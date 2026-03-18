@@ -55,7 +55,7 @@ func (c *EchoSCUCommand) Execute(args []string) error {
 	if err := scu.Associate(ctx, network.DefaultVerificationContexts()); err != nil {
 		return fmt.Errorf("association failed: %w", err)
 	}
-	defer scu.Release(ctx)
+	defer func() { _ = scu.Release(ctx) }()
 
 	fmt.Println("Association accepted")
 	fmt.Println("Sending C-ECHO...")

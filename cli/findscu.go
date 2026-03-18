@@ -62,31 +62,31 @@ func (c *FindSCUCommand) Execute(args []string) error {
 	if err := scu.Associate(ctx, nil); err != nil {
 		return fmt.Errorf("association failed: %w", err)
 	}
-	defer scu.Release(ctx)
+	defer func() { _ = scu.Release(ctx) }()
 
 	// Build query dataset
 	queryDS := dataset.NewDataset()
 
 	// Query Retrieve Level
-	queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0052), dataelem.CS, []byte(c.level)))
+	_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0052), dataelem.CS, []byte(c.level)))
 
 	// Patient Name
 	if c.patientName != "" {
-		queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, []byte(c.patientName)))
+		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, []byte(c.patientName)))
 	} else {
-		queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, []byte{}))
+		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, []byte{}))
 	}
 
 	// Patient ID
 	if c.patientID != "" {
-		queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0020), dataelem.LO, []byte(c.patientID)))
+		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0020), dataelem.LO, []byte(c.patientID)))
 	} else {
-		queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0020), dataelem.LO, []byte{}))
+		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0020), dataelem.LO, []byte{}))
 	}
 
 	// Also request Study Instance UID and Study Date
-	queryDS.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000D), dataelem.UI, []byte{}))
-	queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0020), dataelem.DA, []byte{}))
+	_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000D), dataelem.UI, []byte{}))
+	_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0020), dataelem.DA, []byte{}))
 
 	fmt.Printf("Querying %s (level: %s)\n", address, c.level)
 

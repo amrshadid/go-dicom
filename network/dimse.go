@@ -66,8 +66,6 @@ var (
 	tagCommandDataSetType             = tag.New(0x0000, 0x0800)
 	tagStatus                         = tag.New(0x0000, 0x0900)
 	tagAffectedSOPInstanceUID         = tag.New(0x0000, 0x1000)
-	tagMoveOriginatorAE               = tag.New(0x0000, 0x1030)
-	tagMoveOriginatorMessageID        = tag.New(0x0000, 0x1031)
 	tagNumberOfRemainingSuboperations = tag.New(0x0000, 0x1020)
 	tagNumberOfCompletedSuboperations = tag.New(0x0000, 0x1021)
 	tagNumberOfFailedSuboperations    = tag.New(0x0000, 0x1022)
@@ -188,10 +186,10 @@ func EncodeCommandDataset(ds *dataset.Dataset) ([]byte, error) {
 	// Write CommandGroupLength first
 	groupLenData := elemBuf.Bytes()
 	// Tag (4 bytes) + Length (4 bytes) + Value (4 bytes) for UL
-	binary.Write(&buf, binary.LittleEndian, uint16(0x0000))
-	binary.Write(&buf, binary.LittleEndian, uint16(0x0000))
-	binary.Write(&buf, binary.LittleEndian, uint32(4))
-	binary.Write(&buf, binary.LittleEndian, uint32(len(groupLenData)))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(0x0000))
+	_ = binary.Write(&buf, binary.LittleEndian, uint16(0x0000))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(4))
+	_ = binary.Write(&buf, binary.LittleEndian, uint32(len(groupLenData)))
 
 	// Write remaining elements
 	buf.Write(groupLenData)
@@ -230,7 +228,7 @@ func DecodeCommandDataset(data []byte) (*dataset.Dataset, error) {
 		// Determine VR from dictionary
 		vr := getCommandVR(t)
 		elem := dataelem.NewDataElement(t, vr, value)
-		ds.Add(elem)
+		_ = ds.Add(elem)
 	}
 
 	return ds, nil
@@ -420,7 +418,7 @@ func GetAffectedSOPInstanceUID(ds *dataset.Dataset) (string, error) {
 func addUSElement(ds *dataset.Dataset, t tag.Tag, value uint16) {
 	data := make([]byte, 2)
 	binary.LittleEndian.PutUint16(data, value)
-	ds.Add(dataelem.NewDataElement(t, dataelem.US, data))
+	_ = ds.Add(dataelem.NewDataElement(t, dataelem.US, data))
 }
 
 func addUIElement(ds *dataset.Dataset, t tag.Tag, value string) {
@@ -429,7 +427,7 @@ func addUIElement(ds *dataset.Dataset, t tag.Tag, value string) {
 	if len(data)%2 != 0 {
 		data = append(data, 0x00)
 	}
-	ds.Add(dataelem.NewDataElement(t, dataelem.UI, data))
+	_ = ds.Add(dataelem.NewDataElement(t, dataelem.UI, data))
 }
 
 func addAEElement(ds *dataset.Dataset, t tag.Tag, value string) {
@@ -438,7 +436,7 @@ func addAEElement(ds *dataset.Dataset, t tag.Tag, value string) {
 	if len(data)%2 != 0 {
 		data = append(data, ' ')
 	}
-	ds.Add(dataelem.NewDataElement(t, dataelem.AE, data))
+	_ = ds.Add(dataelem.NewDataElement(t, dataelem.AE, data))
 }
 
 func getUSValue(ds *dataset.Dataset, t tag.Tag) (uint16, error) {
@@ -481,10 +479,10 @@ func encodeCommandElement(buf *bytes.Buffer, t tag.Tag, elem *dataelem.DataEleme
 	}
 
 	// Tag: group (2 bytes LE) + element (2 bytes LE)
-	binary.Write(buf, binary.LittleEndian, t.Group())
-	binary.Write(buf, binary.LittleEndian, t.Element())
+	_ = binary.Write(buf, binary.LittleEndian, t.Group())
+	_ = binary.Write(buf, binary.LittleEndian, t.Element())
 	// Length (4 bytes LE)
-	binary.Write(buf, binary.LittleEndian, uint32(len(data)))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(len(data)))
 	// Value
 	buf.Write(data)
 	return nil

@@ -63,7 +63,7 @@ func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 }
 
 // ListenAndServe starts the SCP server, listening for incoming associations.
-// It blocks until the context is cancelled.
+// It blocks until the context is canceled.
 func (s *SCP) ListenAndServe(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", s.config.BindAddress, s.config.Port)
 
@@ -140,13 +140,13 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	rq, ok := pdu.(*AssociateRQ)
 	if !ok {
 		log.Printf("expected A-ASSOCIATE-RQ, got %T", pdu)
-		assoc.Abort(ctx, AbortSourceServiceProvider, 2)
+		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 2)
 		return
 	}
 
 	// Check AE title
 	if rq.CalledAE != s.config.AETitle {
-		assoc.RejectAssociation(ctx, RJResultRejectedPermanent, RJSourceServiceUser, 7)
+		_ = assoc.RejectAssociation(ctx, RJResultRejectedPermanent, RJSourceServiceUser, 7)
 		return
 	}
 
@@ -228,7 +228,7 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			s.handleNDelete(ctx, assoc, handler, ctxID, messageID, cmdDS)
 		default:
 			log.Printf("unsupported command: 0x%04X", commandField)
-			assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
 			return
 		}
 	}
@@ -258,7 +258,7 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 		return
 	}
 
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Handler,
@@ -310,7 +310,7 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 		return
 	}
 
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handler,
@@ -348,7 +348,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 		// Send failure response
 		rspDS := BuildCFindRSP(messageID, sopClassUID, StatusUnableToProcess, false)
 		rspBytes, _ := EncodeCommandDataset(rspDS)
-		assoc.SendPData(ctx, ctxID, rspBytes, true)
+		_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 		return
 	}
 
@@ -360,7 +360,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 		if err != nil {
 			continue
 		}
-		assoc.SendPData(ctx, ctxID, rspBytes, true)
+		_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 
 		// Send result dataset if present
 		if resp.DataSet != nil {
@@ -368,14 +368,14 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 			if err != nil {
 				continue
 			}
-			assoc.SendPData(ctx, ctxID, dataBytes, false)
+			_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
 		}
 	}
 
 	// Send final success response
 	rspDS := BuildCFindRSP(messageID, sopClassUID, StatusSuccess, false)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handler,
@@ -422,7 +422,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 
 	rspDS := BuildCMoveRSP(messageID, sopClassUID, status, 0, 0, 0, 0)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handler,
@@ -458,7 +458,7 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 
 	rspDS := BuildCGetRSP(messageID, sopClassUID, status, 0, 0, 0, 0)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handler Handler,
@@ -495,7 +495,7 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 
 	rspDS := BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, status)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handler,
@@ -522,11 +522,11 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 
 	rspDS := BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, status, hasDS)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 
 	if hasDS && resp != nil && resp.DataSet != nil {
 		dataBytes, _ := encodeDataset(resp.DataSet)
-		assoc.SendPData(ctx, ctxID, dataBytes, false)
+		_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
 	}
 }
 
@@ -562,7 +562,7 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 
 	rspDS := BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, status)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Handler,
@@ -599,7 +599,7 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 
 	rspDS := BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, status)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Handler,
@@ -634,7 +634,7 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 
 	rspDS := BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, status)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Handler,
@@ -659,7 +659,7 @@ func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Han
 
 	rspDS := BuildNDeleteRSP(messageID, sopClassUID, sopInstanceUID, status)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
-	assoc.SendPData(ctx, ctxID, rspBytes, true)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 func defaultSupportedAbstractSyntaxes() map[string]bool {

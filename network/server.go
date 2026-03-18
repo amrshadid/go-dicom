@@ -32,8 +32,6 @@ type Server struct {
 	scp    *SCP
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	err    error
-	mu     sync.Mutex
 
 	// Events provides hooks into server lifecycle events.
 	Events *EventManager

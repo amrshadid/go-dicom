@@ -139,7 +139,7 @@ func TestSCPListenAndServeCancel(t *testing.T) {
 			cancel()
 		}()
 
-		// Try to accept (will be cancelled)
+		// Try to accept (will be canceled)
 		_, err = ln.Accept(ctx)
 		errCh <- err
 	}()

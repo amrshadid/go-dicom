@@ -23,9 +23,8 @@ const (
 
 // Additional command tag constants for N-DIMSE.
 var (
-	tagEventTypeID             = tag.New(0x0000, 0x1002)
-	tagActionTypeID            = tag.New(0x0000, 0x1008)
-	tagAttributeIdentifierList = tag.New(0x0000, 0x1005)
+	tagEventTypeID  = tag.New(0x0000, 0x1002)
+	tagActionTypeID = tag.New(0x0000, 0x1008)
 )
 
 // NEventReportRequest represents an N-EVENT-REPORT-RQ message.

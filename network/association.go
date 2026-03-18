@@ -376,7 +376,7 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 					fmt.Sprintf("association aborted: source=%d, reason=%d", p.Source, p.Reason))
 			case *ReleaseRQ:
 				// Peer wants to release during data transfer
-				a.transport.WritePDU(ctx, &ReleaseRP{})
+				_ = a.transport.WritePDU(ctx, &ReleaseRP{})
 				a.mu.Lock()
 				a.state = StateIdle
 				a.mu.Unlock()
