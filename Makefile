@@ -9,7 +9,8 @@ GOFLAGS     := -race
 TIMEOUT     := 5m
 COVER_OUT   := coverage.out
 COVER_HTML  := coverage.html
-LINT        := golangci-lint
+GOBIN       := $(shell go env GOPATH)/bin
+LINT        := $(shell which golangci-lint 2>/dev/null || echo $(GOBIN)/golangci-lint)
 
 # Network defaults (overridable: make echoscu ADDR=pacs:11112)
 ADDR        ?= 127.0.0.1:11112
@@ -68,8 +69,13 @@ bench:  ## Run benchmarks
 # ─── Code Quality ────────────────────────────────────────────────────────────
 
 lint:  ## Run golangci-lint (optional, install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
-	@which $(LINT) > /dev/null 2>&1 || { echo "golangci-lint not found — skipping. Install with:"; echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; exit 0; }
-	$(LINT) run ./...
+	@if [ -x "$(LINT)" ]; then \
+		$(LINT) run ./...; \
+	else \
+		echo "golangci-lint not found — skipping. Install with:"; \
+		echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+		echo "  Then ensure ~/go/bin is in your PATH"; \
+	fi
 
 fmt:  ## Format all Go source files
 	gofmt -s -w .
