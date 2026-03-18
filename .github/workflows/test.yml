@@ -46,6 +46,31 @@ jobs:
           flags: unittests
           name: codecov-umbrella
 
+  network-integration:
+    name: Network Integration Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.24']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run network unit tests
+        run: go test -v -race -timeout 5m ./network/...
+
+      - name: Run network integration tests (real TCP SCP+SCU)
+        run: go test -v -race -timeout 5m -run TestIntegration ./network/...
+
   lint:
     name: Lint - golangci-lint
     runs-on: ubuntu-latest
@@ -88,6 +113,14 @@ jobs:
       - name: Verify CLI version
         run: ./dicom -v
 
+      - name: Verify network CLI commands are registered
+        run: |
+          ./dicom -h | grep -q echoscu
+          ./dicom -h | grep -q storescu
+          ./dicom -h | grep -q storescp
+          ./dicom -h | grep -q findscu
+          ./dicom -h | grep -q movescu
+
   module-check:
     name: Module Validation
     runs-on: ubuntu-latest
@@ -129,7 +162,7 @@ jobs:
 
       - name: Verify module documentation
         run: |
-          for dir in anonymize charset cli compress config dataelem dataset element encaps errors filebase filereader fileset fileutil filewriter hooks jsonrep multival overlays pixels sequence sr tag uid util valuerep values waveforms; do
+          for dir in anonymize charset cli compress config dataelem dataset element encaps errors filebase filereader fileset fileutil filewriter hooks jsonrep multival network overlays pixels sequence sr tag uid util valuerep values waveforms; do
             if [ -d "$dir" ]; then
               test -f "$dir/doc.go" || (echo "Missing doc.go in $dir"; exit 1)
             fi
