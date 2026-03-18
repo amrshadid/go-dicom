@@ -38,9 +38,9 @@ func (a *AsynchronousOperationsWindow) Encode() []byte {
 	var buf bytes.Buffer
 	buf.WriteByte(ItemTypeAsyncOperationsWindow)
 	buf.WriteByte(0x00)
-	binary.Write(&buf, binary.BigEndian, uint16(4))
-	binary.Write(&buf, binary.BigEndian, a.MaxOperationsInvoked)
-	binary.Write(&buf, binary.BigEndian, a.MaxOperationsPerformed)
+	_ = binary.Write(&buf, binary.BigEndian, uint16(4))
+	_ = binary.Write(&buf, binary.BigEndian, a.MaxOperationsInvoked)
+	_ = binary.Write(&buf, binary.BigEndian, a.MaxOperationsPerformed)
 	return buf.Bytes()
 }
 
@@ -70,8 +70,8 @@ func (r *SCPSCURoleSelection) Encode() []byte {
 
 	uidBytes := []byte(r.SOPClassUID)
 	itemLen := uint16(2 + len(uidBytes) + 2) // UID length field + UID + SCU role + SCP role
-	binary.Write(&buf, binary.BigEndian, itemLen)
-	binary.Write(&buf, binary.BigEndian, uint16(len(uidBytes)))
+	_ = binary.Write(&buf, binary.BigEndian, itemLen)
+	_ = binary.Write(&buf, binary.BigEndian, uint16(len(uidBytes)))
 	buf.Write(uidBytes)
 
 	if r.SCURole {
@@ -96,9 +96,9 @@ func DecodeSCPSCURoleSelection(data []byte) (*SCPSCURoleSelection, error) {
 	r := bytes.NewReader(data)
 
 	var uidLen uint16
-	binary.Read(r, binary.BigEndian, &uidLen)
+	_ = binary.Read(r, binary.BigEndian, &uidLen)
 	uid := make([]byte, uidLen)
-	io.ReadFull(r, uid)
+	_, _ = io.ReadFull(r, uid)
 
 	scuRole, _ := r.ReadByte()
 	scpRole, _ := r.ReadByte()
@@ -131,14 +131,14 @@ func (u *UserIdentityNegotiation) Encode() []byte {
 	} else {
 		itemBuf.WriteByte(0x00)
 	}
-	binary.Write(&itemBuf, binary.BigEndian, uint16(len(u.PrimaryField)))
+	_ = binary.Write(&itemBuf, binary.BigEndian, uint16(len(u.PrimaryField)))
 	itemBuf.Write(u.PrimaryField)
-	binary.Write(&itemBuf, binary.BigEndian, uint16(len(u.SecondaryField)))
+	_ = binary.Write(&itemBuf, binary.BigEndian, uint16(len(u.SecondaryField)))
 	if len(u.SecondaryField) > 0 {
 		itemBuf.Write(u.SecondaryField)
 	}
 
-	binary.Write(&buf, binary.BigEndian, uint16(itemBuf.Len()))
+	_ = binary.Write(&buf, binary.BigEndian, uint16(itemBuf.Len()))
 	buf.Write(itemBuf.Bytes())
 	return buf.Bytes()
 }
@@ -154,15 +154,15 @@ func DecodeUserIdentityNegotiation(data []byte) (*UserIdentityNegotiation, error
 	posResp, _ := r.ReadByte()
 
 	var primaryLen uint16
-	binary.Read(r, binary.BigEndian, &primaryLen)
+	_ = binary.Read(r, binary.BigEndian, &primaryLen)
 	primary := make([]byte, primaryLen)
-	io.ReadFull(r, primary)
+	_, _ = io.ReadFull(r, primary)
 
 	var secondaryLen uint16
-	binary.Read(r, binary.BigEndian, &secondaryLen)
+	_ = binary.Read(r, binary.BigEndian, &secondaryLen)
 	secondary := make([]byte, secondaryLen)
 	if secondaryLen > 0 {
-		io.ReadFull(r, secondary)
+		_, _ = io.ReadFull(r, secondary)
 	}
 
 	return &UserIdentityNegotiation{
@@ -184,8 +184,8 @@ func (u *UserIdentityResponse) Encode() []byte {
 	buf.WriteByte(ItemTypeUserIdentityAC)
 	buf.WriteByte(0x00)
 	itemLen := uint16(2 + len(u.ServerResponse))
-	binary.Write(&buf, binary.BigEndian, itemLen)
-	binary.Write(&buf, binary.BigEndian, uint16(len(u.ServerResponse)))
+	_ = binary.Write(&buf, binary.BigEndian, itemLen)
+	_ = binary.Write(&buf, binary.BigEndian, uint16(len(u.ServerResponse)))
 	buf.Write(u.ServerResponse)
 	return buf.Bytes()
 }
@@ -211,8 +211,8 @@ func (s *SOPClassExtendedNegotiation) Encode() []byte {
 
 	uidBytes := []byte(s.SOPClassUID)
 	itemLen := uint16(2 + len(uidBytes) + len(s.ServiceData))
-	binary.Write(&buf, binary.BigEndian, itemLen)
-	binary.Write(&buf, binary.BigEndian, uint16(len(uidBytes)))
+	_ = binary.Write(&buf, binary.BigEndian, itemLen)
+	_ = binary.Write(&buf, binary.BigEndian, uint16(len(uidBytes)))
 	buf.Write(uidBytes)
 	buf.Write(s.ServiceData)
 	return buf.Bytes()

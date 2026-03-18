@@ -68,17 +68,17 @@ func (c *MoveSCUCommand) Execute(args []string) error {
 	if err := scu.Associate(ctx, nil); err != nil {
 		return fmt.Errorf("association failed: %w", err)
 	}
-	defer scu.Release(ctx)
+	defer func() { _ = scu.Release(ctx) }()
 
 	// Build query dataset
 	queryDS := dataset.NewDataset()
-	queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0052), dataelem.CS, []byte(c.level)))
+	_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0052), dataelem.CS, []byte(c.level)))
 
 	if c.studyUID != "" {
-		queryDS.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000D), dataelem.UI, []byte(c.studyUID)))
+		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000D), dataelem.UI, []byte(c.studyUID)))
 	}
 	if c.seriesUID != "" {
-		queryDS.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000E), dataelem.UI, []byte(c.seriesUID)))
+		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000E), dataelem.UI, []byte(c.seriesUID)))
 	}
 
 	fmt.Printf("Moving from %s to %s (level: %s)\n", address, c.moveDest, c.level)

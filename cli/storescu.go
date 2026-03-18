@@ -64,7 +64,7 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 	if err := scu.Associate(ctx, nil); err != nil {
 		return fmt.Errorf("association failed: %w", err)
 	}
-	defer scu.Release(ctx)
+	defer func() { _ = scu.Release(ctx) }()
 
 	fmt.Println("Association accepted")
 
@@ -117,7 +117,7 @@ func dicomFileToDataset(df *filereader.DICOMFile) *dataset.Dataset {
 	for _, elem := range df.DataElements {
 		t := tag.New(elem.Tag.Group(), elem.Tag.Element())
 		de := dataelem.NewDataElement(t, dataelem.VR(elem.VR), elem.Value)
-		ds.Add(de)
+		_ = ds.Add(de)
 	}
 	return ds
 }
