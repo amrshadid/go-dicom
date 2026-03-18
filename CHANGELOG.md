@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-18
+
+### Added
+- **DICOM Networking module** (`network/`) - Complete DICOM Upper Layer Protocol implementation
+  - **SCU (Client)**: `NewSCU()` with `Echo()`, `Store()`, `Find()`, `Move()`, `Release()`, `Abort()`
+  - **SCP (Server)**: `NewSCP()` with `ListenAndServe()`, goroutine-per-association concurrency
+  - **C-DIMSE services**: C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET with full encode/decode
+  - **N-DIMSE services**: N-EVENT-REPORT, N-GET, N-SET, N-ACTION, N-CREATE, N-DELETE
+  - **PDU encoding/decoding**: A-ASSOCIATE-RQ/AC/RJ, P-DATA-TF, A-RELEASE-RQ/RP, A-ABORT
+  - **Association state machine**: Full DICOM Part 8 state transitions with context-aware timeouts
+  - **Presentation context negotiation**: Abstract syntax + transfer syntax matching
+  - **Extended negotiation**: Async operations window, SCP/SCU role selection, user identity (username/password, Kerberos, SAML, JWT)
+  - **TLS support**: `DialTLS()` and `ListenTLS()` for encrypted DICOM communication
+  - **80+ Storage SOP Classes**: CT, MR, US, PET, NM, RT, XR, CR, DX, MG, VL, SR, waveforms, encapsulated documents (PDF, CDA, STL, OBJ), segmentation, parametric maps
+  - **15 Transfer Syntaxes**: All uncompressed + JPEG, JPEG-LS, JPEG 2000, RLE, Deflated
+  - **Query/Retrieve**: Patient Root and Study Root models (Find, Move, Get)
+  - **Modality Worklist**: MWL SOP Class with `WorklistHandler`
+  - **MPPS**: Modality Performed Procedure Step via N-CREATE/N-SET
+  - **Print Management**: Film Session, Film Box, Image Box SOP Classes
+  - **Handler system**: `BaseHandler` (embeddable defaults), `EchoHandler`, `StorageHandler`, `QueryRetrieveHandler`, `WorklistHandler`, `CompositeHandler`
+  - **71 tests** with race detection, covering PDU encode/decode, DIMSE messages, association negotiation, SCU/SCP integration
+  - Inspired by [pynetdicom](https://github.com/pydicom/pynetdicom), reimplemented with Go idioms (goroutines, channels, context.Context)
+
+- **Network CLI commands** — equivalent to pynetdicom's CLI tools
+  - `echoscu` — DICOM Echo verification (ping)
+  - `storescu` — Send DICOM files (.dcm, .ima, any DICOM format)
+  - `storescp` — Receive and save DICOM files
+  - `findscu` — Query for patients/studies/series with wildcards
+  - `movescu` — Retrieve studies to a destination AE
+
+- **Networking example** (`examples/networking/`) — SCU/SCP usage, handler patterns, supported modalities
+
+### Changed
+- **Version** bumped to 1.1.0
+- **README** rewritten with networking documentation, pynetdicom feature parity table, handler patterns, CLI network commands
+- **CLI help** updated to show file and network command categories
+
 ## [Unreleased]
 
 ### Added
@@ -71,5 +108,6 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...v1.1.0
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...HEAD
 [1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0

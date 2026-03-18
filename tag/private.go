@@ -53,7 +53,7 @@ func initPrivateDictCache() {
 
 	cachedVendors = vendors
 
-initialized = true
+	initialized = true
 }
 
 // GetAllPrivateVendors returns a sorted list of all available private tag vendors.

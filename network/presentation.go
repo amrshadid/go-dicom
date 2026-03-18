@@ -1,0 +1,260 @@
+package network
+
+// Common DICOM SOP Class UIDs used in networking.
+const (
+	VerificationSOPClassUID = "1.2.840.10008.1.1"
+
+	// Storage SOP Classes
+	CTImageStorageUID               = "1.2.840.10008.5.1.4.1.1.2"
+	EnhancedCTImageStorageUID       = "1.2.840.10008.5.1.4.1.1.2.1"
+	MRImageStorageUID               = "1.2.840.10008.5.1.4.1.1.4"
+	EnhancedMRImageStorageUID       = "1.2.840.10008.5.1.4.1.1.4.1"
+	USImageStorageUID               = "1.2.840.10008.5.1.4.1.1.6.1"
+	SecondaryCaptureImageStorageUID = "1.2.840.10008.5.1.4.1.1.7"
+	XRayAngiographicImageStorageUID = "1.2.840.10008.5.1.4.1.1.12.1"
+	DigitalXRayImageStorageUID      = "1.2.840.10008.5.1.4.1.1.1.1"
+	CRImageStorageUID               = "1.2.840.10008.5.1.4.1.1.1"
+
+	// Query/Retrieve SOP Classes
+	PatientRootQueryRetrieveFind = "1.2.840.10008.5.1.4.1.2.1.1"
+	PatientRootQueryRetrieveMove = "1.2.840.10008.5.1.4.1.2.1.2"
+	PatientRootQueryRetrieveGet  = "1.2.840.10008.5.1.4.1.2.1.3"
+	StudyRootQueryRetrieveFind   = "1.2.840.10008.5.1.4.1.2.2.1"
+	StudyRootQueryRetrieveMove   = "1.2.840.10008.5.1.4.1.2.2.2"
+	StudyRootQueryRetrieveGet    = "1.2.840.10008.5.1.4.1.2.2.3"
+)
+
+// DICOM Transfer Syntax UIDs — complete set matching pynetdicom.
+const (
+	// Uncompressed
+	ImplicitVRLittleEndianUID         = "1.2.840.10008.1.2"
+	ExplicitVRLittleEndianUID         = "1.2.840.10008.1.2.1"
+	DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
+	ExplicitVRBigEndianUID            = "1.2.840.10008.1.2.2"
+
+	// JPEG
+	JPEGBaselineUID    = "1.2.840.10008.1.2.4.50"
+	JPEGExtendedUID    = "1.2.840.10008.1.2.4.51"
+	JPEGLosslessSV1UID = "1.2.840.10008.1.2.4.57"
+	JPEGLosslessUID    = "1.2.840.10008.1.2.4.70"
+
+	// JPEG-LS
+	JPEGLSLosslessUID     = "1.2.840.10008.1.2.4.80"
+	JPEGLSNearLosslessUID = "1.2.840.10008.1.2.4.81"
+
+	// JPEG 2000
+	JPEG2000LosslessUID                    = "1.2.840.10008.1.2.4.90"
+	JPEG2000UID                            = "1.2.840.10008.1.2.4.91"
+	JPEG2000Part2MultiComponentLosslessUID = "1.2.840.10008.1.2.4.92"
+	JPEG2000Part2MultiComponentUID         = "1.2.840.10008.1.2.4.93"
+
+	// JPIP
+	JPIPReferencedUID        = "1.2.840.10008.1.2.4.94"
+	JPIPReferencedDeflateUID = "1.2.840.10008.1.2.4.95"
+
+	// MPEG2
+	MPEG2MainProfileUID            = "1.2.840.10008.1.2.4.100"
+	MPEG2MainProfileFragmentUID    = "1.2.840.10008.1.2.4.100.1"
+	MPEG2MainProfileHighUID        = "1.2.840.10008.1.2.4.101"
+	MPEG2MainProfileHighFragmentUID = "1.2.840.10008.1.2.4.101.1"
+
+	// MPEG-4 AVC/H.264
+	MPEG4AVCH264HighProfileUID            = "1.2.840.10008.1.2.4.102"
+	MPEG4AVCH264HighProfileFragmentUID    = "1.2.840.10008.1.2.4.102.1"
+	MPEG4AVCH264BDCompatibleUID           = "1.2.840.10008.1.2.4.103"
+	MPEG4AVCH264BDCompatibleFragmentUID   = "1.2.840.10008.1.2.4.103.1"
+	MPEG4AVCH264HighProfile2DUID          = "1.2.840.10008.1.2.4.104"
+	MPEG4AVCH264HighProfile2DFragmentUID  = "1.2.840.10008.1.2.4.104.1"
+	MPEG4AVCH264HighProfile3DUID          = "1.2.840.10008.1.2.4.105"
+	MPEG4AVCH264HighProfile3DFragmentUID  = "1.2.840.10008.1.2.4.105.1"
+	MPEG4AVCH264StereoHighProfileUID      = "1.2.840.10008.1.2.4.106"
+	MPEG4AVCH264StereoHighFragmentUID     = "1.2.840.10008.1.2.4.106.1"
+
+	// HEVC/H.265
+	HEVCH265MainProfileUID   = "1.2.840.10008.1.2.4.107"
+	HEVCH265Main10ProfileUID = "1.2.840.10008.1.2.4.108"
+
+	// JPEG XL
+	JPEGXLLosslessUID        = "1.2.840.10008.1.2.4.110"
+	JPEGXLJPEGRecompressionUID = "1.2.840.10008.1.2.4.111"
+	JPEGXLUID                = "1.2.840.10008.1.2.4.112"
+
+	// High-Throughput JPEG 2000
+	HTJ2KLosslessUID             = "1.2.840.10008.1.2.4.201"
+	HTJ2KLosslessRPCLUID         = "1.2.840.10008.1.2.4.202"
+	HTJ2KUID                     = "1.2.840.10008.1.2.4.203"
+	JPIPHTJ2KReferencedUID       = "1.2.840.10008.1.2.4.204"
+	JPIPHTJ2KReferencedDeflateUID = "1.2.840.10008.1.2.4.205"
+
+	// RLE
+	RLELosslessUID = "1.2.840.10008.1.2.5"
+
+	// SMPTE ST 2110
+	SMPTEST2110UncompressedProgressiveUID = "1.2.840.10008.1.2.7.1"
+	SMPTEST2110UncompressedInterlacedUID  = "1.2.840.10008.1.2.7.2"
+	SMPTEST2110PCMDigitalAudioUID         = "1.2.840.10008.1.2.7.3"
+)
+
+// PresentationContext represents a negotiated presentation context
+// pairing an abstract syntax (SOP Class) with a transfer syntax.
+type PresentationContext struct {
+	ID             byte
+	AbstractSyntax string
+	TransferSyntax string
+	Result         byte
+}
+
+// IsAccepted returns true if this presentation context was accepted.
+func (pc *PresentationContext) IsAccepted() bool {
+	return pc.Result == PCResultAcceptance
+}
+
+// DefaultTransferSyntaxes returns the default set of transfer syntaxes to propose.
+func DefaultTransferSyntaxes() []string {
+	return []string{
+		ExplicitVRLittleEndianUID,
+		ImplicitVRLittleEndianUID,
+	}
+}
+
+// DefaultVerificationContexts returns presentation contexts for C-ECHO.
+func DefaultVerificationContexts() []PresentationContextItem {
+	return []PresentationContextItem{
+		{
+			ID:               1,
+			AbstractSyntax:   VerificationSOPClassUID,
+			TransferSyntaxes: DefaultTransferSyntaxes(),
+		},
+	}
+}
+
+// DefaultStorageContexts returns presentation contexts for common storage SOP classes.
+func DefaultStorageContexts() []PresentationContextItem {
+	storageClasses := []string{
+		CTImageStorageUID,
+		EnhancedCTImageStorageUID,
+		MRImageStorageUID,
+		EnhancedMRImageStorageUID,
+		USImageStorageUID,
+		SecondaryCaptureImageStorageUID,
+		CRImageStorageUID,
+		DigitalXRayImageStorageUID,
+		XRayAngiographicImageStorageUID,
+	}
+
+	ts := DefaultTransferSyntaxes()
+	contexts := make([]PresentationContextItem, len(storageClasses))
+	for i, sc := range storageClasses {
+		contexts[i] = PresentationContextItem{
+			ID:               byte(2*i + 1), // Odd IDs: 1, 3, 5, ...
+			AbstractSyntax:   sc,
+			TransferSyntaxes: ts,
+		}
+	}
+	return contexts
+}
+
+// DefaultQueryRetrieveContexts returns presentation contexts for query/retrieve operations.
+func DefaultQueryRetrieveContexts() []PresentationContextItem {
+	qrClasses := []string{
+		PatientRootQueryRetrieveFind,
+		PatientRootQueryRetrieveMove,
+		PatientRootQueryRetrieveGet,
+		StudyRootQueryRetrieveFind,
+		StudyRootQueryRetrieveMove,
+		StudyRootQueryRetrieveGet,
+	}
+
+	ts := DefaultTransferSyntaxes()
+	contexts := make([]PresentationContextItem, len(qrClasses))
+	for i, qr := range qrClasses {
+		contexts[i] = PresentationContextItem{
+			ID:               byte(2*i + 1),
+			AbstractSyntax:   qr,
+			TransferSyntaxes: ts,
+		}
+	}
+	return contexts
+}
+
+// NegotiatePresentationContexts selects transfer syntaxes for requested presentation contexts
+// based on what the SCP supports. Returns the result items for the A-ASSOCIATE-AC PDU.
+func NegotiatePresentationContexts(
+	requested []PresentationContextItem,
+	supportedAbstractSyntaxes map[string]bool,
+	supportedTransferSyntaxes map[string]bool,
+) []PresentationContextResultItem {
+	results := make([]PresentationContextResultItem, 0, len(requested))
+
+	for _, req := range requested {
+		result := PresentationContextResultItem{
+			ID: req.ID,
+		}
+
+		// Check abstract syntax support
+		if !supportedAbstractSyntaxes[req.AbstractSyntax] {
+			result.Result = PCResultAbstractSyntaxNotSupported
+			result.TransferSyntax = req.TransferSyntaxes[0] // Must include a TS per spec
+			results = append(results, result)
+			continue
+		}
+
+		// Find a supported transfer syntax (prefer first match)
+		found := false
+		for _, ts := range req.TransferSyntaxes {
+			if supportedTransferSyntaxes[ts] {
+				result.Result = PCResultAcceptance
+				result.TransferSyntax = ts
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			result.Result = PCResultTransferSyntaxNotSupported
+			result.TransferSyntax = req.TransferSyntaxes[0]
+		}
+
+		results = append(results, result)
+	}
+
+	return results
+}
+
+// BuildAcceptedContextMap creates a map from presentation context ID to accepted context
+// from the A-ASSOCIATE-AC response.
+func BuildAcceptedContextMap(
+	requested []PresentationContextItem,
+	results []PresentationContextResultItem,
+) map[byte]*PresentationContext {
+	// Build abstract syntax lookup from request
+	abstractSyntaxByID := make(map[byte]string)
+	for _, req := range requested {
+		abstractSyntaxByID[req.ID] = req.AbstractSyntax
+	}
+
+	accepted := make(map[byte]*PresentationContext)
+	for _, res := range results {
+		pc := &PresentationContext{
+			ID:             res.ID,
+			AbstractSyntax: abstractSyntaxByID[res.ID],
+			TransferSyntax: res.TransferSyntax,
+			Result:         res.Result,
+		}
+		if pc.IsAccepted() {
+			accepted[res.ID] = pc
+		}
+	}
+	return accepted
+}
+
+// FindPresentationContextID returns the presentation context ID for a given
+// abstract syntax from the accepted contexts map. Returns 0, false if not found.
+func FindPresentationContextID(accepted map[byte]*PresentationContext, abstractSyntax string) (byte, bool) {
+	for id, pc := range accepted {
+		if pc.AbstractSyntax == abstractSyntax {
+			return id, true
+		}
+	}
+	return 0, false
+}

@@ -1,0 +1,846 @@
+package network
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/tag"
+)
+
+// SCU (Service Class User) is a DICOM network client.
+type SCU struct {
+	config      SCUConfig
+	association *Association
+	messageID   atomic.Uint32
+	mu          sync.Mutex
+}
+
+// NewSCU creates a new SCU with the given configuration.
+func NewSCU(config SCUConfig) *SCU {
+	config.applyDefaults()
+	return &SCU{config: config}
+}
+
+// nextMessageID returns the next message ID.
+func (s *SCU) nextMessageID() uint16 {
+	return uint16(s.messageID.Add(1))
+}
+
+// Associate establishes an association with the SCP, proposing the given presentation contexts.
+// If contexts is nil, default verification + storage + query/retrieve contexts are proposed.
+func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.association != nil && s.association.State() == StateAssociated {
+		return NewAssociationError("ALREADY_ASSOCIATED", "already associated")
+	}
+
+	transport, err := Dial(ctx, s.config.Address, s.config.Network.NetworkTimeout)
+	if err != nil {
+		return err
+	}
+
+	s.association = NewAssociation(transport)
+
+	if contexts == nil {
+		contexts = s.defaultContexts()
+	}
+
+	return s.association.RequestAssociation(ctx, s.config.CallingAE, s.config.CalledAE,
+		contexts, s.config.Network.MaxPDUSize)
+}
+
+// defaultContexts builds the default set of presentation contexts.
+func (s *SCU) defaultContexts() []PresentationContextItem {
+	var contexts []PresentationContextItem
+
+	// Always include verification
+	contexts = append(contexts, DefaultVerificationContexts()...)
+
+	// Include storage and query/retrieve
+	storageCtx := DefaultStorageContexts()
+	qrCtx := DefaultQueryRetrieveContexts()
+
+	// Re-number IDs to be unique odd numbers
+	id := byte(1)
+	for i := range contexts {
+		contexts[i].ID = id
+		id += 2
+	}
+	for i := range storageCtx {
+		storageCtx[i].ID = id
+		id += 2
+	}
+	for i := range qrCtx {
+		qrCtx[i].ID = id
+		id += 2
+	}
+
+	contexts = append(contexts, storageCtx...)
+	contexts = append(contexts, qrCtx...)
+	return contexts
+}
+
+// Echo performs a C-ECHO verification.
+func (s *SCU) Echo(ctx context.Context) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	// Find presentation context for Verification
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), VerificationSOPClassUID)
+	if !ok {
+		return NewAssociationError("NO_CONTEXT", "no accepted presentation context for Verification SOP Class")
+	}
+
+	// Build and send C-ECHO-RQ
+	cmdDS := BuildCEchoRQ(s.nextMessageID())
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode C-ECHO-RQ: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return fmt.Errorf("failed to send C-ECHO-RQ: %w", err)
+	}
+
+	// Receive C-ECHO-RSP
+	_, respData, isCmd, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to receive C-ECHO-RSP: %w", err)
+	}
+	if !isCmd {
+		return NewDIMSEError("UNEXPECTED", "expected command, got data", 0)
+	}
+
+	respDS, err := DecodeCommandDataset(respData)
+	if err != nil {
+		return fmt.Errorf("failed to decode C-ECHO-RSP: %w", err)
+	}
+
+	_, _, status, err := ParseCommandDataset(respDS)
+	if err != nil {
+		return err
+	}
+
+	if status != StatusSuccess {
+		return NewDIMSEError("ECHO_FAILED", fmt.Sprintf("C-ECHO failed with status 0x%04X", status), status)
+	}
+
+	return nil
+}
+
+// Store sends a DICOM dataset to the SCP using C-STORE.
+func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	// Extract SOP Class and Instance UIDs from the dataset
+	sopClassElem, ok := ds.Get(tag.New(0x0008, 0x0016)) // SOPClassUID
+	if !ok {
+		return fmt.Errorf("dataset missing SOP Class UID (0008,0016)")
+	}
+	sopClassUID := extractStringValue(sopClassElem.GetValue())
+
+	sopInstanceElem, ok := ds.Get(tag.New(0x0008, 0x0018)) // SOPInstanceUID
+	if !ok {
+		return fmt.Errorf("dataset missing SOP Instance UID (0008,0018)")
+	}
+	sopInstanceUID := extractStringValue(sopInstanceElem.GetValue())
+
+	// Find presentation context
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return NewAssociationError("NO_CONTEXT",
+			fmt.Sprintf("no accepted presentation context for SOP Class %s", sopClassUID))
+	}
+
+	// Build and send C-STORE-RQ command
+	cmdDS := BuildCStoreRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, PriorityMedium)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode C-STORE-RQ: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return fmt.Errorf("failed to send C-STORE-RQ command: %w", err)
+	}
+
+	// Send data set
+	dataBytes, err := encodeDataset(ds)
+	if err != nil {
+		return fmt.Errorf("failed to encode dataset: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+		return fmt.Errorf("failed to send C-STORE data: %w", err)
+	}
+
+	// Receive C-STORE-RSP
+	_, respData, isCmd, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to receive C-STORE-RSP: %w", err)
+	}
+	if !isCmd {
+		return NewDIMSEError("UNEXPECTED", "expected command response, got data", 0)
+	}
+
+	respDS, err := DecodeCommandDataset(respData)
+	if err != nil {
+		return fmt.Errorf("failed to decode C-STORE-RSP: %w", err)
+	}
+
+	_, _, status, err := ParseCommandDataset(respDS)
+	if err != nil {
+		return err
+	}
+
+	if status != StatusSuccess && status != StatusWarning {
+		return NewDIMSEError("STORE_FAILED",
+			fmt.Sprintf("C-STORE failed with status 0x%04X", status), status)
+	}
+
+	return nil
+}
+
+// Find performs a C-FIND query and returns results on a channel.
+func (s *SCU) Find(ctx context.Context, queryDS *dataset.Dataset) (<-chan *CFindResult, error) {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	// Default to Patient Root Q/R Find
+	sopClassUID := PatientRootQueryRetrieveFind
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		// Try Study Root
+		sopClassUID = StudyRootQueryRetrieveFind
+		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		if !ok {
+			return nil, NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-FIND")
+		}
+	}
+
+	// Build and send C-FIND-RQ
+	cmdDS := BuildCFindRQ(s.nextMessageID(), sopClassUID, PriorityMedium)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode C-FIND-RQ: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, fmt.Errorf("failed to send C-FIND-RQ command: %w", err)
+	}
+
+	// Send query dataset
+	dataBytes, err := encodeDataset(queryDS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode query dataset: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+		return nil, fmt.Errorf("failed to send C-FIND query data: %w", err)
+	}
+
+	// Stream results on channel
+	results := make(chan *CFindResult, 16)
+	go s.receiveFindResults(ctx, assoc, results)
+	return results, nil
+}
+
+// CFindResult wraps a find result or error.
+type CFindResult struct {
+	DataSet *dataset.Dataset
+	Err     error
+}
+
+func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, results chan<- *CFindResult) {
+	defer close(results)
+
+	for {
+		// Receive command
+		_, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		if err != nil {
+			results <- &CFindResult{Err: err}
+			return
+		}
+		if !isCmd {
+			results <- &CFindResult{Err: NewDIMSEError("UNEXPECTED", "expected command, got data", 0)}
+			return
+		}
+
+		cmdDS, err := DecodeCommandDataset(cmdData)
+		if err != nil {
+			results <- &CFindResult{Err: err}
+			return
+		}
+
+		_, _, status, err := ParseCommandDataset(cmdDS)
+		if err != nil {
+			results <- &CFindResult{Err: err}
+			return
+		}
+
+		if IsPending(status) {
+			// Receive the result dataset
+			_, resultData, isCmd, err := assoc.ReceivePData(ctx)
+			if err != nil {
+				results <- &CFindResult{Err: err}
+				return
+			}
+			if isCmd {
+				results <- &CFindResult{Err: NewDIMSEError("UNEXPECTED", "expected data, got command", 0)}
+				return
+			}
+
+			resultDS, err := decodeDatasetBytes(resultData)
+			if err != nil {
+				results <- &CFindResult{Err: err}
+				return
+			}
+
+			select {
+			case results <- &CFindResult{DataSet: resultDS}:
+			case <-ctx.Done():
+				results <- &CFindResult{Err: ctx.Err()}
+				return
+			}
+		} else {
+			// Final status (success, failure, or cancel)
+			if status != StatusSuccess {
+				if status != StatusCancel {
+					results <- &CFindResult{Err: NewDIMSEError("FIND_FAILED",
+						fmt.Sprintf("C-FIND failed with status 0x%04X", status), status)}
+				}
+			}
+			return
+		}
+	}
+}
+
+// Move performs a C-MOVE request.
+func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestination string) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	sopClassUID := PatientRootQueryRetrieveMove
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		sopClassUID = StudyRootQueryRetrieveMove
+		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		if !ok {
+			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-MOVE")
+		}
+	}
+
+	cmdDS := BuildCMoveRQ(s.nextMessageID(), sopClassUID, moveDestination, PriorityMedium)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode C-MOVE-RQ: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return fmt.Errorf("failed to send C-MOVE-RQ command: %w", err)
+	}
+
+	dataBytes, err := encodeDataset(queryDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode query dataset: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+		return fmt.Errorf("failed to send C-MOVE query data: %w", err)
+	}
+
+	// Wait for final response (may receive pending status updates)
+	for {
+		_, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		if err != nil {
+			return err
+		}
+		if !isCmd {
+			continue // Skip data PDUs (sub-operations handled by destination SCP)
+		}
+
+		respDS, err := DecodeCommandDataset(cmdData)
+		if err != nil {
+			return fmt.Errorf("failed to decode C-MOVE-RSP: %w", err)
+		}
+
+		_, _, status, err := ParseCommandDataset(respDS)
+		if err != nil {
+			return err
+		}
+
+		if !IsPending(status) {
+			if status != StatusSuccess && status != StatusWarning {
+				return NewDIMSEError("MOVE_FAILED",
+					fmt.Sprintf("C-MOVE failed with status 0x%04X", status), status)
+			}
+			return nil
+		}
+	}
+}
+
+// Get performs a C-GET request (retrieve objects on the same association).
+func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	sopClassUID := PatientRootQueryRetrieveGet
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		sopClassUID = StudyRootQueryRetrieveGet
+		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		if !ok {
+			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-GET")
+		}
+	}
+
+	cmdDS := BuildCGetRQ(s.nextMessageID(), sopClassUID, PriorityMedium)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode C-GET-RQ: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return fmt.Errorf("failed to send C-GET-RQ command: %w", err)
+	}
+
+	dataBytes, err := encodeDataset(queryDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode query dataset: %w", err)
+	}
+
+	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+		return fmt.Errorf("failed to send C-GET query data: %w", err)
+	}
+
+	// Wait for final response (may receive C-STORE sub-operations on same association)
+	for {
+		_, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		if err != nil {
+			return err
+		}
+		if !isCmd {
+			continue // Skip data PDUs (sub-operation datasets)
+		}
+
+		respDS, err := DecodeCommandDataset(cmdData)
+		if err != nil {
+			return fmt.Errorf("failed to decode C-GET-RSP: %w", err)
+		}
+
+		_, _, status, err := ParseCommandDataset(respDS)
+		if err != nil {
+			return err
+		}
+
+		if !IsPending(status) {
+			if status != StatusSuccess && status != StatusWarning {
+				return NewDIMSEError("GET_FAILED",
+					fmt.Sprintf("C-GET failed with status 0x%04X", status), status)
+			}
+			return nil
+		}
+	}
+}
+
+// Cancel sends a C-CANCEL-RQ to cancel an in-progress C-FIND, C-MOVE, or C-GET.
+func (s *SCU) Cancel(ctx context.Context, messageID uint16) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	cmdDS := BuildCCancelRQ(messageID)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode C-CANCEL-RQ: %w", err)
+	}
+
+	// Send on any accepted presentation context
+	var pcID byte
+	for id := range assoc.AcceptedContexts() {
+		pcID = id
+		break
+	}
+
+	return assoc.SendPData(ctx, pcID, cmdBytes, true)
+}
+
+// NEventReport sends an N-EVENT-REPORT-RQ.
+func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID string, eventTypeID uint16, ds *dataset.Dataset) (*NEventReportResponse, error) {
+	assoc := s.getAssociation()
+	if assoc == nil {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
+	}
+
+	hasDS := ds != nil
+	cmdDS := BuildNEventReportRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, eventTypeID, hasDS)
+	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, err
+	}
+	if hasDS {
+		dataBytes, _ := encodeDataset(ds)
+		if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+			return nil, err
+		}
+	}
+
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	respDS, _ := DecodeCommandDataset(respData)
+	_, _, status, _ := ParseCommandDataset(respDS)
+
+	return &NEventReportResponse{
+		MessageIDRespondedTo: s.nextMessageID() - 1,
+		AffectedSOPClass:     sopClassUID,
+		AffectedSOPInstance:  sopInstanceUID,
+		EventTypeID:          eventTypeID,
+		Status:               status,
+	}, nil
+}
+
+// NGet sends an N-GET-RQ.
+func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NGetResponse, error) {
+	assoc := s.getAssociation()
+	if assoc == nil {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
+	}
+
+	cmdDS := BuildNGetRQ(s.nextMessageID(), sopClassUID, sopInstanceUID)
+	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, err
+	}
+
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	respDS, _ := DecodeCommandDataset(respData)
+	_, _, status, _ := ParseCommandDataset(respDS)
+
+	resp := &NGetResponse{
+		AffectedSOPClass:    sopClassUID,
+		AffectedSOPInstance: sopInstanceUID,
+		Status:              status,
+	}
+
+	// Check if data set follows
+	if HasDataSet(respDS) {
+		_, dsData, _, err := assoc.ReceivePData(ctx)
+		if err == nil {
+			resp.DataSet, _ = decodeDatasetBytes(dsData)
+		}
+	}
+
+	return resp, nil
+}
+
+// NSet sends an N-SET-RQ.
+func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) (*NSetResponse, error) {
+	assoc := s.getAssociation()
+	if assoc == nil {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
+	}
+
+	cmdDS := BuildNSetRQ(s.nextMessageID(), sopClassUID, sopInstanceUID)
+	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, err
+	}
+	dataBytes, _ := encodeDataset(ds)
+	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+		return nil, err
+	}
+
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	respDS, _ := DecodeCommandDataset(respData)
+	_, _, status, _ := ParseCommandDataset(respDS)
+
+	return &NSetResponse{
+		AffectedSOPClass:    sopClassUID,
+		AffectedSOPInstance: sopInstanceUID,
+		Status:              status,
+	}, nil
+}
+
+// NAction sends an N-ACTION-RQ.
+func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, actionTypeID uint16, ds *dataset.Dataset) (*NActionResponse, error) {
+	assoc := s.getAssociation()
+	if assoc == nil {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
+	}
+
+	hasDS := ds != nil
+	cmdDS := BuildNActionRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, actionTypeID, hasDS)
+	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, err
+	}
+	if hasDS {
+		dataBytes, _ := encodeDataset(ds)
+		if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+			return nil, err
+		}
+	}
+
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	respDS, _ := DecodeCommandDataset(respData)
+	_, _, status, _ := ParseCommandDataset(respDS)
+
+	return &NActionResponse{
+		AffectedSOPClass:    sopClassUID,
+		AffectedSOPInstance: sopInstanceUID,
+		ActionTypeID:        actionTypeID,
+		Status:              status,
+	}, nil
+}
+
+// NCreate sends an N-CREATE-RQ.
+func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) (*NCreateResponse, error) {
+	assoc := s.getAssociation()
+	if assoc == nil {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
+	}
+
+	hasDS := ds != nil
+	cmdDS := BuildNCreateRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, hasDS)
+	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, err
+	}
+	if hasDS {
+		dataBytes, _ := encodeDataset(ds)
+		if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+			return nil, err
+		}
+	}
+
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	respDS, _ := DecodeCommandDataset(respData)
+	_, _, status, _ := ParseCommandDataset(respDS)
+
+	return &NCreateResponse{
+		AffectedSOPClass:    sopClassUID,
+		AffectedSOPInstance: sopInstanceUID,
+		Status:              status,
+	}, nil
+}
+
+// NDelete sends an N-DELETE-RQ.
+func (s *SCU) NDelete(ctx context.Context, sopClassUID, sopInstanceUID string) (*NDeleteResponse, error) {
+	assoc := s.getAssociation()
+	if assoc == nil {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
+
+	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	if !ok {
+		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
+	}
+
+	cmdDS := BuildNDeleteRQ(s.nextMessageID(), sopClassUID, sopInstanceUID)
+	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		return nil, err
+	}
+
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return nil, err
+	}
+	respDS, _ := DecodeCommandDataset(respData)
+	_, _, status, _ := ParseCommandDataset(respDS)
+
+	return &NDeleteResponse{
+		AffectedSOPClass:    sopClassUID,
+		AffectedSOPInstance: sopInstanceUID,
+		Status:              status,
+	}, nil
+}
+
+// getAssociation returns the current association or nil.
+func (s *SCU) getAssociation() *Association {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.association != nil && s.association.State() == StateAssociated {
+		return s.association
+	}
+	return nil
+}
+
+// Release performs an orderly release of the association.
+func (s *SCU) Release(ctx context.Context) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil {
+		return nil
+	}
+
+	err := assoc.Release(ctx)
+	s.mu.Lock()
+	s.association = nil
+	s.mu.Unlock()
+	return err
+}
+
+// Abort sends an A-ABORT and closes the connection.
+func (s *SCU) Abort(ctx context.Context) error {
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil {
+		return nil
+	}
+
+	err := assoc.Abort(ctx, AbortSourceServiceUser, 0)
+	s.mu.Lock()
+	s.association = nil
+	s.mu.Unlock()
+	return err
+}
+
+// IsAssociated returns whether the SCU has an active association.
+func (s *SCU) IsAssociated() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.association != nil && s.association.State() == StateAssociated
+}
+
+// Helper functions
+
+func extractStringValue(val interface{}) string {
+	switch v := val.(type) {
+	case string:
+		return v
+	case []byte:
+		s := string(v)
+		for len(s) > 0 && s[len(s)-1] == 0 {
+			s = s[:len(s)-1]
+		}
+		return s
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// encodeDataset encodes a dataset to Implicit VR Little Endian bytes.
+// This is a simplified encoding for DIMSE data transfer.
+func encodeDataset(ds *dataset.Dataset) ([]byte, error) {
+	var buf bytes.Buffer
+	elements := ds.GetAll()
+
+	for _, elem := range elements {
+		t := elem.GetTag()
+		elemTag, ok := t.(tag.Tag)
+		if !ok {
+			continue
+		}
+
+		val := elem.GetValue()
+		data, ok := val.([]byte)
+		if !ok {
+			// Try string conversion
+			if s, ok := val.(string); ok {
+				data = []byte(s)
+			} else {
+				continue
+			}
+		}
+
+		// Implicit VR Little Endian: tag (4 bytes) + length (4 bytes) + value
+		if err := binary.Write(&buf, binary.LittleEndian, elemTag.Group()); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&buf, binary.LittleEndian, elemTag.Element()); err != nil {
+			return nil, err
+		}
+		if err := binary.Write(&buf, binary.LittleEndian, uint32(len(data))); err != nil {
+			return nil, err
+		}
+		buf.Write(data)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// decodeDatasetBytes decodes a dataset from Implicit VR Little Endian bytes.
+func decodeDatasetBytes(data []byte) (*dataset.Dataset, error) {
+	return DecodeCommandDataset(data) // Same format for implicit VR LE
+}

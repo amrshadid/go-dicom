@@ -389,11 +389,11 @@ func GenerateReportSummary(report *StructuredReport) string {
 
 // SRCode represents a coded concept in a Structured Report.
 type SRCode struct {
-	Value              string
-	SchemeDesignator   string
-	Meaning            string
-	SchemeVersion      string
-	PrivateScheme      bool
+	Value            string
+	SchemeDesignator string
+	Meaning          string
+	SchemeVersion    string
+	PrivateScheme    bool
 }
 
 // SRCodeSchemes defines standard coding scheme designators.

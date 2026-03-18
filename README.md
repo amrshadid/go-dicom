@@ -1,19 +1,21 @@
 # go-dicom
 
-A comprehensive, high-performance Go library for reading, writing, and manipulating DICOM (Digital Imaging and Communications in Medicine) files.
+A comprehensive, high-performance Go library for reading, writing, manipulating, and **networking** DICOM (Digital Imaging and Communications in Medicine) data. The Go equivalent of Python's pydicom + pynetdicom.
 
 ## Overview
 
 go-dicom is designed for healthcare IT systems, medical imaging applications, PACS systems, and clinical data management. It provides:
 
-- **Complete DICOM file I/O** with support for all transfer syntaxes
+- **Complete DICOM file I/O** with support for all transfer syntaxes (.dcm, .ima, DICOMDIR, raw)
+- **DICOM networking** — SCU/SCP with C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET, and all N-DIMSE services
 - **Thread-safe dataset operations** for concurrent processing
 - **5,000+ standard DICOM tags** with O(1) lookup
 - **10,500+ private vendor tags** (GE, Siemens, Philips, Toshiba, and more)
 - **De-identification / anonymization** per DICOM PS3.15 Annex E
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
-- **CLI tool** for inspection, conversion, and manipulation
+- **TLS support** for encrypted DICOM communication (HIPAA compliance)
+- **CLI tools** for file inspection, conversion, and network operations (echoscu, storescu, storescp, findscu, movescu)
 
 ## Quick Start
 
@@ -21,6 +23,92 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 
 ```bash
 go get github.com/amrshadid/go-dicom
+```
+
+### DICOM Networking (SCU Client)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/amrshadid/go-dicom/network"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Create SCU (client) — equivalent to pynetdicom's AE().associate()
+    scu := network.NewSCU(network.SCUConfig{
+        CallingAE: "MY_APP",
+        CalledAE:  "PACS",
+        Address:   "pacs.hospital.com:11112",
+    })
+
+    // Associate with the server
+    if err := scu.Associate(ctx, nil); err != nil {
+        log.Fatal(err)
+    }
+    defer scu.Release(ctx)
+
+    // C-ECHO (verification/ping)
+    if err := scu.Echo(ctx); err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("Server is reachable!")
+
+    // C-STORE (send a dataset)
+    // err = scu.Store(ctx, dataset)
+
+    // C-FIND (query) — results stream on a Go channel
+    // results, _ := scu.Find(ctx, queryDataset)
+    // for result := range results {
+    //     fmt.Println(result.DataSet)
+    // }
+
+    // C-MOVE (retrieve to another AE)
+    // err = scu.Move(ctx, queryDataset, "DEST_AE")
+}
+```
+
+### DICOM Networking (SCP Server)
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/amrshadid/go-dicom/dataset"
+    "github.com/amrshadid/go-dicom/network"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // Create SCP (server) — equivalent to pynetdicom's AE().start_server()
+    scp := network.NewSCP(network.SCPConfig{
+        AETitle: "MY_SCP",
+        Port:    11112,
+    })
+
+    // Set handler for incoming requests
+    scp.SetHandler(&network.StorageHandler{
+        OnStore: func(ctx context.Context, sopClass, sopInstance string, ds *dataset.Dataset) uint16 {
+            fmt.Printf("Received: %s\n", sopInstance)
+            // Save to disk, database, forward to another PACS, etc.
+            return network.StatusSuccess
+        },
+    })
+
+    // Listen and serve (blocks, handles associations in goroutines)
+    log.Fatal(scp.ListenAndServe(ctx))
+}
 ```
 
 ### Read a DICOM File
@@ -57,92 +145,32 @@ func main() {
 }
 ```
 
-### Write a DICOM File
-
-```go
-package main
-
-import (
-    "log"
-    "os"
-
-    "github.com/amrshadid/go-dicom/filewriter"
-    "github.com/amrshadid/go-dicom/tag"
-)
-
-func main() {
-    file, err := os.Create("output.dcm")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer file.Close()
-
-    writer := filewriter.NewDICOMFileWriter(file)
-
-    writer.SetFileMetaInfo(&filewriter.FileMetaInfo{
-        MediaStorageSOPClassUID:    "1.2.840.10008.5.1.4.1.1.2",
-        MediaStorageSOPInstanceUID: "1.2.3.4.5.6.7.8.9",
-        TransferSyntaxUID:         "1.2.840.10008.1.2.1",
-        ImplementationClassUID:    "1.2.3.4.5.6.7",
-    })
-
-    writer.AddDataElement(&filewriter.DataElement{
-        Tag:   tag.New(0x0010, 0x0010),
-        VR:    "PN",
-        Value: []byte("Smith^John"),
-    })
-
-    if err := writer.Write(); err != nil {
-        log.Fatal(err)
-    }
-}
-```
-
-### Anonymize a DICOM File
-
-```go
-package main
-
-import (
-    "log"
-
-    "github.com/amrshadid/go-dicom/anonymize"
-    "github.com/amrshadid/go-dicom/dataset"
-)
-
-func main() {
-    ds := dataset.NewDataset()
-    // ... load dataset from file ...
-
-    anon := anonymize.NewAnonymizer(anonymize.BasicProfile)
-    if err := anon.Anonymize(ds); err != nil {
-        log.Fatal(err)
-    }
-
-    // Patient name is now "ANONYMOUS", dates cleared, UIDs remapped
-}
-```
-
-### Command-Line Tool
+### Command-Line Tools
 
 ```bash
 # Build the CLI
 go build -o dicom .
 
-# Show DICOM file contents
-./dicom show patient.dcm
+# === File Operations ===
+./dicom show patient.dcm          # Display DICOM file contents
+./dicom info patient.dcm           # Display file metadata
+./dicom convert patient.dcm out.json  # Convert to JSON
 
-# Display file metadata
-./dicom info patient.dcm
+# === Network Operations (like pynetdicom CLI) ===
+# Verification (ping a PACS)
+./dicom echoscu pacs.hospital.com:11112
 
-# Convert to JSON
-./dicom convert patient.dcm output.json
+# Send DICOM files (.dcm, .ima, any DICOM format)
+./dicom storescu -aec PACS pacs:11112 study/*.dcm
 
-# Generate Go code to recreate a DICOM file
-./dicom codify patient.dcm --output create_patient.go
+# Start a storage server (receive files)
+./dicom storescp -port 11112 -output ./received/
 
-# Look up tag documentation
-./dicom tag-doc 0010,0010
+# Query for patients/studies
+./dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
+
+# Retrieve studies to a destination
+./dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 
 # Get help
 ./dicom -h
@@ -176,6 +204,11 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [values](./values/) | Value conversion and encoding |
 | [multival](./multival/) | Type-safe multi-value lists |
 
+#### Networking (DICOM Upper Layer Protocol)
+| Package | Description |
+|---------|-------------|
+| [network](./network/) | DICOM networking — SCU/SCP, DIMSE services, PDU encoding, TLS |
+
 #### Encoding and Compression
 | Package | Description |
 |---------|-------------|
@@ -202,6 +235,97 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [util](./util/) | General utilities (hex dump, dataset info) |
 | [cli](./cli/) | Command-line interface framework |
 
+## Networking Features
+
+### pynetdicom Feature Parity
+
+go-dicom's `network` package provides feature parity with [pynetdicom](https://github.com/pydicom/pynetdicom), reimplemented in Go with goroutines, channels, and `context.Context`.
+
+| Feature | pynetdicom | go-dicom | Notes |
+|---------|-----------|----------|-------|
+| C-ECHO (Verification) | Yes | Yes | `scu.Echo(ctx)` |
+| C-STORE (Storage) | Yes | Yes | `scu.Store(ctx, ds)` |
+| C-FIND (Query) | Yes | Yes | `scu.Find(ctx, ds)` — streams via Go channel |
+| C-MOVE (Retrieve) | Yes | Yes | `scu.Move(ctx, ds, dest)` |
+| C-GET (Get) | Yes | Yes | `scu.Get(ctx, ds)` |
+| N-EVENT-REPORT | Yes | Yes | Full N-DIMSE service support |
+| N-GET | Yes | Yes | |
+| N-SET | Yes | Yes | |
+| N-ACTION | Yes | Yes | |
+| N-CREATE | Yes | Yes | |
+| N-DELETE | Yes | Yes | |
+| SCU (Client) | Yes | Yes | `network.NewSCU()` |
+| SCP (Server) | Yes | Yes | `network.NewSCP()` with goroutine-per-association |
+| TLS Encryption | Yes | Yes | `network.DialTLS()` / `network.ListenTLS()` |
+| Association Negotiation | Yes | Yes | Full A-ASSOCIATE-RQ/AC/RJ state machine |
+| Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
+| Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity |
+| Storage SOP Classes | 100+ | 80+ | CT, MR, US, PET, RT, XR, SR, waveforms, encapsulated docs |
+| Transfer Syntax Support | 15+ | 15 | All standard + compressed syntaxes |
+| Query/Retrieve Models | Patient/Study Root | Yes | Find, Move, Get for both models |
+| Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |
+| MPPS | Yes | Yes | Via N-CREATE/N-SET |
+| Print Management | Yes | Yes | SOP Class UIDs defined |
+| Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
+| CLI Tools | 7 tools | 5 tools | echoscu, storescu, storescp, findscu, movescu |
+| Async Operations | Thread pool | Goroutines | Native Go concurrency |
+| Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
+
+### Supported File Formats
+
+The network module works with any DICOM data regardless of source format:
+
+| Format | Extension | Support |
+|--------|-----------|---------|
+| Standard DICOM | `.dcm` | Full |
+| Siemens IMA | `.ima` | Full |
+| DICOMDIR | `DICOMDIR` | Full |
+| Raw DICOM | (none) | Full |
+| DICOM Part 10 | `.dicom` | Full |
+
+### Handler Patterns
+
+```go
+// 1. Echo-only (verification server)
+scp.SetHandler(&network.EchoHandler{})
+
+// 2. Storage with callback
+scp.SetHandler(&network.StorageHandler{
+    OnStore: func(ctx context.Context, sopClass, sopInstance string, ds *dataset.Dataset) uint16 {
+        // Save to disk, database, cloud storage, etc.
+        return network.StatusSuccess
+    },
+})
+
+// 3. Query/Retrieve with callbacks
+scp.SetHandler(&network.QueryRetrieveHandler{
+    OnFind: func(ctx context.Context, sopClass string, query *dataset.Dataset) ([]*dataset.Dataset, error) {
+        // Search database, return matching results
+        return results, nil
+    },
+})
+
+// 4. Modality Worklist
+scp.SetHandler(&network.WorklistHandler{
+    OnWorklist: func(ctx context.Context, query *dataset.Dataset) ([]*dataset.Dataset, error) {
+        // Return scheduled procedures
+        return procedures, nil
+    },
+})
+
+// 5. Composite handler (mix & match)
+h := network.NewCompositeHandler()
+h.SetStoreHandler(myStoreHandler)
+h.SetFindHandler(myFindHandler)
+scp.SetHandler(h)
+
+// 6. Custom handler (implement the interface)
+type MyHandler struct { network.BaseHandler }
+func (h *MyHandler) HandleCStore(ctx context.Context, req *network.CStoreRequest) (*network.CStoreResponse, error) {
+    // Full control over request processing
+}
+```
+
 ## Features
 
 ### DICOM Standards Compliance
@@ -210,27 +334,33 @@ The library is organized into focused packages, each handling a specific DICOM a
 |----------|--------|
 | DICOM PS3.5 - Data Structures and Encoding | Supported |
 | DICOM PS3.6 - Data Dictionary | Supported (5,000+ tags) |
+| DICOM PS3.7 - Message Exchange (DIMSE) | Supported |
+| DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
-| DICOM PS3.15 - Security and System Management (Annex E) | Supported (de-identification) |
+| DICOM PS3.15 - Security (TLS, de-identification) | Supported |
 | DICOM JSON Model (Part 18) | Supported |
 | ISO 2022 - Character set escape sequences | Supported |
 
 ### Transfer Syntax Support
 
-| Transfer Syntax | Read | Write |
-|----------------|------|-------|
-| Implicit VR Little Endian | Yes | Yes |
-| Explicit VR Little Endian | Yes | Yes |
-| Explicit VR Big Endian | Yes | Yes |
-| DEFLATE (zlib) | Yes | No |
-| RLE Lossless | Yes | No |
-| JPEG Baseline | Yes | No |
-| JPEG-LS | Planned | Planned |
-| JPEG 2000 | Planned | Planned |
+| Transfer Syntax | File I/O | Network |
+|----------------|----------|---------|
+| Implicit VR Little Endian | Read/Write | Yes |
+| Explicit VR Little Endian | Read/Write | Yes |
+| Explicit VR Big Endian | Read/Write | Yes |
+| Deflated Explicit VR LE | Read | Yes |
+| RLE Lossless | Read | Yes |
+| JPEG Baseline | Read | Yes |
+| JPEG Extended | Read | Yes |
+| JPEG Lossless | Read | Yes |
+| JPEG-LS Lossless | Read | Yes |
+| JPEG-LS Near-Lossless | Read | Yes |
+| JPEG 2000 Lossless | Read | Yes |
+| JPEG 2000 | Read | Yes |
 
 ### Thread Safety
 
-All mutable data structures use `sync.RWMutex` for concurrent access. Datasets, sequences, and managers are safe for concurrent reads with exclusive writes.
+All mutable data structures use `sync.RWMutex` for concurrent access. Datasets, sequences, and managers are safe for concurrent reads with exclusive writes. The SCP server spawns a goroutine per association for concurrent client handling.
 
 ### De-identification Profiles
 
@@ -254,8 +384,11 @@ go build ./...
 # Build the CLI tool
 go build -o dicom .
 
-# Run all tests
+# Run all tests (71 network tests + file I/O tests)
 go test -race ./...
+
+# Run network tests specifically
+go test -v ./network/...
 
 # Run tests with coverage
 go test -race -coverprofile=coverage.out ./... && go tool cover -html=coverage.out
@@ -274,6 +407,7 @@ See the [examples](./examples/) directory for complete working examples:
 - **[Print Dataset](./examples/input_output/printing_dataset/)** - Displaying dataset contents
 - **[Sequences](./examples/metadata_processing/sequences/)** - Working with nested sequences
 - **[Image Processing](./examples/image_processing/)** - Reslicing, downsizing, waveforms
+- **[Networking](./examples/networking/)** - SCU/SCP, C-ECHO, C-STORE, C-FIND, handler patterns
 
 ## Contributing
 
@@ -297,12 +431,16 @@ MIT License - see [LICENSE](./LICENSE) for details.
 
 - [DICOM Standard](https://www.dicomstandard.org/) - The foundation this library is built on
 - [pydicom](https://pydicom.github.io/) - Python DICOM library that inspired the API design
+- [pynetdicom](https://github.com/pydicom/pynetdicom) - Python DICOM networking library that inspired the network module
 - [Go Community](https://golang.org/) - Excellent standard library and ecosystem
 
 ## Resources
 
 - [DICOM Standard Browser](https://dicom.innolitics.com/ciods) - Interactive tag browser
+- [pynetdicom Documentation](https://pydicom.github.io/pynetdicom/) - Reference for DICOM networking concepts
 - [DICOM PS3.5 - Data Structures](https://dicom.nema.org/medical/dicom/current/output/html/part05.html)
 - [DICOM PS3.6 - Data Dictionary](https://dicom.nema.org/medical/dicom/current/output/html/part06.html)
+- [DICOM PS3.7 - Message Exchange](https://dicom.nema.org/medical/dicom/current/output/html/part07.html)
+- [DICOM PS3.8 - Network Communication](https://dicom.nema.org/medical/dicom/current/output/html/part08.html)
 - [DICOM PS3.10 - Media Storage](https://dicom.nema.org/medical/dicom/current/output/html/part10.html)
 - [DICOM PS3.15 - Security Profiles](https://dicom.nema.org/medical/dicom/current/output/html/part15.html)

@@ -80,31 +80,53 @@ func (c *CLI) ShowHelp() {
 	fmt.Printf("COMMANDS:\n")
 
 	// Display commands in a specific order
-	commands := []string{"show", "info", "convert", "tag-doc", "codify", "help", "version"}
-	descriptions := map[string]string{
+	fmt.Printf("  FILE COMMANDS:\n")
+	fileCommands := []string{"show", "info", "convert", "tag-doc", "codify"}
+	fileDescriptions := map[string]string{
 		"show":    "Display DICOM file contents",
 		"info":    "Show DICOM file metadata and information",
 		"convert": "Convert DICOM files to other formats (JSON, CSV, NIfTI)",
 		"tag-doc": "Generate documentation for DICOM tags",
 		"codify":  "Read a DICOM file and produce Go code to create it",
-		"help":    "Display help for commands",
-		"version": "Display version information",
 	}
-
-	for _, cmdName := range commands {
-		if desc, ok := descriptions[cmdName]; ok {
-			fmt.Printf("  %-12s %s\n", cmdName, desc)
+	for _, cmdName := range fileCommands {
+		if desc, ok := fileDescriptions[cmdName]; ok {
+			fmt.Printf("    %-12s %s\n", cmdName, desc)
 		}
 	}
+
+	fmt.Printf("\n  NETWORK COMMANDS:\n")
+	netCommands := []string{"echoscu", "echoscp", "storescu", "storescp", "findscu", "movescu", "getscu", "qrscp"}
+	netDescriptions := map[string]string{
+		"echoscu":  "DICOM Echo SCU — verification (ping)",
+		"echoscp":  "DICOM Echo SCP — verification server",
+		"storescu": "DICOM Store SCU — send DICOM files (.dcm, .ima, etc.)",
+		"storescp": "DICOM Store SCP — receive and save DICOM files",
+		"findscu":  "DICOM Find SCU — query for patients/studies/series",
+		"movescu":  "DICOM Move SCU — retrieve studies to a destination",
+		"getscu":   "DICOM Get SCU — retrieve on same association",
+		"qrscp":    "DICOM Q/R SCP — combined store + query/retrieve server",
+	}
+	for _, cmdName := range netCommands {
+		if desc, ok := netDescriptions[cmdName]; ok {
+			fmt.Printf("    %-12s %s\n", cmdName, desc)
+		}
+	}
+
+	fmt.Printf("\n  OTHER:\n")
+	fmt.Printf("    %-12s %s\n", "help", "Display help for commands")
+	fmt.Printf("    %-12s %s\n", "version", "Display version information")
 
 	fmt.Printf("\nGLOBAL OPTIONS:\n")
 	fmt.Printf("  -h, --help      Show help message\n")
 	fmt.Printf("  -v, --version   Show version information\n")
 	fmt.Printf("\nEXAMPLES:\n")
 	fmt.Printf("  %s show patient.dcm\n", c.Name)
-	fmt.Printf("  %s info patient.dcm --verbose\n", c.Name)
-	fmt.Printf("  %s convert patient.dcm --format json\n", c.Name)
-	fmt.Printf("  %s help show\n", c.Name)
+	fmt.Printf("  %s echoscu pacs.hospital.com:11112\n", c.Name)
+	fmt.Printf("  %s storescu -aec PACS pacs:11112 study/*.dcm\n", c.Name)
+	fmt.Printf("  %s storescp -port 11112 -output ./received/\n", c.Name)
+	fmt.Printf("  %s findscu -patient-name \"Smith*\" pacs:11112\n", c.Name)
+	fmt.Printf("  %s movescu -dest MY_SCP -study 1.2.3.4 pacs:11112\n", c.Name)
 	fmt.Printf("\nUse '%s help <command>' for more information on a specific command.\n", c.Name)
 }
 
