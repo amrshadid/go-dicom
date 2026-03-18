@@ -1,0 +1,75 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- **Anonymization module** (`anonymize/`) - DICOM de-identification per PS3.15 Annex E
+  - Multiple profiles: Basic, Clean Descriptors, Retain Dates, Retain Patient Chars, etc.
+  - Consistent UID remapping across anonymization sessions
+  - Custom per-tag action overrides
+- **Private tag dictionary** - 10,500+ private tags from major vendors (GE, Siemens, Philips, Toshiba, and more)
+- **Project infrastructure** - CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, Makefile, .golangci.yml
+- **GitHub templates** - Issue templates (bug report, feature request), PR template
+
+### Changed
+- **Test organization** - Moved tests from `tests/` subdirectories to same directory as source (idiomatic Go)
+- **Go version** - Minimum Go version set to 1.22 (aligned across go.mod, README, and CI)
+- **CI/CD** - Updated GitHub Actions to latest versions (setup-go@v5, golangci-lint-action@v6)
+- **README** - Complete rewrite with accurate feature matrix, examples, and architecture overview
+
+### Fixed
+- **Build error** - Added missing `privateDictionary` variable that prevented compilation
+- **Deprecated API** - Replaced `ioutil.TempFile` with `os.CreateTemp` in tests
+- **VM validation** - Implemented full Value Multiplicity range validation (1-n, 2-2n, etc.)
+- **External codecs** - JPEG-LS, JPEG-2000, JPEG Lossless now return proper errors instead of nil
+- **Waveform serialization** - Implemented sequence serialization in filewriter
+
+## [1.0.0] - 2024-10-24
+
+### Added
+
+#### Core Features
+- **27 Specialized DICOM Modules** organized by responsibility
+  - **Core I/O**: filebase, filereader, filewriter, fileutil, fileset
+  - **Data Model**: dataset, dataelem, tag, element, sequence, uid, valuerep, values, multival
+  - **Encoding**: charset (30+ encodings), compress, encaps
+  - **Imaging**: pixels, overlays, waveforms
+  - **Clinical**: sr (structured reports)
+  - **Serialization**: jsonrep (DICOM JSON Model)
+  - **Infrastructure**: config, errors, hooks, util
+  - **CLI**: 7 commands (show, info, convert, codify, tag-doc, help, version)
+
+#### DICOM Standards Compliance
+- DICOM PS3.5 - Data Structures and Encoding
+- DICOM PS3.6 - Data Dictionary (5,000+ standard tags)
+- DICOM PS3.10 - Media Storage and File Format
+- ISO 2022 - Character set escape sequences
+- DICOM JSON Model (Part 18)
+
+#### Key Features
+- Thread-safe operations with `sync.RWMutex`
+- O(1) tag dictionary lookup
+- Streaming I/O for large files
+- Buffer pooling for reduced allocations
+- Pixel data extraction (8/16/32-bit, multi-frame)
+- Windowing and color space conversion
+- Decompression: DEFLATE, RLE, JPEG
+- Physiological waveform support (ECG, EEG)
+- Structured report handling with coded concepts
+- Overlay management with ROI analysis
+- Hook/plugin system for extensibility
+- 30+ international character encodings
+
+### License
+
+MIT License - See [LICENSE](./LICENSE) for details.
+
+---
+
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0

@@ -1,0 +1,48 @@
+#!/bin/sh
+# Pre-commit hook for go-dicom
+# Runs formatting check, vet, and tests before allowing a commit.
+#
+# Install with: git config core.hooksPath .githooks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "  Checking gofmt..."
+UNFORMATTED=$(gofmt -l . 2>&1 | grep -v vendor || true)
+if [ -n "$UNFORMATTED" ]; then
+    echo "ERROR: The following files are not formatted with gofmt:"
+    echo "$UNFORMATTED"
+    echo ""
+    echo "Run 'gofmt -s -w .' to fix."
+    exit 1
+fi
+
+# Run go vet
+echo "  Running go vet..."
+go vet ./... 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR: go vet found issues."
+    exit 1
+fi
+
+# Run tests
+echo "  Running tests..."
+go test -race -timeout 3m ./... > /dev/null 2>&1
+if [ $? -ne 0 ]; then
+    echo "ERROR: Tests failed. Run 'go test ./...' to see details."
+    exit 1
+fi
+
+# Run golangci-lint if available
+if command -v golangci-lint > /dev/null 2>&1; then
+    echo "  Running golangci-lint..."
+    golangci-lint run ./... 2>&1
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Linter found issues."
+        exit 1
+    fi
+fi
+
+echo "All pre-commit checks passed."

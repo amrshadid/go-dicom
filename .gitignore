@@ -1,0 +1,279 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.cover
+*.coverprofile
+
+# Go workspace file
+go.work
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Build output
+bin/
+dist/
+build/
+*.o
+*.a
+
+# Generated binaries
+/dicom
+/go-dicom
+/diom
+
+# IDE-specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.vim/
+
+# Editor backups and temp files
+*.bak
+*.backup
+*~
+.#*
+*#
+
+# Environment files
+.env
+.env.local
+.env.*.local
+.envrc
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.AppleDouble
+.LSOverride
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log
+
+# DICOM-specific temporary files
+*.dcm.bak
+*.dcm.tmp
+*.dcm~
+dicom_temp/
+dicom_cache/
+
+# Test artifacts and coverage
+coverage/
+coverage.out
+coverage.html
+test-results/
+test-reports/
+
+# Performance profiling
+*.prof
+*.pprof
+cpu.prof
+mem.prof
+trace.out
+
+# Local development files
+local/
+scratch/
+notes/
+examples/output/
+examples/*.dcm.json
+examples/*.dcm.csv
+
+# IDE run configurations
+.run/
+
+# Generated documentation
+docs/generated/
+api-docs/
+godoc-generated/
+
+# Build artifacts
+*.zip
+*.tar.gz
+*.tar.bz2
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.so.*
+*.dylib
+*.dll
+*.class
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.arm
+*.arm64
+
+# Go coverage
+*.coverprofile
+coverage.txt
+
+# Intellij
+*.iml
+*.iws
+*.ipr
+
+# Mac files
+.DS_Store
+
+# Linux files
+.directory
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Neovim
+.nvimrc
+.netrwhist
+
+# Air - live reload for Go
+tmp/
+
+# GoLand
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Delve debugger
+.dlv/
+
+# Testing
+test.dcm
+test_*.dcm
+*.test.dcm
+test-data/
+test-output/
+
+# DICOM files (exclude except test data)
+# *.dcm        # Uncomment to ignore all DICOM files
+
+# Project-specific
+config.local.yaml
+secrets.yaml
+private_keys/
+credentials/
+
+# Build-specific
+release/
+builds/
+
+# Backup files
+*.orig
+*.patch.bak
+*.save
+
+# Temporary build files
+*.a
+*.o
+*.lo
+*.la
+*.lai
+*.so
+*.so.*
+*.dylib
+*.egg-info/
+.Python
+
+# Packages
+*.egg
+.eggs/
+
+# Generated files
+*.generated.go
+*_gen.go
+
+# Documentation generated files
+docs/api/
+docs/build/
+
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Vagrant
+.vagrant/
+*.box
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache
+.cache/
+*.cache
+
+# Node modules (if any JavaScript tools are used)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Python virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Local test DICOM files (not part of repo)
+test-dicom-files/
+sample-data/
+
+# Logs
+*.log
+logs/
+
+# Private configurations
+.config/
+.credentials/
+.secrets/
+
+# Generated code
+generated/
+*_generated.go
+
+# Vendored dependencies
+vendor/
+Godeps/
