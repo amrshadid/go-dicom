@@ -163,10 +163,24 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	}
 
 	// Handle DIMSE messages
-	s.handleAssociation(ctx, assoc, handler)
+	s.handleAssociation(ctx, assoc, handler, transport, rq)
 }
 
-func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler Handler) {
+func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler Handler,
+	transport *Transport, rq *AssociateRQ) {
+	// Attach association info to the context so handlers can access it.
+	info := &AssociationInfo{
+		CallingAE:                  assoc.CallingAE(),
+		CalledAE:                   assoc.CalledAE(),
+		RemoteAddr:                 transport.RemoteAddr(),
+		LocalAddr:                  transport.LocalAddr(),
+		MaxPDUSize:                 assoc.MaxPDUSize(),
+		AcceptedContexts:           assoc.AcceptedContexts(),
+		PeerImplementationClassUID: rq.UserInformation.ImplementationClassUID,
+		PeerImplementationVersion:  rq.UserInformation.ImplementationVersion,
+	}
+	ctx = ContextWithAssociationInfo(ctx, info)
+
 	for {
 		if assoc.State() != StateAssociated {
 			return
