@@ -33,6 +33,7 @@ func main() {
 		fmt.Println("  go run . store             - Run Store SCP+SCU example")
 		fmt.Println("  go run . find              - Run Find SCP+SCU example")
 		fmt.Println("  go run . handlers          - Show handler patterns")
+		fmt.Println("  go run . associnfo         - Show association info in context")
 		fmt.Println("  go run . all               - Run all examples")
 		return
 	}
@@ -46,6 +47,8 @@ func main() {
 		runFindExample()
 	case "handlers":
 		showHandlerPatterns()
+	case "associnfo":
+		showAssociationInfoExample()
 	case "all":
 		runEchoExample()
 		fmt.Println()
@@ -54,6 +57,8 @@ func main() {
 		runFindExample()
 		fmt.Println()
 		showHandlerPatterns()
+		fmt.Println()
+		showAssociationInfoExample()
 	default:
 		fmt.Printf("Unknown example: %s\n", os.Args[1])
 	}
@@ -215,11 +220,16 @@ func showHandlerPatterns() {
 	fmt.Println("   scp.SetHandler(h)")
 	fmt.Println()
 
-	// Pattern 5: Custom handler
-	fmt.Println("5. Custom Handler (implement interface):")
+	// Pattern 5: Custom handler with association info
+	fmt.Println("5. Custom Handler with Association Info:")
 	fmt.Println("   type MyHandler struct { network.BaseHandler }")
-	fmt.Println("   func (h *MyHandler) HandleCStore(ctx, req) (*CStoreResponse, error) { ... }")
-	fmt.Println("   func (h *MyHandler) HandleCFind(ctx, req) ([]*CFindResponse, error) { ... }")
+	fmt.Println("   func (h *MyHandler) HandleCStore(ctx context.Context, req *network.CStoreRequest) (*network.CStoreResponse, error) {")
+	fmt.Println("       info := network.AssociationInfoFromContext(ctx)")
+	fmt.Println("       if info != nil {")
+	fmt.Println("           log.Println(\"C-STORE from\", info.CallingAE, \"IP:\", info.RemoteAddr)")
+	fmt.Println("       }")
+	fmt.Println("       // ... handle store")
+	fmt.Println("   }")
 	fmt.Println()
 
 	// Supported modalities
@@ -230,4 +240,41 @@ func showHandlerPatterns() {
 	fmt.Println("  File formats: .dcm, .ima, .dicom, DICOMDIR, raw DICOM (extensionless)")
 	fmt.Println("  Documents: PDF, CDA, STL, OBJ (encapsulated)")
 	fmt.Println("  Waveforms: ECG, EEG, EMG, hemodynamic, respiratory")
+}
+
+// showAssociationInfoExample demonstrates accessing association info from handler context.
+func showAssociationInfoExample() {
+	fmt.Println("=== Association Info in Context ===")
+	fmt.Println()
+	fmt.Println("When implementing a Handler, you can access full association details")
+	fmt.Println("from the context passed to every handler method:")
+	fmt.Println()
+	fmt.Println("  type AuditHandler struct { network.BaseHandler }")
+	fmt.Println()
+	fmt.Println("  func (h *AuditHandler) HandleCStore(ctx context.Context, req *network.CStoreRequest) (*network.CStoreResponse, error) {")
+	fmt.Println("      info := network.AssociationInfoFromContext(ctx)")
+	fmt.Println("      if info != nil {")
+	fmt.Println("          fmt.Println(\"Caller:     \", info.CallingAE)")
+	fmt.Println("          fmt.Println(\"Called:      \", info.CalledAE)")
+	fmt.Println("          fmt.Println(\"Remote addr:\", info.RemoteAddr)")
+	fmt.Println("          fmt.Println(\"Local addr: \", info.LocalAddr)")
+	fmt.Println("          fmt.Println(\"Max PDU:    \", info.MaxPDUSize)")
+	fmt.Println("          fmt.Println(\"Peer impl:  \", info.PeerImplementationClassUID, info.PeerImplementationVersion)")
+	fmt.Println("          fmt.Println(\"Contexts:   \", len(info.AcceptedContexts), \"negotiated\")")
+	fmt.Println("      }")
+	fmt.Println("      return &network.CStoreResponse{")
+	fmt.Println("          MessageIDRespondedTo: req.MessageID,")
+	fmt.Println("          Status:               network.StatusSuccess,")
+	fmt.Println("      }, nil")
+	fmt.Println("  }")
+	fmt.Println()
+	fmt.Println("Available fields in AssociationInfo:")
+	fmt.Println("  CallingAE                  - Remote peer AE title (the SCU)")
+	fmt.Println("  CalledAE                   - Local AE title (the SCP)")
+	fmt.Println("  RemoteAddr                 - Peer IP:port (net.Addr)")
+	fmt.Println("  LocalAddr                  - Local IP:port (net.Addr)")
+	fmt.Println("  MaxPDUSize                 - Negotiated max PDU size")
+	fmt.Println("  AcceptedContexts           - Negotiated presentation contexts")
+	fmt.Println("  PeerImplementationClassUID - Peer's implementation class UID")
+	fmt.Println("  PeerImplementationVersion  - Peer's implementation version name")
 }

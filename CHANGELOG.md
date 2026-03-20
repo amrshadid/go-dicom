@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-03-20
+
+### Added
+- **Association context info** (`network.AssociationInfo`) — Handlers can now access full association details via `AssociationInfoFromContext(ctx)`:
+  - `CallingAE` / `CalledAE` — peer and local AE titles
+  - `RemoteAddr` / `LocalAddr` — network addresses (IP:port)
+  - `MaxPDUSize` — negotiated maximum PDU size
+  - `AcceptedContexts` — negotiated presentation contexts
+  - `PeerImplementationClassUID` / `PeerImplementationVersion` — peer's DICOM implementation info
+- **Networking example** updated with `associnfo` subcommand demonstrating association context usage
+
 ## [1.1.0] - 2026-03-18
 
 ### Added
@@ -108,6 +119,7 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
+[1.1.1]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...v1.1.0
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.1.1...HEAD
 [1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0
