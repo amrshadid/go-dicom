@@ -10,7 +10,10 @@ import (
 	"syscall"
 
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/filewriter"
 	"github.com/amrshadid/go-dicom/network"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // StoreSCPCommand implements the storescp CLI command.
@@ -51,8 +54,11 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 		OnStore: func(_ context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {
 			received++
 			filename := filepath.Join(c.outputDir, sopInstanceUID+".dcm")
+			if err := writeDICOMFile(filename, sopClassUID, sopInstanceUID, ds); err != nil {
+				fmt.Printf("Error writing %s: %v\n", filename, err)
+				return network.StatusUnableToProcess
+			}
 			fmt.Printf("Received: %s (SOP Class: %s) -> %s\n", sopInstanceUID, sopClassUID, filename)
-			_ = ds // In a full implementation, write ds to file
 			return network.StatusSuccess
 		},
 	}
@@ -83,4 +89,48 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 
 	fmt.Printf("Received %d file(s)\n", received)
 	return nil
+}
+
+// writeDICOMFile writes a dataset to a DICOM Part 10 file.
+func writeDICOMFile(filename, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	defer f.Close()
+
+	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(f))
+	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
+		MediaStorageSOPClassUID:    sopClassUID,
+		MediaStorageSOPInstanceUID: sopInstanceUID,
+		TransferSyntaxUID:         network.ExplicitVRLittleEndianUID,
+		ImplementationClassUID:    network.DefaultImplementationClassUID,
+		ImplementationVersionName: network.DefaultImplementationVersionName,
+	})
+
+	for _, elem := range ds.GetAll() {
+		t, ok := elem.GetTag().(tag.Tag)
+		if !ok {
+			continue
+		}
+		val := elem.GetValue()
+		data, ok := val.([]byte)
+		if !ok {
+			continue
+		}
+		vr := string(elem.GetVR())
+		if err := w.AddDataElement(&filewriter.DataElement{
+			Tag:    t,
+			VR:     vr,
+			Value:  data,
+			Length: uint32(len(data)),
+		}); err != nil {
+			return fmt.Errorf("add element %s: %w", t, err)
+		}
+	}
+
+	if err := w.Write(); err != nil {
+		return fmt.Errorf("write DICOM: %w", err)
+	}
+	return w.Close()
 }
