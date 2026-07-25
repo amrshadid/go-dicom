@@ -377,11 +377,13 @@ func (dfr *DCMFileReader) storeMetaValue(metaInfo *FileMetaInfo, t tag.Tag, vr s
 		metaInfo.ImplementationClassUID = toString(value)
 	case group == 0x0002 && element == 0x0013:
 		metaInfo.ImplementationVersionName = toString(value)
-	case group == 0x0002 && element == 0x0100:
+	// Application Entity titles are (0002,0016..0018) per PS3.6; the 0x0100
+	// range previously used here belongs to Private Information attributes.
+	case group == 0x0002 && element == 0x0016:
 		metaInfo.SourceApplicationEntityTitle = toString(value)
-	case group == 0x0002 && element == 0x0101:
+	case group == 0x0002 && element == 0x0017:
 		metaInfo.SendingApplicationEntityTitle = toString(value)
-	case group == 0x0002 && element == 0x0102:
+	case group == 0x0002 && element == 0x0018:
 		metaInfo.ReceivingApplicationEntityTitle = toString(value)
 	}
 
