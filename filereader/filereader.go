@@ -7,8 +7,10 @@ import (
 
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
+	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/hooks"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 	"github.com/amrshadid/go-dicom/uid"
 )
@@ -35,6 +37,7 @@ type DCMFileReader struct {
 	settings     *config.Settings // Configuration settings for reading behavior
 	hookChain    *hooks.HookChain // Hook chain for element processing
 	elementCount int              // Count of elements read
+	metaWarnings []string         // Non-fatal issues found while reading the meta header
 }
 
 // NewDCMFileReader creates a new DICOM file reader.
@@ -163,11 +166,12 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 
 		value := make([]byte, valueLength)
 		if err := dfr.reader.ReadBytes(value); err != nil {
-			// Handle read error gracefully - file meta info might be incomplete/corrupted
-			// Log warning but continue with what we have so far
-			fmt.Printf("Warning: skipping file meta element %s (expected %d bytes): %v\n",
-				tagValue.String(), valueLength, err)
-			// Return what we have - rest of file may be readable
+			// Handle read error gracefully - file meta info might be incomplete/corrupted.
+			// Log a warning but continue with what we have so far; the rest of the
+			// file may still be readable.
+			dfr.metaWarnings = append(dfr.metaWarnings,
+				fmt.Sprintf("skipped file meta element %s (expected %d bytes): %v",
+					tagValue.String(), valueLength, err))
 			return metaInfo, nil
 		}
 		dfr.position += int64(valueLength)
@@ -197,16 +201,47 @@ func (dfr *DCMFileReader) ReadTag() (tag.Tag, error) {
 	return tag.New(uint16(group), uint16(element)), nil
 }
 
+// UndefinedLength is the DICOM sentinel value (0xFFFFFFFF) used in the Value
+// Length field to indicate that an element's extent is delimited by a
+// Sequence/Item Delimitation Item rather than stated up front. It is legal for
+// Sequences (SQ) and for encapsulated Pixel Data. See PS3.5 Section 7.1.
+const UndefinedLength uint32 = 0xFFFFFFFF
+
 // ReadDataElement reads a single data element from the dataset.
 type DataElementValue struct {
 	Tag    tag.Tag
 	VR     string
 	Value  []byte
 	Length uint32
+
+	// UndefinedLength reports whether the element declared length 0xFFFFFFFF.
+	// Such elements carry no inline value; their content is delimited and is
+	// parsed separately (see ReadSequence).
+	UndefinedLength bool
+
+	// Items holds the parsed child datasets of a Sequence (SQ) element.
+	// It is nil for non-sequence elements.
+	Items []*SequenceItemValue
 }
 
-// ReadDataElement reads a data element.
+// SequenceItemValue is a single item within a Sequence (SQ) element,
+// holding the data elements nested inside that item.
+type SequenceItemValue struct {
+	Elements []*DataElementValue
+}
+
+// MaxSequenceDepth bounds how deeply nested sequences may be parsed. Real
+// DICOM objects nest a handful of levels at most; the limit stops a crafted or
+// corrupt file from driving unbounded recursion.
+const MaxSequenceDepth = 64
+
+// ReadDataElement reads a data element, including any nested sequence content.
 func (dfr *DCMFileReader) ReadDataElement(explicitVR bool) (*DataElementValue, error) {
+	return dfr.readDataElement(explicitVR, 0)
+}
+
+// readDataElement reads one data element at the given sequence nesting depth.
+func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElementValue, error) {
 	tagValue, err := dfr.ReadTag()
 	if err != nil {
 		return nil, err
@@ -214,6 +249,20 @@ func (dfr *DCMFileReader) ReadDataElement(explicitVR bool) (*DataElementValue, e
 
 	element := &DataElementValue{
 		Tag: tagValue,
+	}
+
+	// Item and delimitation items (group FFFE) are always encoded as
+	// tag + 4-byte length with no VR, even inside explicit VR transfer
+	// syntaxes. See PS3.5 Section 7.5.
+	if tagValue.Group() == 0xFFFE {
+		length, err := dfr.reader.ReadUint32()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read item length: %w", err)
+		}
+		dfr.position += 4
+		element.Length = length
+		element.UndefinedLength = length == UndefinedLength
+		return element, nil
 	}
 
 	if explicitVR {
@@ -254,9 +303,46 @@ func (dfr *DCMFileReader) ReadDataElement(explicitVR bool) (*DataElementValue, e
 		}
 		element.Length = length
 		dfr.position += 4
+		// Implicit VR carries no VR on the wire; recover it from the dictionary
+		// so sequences can be recognized and descended into.
+		element.VR = tagValue.GetVR()
+	}
+
+	element.UndefinedLength = element.Length == UndefinedLength
+
+	// Sequences are parsed into items rather than read as an opaque value.
+	if isSequenceVR(element.VR) {
+		if depth >= MaxSequenceDepth {
+			return nil, fmt.Errorf("sequence nesting exceeds maximum depth %d at tag %s",
+				MaxSequenceDepth, element.Tag.String())
+		}
+		items, err := dfr.readSequenceItems(explicitVR, depth+1, element.Length)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read sequence %s: %w", element.Tag.String(), err)
+		}
+		element.Items = items
+		return element, nil
+	}
+
+	// An undefined length on a non-sequence element means encapsulated
+	// (fragmented) pixel data: a run of items terminated by a Sequence
+	// Delimitation Item. Concatenate the fragments into the element value.
+	if element.UndefinedLength {
+		value, err := dfr.readEncapsulatedValue()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read encapsulated value for %s: %w",
+				element.Tag.String(), err)
+		}
+		element.Value = value
+		return element, nil
 	}
 
 	if element.Length > 0 {
+		// Guard the allocation against a corrupt or hostile length field before
+		// committing memory to it.
+		if err := dfr.checkValueLength(element.Length); err != nil {
+			return nil, fmt.Errorf("invalid length for tag %s: %w", element.Tag.String(), err)
+		}
 		value := make([]byte, element.Length)
 		if err := dfr.reader.ReadBytes(value); err != nil {
 			return nil, fmt.Errorf("failed to read data element value for tag %s (claimed %d bytes): %w",
@@ -267,6 +353,205 @@ func (dfr *DCMFileReader) ReadDataElement(explicitVR bool) (*DataElementValue, e
 	}
 
 	return element, nil
+}
+
+// lengthCheckThreshold is the declared value length above which the reader
+// verifies the claim against the actual bytes remaining. Verification costs
+// three seeks, so small elements — the overwhelming majority — skip it; an
+// allocation of this size is harmless even when the length turns out to be
+// wrong.
+const lengthCheckThreshold = 16 << 20
+
+// checkValueLength rejects declared value lengths that cannot be satisfied by
+// the underlying stream. A corrupt or crafted file can claim a multi-gigabyte
+// element; allocating for it before reading would exhaust memory.
+func (dfr *DCMFileReader) checkValueLength(length uint32) error {
+	if length < lengthCheckThreshold {
+		return nil
+	}
+	remaining, err := dfr.remainingBytes()
+	if err != nil {
+		// Size is not knowable (non-seekable source); fall back to reading and
+		// letting the short-read check report the truncation.
+		return nil //nolint:nilerr // unknown size is not an error, just unverifiable
+	}
+	if int64(length) > remaining {
+		return fmt.Errorf("declared length %d exceeds %d bytes remaining in stream", length, remaining)
+	}
+	return nil
+}
+
+// remainingBytes reports how many bytes are left in the underlying stream,
+// restoring the stream position before returning.
+func (dfr *DCMFileReader) remainingBytes() (int64, error) {
+	current, err := dfr.reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	end, err := dfr.reader.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := dfr.reader.Seek(current, io.SeekStart); err != nil {
+		return 0, err
+	}
+	return end - current, nil
+}
+
+// readSequenceItems reads the items of a Sequence (SQ) element. A declared
+// length of UndefinedLength means the sequence runs until a Sequence
+// Delimitation Item; otherwise it spans exactly declaredLength bytes.
+func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declaredLength uint32) ([]*SequenceItemValue, error) {
+	var items []*SequenceItemValue
+
+	undefined := declaredLength == UndefinedLength
+	if !undefined {
+		if err := dfr.checkValueLength(declaredLength); err != nil {
+			return nil, err
+		}
+	}
+	start := dfr.position
+
+	for {
+		if !undefined && dfr.position-start >= int64(declaredLength) {
+			return items, nil
+		}
+
+		marker, err := dfr.readItemHeader()
+		if err != nil {
+			if err == io.EOF {
+				return items, nil
+			}
+			return nil, err
+		}
+
+		switch marker.tag {
+		case tag.SequenceDelimiterTag:
+			// End of an undefined-length sequence.
+			return items, nil
+		case tag.ItemTag:
+			item, err := dfr.readSequenceItem(explicitVR, depth, marker.length)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, item)
+		default:
+			return nil, fmt.Errorf("unexpected tag %s inside sequence (expected item or delimiter)",
+				marker.tag.String())
+		}
+	}
+}
+
+// itemHeader is the tag + length pair that prefixes a sequence item or delimiter.
+type itemHeader struct {
+	tag    tag.Tag
+	length uint32
+}
+
+// readItemHeader reads the tag and 4-byte length of an item or delimitation item.
+func (dfr *DCMFileReader) readItemHeader() (*itemHeader, error) {
+	t, err := dfr.ReadTag()
+	if err != nil {
+		return nil, err
+	}
+	length, err := dfr.reader.ReadUint32()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read item length: %w", err)
+	}
+	dfr.position += 4
+	return &itemHeader{tag: t, length: length}, nil
+}
+
+// readSequenceItem reads the data elements contained in a single sequence item.
+func (dfr *DCMFileReader) readSequenceItem(explicitVR bool, depth int, declaredLength uint32) (*SequenceItemValue, error) {
+	item := &SequenceItemValue{}
+
+	undefined := declaredLength == UndefinedLength
+	if !undefined {
+		if err := dfr.checkValueLength(declaredLength); err != nil {
+			return nil, err
+		}
+	}
+	start := dfr.position
+
+	for {
+		if !undefined && dfr.position-start >= int64(declaredLength) {
+			return item, nil
+		}
+
+		elem, err := dfr.readDataElement(explicitVR, depth)
+		if err != nil {
+			if err == io.EOF {
+				return item, nil
+			}
+			return nil, err
+		}
+
+		// An Item Delimitation Item closes an undefined-length item.
+		if elem.Tag == tag.ItemDelimiterTag {
+			return item, nil
+		}
+		// A Sequence Delimitation Item here means the enclosing sequence ended
+		// without an explicit item delimiter; treat the item as complete.
+		if elem.Tag == tag.SequenceDelimiterTag {
+			return item, nil
+		}
+
+		item.Elements = append(item.Elements, elem)
+	}
+}
+
+// readEncapsulatedValue reads the fragments of an undefined-length,
+// non-sequence element (encapsulated Pixel Data) and returns them
+// concatenated. The Basic Offset Table, when present, is the first item and is
+// skipped since frame boundaries are recovered by the encaps package.
+func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, error) {
+	var value []byte
+	first := true
+
+	for {
+		marker, err := dfr.readItemHeader()
+		if err != nil {
+			if err == io.EOF {
+				return value, nil
+			}
+			return nil, err
+		}
+
+		if marker.tag == tag.SequenceDelimiterTag {
+			return value, nil
+		}
+		if marker.tag != tag.ItemTag {
+			return nil, fmt.Errorf("unexpected tag %s in encapsulated data (expected item or delimiter)",
+				marker.tag.String())
+		}
+		if marker.length == UndefinedLength {
+			return nil, fmt.Errorf("encapsulated data item has undefined length")
+		}
+
+		if marker.length > 0 {
+			if err := dfr.checkValueLength(marker.length); err != nil {
+				return nil, err
+			}
+			fragment := make([]byte, marker.length)
+			if err := dfr.reader.ReadBytes(fragment); err != nil {
+				return nil, fmt.Errorf("failed to read encapsulated fragment (%d bytes): %w",
+					marker.length, err)
+			}
+			dfr.position += int64(marker.length)
+
+			// The first item is the Basic Offset Table, not pixel data.
+			if !first {
+				value = append(value, fragment...)
+			}
+		}
+		first = false
+	}
+}
+
+// isSequenceVR reports whether a VR denotes a Sequence of Items.
+func isSequenceVR(vr string) bool {
+	return vr == "SQ"
 }
 
 // GetPosition returns the current position in the file.
@@ -408,12 +693,43 @@ func ConvertRawDataElement(elem *DataElementValue, encoding string) (*hooks.RawD
 	return raw, nil
 }
 
-// ReadDICOMFile reads a complete DICOM file including preamble, meta header, and dataset.
+// DICOMFile is a parsed DICOM file: preamble, meta header, and dataset.
 type DICOMFile struct {
 	FileMetaInfo   *FileMetaInfo
 	DataElements   []*DataElementValue
 	ExplicitVR     bool
 	IsLittleEndian bool
+
+	// Warnings collects non-fatal issues found while parsing (unknown tags,
+	// retired tags, VR mismatches, truncated meta elements). Parsing continues
+	// past these; inspect the slice to surface them.
+	Warnings []string
+}
+
+// GetDataset converts the parsed file into a Dataset, recursively materializing
+// any nested sequences as sequence.Sequence values holding child Datasets.
+func (df *DICOMFile) GetDataset() *dataset.Dataset {
+	return elementsToDataset(df.DataElements)
+}
+
+// elementsToDataset builds a Dataset from parsed elements, descending into
+// sequence items.
+func elementsToDataset(elements []*DataElementValue) *dataset.Dataset {
+	ds := dataset.NewDataset()
+
+	for _, elem := range elements {
+		if elem.Items != nil || isSequenceVR(elem.VR) {
+			seq := sequence.New()
+			for _, item := range elem.Items {
+				_ = seq.Append(elementsToDataset(item.Elements))
+			}
+			_ = ds.AddSequence(elem.Tag, seq)
+			continue
+		}
+		_ = ds.Add(dataelem.NewDataElement(elem.Tag, dataelem.VR(elem.VR), elem.Value))
+	}
+
+	return ds
 }
 
 // ReadDICOMFile reads an entire DICOM file.
@@ -438,6 +754,7 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 
 	dicomFile.FileMetaInfo = metaInfo
+	dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
 
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
@@ -459,22 +776,28 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 				break
 			}
 			// Check if this is a length-related error (corrupted element)
-			if strings.Contains(errMsg, "claimed") && strings.Contains(errMsg, "bytes") {
-				fmt.Printf("Warning: skipping corrupted element at position %d: %v\n", dfr.position, err)
+			if strings.Contains(errMsg, "claimed") && strings.Contains(errMsg, "bytes") ||
+				strings.Contains(errMsg, "exceeds") {
+				dicomFile.Warnings = append(dicomFile.Warnings,
+					fmt.Sprintf("stopped at corrupted element at position %d: %v", dfr.position, err))
 				break
 			}
 			return nil, fmt.Errorf("failed to read data element: %w", err)
 		}
 
 		if err := validateDataElement(element); err != nil {
-			fmt.Printf("Warning validating tag %s: %v\n", element.Tag.String(), err)
+			dicomFile.Warnings = append(dicomFile.Warnings,
+				fmt.Sprintf("tag %s: %v", element.Tag.String(), err))
+		}
+
+		// A delimitation item at the top level is stray — sequence content is
+		// consumed by the sequence parser, so one appearing here marks the end
+		// of readable data rather than an element to keep.
+		if element.Tag == tag.SequenceDelimiterTag || element.Tag == tag.ItemDelimiterTag {
+			break
 		}
 
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
-
-		if element.Tag == tag.New(0xFFFE, 0xE0DD) || element.Tag == tag.New(0xFFFE, 0xE00D) {
-			break
-		}
 	}
 
 	return dicomFile, nil
