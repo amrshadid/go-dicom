@@ -53,37 +53,37 @@ const (
 	JPIPReferencedDeflateUID = "1.2.840.10008.1.2.4.95"
 
 	// MPEG2
-	MPEG2MainProfileUID            = "1.2.840.10008.1.2.4.100"
-	MPEG2MainProfileFragmentUID    = "1.2.840.10008.1.2.4.100.1"
-	MPEG2MainProfileHighUID        = "1.2.840.10008.1.2.4.101"
+	MPEG2MainProfileUID             = "1.2.840.10008.1.2.4.100"
+	MPEG2MainProfileFragmentUID     = "1.2.840.10008.1.2.4.100.1"
+	MPEG2MainProfileHighUID         = "1.2.840.10008.1.2.4.101"
 	MPEG2MainProfileHighFragmentUID = "1.2.840.10008.1.2.4.101.1"
 
 	// MPEG-4 AVC/H.264
-	MPEG4AVCH264HighProfileUID            = "1.2.840.10008.1.2.4.102"
-	MPEG4AVCH264HighProfileFragmentUID    = "1.2.840.10008.1.2.4.102.1"
-	MPEG4AVCH264BDCompatibleUID           = "1.2.840.10008.1.2.4.103"
-	MPEG4AVCH264BDCompatibleFragmentUID   = "1.2.840.10008.1.2.4.103.1"
-	MPEG4AVCH264HighProfile2DUID          = "1.2.840.10008.1.2.4.104"
-	MPEG4AVCH264HighProfile2DFragmentUID  = "1.2.840.10008.1.2.4.104.1"
-	MPEG4AVCH264HighProfile3DUID          = "1.2.840.10008.1.2.4.105"
-	MPEG4AVCH264HighProfile3DFragmentUID  = "1.2.840.10008.1.2.4.105.1"
-	MPEG4AVCH264StereoHighProfileUID      = "1.2.840.10008.1.2.4.106"
-	MPEG4AVCH264StereoHighFragmentUID     = "1.2.840.10008.1.2.4.106.1"
+	MPEG4AVCH264HighProfileUID           = "1.2.840.10008.1.2.4.102"
+	MPEG4AVCH264HighProfileFragmentUID   = "1.2.840.10008.1.2.4.102.1"
+	MPEG4AVCH264BDCompatibleUID          = "1.2.840.10008.1.2.4.103"
+	MPEG4AVCH264BDCompatibleFragmentUID  = "1.2.840.10008.1.2.4.103.1"
+	MPEG4AVCH264HighProfile2DUID         = "1.2.840.10008.1.2.4.104"
+	MPEG4AVCH264HighProfile2DFragmentUID = "1.2.840.10008.1.2.4.104.1"
+	MPEG4AVCH264HighProfile3DUID         = "1.2.840.10008.1.2.4.105"
+	MPEG4AVCH264HighProfile3DFragmentUID = "1.2.840.10008.1.2.4.105.1"
+	MPEG4AVCH264StereoHighProfileUID     = "1.2.840.10008.1.2.4.106"
+	MPEG4AVCH264StereoHighFragmentUID    = "1.2.840.10008.1.2.4.106.1"
 
 	// HEVC/H.265
 	HEVCH265MainProfileUID   = "1.2.840.10008.1.2.4.107"
 	HEVCH265Main10ProfileUID = "1.2.840.10008.1.2.4.108"
 
 	// JPEG XL
-	JPEGXLLosslessUID        = "1.2.840.10008.1.2.4.110"
+	JPEGXLLosslessUID          = "1.2.840.10008.1.2.4.110"
 	JPEGXLJPEGRecompressionUID = "1.2.840.10008.1.2.4.111"
-	JPEGXLUID                = "1.2.840.10008.1.2.4.112"
+	JPEGXLUID                  = "1.2.840.10008.1.2.4.112"
 
 	// High-Throughput JPEG 2000
-	HTJ2KLosslessUID             = "1.2.840.10008.1.2.4.201"
-	HTJ2KLosslessRPCLUID         = "1.2.840.10008.1.2.4.202"
-	HTJ2KUID                     = "1.2.840.10008.1.2.4.203"
-	JPIPHTJ2KReferencedUID       = "1.2.840.10008.1.2.4.204"
+	HTJ2KLosslessUID              = "1.2.840.10008.1.2.4.201"
+	HTJ2KLosslessRPCLUID          = "1.2.840.10008.1.2.4.202"
+	HTJ2KUID                      = "1.2.840.10008.1.2.4.203"
+	JPIPHTJ2KReferencedUID        = "1.2.840.10008.1.2.4.204"
 	JPIPHTJ2KReferencedDeflateUID = "1.2.840.10008.1.2.4.205"
 
 	// RLE
@@ -191,10 +191,19 @@ func NegotiatePresentationContexts(
 			ID: req.ID,
 		}
 
+		// A rejected result must still carry a Transfer Syntax sub-item (PS3.8 9.3.3.2),
+		// so fall back to a known-valid UID when the peer proposed none. A peer is free
+		// to send a presentation context with zero transfer syntax sub-items, so this
+		// must never index into an empty slice.
+		rejectionTS := ImplicitVRLittleEndianUID
+		if len(req.TransferSyntaxes) > 0 {
+			rejectionTS = req.TransferSyntaxes[0]
+		}
+
 		// Check abstract syntax support
 		if !supportedAbstractSyntaxes[req.AbstractSyntax] {
 			result.Result = PCResultAbstractSyntaxNotSupported
-			result.TransferSyntax = req.TransferSyntaxes[0] // Must include a TS per spec
+			result.TransferSyntax = rejectionTS
 			results = append(results, result)
 			continue
 		}
@@ -212,7 +221,7 @@ func NegotiatePresentationContexts(
 
 		if !found {
 			result.Result = PCResultTransferSyntaxNotSupported
-			result.TransferSyntax = req.TransferSyntaxes[0]
+			result.TransferSyntax = rejectionTS
 		}
 
 		results = append(results, result)
