@@ -7,8 +7,12 @@ import (
 	"github.com/amrshadid/go-dicom/cli"
 )
 
-// Version of the CLI application
-const Version = "1.1.0"
+// Version of the CLI application.
+//
+// Declared as a var, not a const, so release builds can stamp the real tag in
+// with -ldflags "-X main.Version=...". The linker cannot rewrite a const, so
+// making this a const silently turns that injection into a no-op.
+var Version = "1.2.0"
 
 func main() {
 	// Create CLI instance

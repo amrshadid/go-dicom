@@ -5,6 +5,103 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-26
+
+### Security
+
+- **SCP crash on malformed association request** — a peer proposing a presentation
+  context with zero Transfer Syntax sub-items caused an index-out-of-range panic in
+  `NegotiatePresentationContexts`, terminating the whole server process. Rejected
+  contexts now fall back to a valid Transfer Syntax UID as PS3.8 9.3.3.2 requires.
+- **Unbounded allocation from the PDU length field** — `DecodePDU` allocated a buffer
+  from a peer-controlled 32-bit length before reading any payload, so a declared
+  ~4 GiB PDU forced a 4 GiB allocation. Declared lengths are now capped at
+  `MaxPDULengthLimit` (128 MiB) and PDV lengths are validated against the enclosing PDU.
+- **Unbounded allocation from element length fields** — the file reader allocated
+  directly from the declared Value Length, so an element claiming 0xFFFFFFFF (or any
+  oversized value) triggered a multi-gigabyte allocation. Lengths above 16 MiB are now
+  verified against the bytes actually remaining in the stream.
+- **Out-of-bounds reads in extended negotiation decoders** — `DecodeSCPSCURoleSelection`
+  and `DecodeUserIdentityNegotiation` trusted peer-supplied length fields. Both now
+  bounds-check against the sub-item before slicing.
+- **Truncated DIMSE command values** — `DecodeCommandDataset` used `Read` instead of
+  `io.ReadFull`, silently producing zero-padded values on a short read, and did not
+  validate declared lengths against the remaining buffer.
+
+### Added
+
+- **Nested sequence (SQ) parsing** — the file reader now parses sequences recursively
+  instead of stopping at the first delimiter. Supports defined- and undefined-length
+  sequences and items, sequences under implicit VR (VR recovered from the dictionary),
+  empty sequences, and encapsulated (fragmented) pixel data. Nesting is bounded by
+  `MaxSequenceDepth` (64) so a crafted file cannot drive unbounded recursion.
+  - `DataElementValue.Items` holds parsed sequence items
+  - `DataElementValue.UndefinedLength` reports delimited elements
+  - `SequenceItemValue` holds the elements nested within one item
+- **`DICOMFile.GetDataset()`** — converts a parsed file into a `Dataset`, materializing
+  nested sequences as `sequence.Sequence` values holding child `Dataset`s with parent
+  pointers wired. This API was documented in the README but did not exist.
+- **`DICOMFile.Warnings`** — non-fatal parse issues (unknown tags, retired tags, VR
+  mismatches, truncated meta elements) are collected instead of printed.
+- **Extended negotiation on the wire** — async operations window, SCP/SCU role
+  selection, user identity, and SOP Class extended negotiation are now encoded into
+  and parsed from the A-ASSOCIATE User Information item. Previously these types
+  existed as a codec that nothing called.
+  - `SCUConfig.ExtendedNegotiation` proposes items during association
+  - `Association.RequestAssociationWithNegotiation` for direct control
+  - `Association.PeerUserInformation()` and `Association.RoleSelectionFor()` inspect results
+  - The SCP echoes back role selections for supported SOP Classes
+  - `DecodeSOPClassExtendedNegotiation` completes the codec (the encoder had no counterpart)
+- **`Association.TransferSyntaxFor(contextID)`** — reports the syntax negotiated per
+  presentation context.
+- **`SCU.Association()`** — exposes the active association for inspecting negotiated
+  parameters.
+- **Exported dataset codec** — `EncodeDataset` / `DecodeDataset` handle implicit VR LE,
+  explicit VR LE, explicit VR BE, and Deflated Explicit VR LE.
+
+### Fixed
+
+- **Written DICOM files were not valid DICOM** *(critical)* — `WriteFileMetaInfo` used the
+  wrong group-0002 tags: the SOP Class UID went to (0002,0010) (Transfer Syntax UID), the
+  SOP Instance UID to (0002,0012) (Implementation Class UID), and so on down the list.
+  Every file this library produced was unreadable by conforming DICOM software, and could
+  not even be read back by this library's own reader. Tags now follow PS3.6:
+  (0002,0002) SOP Class, (0002,0003) SOP Instance, (0002,0010) Transfer Syntax,
+  (0002,0012) Implementation Class, (0002,0013) Implementation Version,
+  (0002,0016..0018) AE titles. The Type 1 (0002,0001) File Meta Information Version is
+  now always written.
+- **Odd-length values corrupted written files** — `WriteDataElement` wrote values without
+  padding them to even length, and a single odd value misaligns every element after it.
+  Padding is now applied centrally in the writer using the VR's designated character,
+  rather than being left to callers.
+- **Reader looked for AE titles at the wrong tags** — (0002,0100..0102) instead of
+  (0002,0016..0018); the former range belongs to Private Information attributes.
+- **`QueryRetrieveHandler.OnGet` was never called** — the struct exposed the field but had
+  no `HandleCGet` method, so setting it silently did nothing and C-GET fell through to
+  `BaseHandler`'s not-implemented error.
+- **`SCPConfig.MaxAssociations` was ignored** — the field was documented but never read, so
+  the server accepted unbounded concurrent associations. The limit is now enforced, and
+  connections over it receive an A-ASSOCIATE-RJ with reason "local-limit-exceeded"
+  rather than a silently dropped socket.
+- **C-STORE/C-FIND data sets ignored the negotiated transfer syntax** — data sets were
+  always encoded as Implicit VR Little Endian regardless of what was agreed. Since
+  Explicit VR Little Endian is proposed first by default, any peer accepting it
+  received an unparsable data set. All DIMSE data set encode/decode paths now use the
+  transfer syntax negotiated for the presentation context in use.
+- **Odd-length values violated PS3.5 Section 7.1.1** — values are now padded to even
+  length with the VR's designated character (NUL for UI and binary VRs, space for text
+  VRs). Odd-length values are rejected by conforming PACS implementations.
+- **`SCU.NEventReport` reported the wrong message ID** and consumed an extra ID by
+  calling `nextMessageID()` a second time to derive `MessageIDRespondedTo`.
+- **Library wrote warnings to stdout** — `dataset.Add`, the file reader, and the file
+  writer's validation path used `fmt.Printf`. All now route through the configurable
+  `config.Logger` (slog, stderr, WARN level), which callers can redirect via
+  `config.SetLogger`.
+
+### Changed
+
+- **Version** bumped to 1.2.0
+
 ## [1.1.1] - 2026-03-20
 
 ### Added
@@ -119,7 +216,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
+[1.2.0]: https://github.com/amrshadid/go-dicom/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...v1.1.0
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...HEAD
 [1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0

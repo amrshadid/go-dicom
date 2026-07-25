@@ -167,6 +167,29 @@ func (h *QueryRetrieveHandler) HandleCMove(ctx context.Context, req *CMoveReques
 	}, nil
 }
 
+// HandleCGet delegates to the OnGet callback if set.
+//
+// The returned datasets are the instances matching the query. Sending them back
+// as C-STORE sub-operations is not yet implemented, so the response reports the
+// match count and a warning status rather than claiming success.
+func (h *QueryRetrieveHandler) HandleCGet(ctx context.Context, req *CGetRequest) (*CGetResponse, error) {
+	if h.OnGet == nil {
+		return nil, NewDIMSEError("NOT_IMPLEMENTED", "C-GET not implemented", StatusUnableToProcess)
+	}
+
+	datasets, err := h.OnGet(ctx, req.AffectedSOPClass, req.DataSet)
+	if err != nil {
+		return nil, err
+	}
+
+	return &CGetResponse{
+		MessageIDRespondedTo: req.MessageID,
+		AffectedSOPClass:     req.AffectedSOPClass,
+		Status:               StatusSuccess,
+		NumberOfCompleted:    uint16(len(datasets)),
+	}, nil
+}
+
 // WorklistHandler handles Modality Worklist (MWL) queries.
 type WorklistHandler struct {
 	BaseHandler

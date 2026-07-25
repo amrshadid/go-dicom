@@ -69,6 +69,11 @@ type SCUConfig struct {
 
 	// Network holds low-level network settings.
 	Network NetworkConfig
+
+	// ExtendedNegotiation carries optional A-ASSOCIATE-RQ extended negotiation
+	// items: asynchronous operations window, SCP/SCU role selection, and user
+	// identity (username/password, Kerberos, SAML, JWT). Nil proposes none.
+	ExtendedNegotiation *ExtendedNegotiation
 }
 
 // SCPConfig holds configuration for a Service Class Provider (server).

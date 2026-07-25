@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
@@ -219,9 +220,18 @@ func DecodeCommandDataset(data []byte) (*dataset.Dataset, error) {
 			return nil, NewPDUError("DECODE_CMD", "failed to read element length")
 		}
 
-		// Read value
+		// The length is peer-controlled; verify it against the bytes actually
+		// remaining before allocating, so a bogus length cannot force a huge
+		// allocation or leave a partially-filled buffer behind.
+		if uint64(length) > uint64(r.Len()) {
+			return nil, NewPDUErrorf("DECODE_CMD",
+				"element %s declares %d bytes but only %d remain", t.String(), length, r.Len())
+		}
+
+		// Read value. io.ReadFull rather than r.Read: a short read would
+		// otherwise silently yield a zero-padded value.
 		value := make([]byte, length)
-		if _, err := r.Read(value); err != nil {
+		if _, err := io.ReadFull(r, value); err != nil {
 			return nil, NewPDUError("DECODE_CMD", "failed to read element value")
 		}
 

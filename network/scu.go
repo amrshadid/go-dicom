@@ -1,9 +1,7 @@
 package network
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -52,8 +50,8 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 		contexts = s.defaultContexts()
 	}
 
-	return s.association.RequestAssociation(ctx, s.config.CallingAE, s.config.CalledAE,
-		contexts, s.config.Network.MaxPDUSize)
+	return s.association.RequestAssociationWithNegotiation(ctx, s.config.CallingAE, s.config.CalledAE,
+		contexts, s.config.Network.MaxPDUSize, s.config.ExtendedNegotiation)
 }
 
 // defaultContexts builds the default set of presentation contexts.
@@ -182,7 +180,7 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	}
 
 	// Send data set
-	dataBytes, err := encodeDataset(ds)
+	dataBytes, err := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
 		return fmt.Errorf("failed to encode dataset: %w", err)
 	}
@@ -253,7 +251,7 @@ func (s *SCU) Find(ctx context.Context, queryDS *dataset.Dataset) (<-chan *CFind
 	}
 
 	// Send query dataset
-	dataBytes, err := encodeDataset(queryDS)
+	dataBytes, err := EncodeDataset(queryDS, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode query dataset: %w", err)
 	}
@@ -303,7 +301,7 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, result
 
 		if IsPending(status) {
 			// Receive the result dataset
-			_, resultData, isCmd, err := assoc.ReceivePData(ctx)
+			resultCtxID, resultData, isCmd, err := assoc.ReceivePData(ctx)
 			if err != nil {
 				results <- &CFindResult{Err: err}
 				return
@@ -313,7 +311,7 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, result
 				return
 			}
 
-			resultDS, err := decodeDatasetBytes(resultData)
+			resultDS, err := DecodeDataset(resultData, assoc.TransferSyntaxFor(resultCtxID))
 			if err != nil {
 				results <- &CFindResult{Err: err}
 				return
@@ -368,7 +366,7 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 		return fmt.Errorf("failed to send C-MOVE-RQ command: %w", err)
 	}
 
-	dataBytes, err := encodeDataset(queryDS)
+	dataBytes, err := EncodeDataset(queryDS, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
 		return fmt.Errorf("failed to encode query dataset: %w", err)
 	}
@@ -437,7 +435,7 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 		return fmt.Errorf("failed to send C-GET-RQ command: %w", err)
 	}
 
-	dataBytes, err := encodeDataset(queryDS)
+	dataBytes, err := EncodeDataset(queryDS, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
 		return fmt.Errorf("failed to encode query dataset: %w", err)
 	}
@@ -515,13 +513,14 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 	}
 
 	hasDS := ds != nil
-	cmdDS := BuildNEventReportRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, eventTypeID, hasDS)
+	messageID := s.nextMessageID()
+	cmdDS := BuildNEventReportRQ(messageID, sopClassUID, sopInstanceUID, eventTypeID, hasDS)
 	cmdBytes, _ := EncodeCommandDataset(cmdDS)
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
 	}
 	if hasDS {
-		dataBytes, _ := encodeDataset(ds)
+		dataBytes, _ := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
 		if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
 			return nil, err
 		}
@@ -535,7 +534,7 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NEventReportResponse{
-		MessageIDRespondedTo: s.nextMessageID() - 1,
+		MessageIDRespondedTo: messageID,
 		AffectedSOPClass:     sopClassUID,
 		AffectedSOPInstance:  sopInstanceUID,
 		EventTypeID:          eventTypeID,
@@ -576,9 +575,9 @@ func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NG
 
 	// Check if data set follows
 	if HasDataSet(respDS) {
-		_, dsData, _, err := assoc.ReceivePData(ctx)
+		dsCtxID, dsData, _, err := assoc.ReceivePData(ctx)
 		if err == nil {
-			resp.DataSet, _ = decodeDatasetBytes(dsData)
+			resp.DataSet, _ = DecodeDataset(dsData, assoc.TransferSyntaxFor(dsCtxID))
 		}
 	}
 
@@ -602,7 +601,7 @@ func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
 	}
-	dataBytes, _ := encodeDataset(ds)
+	dataBytes, _ := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
 	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
 		return nil, err
 	}
@@ -640,7 +639,7 @@ func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, a
 		return nil, err
 	}
 	if hasDS {
-		dataBytes, _ := encodeDataset(ds)
+		dataBytes, _ := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
 		if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
 			return nil, err
 		}
@@ -680,7 +679,7 @@ func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, d
 		return nil, err
 	}
 	if hasDS {
-		dataBytes, _ := encodeDataset(ds)
+		dataBytes, _ := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
 		if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
 			return nil, err
 		}
@@ -730,6 +729,16 @@ func (s *SCU) NDelete(ctx context.Context, sopClassUID, sopInstanceUID string) (
 		AffectedSOPInstance: sopInstanceUID,
 		Status:              status,
 	}, nil
+}
+
+// Association returns the SCU's current association, or nil when not
+// associated. Use it to inspect what was negotiated — accepted presentation
+// contexts, the agreed transfer syntax per context, and any extended
+// negotiation the peer returned.
+func (s *SCU) Association() *Association {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.association
 }
 
 // getAssociation returns the current association or nil.
@@ -798,49 +807,4 @@ func extractStringValue(val interface{}) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
-}
-
-// encodeDataset encodes a dataset to Implicit VR Little Endian bytes.
-// This is a simplified encoding for DIMSE data transfer.
-func encodeDataset(ds *dataset.Dataset) ([]byte, error) {
-	var buf bytes.Buffer
-	elements := ds.GetAll()
-
-	for _, elem := range elements {
-		t := elem.GetTag()
-		elemTag, ok := t.(tag.Tag)
-		if !ok {
-			continue
-		}
-
-		val := elem.GetValue()
-		data, ok := val.([]byte)
-		if !ok {
-			// Try string conversion
-			if s, ok := val.(string); ok {
-				data = []byte(s)
-			} else {
-				continue
-			}
-		}
-
-		// Implicit VR Little Endian: tag (4 bytes) + length (4 bytes) + value
-		if err := binary.Write(&buf, binary.LittleEndian, elemTag.Group()); err != nil {
-			return nil, err
-		}
-		if err := binary.Write(&buf, binary.LittleEndian, elemTag.Element()); err != nil {
-			return nil, err
-		}
-		if err := binary.Write(&buf, binary.LittleEndian, uint32(len(data))); err != nil {
-			return nil, err
-		}
-		buf.Write(data)
-	}
-
-	return buf.Bytes(), nil
-}
-
-// decodeDatasetBytes decodes a dataset from Implicit VR Little Endian bytes.
-func decodeDatasetBytes(data []byte) (*dataset.Dataset, error) {
-	return DecodeCommandDataset(data) // Same format for implicit VR LE
 }

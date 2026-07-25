@@ -65,8 +65,9 @@ const DefaultApplicationContextUID = "1.2.840.10008.3.1.1.1"
 // DefaultImplementationClassUID is a placeholder implementation class UID.
 const DefaultImplementationClassUID = "1.2.826.0.1.3680043.10.511"
 
-// DefaultImplementationVersionName is a placeholder implementation version.
-const DefaultImplementationVersionName = "GO-DICOM-1.0"
+// DefaultImplementationVersionName identifies this implementation to peers in
+// the A-ASSOCIATE User Information item. Limited to 16 characters by PS3.7 D.3.3.2.
+const DefaultImplementationVersionName = "GO-DICOM-1.2.0"
 
 // PDU is the interface for all Protocol Data Units.
 type PDU interface {
@@ -330,6 +331,26 @@ type UserInformationItem struct {
 	MaxPDULength           uint32
 	ImplementationClassUID string
 	ImplementationVersion  string
+
+	// AsyncOperations carries the Asynchronous Operations Window sub-item
+	// (PS3.7 D.3.3.3) when the peer negotiates one. Nil when absent.
+	AsyncOperations *AsynchronousOperationsWindow
+
+	// RoleSelections carries SCP/SCU Role Selection sub-items (PS3.7 D.3.3.4),
+	// which let an SCU also act as an SCP for a SOP Class — required by C-GET.
+	RoleSelections []SCPSCURoleSelection
+
+	// UserIdentity carries the User Identity Negotiation sub-item
+	// (PS3.7 D.3.3.7) used for username/password, Kerberos, SAML, or JWT auth.
+	UserIdentity *UserIdentityNegotiation
+
+	// UserIdentityResponse carries the server's identity response in an
+	// A-ASSOCIATE-AC. Nil when absent.
+	UserIdentityResponse *UserIdentityResponse
+
+	// SOPClassExtended carries SOP Class Extended Negotiation sub-items
+	// (PS3.7 D.3.3.5) holding service-class-specific data.
+	SOPClassExtended []SOPClassExtendedNegotiation
 }
 
 func (u *UserInformationItem) encode(w *bytes.Buffer) error {
@@ -359,6 +380,23 @@ func (u *UserInformationItem) encode(w *bytes.Buffer) error {
 		}
 	}
 
+	// Extended negotiation sub-items
+	if u.AsyncOperations != nil {
+		itemBuf.Write(u.AsyncOperations.Encode())
+	}
+	for i := range u.RoleSelections {
+		itemBuf.Write(u.RoleSelections[i].Encode())
+	}
+	if u.UserIdentity != nil {
+		itemBuf.Write(u.UserIdentity.Encode())
+	}
+	if u.UserIdentityResponse != nil {
+		itemBuf.Write(u.UserIdentityResponse.Encode())
+	}
+	for i := range u.SOPClassExtended {
+		itemBuf.Write(u.SOPClassExtended[i].Encode())
+	}
+
 	w.WriteByte(ItemTypeUserInformation)
 	w.WriteByte(0x00)
 	if err := binary.Write(w, binary.BigEndian, uint16(itemBuf.Len())); err != nil {
@@ -367,6 +405,14 @@ func (u *UserInformationItem) encode(w *bytes.Buffer) error {
 	w.Write(itemBuf.Bytes())
 	return nil
 }
+
+// MaxPDULengthLimit is the hard ceiling on the declared length of a single
+// received PDU. The PDU length field is a peer-controlled 32-bit value, so
+// without a limit a remote peer could declare ~4 GiB and force an allocation
+// of that size before a single byte of payload is read. 128 MiB is far above
+// any legitimate DICOM PDU (negotiated maximums are typically 16-128 KB) while
+// keeping a malicious declaration cheap to reject.
+const MaxPDULengthLimit uint32 = 128 << 20
 
 // DecodePDU reads and decodes a PDU from a reader.
 func DecodePDU(r io.Reader) (PDU, error) {
@@ -379,7 +425,13 @@ func DecodePDU(r io.Reader) (PDU, error) {
 	pduType := header[0]
 	pduLength := binary.BigEndian.Uint32(header[2:6])
 
-	// Read PDU data
+	if pduLength > MaxPDULengthLimit {
+		return nil, NewPDUErrorf("TOO_LARGE",
+			"PDU length %d exceeds maximum allowed %d", pduLength, MaxPDULengthLimit)
+	}
+
+	// Read PDU data. io.ReadFull fails if the peer declared more than it sends,
+	// so the allocation above is bounded and the read is never short.
 	data := make([]byte, pduLength)
 	if _, err := io.ReadFull(r, data); err != nil {
 		return nil, NewCommunicationError("READ_PDU", "failed to read PDU data", err)
@@ -530,6 +582,14 @@ func decodeDataTF(data []byte) (*PDataTF, error) {
 		if pdvLen < 2 {
 			return nil, NewPDUError("INVALID", "PDV length too short")
 		}
+		// The PDV length is peer-controlled and independent of the enclosing PDU
+		// length, so a small PDU can still declare a huge PDV. Reject anything
+		// that cannot possibly be satisfied by the remaining buffer before
+		// allocating for it.
+		if uint64(pdvLen-2) > uint64(r.Len()) {
+			return nil, NewPDUErrorf("INVALID",
+				"PDV length %d exceeds remaining PDU data %d", pdvLen, r.Len())
+		}
 
 		ctxID, err := r.ReadByte()
 		if err != nil {
@@ -670,6 +730,33 @@ func decodeUserInformation(data []byte) (*UserInformationItem, error) {
 			ui.ImplementationClassUID = string(itemData)
 		case ItemTypeImplementationVersion:
 			ui.ImplementationVersion = string(itemData)
+		case ItemTypeAsyncOperationsWindow:
+			// A malformed sub-item must not fail the whole association;
+			// skip what cannot be parsed and keep the rest.
+			if aow, err := DecodeAsyncOperationsWindow(itemData); err == nil {
+				ui.AsyncOperations = aow
+			}
+		case ItemTypeSCPSCURoleSelection:
+			if rs, err := DecodeSCPSCURoleSelection(itemData); err == nil {
+				ui.RoleSelections = append(ui.RoleSelections, *rs)
+			}
+		case ItemTypeUserIdentity:
+			if id, err := DecodeUserIdentityNegotiation(itemData); err == nil {
+				ui.UserIdentity = id
+			}
+		case ItemTypeUserIdentityAC:
+			if len(itemData) >= 2 {
+				respLen := int(binary.BigEndian.Uint16(itemData[0:2]))
+				if respLen <= len(itemData)-2 {
+					ui.UserIdentityResponse = &UserIdentityResponse{
+						ServerResponse: itemData[2 : 2+respLen],
+					}
+				}
+			}
+		case ItemTypeSOPClassExtended:
+			if ext, err := DecodeSOPClassExtendedNegotiation(itemData); err == nil {
+				ui.SOPClassExtended = append(ui.SOPClassExtended, *ext)
+			}
 		}
 	}
 

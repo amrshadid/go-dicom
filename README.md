@@ -121,6 +121,7 @@ import (
     "log"
     "os"
 
+    "github.com/amrshadid/go-dicom/filebase"
     "github.com/amrshadid/go-dicom/filereader"
     "github.com/amrshadid/go-dicom/tag"
 )
@@ -132,16 +133,49 @@ func main() {
     }
     defer file.Close()
 
-    dicomFile, err := filereader.ReadDICOMFile(file)
+    // Wrap the file in a byte-order-aware reader
+    reader := filebase.NewFileReader(file)
+
+    dicomFile, err := filereader.ReadDICOMFile(reader)
     if err != nil {
         log.Fatal(err)
     }
 
+    // Non-fatal parse issues (unknown tags, retired tags, VR mismatches)
+    for _, w := range dicomFile.Warnings {
+        log.Println("warning:", w)
+    }
+
+    // Convert to a Dataset — nested sequences become child Datasets
     ds := dicomFile.GetDataset()
 
     // Access elements by tag
-    name, _ := ds.GetStringValue(tag.New(0x0010, 0x0010)) // Patient Name
-    fmt.Println("Patient:", name)
+    if elem, ok := ds.Get(tag.New(0x0010, 0x0010)); ok { // Patient Name
+        fmt.Printf("Patient: %s\n", elem.GetValue())
+    }
+
+    fmt.Println("Transfer Syntax:", dicomFile.FileMetaInfo.TransferSyntaxUID)
+}
+```
+
+### Work with Sequences
+
+Nested sequences (SQ) are parsed recursively into child `Dataset` values:
+
+```go
+ds := dicomFile.GetDataset()
+
+// (0040,A730) ContentSequence
+if seq, err := ds.GetSequence(tag.New(0x0040, 0xA730)); err == nil {
+    for i := 0; i < seq.Length(); i++ {
+        item, _ := seq.Get(i)
+        child := item.(*dataset.Dataset)
+
+        // Child datasets know their parent
+        if code, ok := child.Get(tag.New(0x0008, 0x0100)); ok {
+            fmt.Printf("item %d code value: %s\n", i, code.GetValue())
+        }
+    }
 }
 ```
 
@@ -246,8 +280,8 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | C-ECHO (Verification) | Yes | Yes | `scu.Echo(ctx)` |
 | C-STORE (Storage) | Yes | Yes | `scu.Store(ctx, ds)` |
 | C-FIND (Query) | Yes | Yes | `scu.Find(ctx, ds)` — streams via Go channel |
-| C-MOVE (Retrieve) | Yes | Yes | `scu.Move(ctx, ds, dest)` |
-| C-GET (Get) | Yes | Yes | `scu.Get(ctx, ds)` |
+| C-MOVE (Retrieve) | Yes | SCU only | `scu.Move(ctx, ds, dest)`. SCP side returns status but does not perform C-STORE sub-operations — see Limitations |
+| C-GET (Get) | Yes | SCU only | `scu.Get(ctx, ds)`. SCP side returns status but does not perform C-STORE sub-operations — see Limitations |
 | N-EVENT-REPORT | Yes | Yes | Full N-DIMSE service support |
 | N-GET | Yes | Yes | |
 | N-SET | Yes | Yes | |
@@ -259,7 +293,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | TLS Encryption | Yes | Yes | `network.DialTLS()` / `network.ListenTLS()` |
 | Association Negotiation | Yes | Yes | Full A-ASSOCIATE-RQ/AC/RJ state machine |
 | Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
-| Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity |
+| Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |
 | Storage SOP Classes | 100+ | 80+ | CT, MR, US, PET, RT, XR, SR, waveforms, encapsulated docs |
 | Transfer Syntax Support | 15+ | 15 | All standard + compressed syntaxes |
 | Query/Retrieve Models | Patient/Study Root | Yes | Find, Move, Get for both models |
@@ -270,6 +304,19 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | CLI Tools | 7 tools | 5 tools | echoscu, storescu, storescp, findscu, movescu |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
 | Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
+
+### Limitations
+
+Known gaps, stated plainly so you can judge fit before adopting:
+
+| Area | Status |
+|------|--------|
+| **C-MOVE / C-GET as an SCP** | The handler is invoked and a status is returned, but the SCP does **not** send C-STORE sub-operations to the destination. Acting as a retrieval *provider* requires implementing this yourself. Both work fully as an **SCU**. |
+| **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
+| **Transcoding between transfer syntaxes** | A data set is sent using the syntax negotiated for its presentation context. The library does not re-encode pixel data, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR will not decompress it for you. |
+| **Sequence writing** | The reader parses nested sequences; `filewriter` does not yet serialize `SQ` elements back out (waveform sequences are the exception). Reading and forwarding sequences works; round-tripping them to disk does not. |
+| **`show` / `info` / `convert` CLI commands** | Use a separate flat parser and do not descend into sequences. The network path and `filereader` do. |
+| **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
 
 ### Supported File Formats
 
@@ -326,13 +373,67 @@ func (h *MyHandler) HandleCStore(ctx context.Context, req *network.CStoreRequest
 }
 ```
 
+### Extended Negotiation
+
+Extended negotiation items are carried in the A-ASSOCIATE-RQ/AC User Information
+item. SCP/SCU role selection is what allows an SCU to also act as an SCP for a
+SOP Class on an association it initiated — required for C-GET, where the peer
+sends C-STORE sub-operations back over the same association.
+
+```go
+scu := network.NewSCU(network.SCUConfig{
+    CallingAE: "MY_APP",
+    CalledAE:  "PACS",
+    Address:   "pacs.hospital.com:11112",
+    ExtendedNegotiation: &network.ExtendedNegotiation{
+        // Allow the peer to send C-STORE back to us for C-GET
+        RoleSelections: []network.SCPSCURoleSelection{
+            {SOPClassUID: network.CTImageStorageUID, SCURole: true, SCPRole: true},
+        },
+        // Permit up to 4 outstanding operations in each direction
+        AsyncOperations: &network.AsynchronousOperationsWindow{
+            MaxOperationsInvoked:   4,
+            MaxOperationsPerformed: 4,
+        },
+        // Authenticate with the remote AE
+        UserIdentity: &network.UserIdentityNegotiation{
+            Type:           network.UserIdentityUsernamePassword,
+            PrimaryField:   []byte("operator"),
+            SecondaryField: []byte("password"),
+        },
+    },
+})
+
+// After associating, inspect what the peer agreed to
+if role, ok := scu.Association().RoleSelectionFor(network.CTImageStorageUID); ok {
+    fmt.Println("peer accepted SCP role:", role.SCPRole)
+}
+```
+
+### Association Info in Handlers
+
+SCP handlers can read the association's details from the request context
+without changing the `Handler` interface:
+
+```go
+scp.SetHandler(&network.StorageHandler{
+    OnStore: func(ctx context.Context, sopClass, sopInstance string, ds *dataset.Dataset) uint16 {
+        if info, ok := network.AssociationInfoFromContext(ctx); ok {
+            log.Printf("from %s (%s) via %s",
+                info.CallingAE, info.RemoteAddr, info.PeerImplementationVersion)
+        }
+        return network.StatusSuccess
+    },
+})
+```
+
 ## Features
 
 ### DICOM Standards Compliance
 
 | Standard | Status |
 |----------|--------|
-| DICOM PS3.5 - Data Structures and Encoding | Supported |
+| DICOM PS3.5 - Data Structures and Encoding | Supported (incl. nested sequences, undefined-length items, even-length padding) |
 | DICOM PS3.6 - Data Dictionary | Supported (5,000+ tags) |
 | DICOM PS3.7 - Message Exchange (DIMSE) | Supported |
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |

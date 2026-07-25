@@ -109,7 +109,7 @@ const (
 
 // Ophthalmic Measurements
 const (
-	LensometryMeasurementsStorageUID       = "1.2.840.10008.5.1.4.1.1.78.1"
+	LensometryMeasurementsStorageUID        = "1.2.840.10008.5.1.4.1.1.78.1"
 	AutorefractionMeasurementsStorageUID    = "1.2.840.10008.5.1.4.1.1.78.2"
 	KeratometryMeasurementsStorageUID       = "1.2.840.10008.5.1.4.1.1.78.3"
 	SubjectiveRefractionMeasurementsUID     = "1.2.840.10008.5.1.4.1.1.78.4"
@@ -131,46 +131,46 @@ const (
 
 // Additional RT Storage
 const (
-	RTPhysicianIntentStorageUID                = "1.2.840.10008.5.1.4.1.1.481.10"
-	RTSegmentAnnotationStorageUID              = "1.2.840.10008.5.1.4.1.1.481.11"
-	RTRadiationSetStorageUID                   = "1.2.840.10008.5.1.4.1.1.481.12"
-	CArmPhotonElectronRadiationStorageUID       = "1.2.840.10008.5.1.4.1.1.481.13"
-	TomotherapeuticRadiationStorageUID         = "1.2.840.10008.5.1.4.1.1.481.14"
-	RoboticArmRadiationStorageUID              = "1.2.840.10008.5.1.4.1.1.481.15"
-	RTRadiationRecordSetStorageUID             = "1.2.840.10008.5.1.4.1.1.481.16"
-	RTRadiationSalvageRecordStorageUID         = "1.2.840.10008.5.1.4.1.1.481.17"
-	TomotherapeuticRadiationRecordStorageUID   = "1.2.840.10008.5.1.4.1.1.481.18"
-	CArmPhotonElectronRadiationRecordUID       = "1.2.840.10008.5.1.4.1.1.481.19"
-	RoboticArmRadiationRecordStorageUID        = "1.2.840.10008.5.1.4.1.1.481.20"
-	RTRadiationSetDeliveryInstructionUID       = "1.2.840.10008.5.1.4.1.1.481.21"
-	RTTreatmentPreparationStorageUID           = "1.2.840.10008.5.1.4.1.1.481.22"
-	EnhancedRTImageStorageUID                  = "1.2.840.10008.5.1.4.1.1.481.23"
-	EnhancedContinuousRTImageStorageUID        = "1.2.840.10008.5.1.4.1.1.481.24"
-	RTBrachyApplicationSetupDeliveryInstUID    = "1.2.840.10008.5.1.4.34.10"
+	RTPhysicianIntentStorageUID              = "1.2.840.10008.5.1.4.1.1.481.10"
+	RTSegmentAnnotationStorageUID            = "1.2.840.10008.5.1.4.1.1.481.11"
+	RTRadiationSetStorageUID                 = "1.2.840.10008.5.1.4.1.1.481.12"
+	CArmPhotonElectronRadiationStorageUID    = "1.2.840.10008.5.1.4.1.1.481.13"
+	TomotherapeuticRadiationStorageUID       = "1.2.840.10008.5.1.4.1.1.481.14"
+	RoboticArmRadiationStorageUID            = "1.2.840.10008.5.1.4.1.1.481.15"
+	RTRadiationRecordSetStorageUID           = "1.2.840.10008.5.1.4.1.1.481.16"
+	RTRadiationSalvageRecordStorageUID       = "1.2.840.10008.5.1.4.1.1.481.17"
+	TomotherapeuticRadiationRecordStorageUID = "1.2.840.10008.5.1.4.1.1.481.18"
+	CArmPhotonElectronRadiationRecordUID     = "1.2.840.10008.5.1.4.1.1.481.19"
+	RoboticArmRadiationRecordStorageUID      = "1.2.840.10008.5.1.4.1.1.481.20"
+	RTRadiationSetDeliveryInstructionUID     = "1.2.840.10008.5.1.4.1.1.481.21"
+	RTTreatmentPreparationStorageUID         = "1.2.840.10008.5.1.4.1.1.481.22"
+	EnhancedRTImageStorageUID                = "1.2.840.10008.5.1.4.1.1.481.23"
+	EnhancedContinuousRTImageStorageUID      = "1.2.840.10008.5.1.4.1.1.481.24"
+	RTBrachyApplicationSetupDeliveryInstUID  = "1.2.840.10008.5.1.4.34.10"
 )
 
 // Additional SR / Annotations / Content
 const (
-	ExtensibleSRStorageUID                        = "1.2.840.10008.5.1.4.1.1.88.35"
-	PlannedImagingAgentAdministrationSRUID         = "1.2.840.10008.5.1.4.1.1.88.74"
-	PerformedImagingAgentAdministrationSRUID       = "1.2.840.10008.5.1.4.1.1.88.75"
-	EnhancedXRayRadiationDoseSRStorageUID          = "1.2.840.10008.5.1.4.1.1.88.76"
-	WaveformAnnotationSRStorageUID                 = "1.2.840.10008.5.1.4.1.1.88.77"
-	ContentAssessmentResultsStorageUID             = "1.2.840.10008.5.1.4.1.1.90.1"
-	MicroscopyBulkSimpleAnnotationsStorageUID      = "1.2.840.10008.5.1.4.1.1.91.1"
+	ExtensibleSRStorageUID                    = "1.2.840.10008.5.1.4.1.1.88.35"
+	PlannedImagingAgentAdministrationSRUID    = "1.2.840.10008.5.1.4.1.1.88.74"
+	PerformedImagingAgentAdministrationSRUID  = "1.2.840.10008.5.1.4.1.1.88.75"
+	EnhancedXRayRadiationDoseSRStorageUID     = "1.2.840.10008.5.1.4.1.1.88.76"
+	WaveformAnnotationSRStorageUID            = "1.2.840.10008.5.1.4.1.1.88.77"
+	ContentAssessmentResultsStorageUID        = "1.2.840.10008.5.1.4.1.1.90.1"
+	MicroscopyBulkSimpleAnnotationsStorageUID = "1.2.840.10008.5.1.4.1.1.91.1"
 )
 
 // Additional Presentation State
 const (
-	GrayscalePlanarMPRVolumetricPresentUID     = "1.2.840.10008.5.1.4.1.1.11.6"
-	CompositingPlanarMPRVolumetricPresentUID    = "1.2.840.10008.5.1.4.1.1.11.7"
-	AdvancedBlendingPresentationStateUID        = "1.2.840.10008.5.1.4.1.1.11.8"
-	VolumeRenderingVolumetricPresentUID         = "1.2.840.10008.5.1.4.1.1.11.9"
+	GrayscalePlanarMPRVolumetricPresentUID       = "1.2.840.10008.5.1.4.1.1.11.6"
+	CompositingPlanarMPRVolumetricPresentUID     = "1.2.840.10008.5.1.4.1.1.11.7"
+	AdvancedBlendingPresentationStateUID         = "1.2.840.10008.5.1.4.1.1.11.8"
+	VolumeRenderingVolumetricPresentUID          = "1.2.840.10008.5.1.4.1.1.11.9"
 	SegmentedVolumeRenderingVolumetricPresentUID = "1.2.840.10008.5.1.4.1.1.11.10"
-	MultipleVolumeRenderingVolumetricPresentUID = "1.2.840.10008.5.1.4.1.1.11.11"
-	VariableModalityLUTSoftcopyPresentUID       = "1.2.840.10008.5.1.4.1.1.11.12"
-	WaveformPresentationStateStorageUID         = "1.2.840.10008.5.1.4.1.1.9.100.1"
-	WaveformAcquisitionPresentationStateUID     = "1.2.840.10008.5.1.4.1.1.9.100.2"
+	MultipleVolumeRenderingVolumetricPresentUID  = "1.2.840.10008.5.1.4.1.1.11.11"
+	VariableModalityLUTSoftcopyPresentUID        = "1.2.840.10008.5.1.4.1.1.11.12"
+	WaveformPresentationStateStorageUID          = "1.2.840.10008.5.1.4.1.1.9.100.1"
+	WaveformAcquisitionPresentationStateUID      = "1.2.840.10008.5.1.4.1.1.9.100.2"
 )
 
 // Additional Waveform
@@ -181,16 +181,16 @@ const (
 
 // Additional Miscellaneous Storage
 const (
-	BasicStructuredDisplayStorageUID          = "1.2.840.10008.5.1.4.1.1.131"
-	CTPerformedProcedureProtocolStorageUID    = "1.2.840.10008.5.1.4.1.1.200.2"
-	XAPerformedProcedureProtocolStorageUID    = "1.2.840.10008.5.1.4.1.1.200.8"
-	CTDefinedProcedureProtocolStorageUID      = "1.2.840.10008.5.1.4.1.1.200.1"
-	ProtocolApprovalStorageUID                = "1.2.840.10008.5.1.4.1.1.200.3"
-	XADefinedProcedureProtocolStorageUID      = "1.2.840.10008.5.1.4.1.1.200.7"
-	InventoryStorageUID                       = "1.2.840.10008.5.1.4.1.1.201.1"
-	TractographyResultsStorageUID            = "1.2.840.10008.5.1.4.1.1.66.6"
-	LabelMapSegmentationStorageUID            = "1.2.840.10008.5.1.4.1.1.66.7"
-	MediaStorageDirectoryStorageUID           = "1.2.840.10008.1.3.10"
+	BasicStructuredDisplayStorageUID       = "1.2.840.10008.5.1.4.1.1.131"
+	CTPerformedProcedureProtocolStorageUID = "1.2.840.10008.5.1.4.1.1.200.2"
+	XAPerformedProcedureProtocolStorageUID = "1.2.840.10008.5.1.4.1.1.200.8"
+	CTDefinedProcedureProtocolStorageUID   = "1.2.840.10008.5.1.4.1.1.200.1"
+	ProtocolApprovalStorageUID             = "1.2.840.10008.5.1.4.1.1.200.3"
+	XADefinedProcedureProtocolStorageUID   = "1.2.840.10008.5.1.4.1.1.200.7"
+	InventoryStorageUID                    = "1.2.840.10008.5.1.4.1.1.201.1"
+	TractographyResultsStorageUID          = "1.2.840.10008.5.1.4.1.1.66.6"
+	LabelMapSegmentationStorageUID         = "1.2.840.10008.5.1.4.1.1.66.7"
+	MediaStorageDirectoryStorageUID        = "1.2.840.10008.1.3.10"
 )
 
 // Waveform Storage

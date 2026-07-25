@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/config"
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/hooks"
 	"github.com/amrshadid/go-dicom/tag"
@@ -20,6 +21,42 @@ type FileMetaInfo struct {
 	SourceApplicationEntityTitle    string
 	SendingApplicationEntityTitle   string
 	ReceivingApplicationEntityTitle string
+
+	// FileMetaInformationVersion is (0002,0001). Defaults to {0x00, 0x01} when
+	// empty, which is the only value defined by PS3.10.
+	FileMetaInformationVersion []byte
+}
+
+// undefinedLength is the DICOM sentinel (0xFFFFFFFF) marking an element whose
+// extent is delimited rather than stated. Such elements are written through
+// unchanged rather than having their length treated as a byte count.
+const undefinedLength uint32 = 0xFFFFFFFF
+
+// padValueForVR pads a value to even length using the VR's designated padding
+// character, as required by PS3.5 Section 7.1.1. Returns the input unchanged
+// when it is already even.
+func padValueForVR(vr string, value []byte) []byte {
+	if len(value)%2 == 0 {
+		return value
+	}
+
+	pad := byte(0x00)
+	if info := dataelem.GetVRInfo(dataelem.VR(vr)); info != nil {
+		pad = info.PadValue
+	}
+
+	// Copy rather than append in place: the input may alias a caller's buffer,
+	// which must not be mutated by writing.
+	padded := make([]byte, len(value)+1)
+	copy(padded, value)
+	padded[len(value)] = pad
+	return padded
+}
+
+// padMetaValue pads a file meta value to even length as DICOM requires:
+// UI values pad with NUL, the text VRs pad with a space.
+func padMetaValue(vr, value string) []byte {
+	return padValueForVR(vr, []byte(value))
 }
 
 // DataElement represents a DICOM data element for writing.
@@ -95,76 +132,56 @@ func (dfw *DCMFileWriter) WriteFileMetaInfo(metaInfo *FileMetaInfo) error {
 	}
 	elements := make([]*DataElement, 0)
 
+	// addMeta appends a group-0002 element, padding the value to even length as
+	// PS3.5 Section 7.1.1 requires. An odd-length value misaligns every element
+	// that follows it, so this is not optional.
+	addMeta := func(element uint16, vr, value string) {
+		padded := padMetaValue(vr, value)
+		elements = append(elements, &DataElement{
+			Tag:    tag.New(0x0002, element),
+			VR:     vr,
+			Value:  padded,
+			Length: uint32(len(padded)),
+		})
+	}
+
+	// File Meta Information Version (0002,0001) is Type 1 — always present,
+	// two bytes with the value 0x0001 big-endian per PS3.10 Section 7.1.
+	version := metaInfo.FileMetaInformationVersion
+	if len(version) == 0 {
+		version = []byte{0x00, 0x01}
+	}
+	elements = append(elements, &DataElement{
+		Tag:    tag.New(0x0002, 0x0001),
+		VR:     "OB",
+		Value:  version,
+		Length: uint32(len(version)),
+	})
+
+	// Tag assignments follow PS3.6 (the DICOM data dictionary, group 0002).
 	if metaInfo.MediaStorageSOPClassUID != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0010),
-			VR:     "UI",
-			Value:  []byte(metaInfo.MediaStorageSOPClassUID),
-			Length: uint32(len(metaInfo.MediaStorageSOPClassUID)),
-		})
+		addMeta(0x0002, "UI", metaInfo.MediaStorageSOPClassUID)
 	}
-
 	if metaInfo.MediaStorageSOPInstanceUID != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0012),
-			VR:     "UI",
-			Value:  []byte(metaInfo.MediaStorageSOPInstanceUID),
-			Length: uint32(len(metaInfo.MediaStorageSOPInstanceUID)),
-		})
+		addMeta(0x0003, "UI", metaInfo.MediaStorageSOPInstanceUID)
 	}
-
 	if metaInfo.TransferSyntaxUID != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0020),
-			VR:     "UI",
-			Value:  []byte(metaInfo.TransferSyntaxUID),
-			Length: uint32(len(metaInfo.TransferSyntaxUID)),
-		})
+		addMeta(0x0010, "UI", metaInfo.TransferSyntaxUID)
 	}
-
 	if metaInfo.ImplementationClassUID != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0100),
-			VR:     "UI",
-			Value:  []byte(metaInfo.ImplementationClassUID),
-			Length: uint32(len(metaInfo.ImplementationClassUID)),
-		})
+		addMeta(0x0012, "UI", metaInfo.ImplementationClassUID)
 	}
-
 	if metaInfo.ImplementationVersionName != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0101),
-			VR:     "SH",
-			Value:  []byte(metaInfo.ImplementationVersionName),
-			Length: uint32(len(metaInfo.ImplementationVersionName)),
-		})
+		addMeta(0x0013, "SH", metaInfo.ImplementationVersionName)
 	}
-
 	if metaInfo.SourceApplicationEntityTitle != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0110),
-			VR:     "AE",
-			Value:  []byte(metaInfo.SourceApplicationEntityTitle),
-			Length: uint32(len(metaInfo.SourceApplicationEntityTitle)),
-		})
+		addMeta(0x0016, "AE", metaInfo.SourceApplicationEntityTitle)
 	}
-
 	if metaInfo.SendingApplicationEntityTitle != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0111),
-			VR:     "AE",
-			Value:  []byte(metaInfo.SendingApplicationEntityTitle),
-			Length: uint32(len(metaInfo.SendingApplicationEntityTitle)),
-		})
+		addMeta(0x0017, "AE", metaInfo.SendingApplicationEntityTitle)
 	}
-
 	if metaInfo.ReceivingApplicationEntityTitle != "" {
-		elements = append(elements, &DataElement{
-			Tag:    tag.New(0x0002, 0x0112),
-			VR:     "AE",
-			Value:  []byte(metaInfo.ReceivingApplicationEntityTitle),
-			Length: uint32(len(metaInfo.ReceivingApplicationEntityTitle)),
-		})
+		addMeta(0x0018, "AE", metaInfo.ReceivingApplicationEntityTitle)
 	}
 
 	// Calculate total group length (all elements after group length tag)
@@ -226,9 +243,26 @@ func (dfw *DCMFileWriter) WriteTag(t tag.Tag) error {
 }
 
 // WriteDataElement writes a single data element.
+//
+// Values are padded to even length as DICOM requires (PS3.5 Section 7.1.1)
+// using the VR's designated padding character. Padding is applied here rather
+// than left to callers because an odd-length value misaligns every element
+// after it, silently corrupting the file.
 func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bool) error {
 	if elem == nil {
 		return fmt.Errorf("data element is nil")
+	}
+
+	// Undefined length (0xFFFFFFFF) marks a delimited element and must be
+	// written through as-is rather than treated as a byte count.
+	if elem.Length != undefinedLength && int(elem.Length) == len(elem.Value) && len(elem.Value)%2 != 0 {
+		padded := padValueForVR(elem.VR, elem.Value)
+		elem = &DataElement{
+			Tag:    elem.Tag,
+			VR:     elem.VR,
+			Value:  padded,
+			Length: uint32(len(padded)),
+		}
 	}
 
 	// Write tag

@@ -50,6 +50,31 @@ type Association struct {
 
 	// Request parameters (stored for reference)
 	requestedContexts []PresentationContextItem
+
+	// Extended negotiation as agreed with the peer.
+	peerUserInfo UserInformationItem
+}
+
+// PeerUserInformation returns the User Information the peer sent during
+// association negotiation, including any extended negotiation sub-items
+// (async operations window, role selection, user identity response).
+func (a *Association) PeerUserInformation() UserInformationItem {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.peerUserInfo
+}
+
+// RoleSelectionFor returns the negotiated SCP/SCU role selection for a SOP
+// Class, and whether the peer supplied one.
+func (a *Association) RoleSelectionFor(sopClassUID string) (SCPSCURoleSelection, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, rs := range a.peerUserInfo.RoleSelections {
+		if rs.SOPClassUID == sopClassUID {
+			return rs, true
+		}
+	}
+	return SCPSCURoleSelection{}, false
 }
 
 // NewAssociation creates a new association in the Idle state.
@@ -96,9 +121,33 @@ func (a *Association) AcceptedContexts() map[byte]*PresentationContext {
 	return a.acceptedContexts
 }
 
+// TransferSyntaxFor returns the transfer syntax negotiated for a presentation
+// context ID. It returns the empty string when the context was not accepted,
+// which callers treat as DICOM's implicit VR little endian default.
+func (a *Association) TransferSyntaxFor(contextID byte) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if pc, ok := a.acceptedContexts[contextID]; ok {
+		return pc.TransferSyntax
+	}
+	return ""
+}
+
 // RequestAssociation sends an A-ASSOCIATE-RQ and processes the response (SCU side).
 func (a *Association) RequestAssociation(ctx context.Context, callingAE, calledAE string,
 	contexts []PresentationContextItem, maxPDUSize uint32) error {
+	return a.RequestAssociationWithNegotiation(ctx, callingAE, calledAE, contexts, maxPDUSize, nil)
+}
+
+// RequestAssociationWithNegotiation sends an A-ASSOCIATE-RQ carrying optional
+// extended negotiation items (async operations window, SCP/SCU role selection,
+// user identity) and processes the response.
+//
+// Role selection is required to act as an SCP for a SOP Class on an association
+// this AE initiated — notably for C-GET, where the peer sends C-STORE
+// sub-operations back over the same association.
+func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, callingAE, calledAE string,
+	contexts []PresentationContextItem, maxPDUSize uint32, ext *ExtendedNegotiation) error {
 
 	a.mu.Lock()
 	if a.state != StateIdle {
@@ -111,6 +160,17 @@ func (a *Association) RequestAssociation(ctx context.Context, callingAE, calledA
 	a.state = StateAwaitingAssocResponse
 	a.mu.Unlock()
 
+	userInfo := UserInformationItem{
+		MaxPDULength:           maxPDUSize,
+		ImplementationClassUID: DefaultImplementationClassUID,
+		ImplementationVersion:  DefaultImplementationVersionName,
+	}
+	if ext != nil {
+		userInfo.AsyncOperations = ext.AsyncOperations
+		userInfo.RoleSelections = ext.RoleSelections
+		userInfo.UserIdentity = ext.UserIdentity
+	}
+
 	// Build and send A-ASSOCIATE-RQ
 	rq := &AssociateRQ{
 		ProtocolVersion:       ProtocolVersion,
@@ -118,11 +178,7 @@ func (a *Association) RequestAssociation(ctx context.Context, callingAE, calledA
 		CallingAE:             callingAE,
 		ApplicationContextUID: DefaultApplicationContextUID,
 		PresentationContexts:  contexts,
-		UserInformation: UserInformationItem{
-			MaxPDULength:           maxPDUSize,
-			ImplementationClassUID: DefaultImplementationClassUID,
-			ImplementationVersion:  DefaultImplementationVersionName,
-		},
+		UserInformation:       userInfo,
 	}
 
 	if err := a.transport.WritePDU(ctx, rq); err != nil {
@@ -157,6 +213,7 @@ func (a *Association) RequestAssociation(ctx context.Context, callingAE, calledA
 
 		// Build accepted contexts map
 		a.acceptedContexts = BuildAcceptedContextMap(contexts, resp.PresentationContexts)
+		a.peerUserInfo = resp.UserInformation
 		a.mu.Unlock()
 		return nil
 
@@ -201,6 +258,26 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 		negotiatedPDU = peerMaxPDU
 	}
 
+	userInfo := UserInformationItem{
+		MaxPDULength:           maxPDUSize,
+		ImplementationClassUID: DefaultImplementationClassUID,
+		ImplementationVersion:  DefaultImplementationVersionName,
+	}
+
+	// Acknowledge extended negotiation the peer proposed. Role selection must be
+	// echoed for each SOP Class the requestor asked about (PS3.7 D.3.3.4), and
+	// the async operations window is confirmed by returning it.
+	if rq.UserInformation.AsyncOperations != nil {
+		userInfo.AsyncOperations = rq.UserInformation.AsyncOperations
+	}
+	for _, rs := range rq.UserInformation.RoleSelections {
+		// Only confirm roles for SOP Classes actually supported; a role for an
+		// unsupported abstract syntax is meaningless.
+		if supportedAbstractSyntaxes[rs.SOPClassUID] {
+			userInfo.RoleSelections = append(userInfo.RoleSelections, rs)
+		}
+	}
+
 	// Send A-ASSOCIATE-AC
 	ac := &AssociateAC{
 		ProtocolVersion:       ProtocolVersion,
@@ -208,11 +285,7 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 		CallingAE:             rq.CallingAE,
 		ApplicationContextUID: DefaultApplicationContextUID,
 		PresentationContexts:  results,
-		UserInformation: UserInformationItem{
-			MaxPDULength:           maxPDUSize,
-			ImplementationClassUID: DefaultImplementationClassUID,
-			ImplementationVersion:  DefaultImplementationVersionName,
-		},
+		UserInformation:       userInfo,
 	}
 
 	if err := a.transport.WritePDU(ctx, ac); err != nil {
@@ -224,6 +297,7 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 	a.maxPDUSize = negotiatedPDU
 	a.transport.SetMaxPDUSize(negotiatedPDU)
 	a.acceptedContexts = BuildAcceptedContextMap(rq.PresentationContexts, results)
+	a.peerUserInfo = rq.UserInformation
 	a.mu.Unlock()
 
 	return nil

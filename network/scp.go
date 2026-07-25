@@ -21,6 +21,10 @@ type SCP struct {
 	// Supported abstract syntaxes and transfer syntaxes
 	supportedAbstractSyntaxes map[string]bool
 	supportedTransferSyntaxes map[string]bool
+
+	// assocSlots bounds concurrent associations when MaxAssociations > 0.
+	// Nil means unlimited.
+	assocSlots chan struct{}
 }
 
 // NewSCP creates a new SCP with the given configuration.
@@ -31,6 +35,9 @@ func NewSCP(config SCPConfig) *SCP {
 		handler:                   &BaseHandler{},
 		supportedAbstractSyntaxes: defaultSupportedAbstractSyntaxes(),
 		supportedTransferSyntaxes: defaultSupportedTransferSyntaxes(),
+	}
+	if config.MaxAssociations > 0 {
+		scp.assocSlots = make(chan struct{}, config.MaxAssociations)
 	}
 	return scp
 }
@@ -97,9 +104,26 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 			}
 		}
 
+		// Bound concurrent associations when configured. Rejecting at the
+		// transport level keeps an unbounded number of peers from each
+		// consuming a goroutine and an open socket.
+		if s.assocSlots != nil {
+			select {
+			case s.assocSlots <- struct{}{}:
+			default:
+				log.Printf("association limit (%d) reached, rejecting %s",
+					s.config.MaxAssociations, transport.RemoteAddr())
+				s.rejectOverLimit(ctx, transport)
+				continue
+			}
+		}
+
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			if s.assocSlots != nil {
+				defer func() { <-s.assocSlots }()
+			}
 			s.handleConnection(ctx, transport)
 		}()
 	}
@@ -123,6 +147,28 @@ func (s *SCP) Close() error {
 		return s.listener.Close()
 	}
 	return nil
+}
+
+// rejectOverLimit turns away a connection that arrived while the association
+// limit was saturated. The peer is told the reason so it can retry, rather than
+// having the socket closed without explanation.
+func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
+	defer transport.Close()
+
+	// Only an A-ASSOCIATE-RQ can be answered with an A-ASSOCIATE-RJ; anything
+	// else gets the connection closed.
+	pdu, err := transport.ReadPDU(ctx)
+	if err != nil {
+		return
+	}
+	if _, ok := pdu.(*AssociateRQ); !ok {
+		return
+	}
+
+	assoc := NewAssociation(transport)
+	// Result: rejected-transient, Source: service-user,
+	// Reason 2: local-limit-exceeded (PS3.8 Table 9-21).
+	_ = assoc.RejectAssociation(ctx, RJResultRejectedTransient, RJSourceServiceUser, 2)
 }
 
 func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
@@ -293,7 +339,7 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 			log.Printf("expected data, got command during C-STORE")
 			return
 		}
-		ds, err = decodeDatasetBytes(dataBytes)
+		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			log.Printf("failed to decode C-STORE dataset: %v", err)
 			ds = dataset.NewDataset()
@@ -344,7 +390,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 			log.Printf("expected data, got command during C-FIND")
 			return
 		}
-		queryDS, err = decodeDatasetBytes(dataBytes)
+		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			log.Printf("failed to decode C-FIND query: %v", err)
 			return
@@ -378,7 +424,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 
 		// Send result dataset if present
 		if resp.DataSet != nil {
-			dataBytes, err := encodeDataset(resp.DataSet)
+			dataBytes, err := EncodeDataset(resp.DataSet, assoc.TransferSyntaxFor(ctxID))
 			if err != nil {
 				continue
 			}
@@ -408,7 +454,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 		if isCmd {
 			return
 		}
-		queryDS, err = decodeDatasetBytes(dataBytes)
+		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			return
 		}
@@ -453,7 +499,7 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 		if isCmd {
 			return
 		}
-		queryDS, _ = decodeDatasetBytes(dataBytes)
+		queryDS, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &CGetRequest{
@@ -488,7 +534,7 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NEventReportRequest{
@@ -539,7 +585,7 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 
 	if hasDS && resp != nil && resp.DataSet != nil {
-		dataBytes, _ := encodeDataset(resp.DataSet)
+		dataBytes, _ := EncodeDataset(resp.DataSet, assoc.TransferSyntaxFor(ctxID))
 		_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
 	}
 }
@@ -556,7 +602,7 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NSetRequest{
@@ -592,7 +638,7 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NActionRequest{
@@ -628,7 +674,7 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NCreateRequest{

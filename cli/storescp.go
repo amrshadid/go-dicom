@@ -103,9 +103,9 @@ func writeDICOMFile(filename, sopClassUID, sopInstanceUID string, ds *dataset.Da
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    sopClassUID,
 		MediaStorageSOPInstanceUID: sopInstanceUID,
-		TransferSyntaxUID:         network.ExplicitVRLittleEndianUID,
-		ImplementationClassUID:    network.DefaultImplementationClassUID,
-		ImplementationVersionName: network.DefaultImplementationVersionName,
+		TransferSyntaxUID:          network.ExplicitVRLittleEndianUID,
+		ImplementationClassUID:     network.DefaultImplementationClassUID,
+		ImplementationVersionName:  network.DefaultImplementationVersionName,
 	})
 
 	for _, elem := range ds.GetAll() {
