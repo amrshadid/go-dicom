@@ -121,6 +121,18 @@ func (a *Association) AcceptedContexts() map[byte]*PresentationContext {
 	return a.acceptedContexts
 }
 
+// TransferSyntaxFor returns the transfer syntax negotiated for a presentation
+// context ID. It returns the empty string when the context was not accepted,
+// which callers treat as DICOM's implicit VR little endian default.
+func (a *Association) TransferSyntaxFor(contextID byte) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if pc, ok := a.acceptedContexts[contextID]; ok {
+		return pc.TransferSyntax
+	}
+	return ""
+}
+
 // RequestAssociation sends an A-ASSOCIATE-RQ and processes the response (SCU side).
 func (a *Association) RequestAssociation(ctx context.Context, callingAE, calledAE string,
 	contexts []PresentationContextItem, maxPDUSize uint32) error {

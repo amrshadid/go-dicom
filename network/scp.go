@@ -293,7 +293,7 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 			log.Printf("expected data, got command during C-STORE")
 			return
 		}
-		ds, err = decodeDatasetBytes(dataBytes)
+		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			log.Printf("failed to decode C-STORE dataset: %v", err)
 			ds = dataset.NewDataset()
@@ -344,7 +344,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 			log.Printf("expected data, got command during C-FIND")
 			return
 		}
-		queryDS, err = decodeDatasetBytes(dataBytes)
+		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			log.Printf("failed to decode C-FIND query: %v", err)
 			return
@@ -378,7 +378,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 
 		// Send result dataset if present
 		if resp.DataSet != nil {
-			dataBytes, err := encodeDataset(resp.DataSet)
+			dataBytes, err := EncodeDataset(resp.DataSet, assoc.TransferSyntaxFor(ctxID))
 			if err != nil {
 				continue
 			}
@@ -408,7 +408,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 		if isCmd {
 			return
 		}
-		queryDS, err = decodeDatasetBytes(dataBytes)
+		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			return
 		}
@@ -453,7 +453,7 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 		if isCmd {
 			return
 		}
-		queryDS, _ = decodeDatasetBytes(dataBytes)
+		queryDS, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &CGetRequest{
@@ -488,7 +488,7 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NEventReportRequest{
@@ -539,7 +539,7 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 
 	if hasDS && resp != nil && resp.DataSet != nil {
-		dataBytes, _ := encodeDataset(resp.DataSet)
+		dataBytes, _ := EncodeDataset(resp.DataSet, assoc.TransferSyntaxFor(ctxID))
 		_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
 	}
 }
@@ -556,7 +556,7 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NSetRequest{
@@ -592,7 +592,7 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NActionRequest{
@@ -628,7 +628,7 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = decodeDatasetBytes(dataBytes)
+		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 	}
 
 	req := &NCreateRequest{
