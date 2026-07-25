@@ -368,6 +368,14 @@ func (u *UserInformationItem) encode(w *bytes.Buffer) error {
 	return nil
 }
 
+// MaxPDULengthLimit is the hard ceiling on the declared length of a single
+// received PDU. The PDU length field is a peer-controlled 32-bit value, so
+// without a limit a remote peer could declare ~4 GiB and force an allocation
+// of that size before a single byte of payload is read. 128 MiB is far above
+// any legitimate DICOM PDU (negotiated maximums are typically 16-128 KB) while
+// keeping a malicious declaration cheap to reject.
+const MaxPDULengthLimit uint32 = 128 << 20
+
 // DecodePDU reads and decodes a PDU from a reader.
 func DecodePDU(r io.Reader) (PDU, error) {
 	// Read PDU header: type (1 byte) + reserved (1 byte) + length (4 bytes)
@@ -379,7 +387,13 @@ func DecodePDU(r io.Reader) (PDU, error) {
 	pduType := header[0]
 	pduLength := binary.BigEndian.Uint32(header[2:6])
 
-	// Read PDU data
+	if pduLength > MaxPDULengthLimit {
+		return nil, NewPDUErrorf("TOO_LARGE",
+			"PDU length %d exceeds maximum allowed %d", pduLength, MaxPDULengthLimit)
+	}
+
+	// Read PDU data. io.ReadFull fails if the peer declared more than it sends,
+	// so the allocation above is bounded and the read is never short.
 	data := make([]byte, pduLength)
 	if _, err := io.ReadFull(r, data); err != nil {
 		return nil, NewCommunicationError("READ_PDU", "failed to read PDU data", err)
@@ -529,6 +543,14 @@ func decodeDataTF(data []byte) (*PDataTF, error) {
 		}
 		if pdvLen < 2 {
 			return nil, NewPDUError("INVALID", "PDV length too short")
+		}
+		// The PDV length is peer-controlled and independent of the enclosing PDU
+		// length, so a small PDU can still declare a huge PDV. Reject anything
+		// that cannot possibly be satisfied by the remaining buffer before
+		// allocating for it.
+		if uint64(pdvLen-2) > uint64(r.Len()) {
+			return nil, NewPDUErrorf("INVALID",
+				"PDV length %d exceeds remaining PDU data %d", pdvLen, r.Len())
 		}
 
 		ctxID, err := r.ReadByte()
