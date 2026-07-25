@@ -169,6 +169,8 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 			// Handle read error gracefully - file meta info might be incomplete/corrupted.
 			// Log a warning but continue with what we have so far; the rest of the
 			// file may still be readable.
+			config.Logger.Warn("filereader: skipping file meta element",
+				"tag", tagValue.String(), "expectedBytes", valueLength, "err", err)
 			dfr.metaWarnings = append(dfr.metaWarnings,
 				fmt.Sprintf("skipped file meta element %s (expected %d bytes): %v",
 					tagValue.String(), valueLength, err))
@@ -778,6 +780,8 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 			// Check if this is a length-related error (corrupted element)
 			if strings.Contains(errMsg, "claimed") && strings.Contains(errMsg, "bytes") ||
 				strings.Contains(errMsg, "exceeds") {
+				config.Logger.Warn("filereader: stopping at corrupted element",
+					"position", dfr.position, "err", err)
 				dicomFile.Warnings = append(dicomFile.Warnings,
 					fmt.Sprintf("stopped at corrupted element at position %d: %v", dfr.position, err))
 				break

@@ -5,6 +5,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -50,10 +51,11 @@ func (ds *Dataset) Add(elem *dataelem.DataElement) error {
 		return fmt.Errorf("invalid tag type")
 	}
 
-	// Perform semantic validation against DICOM dictionary
-	// Non-fatal; logs warning but continues
+	// Perform semantic validation against DICOM dictionary.
+	// Non-fatal; logs a warning through the configurable logger and continues.
 	if err := validateElementSemantics(t, elem); err != nil {
-		fmt.Printf("Warning: semantic validation for tag %s: %v\n", t.String(), err)
+		config.Logger.Warn("dataset: semantic validation",
+			"tag", t.String(), "err", err)
 	}
 
 	// Add to order if new tag

@@ -3,6 +3,7 @@ package filewriter
 import (
 	"fmt"
 
+	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/valuerep"
 )
@@ -226,7 +227,7 @@ func (dfw *DCMFileWriterWithValidation) WriteFileMetaInfoWithValidation(metaInfo
 				return err
 			}
 			// ValidationWarn: log warning but continue
-			fmt.Printf("Warning: File meta info validation: %v\n", err)
+			config.Logger.Warn("filewriter: file meta info validation", "err", err)
 		}
 	}
 
@@ -250,7 +251,8 @@ func (dfw *DCMFileWriterWithValidation) WriteElementWithValidation(elem *DataEle
 				return fmt.Errorf("element validation failed: %w", err)
 			}
 			// ValidationWarn: log warning but continue
-			fmt.Printf("Warning: Element validation for tag %s: %v\n", elem.Tag.String(), err)
+			config.Logger.Warn("filewriter: element validation",
+				"tag", elem.Tag.String(), "err", err)
 		}
 	}
 
@@ -328,7 +330,7 @@ func (tvw *TrackingValidationWriter) WriteElementTracked(elem *DataElement) erro
 				return err
 			}
 			tvw.stats.Warnings++
-			fmt.Printf("Warning: Element validation: %v\n", err)
+			config.Logger.Warn("filewriter: element validation", "err", err)
 		}
 	}
 
