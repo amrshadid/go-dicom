@@ -129,6 +129,50 @@ Use the bug report template. Include:
 
 Use the feature request template. Describe the use case and proposed approach.
 
+## Releasing
+
+Releases are cut by pushing a tag. The `build-release.yml` workflow does the
+rest: it cross-compiles the CLI for five platforms, generates `SHA256SUMS`,
+extracts the release notes from `CHANGELOG.md`, and publishes the GitHub
+release with the binaries attached.
+
+1. **Update `CHANGELOG.md`.** Add a section headed exactly `## [X.Y.Z] - YYYY-MM-DD`
+   and a comparison link at the bottom of the file. The workflow extracts the
+   release notes by matching this heading, so the format matters.
+2. **Update `Version` in `main.go`** to `X.Y.Z`.
+3. **Merge to `main`** via a pull request, and wait for CI to pass.
+4. **Tag the merge commit on `main`:**
+   ```bash
+   git checkout main && git pull
+   git tag -a vX.Y.Z -m "vX.Y.Z — short summary"
+   git push origin vX.Y.Z
+   ```
+5. **Watch the release workflow.** It publishes the release itself.
+
+### Tag naming
+
+The tag **must** be `vX.Y.Z` — a leading `v` followed by valid
+[semver](https://semver.org/), with no other punctuation.
+
+Go's module proxy silently ignores tags that are not valid semver. A tag like
+`v.1.2.1` (note the extra dot) looks fine in the GitHub UI but is invisible to
+`go get`, so nobody can install that version. Verify after tagging:
+
+```bash
+go list -m -versions github.com/amrshadid/go-dicom
+```
+
+The new version must appear in that list. If it does not, the tag name is wrong.
+
+### Do not create the release by hand
+
+The workflow owns the GitHub release. Creating one manually with
+`gh release create` before the workflow finishes causes it to be overwritten —
+the action replaces the name and body of an existing release with its own.
+
+If the notes need changing, edit `CHANGELOG.md` and re-run the workflow, or
+edit the release in the GitHub UI *after* the workflow has completed.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.

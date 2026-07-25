@@ -51,11 +51,24 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      # github.ref_name is exactly the tag that triggered this run. Using it
+      # instead of `git describe` avoids depending on tag history being present
+      # in the default shallow checkout, and cannot produce a "-N-gHASH" suffix.
       - name: Build binary
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
-        run: go build -ldflags "-X main.Version=$(git describe --tags)" -o ${{ matrix.output }} .
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o ${{ matrix.output }} .
+
+      - name: Verify the version was stamped
+        if: matrix.os == 'linux' && matrix.arch == 'amd64'
+        run: |
+          stamped=$(./${{ matrix.output }} -v)
+          echo "$stamped"
+          case "$stamped" in
+            *"${{ github.ref_name }}"*) ;;
+            *) echo "::error::binary reports '$stamped', expected it to contain '${{ github.ref_name }}'"; exit 1 ;;
+          esac
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
@@ -86,19 +99,24 @@ jobs:
 
       - name: Get version
         id: version
-        run: echo "tag=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+        run: echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
 
+      # CHANGELOG.md headings are unprefixed ("## [1.2.0]") while tags carry a
+      # leading v ("v1.2.0"), so the tag name must be stripped before matching.
+      # Without this every release silently fell back to the generic message.
       - name: Extract changelog notes
         id: changelog
         run: |
-          VERSION=$(git describe --tags --abbrev=0)
-          NOTES=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | sed '$d' || echo "")
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          NOTES=$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d')
           if [ -z "$NOTES" ]; then
+            echo "::warning::no CHANGELOG.md section found for [$VERSION]; using the generic fallback"
             NOTES="See [CHANGELOG.md](https://github.com/amrshadid/go-dicom/blob/main/CHANGELOG.md) for details."
           fi
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "notes<<CHANGELOG_EOF" >> $GITHUB_OUTPUT
           echo "$NOTES" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
 
       - name: Create checksums
         working-directory: release
