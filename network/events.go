@@ -70,8 +70,8 @@ type Event struct {
 	Timestamp time.Time
 
 	// Association context (may be nil for connection-level events)
-	CallingAE string
-	CalledAE  string
+	CallingAE  string
+	CalledAE   string
 	RemoteAddr string
 
 	// PDU/DIMSE context (set for PDU/DIMSE events)
