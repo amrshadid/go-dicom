@@ -3,7 +3,6 @@ package network
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
 )
 
 // Extended negotiation sub-item types within User Information.
@@ -93,20 +92,17 @@ func DecodeSCPSCURoleSelection(data []byte) (*SCPSCURoleSelection, error) {
 	if len(data) < 4 {
 		return nil, NewPDUError("SHORT_DATA", "SCP/SCU role selection data too short")
 	}
-	r := bytes.NewReader(data)
-
-	var uidLen uint16
-	_ = binary.Read(r, binary.BigEndian, &uidLen)
-	uid := make([]byte, uidLen)
-	_, _ = io.ReadFull(r, uid)
-
-	scuRole, _ := r.ReadByte()
-	scpRole, _ := r.ReadByte()
+	uidLen := int(binary.BigEndian.Uint16(data[0:2]))
+	// The UID length plus the two role bytes must fit within the sub-item.
+	if uidLen+2 > len(data)-2 {
+		return nil, NewPDUErrorf("INVALID",
+			"role selection UID length %d exceeds available data %d", uidLen, len(data)-2)
+	}
 
 	return &SCPSCURoleSelection{
-		SOPClassUID: string(uid),
-		SCURole:     scuRole == 0x01,
-		SCPRole:     scpRole == 0x01,
+		SOPClassUID: string(data[2 : 2+uidLen]),
+		SCURole:     data[2+uidLen] == 0x01,
+		SCPRole:     data[3+uidLen] == 0x01,
 	}, nil
 }
 
@@ -149,20 +145,27 @@ func DecodeUserIdentityNegotiation(data []byte) (*UserIdentityNegotiation, error
 		return nil, NewPDUError("SHORT_DATA", "user identity data too short")
 	}
 
-	r := bytes.NewReader(data)
-	identType, _ := r.ReadByte()
-	posResp, _ := r.ReadByte()
+	identType := data[0]
+	posResp := data[1]
 
-	var primaryLen uint16
-	_ = binary.Read(r, binary.BigEndian, &primaryLen)
-	primary := make([]byte, primaryLen)
-	_, _ = io.ReadFull(r, primary)
+	primaryLen := int(binary.BigEndian.Uint16(data[2:4]))
+	if primaryLen > len(data)-4 {
+		return nil, NewPDUErrorf("INVALID",
+			"user identity primary field length %d exceeds available data %d", primaryLen, len(data)-4)
+	}
+	primary := data[4 : 4+primaryLen]
 
-	var secondaryLen uint16
-	_ = binary.Read(r, binary.BigEndian, &secondaryLen)
-	secondary := make([]byte, secondaryLen)
-	if secondaryLen > 0 {
-		_, _ = io.ReadFull(r, secondary)
+	// The secondary field (password) is optional; peers may omit its length.
+	var secondary []byte
+	rest := data[4+primaryLen:]
+	if len(rest) >= 2 {
+		secondaryLen := int(binary.BigEndian.Uint16(rest[0:2]))
+		if secondaryLen > len(rest)-2 {
+			return nil, NewPDUErrorf("INVALID",
+				"user identity secondary field length %d exceeds available data %d",
+				secondaryLen, len(rest)-2)
+		}
+		secondary = rest[2 : 2+secondaryLen]
 	}
 
 	return &UserIdentityNegotiation{
@@ -201,6 +204,26 @@ type ExtendedNegotiation struct {
 type SOPClassExtendedNegotiation struct {
 	SOPClassUID string
 	ServiceData []byte
+}
+
+// DecodeSOPClassExtendedNegotiation decodes a SOP Class Extended Negotiation
+// sub-item: a 2-byte UID length, the SOP Class UID, then service-class-specific
+// application information filling the remainder.
+func DecodeSOPClassExtendedNegotiation(data []byte) (*SOPClassExtendedNegotiation, error) {
+	if len(data) < 2 {
+		return nil, NewPDUError("SHORT_DATA", "SOP class extended negotiation data too short")
+	}
+
+	uidLen := int(binary.BigEndian.Uint16(data[0:2]))
+	if uidLen > len(data)-2 {
+		return nil, NewPDUErrorf("INVALID",
+			"SOP class UID length %d exceeds available data %d", uidLen, len(data)-2)
+	}
+
+	return &SOPClassExtendedNegotiation{
+		SOPClassUID: string(data[2 : 2+uidLen]),
+		ServiceData: data[2+uidLen:],
+	}, nil
 }
 
 // Encode serializes the SOP Class Extended Negotiation sub-item.

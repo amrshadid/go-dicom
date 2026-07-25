@@ -99,3 +99,109 @@ func TestDecodeCommandDatasetRejectsOversizedElement(t *testing.T) {
 		t.Fatal("expected an error for an element longer than the buffer, got nil")
 	}
 }
+
+// TestDecodeSCPSCURoleSelectionBounds verifies the role selection decoder
+// rejects a UID length that runs past the end of the sub-item.
+func TestDecodeSCPSCURoleSelectionBounds(t *testing.T) {
+	data := make([]byte, 8)
+	binary.BigEndian.PutUint16(data[0:2], 200)
+
+	if _, err := DecodeSCPSCURoleSelection(data); err == nil {
+		t.Fatal("expected an error for an out-of-bounds UID length, got nil")
+	}
+}
+
+// TestDecodeUserIdentityNegotiationBounds verifies the user identity decoder
+// rejects a primary field length that runs past the end of the sub-item.
+func TestDecodeUserIdentityNegotiationBounds(t *testing.T) {
+	data := make([]byte, 8)
+	data[0] = byte(UserIdentityUsername)
+	data[1] = 0x01
+	binary.BigEndian.PutUint16(data[2:4], 9999)
+
+	if _, err := DecodeUserIdentityNegotiation(data); err == nil {
+		t.Fatal("expected an error for an out-of-bounds primary field length, got nil")
+	}
+}
+
+// TestDecodeSOPClassExtendedNegotiationRoundTrip covers the decoder added to
+// complete the extended negotiation codec.
+func TestDecodeSOPClassExtendedNegotiationRoundTrip(t *testing.T) {
+	original := &SOPClassExtendedNegotiation{
+		SOPClassUID: StudyRootQueryRetrieveFind,
+		ServiceData: []byte{0x01, 0x01},
+	}
+
+	encoded := original.Encode()
+	decoded, err := DecodeSOPClassExtendedNegotiation(encoded[4:])
+	if err != nil {
+		t.Fatalf("DecodeSOPClassExtendedNegotiation: %v", err)
+	}
+	if decoded.SOPClassUID != original.SOPClassUID {
+		t.Errorf("SOPClassUID = %q, want %q", decoded.SOPClassUID, original.SOPClassUID)
+	}
+	if !bytes.Equal(decoded.ServiceData, original.ServiceData) {
+		t.Errorf("ServiceData = % x, want % x", decoded.ServiceData, original.ServiceData)
+	}
+}
+
+// TestUserInformationExtendedNegotiationRoundTrip verifies that extended
+// negotiation sub-items survive a full encode/decode of the User Information
+// item. Before v1.2.0 these were encoded nowhere and parsed nowhere.
+func TestUserInformationExtendedNegotiationRoundTrip(t *testing.T) {
+	ui := UserInformationItem{
+		MaxPDULength:           16384,
+		ImplementationClassUID: DefaultImplementationClassUID,
+		ImplementationVersion:  DefaultImplementationVersionName,
+		AsyncOperations: &AsynchronousOperationsWindow{
+			MaxOperationsInvoked:   4,
+			MaxOperationsPerformed: 8,
+		},
+		RoleSelections: []SCPSCURoleSelection{
+			{SOPClassUID: CTImageStorageUID, SCURole: true, SCPRole: true},
+		},
+		UserIdentity: &UserIdentityNegotiation{
+			Type:                      UserIdentityUsernamePassword,
+			PositiveResponseRequested: true,
+			PrimaryField:              []byte("operator"),
+			SecondaryField:            []byte("secret"),
+		},
+	}
+
+	var buf bytes.Buffer
+	if err := ui.encode(&buf); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	decoded, err := decodeUserInformation(buf.Bytes()[4:])
+	if err != nil {
+		t.Fatalf("decodeUserInformation: %v", err)
+	}
+
+	if decoded.MaxPDULength != ui.MaxPDULength {
+		t.Errorf("MaxPDULength = %d, want %d", decoded.MaxPDULength, ui.MaxPDULength)
+	}
+	if decoded.AsyncOperations == nil {
+		t.Fatal("AsyncOperations was dropped in the round trip")
+	}
+	if decoded.AsyncOperations.MaxOperationsInvoked != 4 ||
+		decoded.AsyncOperations.MaxOperationsPerformed != 8 {
+		t.Errorf("AsyncOperations = %+v, want {4 8}", *decoded.AsyncOperations)
+	}
+	if len(decoded.RoleSelections) != 1 {
+		t.Fatalf("got %d role selections, want 1", len(decoded.RoleSelections))
+	}
+	if got := decoded.RoleSelections[0]; got.SOPClassUID != CTImageStorageUID ||
+		!got.SCURole || !got.SCPRole {
+		t.Errorf("RoleSelections[0] = %+v, want {%s true true}", got, CTImageStorageUID)
+	}
+	if decoded.UserIdentity == nil {
+		t.Fatal("UserIdentity was dropped in the round trip")
+	}
+	if string(decoded.UserIdentity.PrimaryField) != "operator" {
+		t.Errorf("PrimaryField = %q, want %q", decoded.UserIdentity.PrimaryField, "operator")
+	}
+	if string(decoded.UserIdentity.SecondaryField) != "secret" {
+		t.Errorf("SecondaryField = %q, want %q", decoded.UserIdentity.SecondaryField, "secret")
+	}
+}

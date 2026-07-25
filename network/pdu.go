@@ -65,8 +65,9 @@ const DefaultApplicationContextUID = "1.2.840.10008.3.1.1.1"
 // DefaultImplementationClassUID is a placeholder implementation class UID.
 const DefaultImplementationClassUID = "1.2.826.0.1.3680043.10.511"
 
-// DefaultImplementationVersionName is a placeholder implementation version.
-const DefaultImplementationVersionName = "GO-DICOM-1.0"
+// DefaultImplementationVersionName identifies this implementation to peers in
+// the A-ASSOCIATE User Information item. Limited to 16 characters by PS3.7 D.3.3.2.
+const DefaultImplementationVersionName = "GO-DICOM-1.2.0"
 
 // PDU is the interface for all Protocol Data Units.
 type PDU interface {
@@ -330,6 +331,26 @@ type UserInformationItem struct {
 	MaxPDULength           uint32
 	ImplementationClassUID string
 	ImplementationVersion  string
+
+	// AsyncOperations carries the Asynchronous Operations Window sub-item
+	// (PS3.7 D.3.3.3) when the peer negotiates one. Nil when absent.
+	AsyncOperations *AsynchronousOperationsWindow
+
+	// RoleSelections carries SCP/SCU Role Selection sub-items (PS3.7 D.3.3.4),
+	// which let an SCU also act as an SCP for a SOP Class — required by C-GET.
+	RoleSelections []SCPSCURoleSelection
+
+	// UserIdentity carries the User Identity Negotiation sub-item
+	// (PS3.7 D.3.3.7) used for username/password, Kerberos, SAML, or JWT auth.
+	UserIdentity *UserIdentityNegotiation
+
+	// UserIdentityResponse carries the server's identity response in an
+	// A-ASSOCIATE-AC. Nil when absent.
+	UserIdentityResponse *UserIdentityResponse
+
+	// SOPClassExtended carries SOP Class Extended Negotiation sub-items
+	// (PS3.7 D.3.3.5) holding service-class-specific data.
+	SOPClassExtended []SOPClassExtendedNegotiation
 }
 
 func (u *UserInformationItem) encode(w *bytes.Buffer) error {
@@ -357,6 +378,23 @@ func (u *UserInformationItem) encode(w *bytes.Buffer) error {
 		if err := writeSubItem(&itemBuf, ItemTypeImplementationVersion, []byte(u.ImplementationVersion)); err != nil {
 			return err
 		}
+	}
+
+	// Extended negotiation sub-items
+	if u.AsyncOperations != nil {
+		itemBuf.Write(u.AsyncOperations.Encode())
+	}
+	for i := range u.RoleSelections {
+		itemBuf.Write(u.RoleSelections[i].Encode())
+	}
+	if u.UserIdentity != nil {
+		itemBuf.Write(u.UserIdentity.Encode())
+	}
+	if u.UserIdentityResponse != nil {
+		itemBuf.Write(u.UserIdentityResponse.Encode())
+	}
+	for i := range u.SOPClassExtended {
+		itemBuf.Write(u.SOPClassExtended[i].Encode())
 	}
 
 	w.WriteByte(ItemTypeUserInformation)
@@ -692,6 +730,33 @@ func decodeUserInformation(data []byte) (*UserInformationItem, error) {
 			ui.ImplementationClassUID = string(itemData)
 		case ItemTypeImplementationVersion:
 			ui.ImplementationVersion = string(itemData)
+		case ItemTypeAsyncOperationsWindow:
+			// A malformed sub-item must not fail the whole association;
+			// skip what cannot be parsed and keep the rest.
+			if aow, err := DecodeAsyncOperationsWindow(itemData); err == nil {
+				ui.AsyncOperations = aow
+			}
+		case ItemTypeSCPSCURoleSelection:
+			if rs, err := DecodeSCPSCURoleSelection(itemData); err == nil {
+				ui.RoleSelections = append(ui.RoleSelections, *rs)
+			}
+		case ItemTypeUserIdentity:
+			if id, err := DecodeUserIdentityNegotiation(itemData); err == nil {
+				ui.UserIdentity = id
+			}
+		case ItemTypeUserIdentityAC:
+			if len(itemData) >= 2 {
+				respLen := int(binary.BigEndian.Uint16(itemData[0:2]))
+				if respLen <= len(itemData)-2 {
+					ui.UserIdentityResponse = &UserIdentityResponse{
+						ServerResponse: itemData[2 : 2+respLen],
+					}
+				}
+			}
+		case ItemTypeSOPClassExtended:
+			if ext, err := DecodeSOPClassExtendedNegotiation(itemData); err == nil {
+				ui.SOPClassExtended = append(ui.SOPClassExtended, *ext)
+			}
 		}
 	}
 
