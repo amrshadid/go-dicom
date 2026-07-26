@@ -424,7 +424,8 @@ without changing the `Handler` interface:
 ```go
 scp.SetHandler(&network.StorageHandler{
     OnStore: func(ctx context.Context, sopClass, sopInstance string, ds *dataset.Dataset) uint16 {
-        if info, ok := network.AssociationInfoFromContext(ctx); ok {
+        // Returns nil when called outside an association, so check it.
+        if info := network.AssociationInfoFromContext(ctx); info != nil {
             log.Printf("from %s (%s) via %s",
                 info.CallingAE, info.RemoteAddr, info.PeerImplementationVersion)
         }
