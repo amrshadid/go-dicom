@@ -88,7 +88,7 @@ func TestSpecialTagsRoundTripOnTheWire(t *testing.T) {
 	}
 }
 
-// TestIsSpecial confirms the delimitation tags are recognised as special and
+// TestIsSpecial confirms the delimitation tags are recognized as special and
 // that ordinary tags are not.
 func TestIsSpecial(t *testing.T) {
 	special := []tag.Tag{tag.ItemTag, tag.ItemDelimiterTag, tag.SequenceDelimiterTag}
