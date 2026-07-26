@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sequence writing in `filewriter`** — `DataElement.Items` holds nested
   `SequenceItem` values, closing the read → write → read round trip. Items are written
   with explicit lengths and implicit-style item headers as PS3.5 Section 7.5 requires.
+- **Raw DICOM data sets without a file meta header** — `ReadDICOMFile` required the
+  128-byte preamble and DICM prefix, so a raw stream, which is what modalities produce and
+  what travels on the network, could not be read despite the README listing it as
+  supported. The reader now detects which form the stream is and falls back to implicit VR
+  little endian per PS3.5 Section 10.1, recording the outcome in `DICOMFile.HasPreamble`.
+- **`DICOMFile.MetaElements`** — the group-0002 elements as they appeared in the file,
+  for callers that need to display the header verbatim.
 - **Interoperability testing against pynetdicom and dcmtk** — `scripts/interop-test.sh`
   plus a CI job. Exercises C-ECHO and C-STORE in both directions and C-GET
   sub-operations, using pydicom's `CT_small.dcm` as the fixture and pydicom as the
@@ -41,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The CLI parsed files with a second, broken parser** — `show`, `info`, `convert`, and
+  `codify` used a parser in `cli/helpers.go` separate from `filereader`, which received
+  none of this cycle's fixes. It read the file in 64 KiB chunks and parsed each
+  independently, so an element straddling a boundary desynchronized the stream: on a
+  268 KB file where pydicom reports 258 elements it printed roughly 38 and ended with an
+  invented element whose VR was two arbitrary bytes. It also never descended into
+  sequences, and classified SQ and UT as short-form VRs. The CLI now uses `filereader`,
+  reports 269 elements for the same file, and indents sequence contents by nesting depth.
 - **`ItemTag` was `0xFFFE0000`, not `0xFFFEE000`** *(critical)* — the constant was missing
   a digit and decoded as (FFFE,0000). Sequence parsing, added in 1.2.0, therefore failed
   on every real DICOM file containing a sequence, rejecting the correct item tag as
