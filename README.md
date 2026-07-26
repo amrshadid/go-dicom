@@ -286,7 +286,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | C-ECHO (Verification) | Yes | Yes | `scu.Echo(ctx)` |
 | C-STORE (Storage) | Yes | Yes | `scu.Store(ctx, ds)` |
 | C-FIND (Query) | Yes | Yes | `scu.Find(ctx, ds)` — streams via Go channel |
-| C-MOVE (Retrieve) | Yes | SCU only | `scu.Move(ctx, ds, dest)`. SCP side returns status but does not perform C-STORE sub-operations — see Limitations |
+| C-MOVE (Retrieve) | Yes | Yes | `scu.Move(ctx, ds, dest)`; SCP opens an association to the destination AE and transfers via C-STORE sub-operations |
 | C-GET (Get) | Yes | Yes | `scu.Get(ctx, ds)` with `SCUConfig.OnCStore`; SCP transfers instances via C-STORE sub-operations |
 | N-EVENT-REPORT | Yes | Yes | Full N-DIMSE service support |
 | N-GET | Yes | Yes | |
@@ -317,7 +317,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 
 | Area | Status |
 |------|--------|
-| **C-MOVE as an SCP** | The handler is invoked and a status is returned, but the SCP does **not** open an association to the destination AE or send C-STORE sub-operations. Acting as a C-MOVE *provider* requires implementing that yourself. C-MOVE works fully as an **SCU**, and **C-GET as an SCP is implemented** — see below. |
+| **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
 | **Transcoding between transfer syntaxes** | A data set is sent using the syntax negotiated for its presentation context. The library does not re-encode pixel data, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR will not decompress it for you. |
 | **`show` / `info` / `convert` CLI commands** | Use a separate flat parser and do not descend into sequences. The network path, `filereader`, and `filewriter` do. |
@@ -327,8 +327,8 @@ Known gaps, stated plainly so you can judge fit before adopting:
 
 Every release is tested against [pynetdicom](https://github.com/pydicom/pynetdicom) and
 [dcmtk](https://dcmtk.org/) in CI — C-ECHO and C-STORE in both directions, plus C-GET
-sub-operations — with the transferred data verified by pydicom rather than by this
-library's own reader:
+and C-MOVE sub-operations — with the transferred data verified by pydicom rather than by
+this library's own reader:
 
 ```bash
 go build -o dicom .

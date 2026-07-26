@@ -473,16 +473,149 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 	}
 
 	resp, err := handler.HandleCMove(ctx, req)
-	status := StatusSuccess
 	if err != nil {
-		status = StatusUnableToProcess
-	} else if resp != nil {
-		status = resp.Status
+		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0)
+		return
 	}
 
-	rspDS := BuildCMoveRSP(messageID, sopClassUID, status, 0, 0, 0, 0)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
+	var instances []*dataset.Dataset
+	status := StatusSuccess
+	if resp != nil {
+		status = resp.Status
+		instances = resp.Instances
+	}
+
+	if len(instances) == 0 {
+		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, status, 0, 0, 0)
+		return
+	}
+
+	// Unlike C-GET, the instances go to a third party named only by AE title,
+	// so the title must be resolvable to an address.
+	address, ok := s.config.resolveMoveDestination(moveDest)
+	if !ok {
+		log.Printf("C-MOVE destination %q is not configured; set SCPConfig.MoveDestinations "+
+			"or SCPConfig.ResolveMoveDestination", moveDest)
+		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID,
+			StatusMoveDestUnknown, 0, uint16(len(instances)), 0)
+		return
+	}
+
+	completed, failed, warning := s.sendMoveSubOperations(ctx, assoc, ctxID,
+		messageID, sopClassUID, moveDest, address, instances)
+
+	if failed > 0 && status == StatusSuccess {
+		status = StatusGetWarningPartial
+	}
+	s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, status, completed, failed, warning)
+}
+
+// sendMoveFinal sends the terminating C-MOVE-RSP.
+func (s *SCP) sendMoveFinal(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID string, status, completed, failed, warning uint16) {
+
+	rspDS := BuildCMoveRSP(messageID, sopClassUID, status, 0, completed, failed, warning)
+	rspBytes, err := EncodeCommandDataset(rspDS)
+	if err != nil {
+		log.Printf("failed to encode C-MOVE-RSP: %v", err)
+		return
+	}
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+}
+
+// sendMoveSubOperations opens an association to the move destination and sends
+// the instances there as C-STORE sub-operations, reporting progress back on the
+// association the C-MOVE arrived on.
+//
+// This is what distinguishes C-MOVE from C-GET: the data travels to a third
+// party over a separate association, while the requestor only watches the
+// counts (PS3.4 Annex C.4.2).
+func (s *SCP) sendMoveSubOperations(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID, destAE, destAddress string,
+	instances []*dataset.Dataset) (completed, failed, warning uint16) {
+
+	// Propose a presentation context for each distinct SOP Class being sent,
+	// so every instance has a context to travel on.
+	contexts := storageContextsFor(instances)
+	if len(contexts) == 0 {
+		return 0, uint16(len(instances)), 0
+	}
+
+	dest := NewSCU(SCUConfig{
+		CallingAE: s.config.AETitle,
+		CalledAE:  destAE,
+		Address:   destAddress,
+		Network:   s.config.Network,
+	})
+
+	if err := dest.Associate(ctx, contexts); err != nil {
+		log.Printf("C-MOVE could not associate with destination %s at %s: %v",
+			destAE, destAddress, err)
+		return 0, uint16(len(instances)), 0
+	}
+	defer func() { _ = dest.Release(ctx) }()
+
+	for i, inst := range instances {
+		remaining := uint16(len(instances) - i - 1)
+
+		if inst == nil {
+			failed++
+			continue
+		}
+		if err := dest.Store(ctx, inst); err != nil {
+			log.Printf("C-MOVE sub-operation failed: %v", err)
+			failed++
+		} else {
+			completed++
+		}
+
+		// Progress goes back to the requestor, not the destination.
+		pendingDS := BuildCMoveRSP(messageID, sopClassUID, StatusPending,
+			remaining, completed, failed, warning)
+		pendingBytes, err := EncodeCommandDataset(pendingDS)
+		if err != nil {
+			continue
+		}
+		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
+			log.Printf("C-MOVE pending response failed, abandoning sub-operations: %v", err)
+			failed += remaining
+			return completed, failed, warning
+		}
+	}
+
+	return completed, failed, warning
+}
+
+// storageContextsFor builds presentation contexts covering the distinct SOP
+// Classes of the given instances, so each can be transferred.
+func storageContextsFor(instances []*dataset.Dataset) []PresentationContextItem {
+	seen := make(map[string]bool)
+	var contexts []PresentationContextItem
+
+	id := byte(1)
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		sopClass, _, ok := instanceUIDs(inst)
+		if !ok || seen[sopClass] {
+			continue
+		}
+		seen[sopClass] = true
+
+		contexts = append(contexts, PresentationContextItem{
+			ID:               id,
+			AbstractSyntax:   sopClass,
+			TransferSyntaxes: DefaultTransferSyntaxes(),
+		})
+		// Presentation context IDs must be odd (PS3.8 Section 9.3.2.2).
+		if id > 253 {
+			break
+		}
+		id += 2
+	}
+
+	return contexts
 }
 
 func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handler,

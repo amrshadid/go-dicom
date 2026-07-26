@@ -9,8 +9,8 @@
 //   - C-ECHO: Verification (ping) to test connectivity
 //   - C-STORE: Send/receive DICOM objects
 //   - C-FIND: Query for DICOM objects
-//   - C-MOVE: Retrieve DICOM objects to a third party (SCU only; as an SCP the
-//     handler runs but no sub-operations are performed)
+//   - C-MOVE: Retrieve DICOM objects to a third party, transferred over a new
+//     association to the destination AE
 //   - C-GET: Retrieve DICOM objects over the same association, transferred as
 //     C-STORE sub-operations
 //
