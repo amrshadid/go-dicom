@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-07-27
+
+> **Upgrade from 1.2.0 without delay.** The `ItemTag` constant in 1.2.0 was wrong, so the
+> nested sequence parsing introduced in that release failed on every real DICOM file
+> containing a sequence. 1.2.0 should be skipped.
 
 ### Added
 
@@ -219,7 +223,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README** rewritten with networking documentation, pynetdicom feature parity table, handler patterns, CLI network commands
 - **CLI help** updated to show file and network command categories
 
-## [Unreleased]
+## [1.3.0] - 2026-07-27
+
+> **Upgrade from 1.2.0 without delay.** The `ItemTag` constant in 1.2.0 was wrong, so the
+> nested sequence parsing introduced in that release failed on every real DICOM file
+> containing a sequence. 1.2.0 should be skipped.
 
 ### Added
 - **Anonymization module** (`anonymize/`) - DICOM de-identification per PS3.15 Annex E
@@ -285,8 +293,9 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
+[1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/amrshadid/go-dicom/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...v1.1.0
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...HEAD
 [1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0
