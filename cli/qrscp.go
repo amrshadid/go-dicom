@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -21,6 +22,7 @@ type QRSCPCommand struct {
 	aeTitle   string
 	port      int
 	outputDir string
+	moveDests string
 }
 
 func (c *QRSCPCommand) Name() string        { return "qrscp" }
@@ -30,6 +32,30 @@ func (c *QRSCPCommand) AddFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.aeTitle, "aet", "QRSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 	fs.StringVar(&c.outputDir, "output", "./dcmstore", "Storage directory for received instances")
+	fs.StringVar(&c.moveDests, "move-dest", "",
+		"C-MOVE destinations as AETITLE=host:port, comma separated (e.g. DEST=127.0.0.1:11113)")
+}
+
+// parseMoveDestinations turns the -move-dest flag into an AE title to address
+// map. A C-MOVE names its destination only by AE title, so without this there
+// is nowhere to send the instances.
+func parseMoveDestinations(spec string) (map[string]string, error) {
+	dests := make(map[string]string)
+	if spec == "" {
+		return dests, nil
+	}
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		aeTitle, address, found := strings.Cut(entry, "=")
+		if !found || aeTitle == "" || address == "" {
+			return nil, fmt.Errorf("invalid -move-dest entry %q, want AETITLE=host:port", entry)
+		}
+		dests[strings.TrimSpace(aeTitle)] = strings.TrimSpace(address)
+	}
+	return dests, nil
 }
 
 func (c *QRSCPCommand) Execute(args []string) error {
@@ -49,9 +75,15 @@ func (c *QRSCPCommand) Execute(args []string) error {
 		instances: make(map[string]*storedInstance),
 	}
 
+	moveDests, err := parseMoveDestinations(c.moveDests)
+	if err != nil {
+		return err
+	}
+
 	scp := network.NewSCP(network.SCPConfig{
-		AETitle: c.aeTitle,
-		Port:    c.port,
+		AETitle:          c.aeTitle,
+		Port:             c.port,
+		MoveDestinations: moveDests,
 	})
 
 	// Support all storage + Q/R + verification + worklist
@@ -193,6 +225,28 @@ func (h *qrHandler) HandleCFind(ctx context.Context, req *network.CFindRequest) 
 	}
 
 	return responses, nil
+}
+
+// HandleCMove returns the matching instances for transfer to the move
+// destination as C-STORE sub-operations over a new association.
+func (h *qrHandler) HandleCMove(_ context.Context, req *network.CMoveRequest) (*network.CMoveResponse, error) {
+	matches := h.store.find(func(inst *storedInstance) bool {
+		return inst.DataSet != nil
+	})
+
+	instances := make([]*dataset.Dataset, 0, len(matches))
+	for _, m := range matches {
+		instances = append(instances, m.DataSet)
+	}
+
+	fmt.Printf("  C-MOVE to %s: returning %d instance(s)\n", req.MoveDestination, len(instances))
+
+	return &network.CMoveResponse{
+		MessageIDRespondedTo: req.MessageID,
+		AffectedSOPClass:     req.AffectedSOPClass,
+		Status:               network.StatusSuccess,
+		Instances:            instances,
+	}, nil
 }
 
 // HandleCGet returns the matching instances for transfer as C-STORE
