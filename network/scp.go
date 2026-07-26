@@ -509,16 +509,156 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 	}
 
 	resp, err := handler.HandleCGet(ctx, req)
-	status := StatusSuccess
 	if err != nil {
-		status = StatusUnableToProcess
-	} else if resp != nil {
-		status = resp.Status
+		rspDS := BuildCGetRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0)
+		rspBytes, _ := EncodeCommandDataset(rspDS)
+		_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+		return
 	}
 
-	rspDS := BuildCGetRSP(messageID, sopClassUID, status, 0, 0, 0, 0)
+	var instances []*dataset.Dataset
+	status := StatusSuccess
+	if resp != nil {
+		status = resp.Status
+		instances = resp.Instances
+	}
+
+	// Transfer each matching instance as a C-STORE sub-operation over this
+	// same association (PS3.4 Annex C.4.3), reporting progress as we go.
+	completed, failed, warning := s.sendGetSubOperations(ctx, assoc, ctxID,
+		messageID, sopClassUID, instances)
+
+	// A partial failure is reported as a warning rather than success.
+	if failed > 0 && status == StatusSuccess {
+		status = StatusGetWarningPartial
+	}
+
+	rspDS := BuildCGetRSP(messageID, sopClassUID, status, 0, completed, failed, warning)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+}
+
+// sendGetSubOperations transfers instances to the requestor as C-STORE
+// sub-operations on the association the C-GET arrived on, emitting a pending
+// C-GET-RSP after each one so the requestor can track progress.
+//
+// Returns the completed, failed, and warning counts.
+func (s *SCP) sendGetSubOperations(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID string, instances []*dataset.Dataset) (completed, failed, warning uint16) {
+
+	// Sub-operations carry their own message IDs, independent of the C-GET's.
+	var subMessageID uint16
+
+	for i, inst := range instances {
+		remaining := uint16(len(instances) - i - 1)
+
+		if inst == nil {
+			failed++
+			continue
+		}
+
+		instClass, instUID, ok := instanceUIDs(inst)
+		if !ok {
+			log.Printf("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
+			failed++
+			continue
+		}
+
+		// The instance travels on the presentation context negotiated for its
+		// own SOP Class, which may differ from the C-GET's.
+		subCtxID, ok := FindPresentationContextID(assoc.AcceptedContexts(), instClass)
+		if !ok {
+			log.Printf("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
+			failed++
+			continue
+		}
+
+		subMessageID++
+		if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID, instClass, instUID, inst); err != nil {
+			log.Printf("C-GET sub-operation for %s failed: %v", instUID, err)
+			failed++
+		} else {
+			completed++
+		}
+
+		// Pending response so the requestor sees progress before the final status.
+		pendingDS := BuildCGetRSP(messageID, sopClassUID, StatusPending,
+			remaining, completed, failed, warning)
+		pendingBytes, err := EncodeCommandDataset(pendingDS)
+		if err != nil {
+			continue
+		}
+		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
+			// The association is gone; further sub-operations cannot succeed.
+			log.Printf("C-GET pending response failed, abandoning sub-operations: %v", err)
+			failed += remaining
+			return completed, failed, warning
+		}
+	}
+
+	return completed, failed, warning
+}
+
+// sendCStoreSubOperation issues one C-STORE-RQ and waits for its response.
+func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) error {
+
+	cmdDS := BuildCStoreRQ(messageID, sopClassUID, sopInstanceUID, PriorityMedium)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return fmt.Errorf("encode C-STORE-RQ: %w", err)
+	}
+	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
+		return fmt.Errorf("send C-STORE-RQ: %w", err)
+	}
+
+	dataBytes, err := EncodeDataset(ds, assoc.TransferSyntaxFor(ctxID))
+	if err != nil {
+		return fmt.Errorf("encode instance: %w", err)
+	}
+	if err := assoc.SendPData(ctx, ctxID, dataBytes, false); err != nil {
+		return fmt.Errorf("send instance: %w", err)
+	}
+
+	_, respData, isCmd, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return fmt.Errorf("receive C-STORE-RSP: %w", err)
+	}
+	if !isCmd {
+		return fmt.Errorf("expected C-STORE-RSP command, got a data set")
+	}
+
+	respDS, err := DecodeCommandDataset(respData)
+	if err != nil {
+		return fmt.Errorf("decode C-STORE-RSP: %w", err)
+	}
+	_, _, status, err := ParseCommandDataset(respDS)
+	if err != nil {
+		return fmt.Errorf("parse C-STORE-RSP: %w", err)
+	}
+	if status != StatusSuccess && status != StatusWarning {
+		return NewDIMSEError("SUBOP_FAILED",
+			fmt.Sprintf("C-STORE sub-operation rejected with status 0x%04X", status), status)
+	}
+
+	return nil
+}
+
+// instanceUIDs extracts the SOP Class and SOP Instance UIDs an instance must
+// carry to be transferred.
+func instanceUIDs(ds *dataset.Dataset) (sopClassUID, sopInstanceUID string, ok bool) {
+	classElem, hasClass := ds.Get(tagSOPClassUID)
+	instElem, hasInst := ds.Get(tagSOPInstanceUID)
+	if !hasClass || !hasInst {
+		return "", "", false
+	}
+
+	sopClassUID = extractStringValue(classElem.GetValue())
+	sopInstanceUID = extractStringValue(instElem.GetValue())
+	if sopClassUID == "" || sopInstanceUID == "" {
+		return "", "", false
+	}
+	return sopClassUID, sopInstanceUID, true
 }
 
 func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handler Handler,

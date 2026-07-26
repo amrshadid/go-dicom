@@ -1,6 +1,11 @@
 package network
 
-import "time"
+import (
+	"context"
+	"time"
+
+	"github.com/amrshadid/go-dicom/dataset"
+)
 
 const (
 	// DefaultMaxPDUSize is the default maximum PDU size (16 KB).
@@ -74,7 +79,20 @@ type SCUConfig struct {
 	// items: asynchronous operations window, SCP/SCU role selection, and user
 	// identity (username/password, Kerberos, SAML, JWT). Nil proposes none.
 	ExtendedNegotiation *ExtendedNegotiation
+
+	// OnCStore receives instances the peer sends as C-STORE sub-operations
+	// during a C-GET. Return a DIMSE status; StatusSuccess accepts the
+	// instance.
+	//
+	// When nil, incoming instances are acknowledged with StatusSuccess and
+	// discarded — the C-GET still completes, but nothing is retained. Set this
+	// to actually keep what a C-GET retrieves.
+	OnCStore CStoreSubOperationFunc
 }
+
+// CStoreSubOperationFunc handles an instance pushed by a peer as a C-STORE
+// sub-operation during a C-GET.
+type CStoreSubOperationFunc func(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16
 
 // SCPConfig holds configuration for a Service Class Provider (server).
 type SCPConfig struct {

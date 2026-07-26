@@ -169,9 +169,10 @@ func (h *QueryRetrieveHandler) HandleCMove(ctx context.Context, req *CMoveReques
 
 // HandleCGet delegates to the OnGet callback if set.
 //
-// The returned datasets are the instances matching the query. Sending them back
-// as C-STORE sub-operations is not yet implemented, so the response reports the
-// match count and a warning status rather than claiming success.
+// The datasets returned by OnGet are transferred to the requestor as C-STORE
+// sub-operations over the same association. Each must carry SOP Class UID
+// (0008,0016) and SOP Instance UID (0008,0018), and its SOP Class must have an
+// accepted presentation context on the association.
 func (h *QueryRetrieveHandler) HandleCGet(ctx context.Context, req *CGetRequest) (*CGetResponse, error) {
 	if h.OnGet == nil {
 		return nil, NewDIMSEError("NOT_IMPLEMENTED", "C-GET not implemented", StatusUnableToProcess)
@@ -186,7 +187,7 @@ func (h *QueryRetrieveHandler) HandleCGet(ctx context.Context, req *CGetRequest)
 		MessageIDRespondedTo: req.MessageID,
 		AffectedSOPClass:     req.AffectedSOPClass,
 		Status:               StatusSuccess,
-		NumberOfCompleted:    uint16(len(datasets)),
+		Instances:            datasets,
 	}, nil
 }
 
