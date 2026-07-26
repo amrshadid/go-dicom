@@ -103,6 +103,9 @@ type storedInstance struct {
 	SeriesUID      string
 	Modality       string
 	FilePath       string
+
+	// DataSet is the instance itself, retained so C-GET can transfer it back.
+	DataSet *dataset.Dataset
 }
 
 // instanceStore is a thread-safe in-memory instance index.
@@ -151,6 +154,7 @@ func (h *qrHandler) HandleCStore(ctx context.Context, req *network.CStoreRequest
 
 	// Extract metadata from dataset if available
 	if req.DataSet != nil {
+		inst.DataSet = req.DataSet
 		inst.PatientName = extractDSString(req.DataSet, 0x0010, 0x0010)
 		inst.PatientID = extractDSString(req.DataSet, 0x0010, 0x0020)
 		inst.StudyUID = extractDSString(req.DataSet, 0x0020, 0x000D)
@@ -189,6 +193,28 @@ func (h *qrHandler) HandleCFind(ctx context.Context, req *network.CFindRequest) 
 	}
 
 	return responses, nil
+}
+
+// HandleCGet returns the matching instances for transfer as C-STORE
+// sub-operations over the same association.
+func (h *qrHandler) HandleCGet(_ context.Context, req *network.CGetRequest) (*network.CGetResponse, error) {
+	matches := h.store.find(func(inst *storedInstance) bool {
+		return inst.DataSet != nil
+	})
+
+	instances := make([]*dataset.Dataset, 0, len(matches))
+	for _, m := range matches {
+		instances = append(instances, m.DataSet)
+	}
+
+	fmt.Printf("  C-GET: returning %d instance(s)\n", len(instances))
+
+	return &network.CGetResponse{
+		MessageIDRespondedTo: req.MessageID,
+		AffectedSOPClass:     req.AffectedSOPClass,
+		Status:               network.StatusSuccess,
+		Instances:            instances,
+	}, nil
 }
 
 // extractDSString extracts a string value from a dataset by tag.
