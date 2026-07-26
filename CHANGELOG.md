@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `SCUConfig.OnCStore` receives them on the requesting side
   - `qrscp` retains received datasets and serves them, making it a working
     in-memory query/retrieve server
+- **C-MOVE sub-operations** — the SCP now opens an association to the move destination and
+  sends the matching instances there as C-STORE sub-operations (PS3.4 Annex C.4.2),
+  reporting progress back to the requestor. This completes query/retrieve: C-FIND,
+  C-GET, and C-MOVE all work as both SCU and SCP.
+  - `CMoveResponse.Instances` supplies the instances to move
+  - `QueryRetrieveHandler.OnMoveInstances` returns them from a handler; the older
+    `OnMove`, which could not transfer anything, is deprecated but still honored
+  - `SCPConfig.MoveDestinations` and `SCPConfig.ResolveMoveDestination` resolve a
+    destination AE title to an address; an unresolvable title is answered with
+    `StatusMoveDestUnknown`
+  - `qrscp -move-dest AETITLE=host:port` configures destinations from the CLI
 - **Sequence writing in `filewriter`** — `DataElement.Items` holds nested
   `SequenceItem` values, closing the read → write → read round trip. Items are written
   with explicit lengths and implicit-style item headers as PS3.5 Section 7.5 requires.

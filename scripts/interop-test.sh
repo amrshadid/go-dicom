@@ -169,6 +169,7 @@ if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/storescu" ]; then
   PY_STORESCP="$PYNETDICOM_BIN/storescp"
   PY_ECHOSCU="$PYNETDICOM_BIN/echoscu"
   PY_GETSCU="$PYNETDICOM_BIN/getscu"
+  PY_MOVESCU="$PYNETDICOM_BIN/movescu"
 
   note "pynetdicom -> go-dicom"
   mkdir -p "$WORKDIR/go_recv"
@@ -250,6 +251,40 @@ if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/storescu" ]; then
     fail "go-dicom qrscp did not start listening"
   fi
   stop_server "$qr_scp_pid"
+
+  note "C-MOVE: pynetdicom movescu -> go-dicom qrscp -> pynetdicom storescp"
+  mkdir -p "$WORKDIR/mv_store" "$WORKDIR/mv_dest"
+  # Three parties: the requestor asks the source to send to a destination it is
+  # not itself. The destination must be reachable by AE title from the source.
+  start_server "$WORKDIR/mv_dest" "$WORKDIR/mv_dest.log" \
+    "$PY_STORESCP" 11155 -aet MVDEST -od .
+  mv_dest_pid=$SERVER_PID
+  start_server "$WORKDIR" "$WORKDIR/mv_src.log" \
+    "$GODICOM" qrscp -port 11156 -aet GOMOVE -output "$WORKDIR/mv_store" \
+    -move-dest "MVDEST=127.0.0.1:11155"
+  mv_src_pid=$SERVER_PID
+
+  if wait_for_port 11155 && wait_for_port 11156; then
+    if "$PY_STORESCU" 127.0.0.1 11156 "$FIXTURE" -aec GOMOVE >/dev/null 2>&1; then
+      if "$PY_MOVESCU" 127.0.0.1 11156 -aec GOMOVE -aem MVDEST -S \
+           -k QueryRetrieveLevel=STUDY -k StudyInstanceUID= >/dev/null 2>&1; then
+        received=$(find "$WORKDIR/mv_dest" -type f | head -1)
+        if [ -n "$received" ]; then
+          verify_transfer "$received" "C-MOVE sub-operations"
+        else
+          fail "C-MOVE — completed but the destination received nothing"
+        fi
+      else
+        fail "C-MOVE"
+      fi
+    else
+      fail "C-MOVE — could not seed the source"
+    fi
+  else
+    fail "C-MOVE servers did not start listening"
+  fi
+  stop_server "$mv_src_pid"
+  stop_server "$mv_dest_pid"
 else
   skip "pynetdicom not available (set PYNETDICOM_BIN)"
 fi
