@@ -6,13 +6,14 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"strings"
 	"unicode"
 
 	"github.com/amrshadid/go-dicom/charset"
+	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -38,7 +39,16 @@ type DicomInfo struct {
 	Columns           int
 }
 
-// readDICOMFile reads a DICOM file and returns its elements.
+// readDICOMFile reads a DICOM file and returns its elements, flattened for
+// display with Depth recording sequence nesting.
+//
+// This delegates to the filereader package rather than parsing the file here.
+// The CLI previously carried its own parser, which read the file in 64 KB
+// chunks and parsed each chunk independently: any element straddling a
+// boundary desynchronized the stream, so a file larger than one chunk lost
+// most of its elements and gained invented ones with impossible VRs. It also
+// never descended into sequences, and received none of the fixes made to the
+// real reader.
 func readDICOMFile(filename string) ([]DicomElement, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -46,133 +56,36 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 	}
 	defer file.Close()
 
-	var elements []DicomElement
-
-	preamble := make([]byte, 132)
-	n, err := file.Read(preamble)
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("failed to read preamble: %w", err)
+	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(file))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 	}
 
-	if n == 132 && string(preamble[128:132]) == "DICM" {
-	} else {
-		_, _ = file.Seek(0, io.SeekStart)
-	}
-
-	// Read elements
-	buffer := make([]byte, 65536)
-	for {
-		n, err := file.Read(buffer)
-		if err != nil && err != io.EOF {
-			return nil, fmt.Errorf("read error: %w", err)
-		}
-		if n == 0 {
-			break
-		}
-
-		// Parse buffer for DICOM elements
-		elems := parseElements(buffer[:n])
-		elements = append(elements, elems...)
-
-		if err == io.EOF {
-			break
-		}
-	}
-
+	// The file meta header first, as it appears in the file, then the data set.
+	elements := make([]DicomElement, 0, len(df.MetaElements)+len(df.DataElements))
+	elements = appendElements(elements, df.MetaElements, 0)
+	elements = appendElements(elements, df.DataElements, 0)
 	return elements, nil
 }
 
-// parseElements parses raw bytes into DICOM elements.
-func parseElements(data []byte) []DicomElement {
-	var elements []DicomElement
-	buf := bytes.NewReader(data)
+// appendElements flattens parsed elements for display, descending into
+// sequences and recording the nesting level in Depth.
+func appendElements(out []DicomElement, elems []*filereader.DataElementValue, depth int) []DicomElement {
+	for _, e := range elems {
+		out = append(out, DicomElement{
+			Tag:   fmt.Sprintf("%04X,%04X", e.Tag.Group(), e.Tag.Element()),
+			Name:  getElementName(e.Tag.Group(), e.Tag.Element()),
+			VR:    e.VR,
+			Value: e.Value,
+			Depth: depth,
+		})
 
-	for buf.Len() >= 8 {
-		// Read group and element (4 bytes total)
-		groupBytes := make([]byte, 2)
-		elemBytes := make([]byte, 2)
-
-		if _, err := buf.Read(groupBytes); err != nil {
-			break
-		}
-		if _, err := buf.Read(elemBytes); err != nil {
-			break
-		}
-
-		group := binary.LittleEndian.Uint16(groupBytes)
-		element := binary.LittleEndian.Uint16(elemBytes)
-
-		// Skip if not a valid tag range
-		if group == 0 && element == 0 {
-			_, _ = buf.ReadByte()
-			continue
-		}
-
-		// Read VR (2 bytes if explicit)
-		vrBytes := make([]byte, 2)
-		if _, err := buf.Read(vrBytes); err != nil {
-			break
-		}
-
-		vr := string(vrBytes)
-
-		// Read length
-		var length uint32
-		if isShortVR(vr) {
-			// Two-byte length for short VR
-			lenBytes := make([]byte, 2)
-			if _, err := buf.Read(lenBytes); err != nil {
-				break
-			}
-			length = uint32(binary.LittleEndian.Uint16(lenBytes))
-		} else {
-			// Skip 2 reserved bytes and read 4-byte length
-			reserved := make([]byte, 2)
-			_, _ = buf.Read(reserved)
-			lenBytes := make([]byte, 4)
-			if _, err := buf.Read(lenBytes); err != nil {
-				break
-			}
-			length = binary.LittleEndian.Uint32(lenBytes)
-		}
-
-		// Read value
-		if length > 0 && length < 100000000 { // Sanity check (100MB max)
-			value := make([]byte, length)
-			n, err := buf.Read(value)
-			if err != nil && err != io.EOF {
-				break
-			}
-			if n != int(length) {
-				// Incomplete read, skip
-				break
-			}
-
-			tag := fmt.Sprintf("%04X,%04X", group, element)
-			elem := DicomElement{
-				Tag:   tag,
-				Name:  getElementName(group, element),
-				VR:    strings.TrimRight(vr, "\x00"),
-				Value: value,
-				Depth: 0,
-			}
-			elements = append(elements, elem)
+		// Sequence items nest one level deeper than the sequence itself.
+		for _, item := range e.Items {
+			out = appendElements(out, item.Elements, depth+1)
 		}
 	}
-
-	return elements
-}
-
-// isShortVR returns true if VR has 2-byte length field (not 4-byte).
-func isShortVR(vr string) bool {
-	short := map[string]bool{
-		"AE": true, "AS": true, "AT": true, "CS": true, "DA": true,
-		"DS": true, "DT": true, "FD": true, "FL": true, "IS": true,
-		"LO": true, "LT": true, "PN": true, "SH": true, "SL": true,
-		"SQ": true, "SS": true, "ST": true, "TM": true, "UI": true,
-		"UL": true, "US": true, "UT": true,
-	}
-	return short[strings.TrimSpace(vr)]
+	return out
 }
 
 // getElementName maps DICOM tag to human-readable name using the dictionary.

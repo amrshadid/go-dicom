@@ -320,7 +320,6 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
 | **Transcoding between transfer syntaxes** | A data set is sent using the syntax negotiated for its presentation context. The library does not re-encode pixel data, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR will not decompress it for you. |
-| **`show` / `info` / `convert` CLI commands** | Use a separate flat parser and do not descend into sequences. The network path, `filereader`, and `filewriter` do. |
 | **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
 
 ### Interoperability
