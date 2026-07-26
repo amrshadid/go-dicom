@@ -37,9 +37,28 @@ When deploying applications built with go-dicom:
 
 - Validate all DICOM input from untrusted sources
 - Use the `config` package validation modes (`RAISE` or `WARN`) in production
-- Be cautious with compressed transfer syntaxes from untrusted sources (decompression bombs)
 - Review private tags carefully as they may contain sensitive data
 - Implement appropriate access controls for DICOM data at the application level
+- DICOM over TCP is unauthenticated and unencrypted by default. Use `network.DialTLS`
+  and `network.ListenTLS` for transport security, and set `SCPConfig.MaxAssociations`
+  to bound concurrency on an exposed server. Checking the called AE title is a naming
+  convention, not authentication.
+
+### Limits enforced by the library
+
+These bound what a peer or a crafted file can cost, and are enforced rather than
+advisory:
+
+| Limit | Value | Guards against |
+|-------|-------|----------------|
+| `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
+| `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs over the Deflated transfer syntax |
+| `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
+| `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
+| Element length verification | 16 MiB threshold | An element declaring more bytes than the stream holds |
+
+The parsers that consume untrusted input — PDU decoding, data set decoding, DIMSE
+command decoding, and file reading — have fuzz targets that run in CI.
 
 ## Disclosure Policy
 
