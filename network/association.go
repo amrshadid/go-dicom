@@ -390,6 +390,20 @@ func (a *Association) SendPData(ctx context.Context, contextID byte, data []byte
 		maxDataPerPDU = 4084 // Fallback minimum
 	}
 
+	// An empty payload must still produce one PDV. The peer has already been
+	// told a data set follows, so sending nothing leaves it waiting on a read
+	// that never completes.
+	if len(data) == 0 {
+		return a.transport.WritePDU(ctx, &PDataTF{
+			PDVItems: []PDVItem{{
+				PresentationContextID: contextID,
+				IsCommand:             isCommand,
+				IsLast:                true,
+				Data:                  nil,
+			}},
+		})
+	}
+
 	offset := 0
 	for offset < len(data) {
 		end := offset + maxDataPerPDU
