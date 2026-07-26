@@ -122,8 +122,24 @@ func (h *StorageHandler) HandleCStore(ctx context.Context, req *CStoreRequest) (
 type QueryRetrieveHandler struct {
 	BaseHandler
 	OnFind func(ctx context.Context, sopClassUID string, query *dataset.Dataset) ([]*dataset.Dataset, error)
-	OnMove func(ctx context.Context, sopClassUID, moveDestination string, query *dataset.Dataset) error
 	OnGet  func(ctx context.Context, sopClassUID string, query *dataset.Dataset) ([]*dataset.Dataset, error)
+
+	// OnMove reports that a C-MOVE was requested. It transfers nothing on its
+	// own; use OnMoveInstances to supply the instances to send.
+	//
+	// Deprecated: use OnMoveInstances, which returns the matching instances so
+	// the SCP can perform the C-STORE sub-operations. OnMove is still honored
+	// when OnMoveInstances is nil.
+	OnMove func(ctx context.Context, sopClassUID, moveDestination string, query *dataset.Dataset) error
+
+	// OnMoveInstances returns the instances matching a C-MOVE query. The SCP
+	// opens an association to the move destination and sends them there as
+	// C-STORE sub-operations.
+	//
+	// The destination AE title must be resolvable through
+	// SCPConfig.MoveDestinations or SCPConfig.ResolveMoveDestination, or the
+	// request is answered with StatusMoveDestUnknown.
+	OnMoveInstances func(ctx context.Context, sopClassUID, moveDestination string, query *dataset.Dataset) ([]*dataset.Dataset, error)
 }
 
 // HandleCFind delegates to the OnFind callback if set.
@@ -149,14 +165,29 @@ func (h *QueryRetrieveHandler) HandleCFind(ctx context.Context, req *CFindReques
 	return responses, nil
 }
 
-// HandleCMove delegates to the OnMove callback if set.
+// HandleCMove delegates to OnMoveInstances, falling back to OnMove.
+//
+// The instances returned by OnMoveInstances are sent to the move destination
+// as C-STORE sub-operations over a new association.
 func (h *QueryRetrieveHandler) HandleCMove(ctx context.Context, req *CMoveRequest) (*CMoveResponse, error) {
+	if h.OnMoveInstances != nil {
+		datasets, err := h.OnMoveInstances(ctx, req.AffectedSOPClass, req.MoveDestination, req.DataSet)
+		if err != nil {
+			return nil, err
+		}
+		return &CMoveResponse{
+			MessageIDRespondedTo: req.MessageID,
+			AffectedSOPClass:     req.AffectedSOPClass,
+			Status:               StatusSuccess,
+			Instances:            datasets,
+		}, nil
+	}
+
 	if h.OnMove == nil {
 		return nil, NewDIMSEError("NOT_IMPLEMENTED", "C-MOVE not implemented", StatusUnableToProcess)
 	}
 
-	err := h.OnMove(ctx, req.AffectedSOPClass, req.MoveDestination, req.DataSet)
-	if err != nil {
+	if err := h.OnMove(ctx, req.AffectedSOPClass, req.MoveDestination, req.DataSet); err != nil {
 		return nil, err
 	}
 

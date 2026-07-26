@@ -150,6 +150,16 @@ type CMoveResponse struct {
 	NumberOfFailed       uint16
 	NumberOfWarning      uint16
 	DataSet              *dataset.Dataset
+
+	// Instances are the matching instances to send to the move destination as
+	// C-STORE sub-operations over a new association. Populating this is what
+	// makes a C-MOVE actually move data; leaving it empty returns a status and
+	// nothing else.
+	//
+	// Each instance must carry SOP Class UID (0008,0016) and SOP Instance UID
+	// (0008,0018). The destination AE title is resolved to an address through
+	// SCPConfig.MoveDestinations or SCPConfig.ResolveMoveDestination.
+	Instances []*dataset.Dataset
 }
 
 // CGetRequest represents a C-GET-RQ message.

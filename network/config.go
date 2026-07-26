@@ -110,6 +110,33 @@ type SCPConfig struct {
 
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
 	MaxAssociations int
+
+	// MoveDestinations maps a destination AE title to its "host:port" address,
+	// for resolving the Move Destination of a C-MOVE request.
+	//
+	// C-MOVE sends the retrieved instances to a third party rather than back to
+	// the requestor, and the request names that party only by AE title. Without
+	// a way to resolve it there is nowhere to send them, and the SCP answers
+	// with StatusMoveDestUnknown.
+	MoveDestinations map[string]string
+
+	// ResolveMoveDestination resolves a destination AE title to a "host:port"
+	// address. It takes precedence over MoveDestinations, for callers that look
+	// destinations up in a database or configuration service.
+	ResolveMoveDestination func(aeTitle string) (address string, ok bool)
+}
+
+// resolveMoveDestination maps a destination AE title to an address, preferring
+// the resolver function over the static map.
+func (c *SCPConfig) resolveMoveDestination(aeTitle string) (string, bool) {
+	if c.ResolveMoveDestination != nil {
+		if addr, ok := c.ResolveMoveDestination(aeTitle); ok {
+			return addr, true
+		}
+		return "", false
+	}
+	addr, ok := c.MoveDestinations[aeTitle]
+	return addr, ok
 }
 
 // applyDefaults fills in any zero-valued config fields with defaults.
