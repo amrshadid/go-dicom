@@ -110,19 +110,39 @@ verify_transfer() {
   local received=$1 label=$2
   if python3 - "$FIXTURE" "$received" <<'PY'
 import sys, pydicom
+
+# (FFFC,FFFC) Data Set Trailing Padding is padding, not data. PS3.5 Section 7.2
+# states its value field "has no significance and shall be ignored by the
+# receiving application", and dcmtk discards it on that basis. Comparing it
+# would fail a conforming peer for doing the right thing.
+IGNORED = {0xFFFCFFFC}
+
+def significant(ds):
+    return [e for e in ds if (e.tag.group << 16 | e.tag.element) not in IGNORED]
+
 orig = pydicom.dcmread(sys.argv[1], force=True)
 recv = pydicom.dcmread(sys.argv[2], force=True)
 
+orig_elems = significant(orig)
+recv_elems = significant(recv)
+
 problems = []
-if len(orig) != len(recv):
-    problems.append(f"element count {len(orig)} -> {len(recv)}")
+if len(orig_elems) != len(recv_elems):
+    problems.append(f"element count {len(orig_elems)} -> {len(recv_elems)}")
+    # Name the elements that differ; a bare count is not actionable.
+    recv_tags = {e.tag for e in recv_elems}
+    orig_tags = {e.tag for e in orig_elems}
+    for e in [e for e in orig_elems if e.tag not in recv_tags][:10]:
+        problems.append(f"  lost {e.tag} {e.name} (VR {e.VR})")
+    for e in [e for e in recv_elems if e.tag not in orig_tags][:10]:
+        problems.append(f"  added {e.tag} {e.name} (VR {e.VR})")
 if orig.PixelData != getattr(recv, "PixelData", None):
     problems.append("pixel data differs")
 for kw in ("PatientName", "PatientID", "SOPInstanceUID", "StudyInstanceUID", "Rows", "Columns"):
     o, r = getattr(orig, kw, None), getattr(recv, kw, None)
     if str(o) != str(r):
         problems.append(f"{kw}: {o!r} -> {r!r}")
-for e in orig:
+for e in orig_elems:
     if e.VR == "SQ":
         n_o = len(e.value) if e.value else 0
         n_r = len(recv[e.tag].value) if e.tag in recv and recv[e.tag].value else 0
