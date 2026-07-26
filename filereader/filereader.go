@@ -45,6 +45,10 @@ type DCMFileReader struct {
 	streamSize      int64
 	streamSizeKnown bool
 	streamSizeErr   error
+
+	// metaElements holds the group-0002 elements exactly as they appeared,
+	// including any not represented by a FileMetaInfo field.
+	metaElements []*DataElementValue
 }
 
 // NewDCMFileReader creates a new DICOM file reader.
@@ -82,6 +86,47 @@ func (dfr *DCMFileReader) ReadDICMPrefix() error {
 
 	dfr.position += 4
 	return nil
+}
+
+// detectPreamble determines whether the stream begins with a DICOM Part 10
+// preamble and DICM prefix, consuming them if so and rewinding to the start if
+// not.
+//
+// A short stream is not an error here: an empty or truncated file simply has no
+// preamble, and the caller then finds no elements.
+func (dfr *DCMFileReader) detectPreamble() (bool, error) {
+	start, err := dfr.reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		// Not seekable, so the preamble cannot be tested for; assume Part 10,
+		// which is what a non-seekable DICOM source almost always is.
+		if err := dfr.ReadPreamble(); err != nil {
+			return false, fmt.Errorf("failed to read preamble: %w", err)
+		}
+		if err := dfr.ReadDICMPrefix(); err != nil {
+			return false, fmt.Errorf("failed to read DICM prefix: %w", err)
+		}
+		return true, nil
+	}
+
+	header := make([]byte, 132)
+	if err := dfr.reader.ReadBytes(header); err != nil {
+		// Fewer than 132 bytes: there is no preamble to consume.
+		if _, seekErr := dfr.reader.Seek(start, io.SeekStart); seekErr != nil {
+			return false, seekErr
+		}
+		return false, nil
+	}
+
+	if string(header[128:132]) == "DICM" {
+		dfr.position = start + 132
+		return true, nil
+	}
+
+	if _, err := dfr.reader.Seek(start, io.SeekStart); err != nil {
+		return false, err
+	}
+	dfr.position = start
+	return false, nil
 }
 
 // ReadFileMetaInformationGroupLength reads the File Meta Information Group Length (0002,0000).
@@ -187,6 +232,10 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 			return metaInfo, nil
 		}
 		dfr.position += int64(valueLength)
+
+		dfr.metaElements = append(dfr.metaElements, &DataElementValue{
+			Tag: tagValue, VR: vr, Value: value, Length: valueLength,
+		})
 
 		if err := dfr.storeMetaValue(metaInfo, tagValue, vr, value); err != nil {
 			return nil, err
@@ -727,6 +776,16 @@ type DICOMFile struct {
 	ExplicitVR     bool
 	IsLittleEndian bool
 
+	// HasPreamble reports whether the file began with the 128-byte preamble and
+	// the DICM prefix. False means a raw data set with no file meta header,
+	// which is parsed as implicit VR little endian.
+	HasPreamble bool
+
+	// MetaElements holds the group-0002 file meta elements as they appeared in
+	// the file, including any without a corresponding FileMetaInfo field.
+	// FileMetaInfo carries the recognized ones in typed form.
+	MetaElements []*DataElementValue
+
 	// Warnings collects non-fatal issues found while parsing (unknown tags,
 	// retired tags, VR mismatches, truncated meta elements). Parsing continues
 	// past these; inspect the slice to surface them.
@@ -767,21 +826,33 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		DataElements: make([]*DataElementValue, 0),
 	}
 
-	if err := dfr.ReadPreamble(); err != nil {
-		return nil, fmt.Errorf("failed to read preamble: %w", err)
-	}
-
-	if err := dfr.ReadDICMPrefix(); err != nil {
-		return nil, fmt.Errorf("failed to read DICM prefix: %w", err)
-	}
-
-	metaInfo, err := dfr.ReadFileMetaInfo()
+	// A DICOM Part 10 file opens with a 128-byte preamble and the characters
+	// DICM. A raw DICOM stream — as produced by some modalities, and what
+	// travels on the network — has neither and begins directly with the data
+	// set. Detect which this is rather than assuming.
+	hasPreamble, err := dfr.detectPreamble()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read file meta information: %w", err)
+		return nil, err
 	}
+	dicomFile.HasPreamble = hasPreamble
 
-	dicomFile.FileMetaInfo = metaInfo
-	dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
+	var metaInfo *FileMetaInfo
+	if hasPreamble {
+		metaInfo, err = dfr.ReadFileMetaInfo()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file meta information: %w", err)
+		}
+		dicomFile.FileMetaInfo = metaInfo
+		dicomFile.MetaElements = dfr.metaElements
+		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
+	} else {
+		// Without a meta header there is no stated transfer syntax. Implicit VR
+		// Little Endian is the DICOM default (PS3.5 Section 10.1).
+		metaInfo = &FileMetaInfo{}
+		dicomFile.FileMetaInfo = metaInfo
+		dicomFile.Warnings = append(dicomFile.Warnings,
+			"no file meta header; parsing as a raw data set in implicit VR little endian")
+	}
 
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
