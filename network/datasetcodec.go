@@ -9,6 +9,7 @@ import (
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -16,6 +17,14 @@ import (
 // a received data set. The length field is peer-controlled, so it is checked
 // against the bytes actually remaining before any allocation is made.
 const maxDatasetElementLength = 1 << 30
+
+// undefinedLength is the DICOM sentinel marking an element whose extent is
+// delimited rather than stated (PS3.5 Section 7.1).
+const undefinedLength uint32 = 0xFFFFFFFF
+
+// maxSequenceDepth bounds nesting while decoding, so a crafted data set cannot
+// drive unbounded recursion.
+const maxSequenceDepth = 64
 
 // transferSyntaxEncoding describes how a data set is laid out on the wire for a
 // given transfer syntax.
@@ -72,6 +81,17 @@ func EncodeDataset(ds *dataset.Dataset, transferSyntax string) ([]byte, error) {
 		if !ok {
 			continue
 		}
+
+		// A sequence holds nested data sets rather than a byte value, so it is
+		// serialized recursively. Skipping it here would transmit the element
+		// as empty and silently drop every nested item.
+		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
+			if err := writeSequence(&buf, enc, t, seq); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
 		data, ok := elementValueBytes(elem)
 		if !ok {
 			continue
@@ -112,10 +132,21 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 			return nil, err
 		}
 
-		// An undefined length here means a sequence or encapsulated pixel data.
-		// Those are delimited rather than sized; consume the remainder as an
-		// opaque value so the surrounding elements still decode.
-		if length == 0xFFFFFFFF {
+		// Sequences hold nested data sets and are parsed recursively, so the
+		// items survive rather than being flattened into an opaque value.
+		if vr == dataelem.SQ {
+			seq, err := readSequence(r, enc, order, length, 0)
+			if err != nil {
+				return nil, err
+			}
+			_ = ds.AddSequence(t, seq)
+			continue
+		}
+
+		// An undefined length on a non-sequence element means encapsulated
+		// pixel data, which is delimited rather than sized. Consume the
+		// remainder as an opaque value so the surrounding elements still decode.
+		if length == undefinedLength {
 			value := make([]byte, r.Len())
 			_, _ = io.ReadFull(r, value)
 			_ = ds.Add(dataelem.NewDataElement(t, vr, value))
@@ -245,6 +276,214 @@ func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr d
 	}
 	buf.Write(data)
 	return nil
+}
+
+// writeSequence serializes a Sequence (SQ) element and the data sets it holds.
+//
+// Items are written with explicit lengths rather than delimiters, which keeps
+// the encoding self-describing and is accepted by every conforming peer. Item
+// tags always use the implicit-style header — tag then 4-byte length, no VR —
+// even inside an explicit VR transfer syntax (PS3.5 Section 7.5).
+func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq *sequence.Sequence) error {
+	order := enc.byteOrder()
+
+	// Serialize the items first so the sequence length is known up front.
+	var itemsBuf bytes.Buffer
+	for _, item := range seq.Items() {
+		child, ok := item.(*dataset.Dataset)
+		if !ok {
+			// A sequence item that is not a data set cannot be encoded; skip it
+			// rather than emitting a malformed item.
+			continue
+		}
+
+		childBytes, err := encodeDatasetBody(child, enc)
+		if err != nil {
+			return err
+		}
+
+		if err := binary.Write(&itemsBuf, order, tag.ItemTag.Group()); err != nil {
+			return err
+		}
+		if err := binary.Write(&itemsBuf, order, tag.ItemTag.Element()); err != nil {
+			return err
+		}
+		if err := binary.Write(&itemsBuf, order, uint32(len(childBytes))); err != nil {
+			return err
+		}
+		itemsBuf.Write(childBytes)
+	}
+
+	// Sequence element header.
+	if err := binary.Write(buf, order, t.Group()); err != nil {
+		return err
+	}
+	if err := binary.Write(buf, order, t.Element()); err != nil {
+		return err
+	}
+	if enc.ExplicitVR {
+		buf.WriteString("SQ")
+		buf.Write([]byte{0x00, 0x00}) // reserved
+	}
+	if err := binary.Write(buf, order, uint32(itemsBuf.Len())); err != nil {
+		return err
+	}
+	buf.Write(itemsBuf.Bytes())
+	return nil
+}
+
+// encodeDatasetBody serializes a data set's elements without applying the
+// deflate wrapper, so it can be nested inside a sequence item.
+func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding) ([]byte, error) {
+	var buf bytes.Buffer
+
+	for _, elem := range ds.GetAll() {
+		t, ok := elem.GetTag().(tag.Tag)
+		if !ok {
+			continue
+		}
+		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
+			if err := writeSequence(&buf, enc, t, seq); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		data, ok := elementValueBytes(elem)
+		if !ok {
+			continue
+		}
+		if err := writeElement(&buf, enc, t, elem.GetVR(), data); err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
+}
+
+// readSequence parses the items of a Sequence (SQ) element. A declaredLength of
+// 0xFFFFFFFF means the sequence is delimited rather than sized.
+func readSequence(r *bytes.Reader, enc transferSyntaxEncoding, order binary.ByteOrder,
+	declaredLength uint32, depth int) (*sequence.Sequence, error) {
+
+	if depth > maxSequenceDepth {
+		return nil, NewPDUErrorf("DECODE_DS",
+			"sequence nesting exceeds maximum depth %d", maxSequenceDepth)
+	}
+
+	seq := sequence.New()
+	undefined := declaredLength == undefinedLength
+
+	if !undefined {
+		if uint64(declaredLength) > uint64(r.Len()) {
+			return nil, NewPDUErrorf("DECODE_DS",
+				"sequence declares %d bytes but only %d remain", declaredLength, r.Len())
+		}
+	}
+	start := r.Len()
+
+	for {
+		if !undefined && start-r.Len() >= int(declaredLength) {
+			return seq, nil
+		}
+		if r.Len() < 8 {
+			return seq, nil
+		}
+
+		itemTag, itemLen, err := readItemHeader(r, order)
+		if err != nil {
+			return seq, nil //nolint:nilerr // a truncated item ends the sequence
+		}
+
+		if itemTag == tag.SequenceDelimiterTag {
+			return seq, nil
+		}
+		if itemTag != tag.ItemTag {
+			return nil, NewPDUErrorf("DECODE_DS",
+				"unexpected tag %s inside sequence (expected item or delimiter)", itemTag)
+		}
+
+		child, err := readSequenceItem(r, enc, order, itemLen, depth)
+		if err != nil {
+			return nil, err
+		}
+		_ = seq.Append(child)
+	}
+}
+
+// readSequenceItem parses the elements of one sequence item into a Dataset.
+func readSequenceItem(r *bytes.Reader, enc transferSyntaxEncoding, order binary.ByteOrder,
+	declaredLength uint32, depth int) (*dataset.Dataset, error) {
+
+	child := dataset.NewDataset()
+	undefined := declaredLength == undefinedLength
+
+	if !undefined && uint64(declaredLength) > uint64(r.Len()) {
+		return nil, NewPDUErrorf("DECODE_DS",
+			"sequence item declares %d bytes but only %d remain", declaredLength, r.Len())
+	}
+	start := r.Len()
+
+	for {
+		if !undefined && start-r.Len() >= int(declaredLength) {
+			return child, nil
+		}
+		if r.Len() == 0 {
+			return child, nil
+		}
+
+		t, vr, length, err := readElementHeader(r, enc, order)
+		if err != nil {
+			return child, nil //nolint:nilerr // a truncated element ends the item
+		}
+
+		// An Item Delimitation Item closes an undefined-length item.
+		if t == tag.ItemDelimiterTag {
+			return child, nil
+		}
+		if t == tag.SequenceDelimiterTag {
+			return child, nil
+		}
+
+		if vr == dataelem.SQ {
+			nested, err := readSequence(r, enc, order, length, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			_ = child.AddSequence(t, nested)
+			continue
+		}
+
+		if length == undefinedLength {
+			return child, nil
+		}
+		if uint64(length) > uint64(r.Len()) {
+			return nil, NewPDUErrorf("DECODE_DS",
+				"element %s declares %d bytes but only %d remain", t, length, r.Len())
+		}
+
+		value := make([]byte, length)
+		if _, err := io.ReadFull(r, value); err != nil {
+			return child, nil //nolint:nilerr // a truncated value ends the item
+		}
+		_ = child.Add(dataelem.NewDataElement(t, vr, value))
+	}
+}
+
+// readItemHeader reads an item or delimitation item: a tag and a 4-byte length,
+// with no VR regardless of the transfer syntax.
+func readItemHeader(r *bytes.Reader, order binary.ByteOrder) (tag.Tag, uint32, error) {
+	var group, element uint16
+	if err := binary.Read(r, order, &group); err != nil {
+		return 0, 0, err
+	}
+	if err := binary.Read(r, order, &element); err != nil {
+		return 0, 0, err
+	}
+	var length uint32
+	if err := binary.Read(r, order, &length); err != nil {
+		return 0, 0, err
+	}
+	return tag.New(group, element), length, nil
 }
 
 // padToEvenLength appends the VR's padding byte when a value has odd length.

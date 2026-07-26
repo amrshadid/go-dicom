@@ -71,6 +71,64 @@ jobs:
       - name: Run network integration tests (real TCP SCP+SCU)
         run: go test -v -race -timeout 5m -run TestIntegration ./network/...
 
+  interop:
+    name: Interoperability - pynetdicom and dcmtk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # pynetdicom's console scripts share names with dcmtk's (storescu,
+      # storescp, ...), so each is installed to a known location and invoked by
+      # absolute path rather than relying on PATH order.
+      - name: Install pynetdicom and pydicom
+        run: |
+          python -m venv "$HOME/dicomvenv"
+          "$HOME/dicomvenv/bin/pip" install --quiet --upgrade pip
+          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom
+          "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__)"
+
+      - name: Install dcmtk
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dcmtk
+          /usr/bin/storescu --version | head -1
+
+      - name: Build CLI
+        run: go build -o dicom .
+
+      # Verifies go-dicom against two independent implementations, in both
+      # directions, comparing the transferred data with pydicom. Every critical
+      # defect in v1.2.0 was a case where go-dicom talked to itself
+      # successfully and would have failed against any real peer.
+      - name: Run interoperability tests
+        env:
+          GODICOM: ./dicom
+          DCMTK_BIN: /usr/bin
+        run: |
+          export PYNETDICOM_BIN="$HOME/dicomvenv/bin"
+          # pydicom supplies the fixture and the verifier.
+          export PATH="$HOME/dicomvenv/bin:$PATH"
+          ./scripts/interop-test.sh
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interop-logs
+          path: /tmp/tmp.*/
+          if-no-files-found: ignore
+
   lint:
     name: Lint - golangci-lint
     runs-on: ubuntu-latest

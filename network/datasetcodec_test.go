@@ -10,11 +10,9 @@ import (
 )
 
 var (
-	tagSOPClassUID    = tag.New(0x0008, 0x0016)
-	tagSOPInstanceUID = tag.New(0x0008, 0x0018)
-	tagPatientName    = tag.New(0x0010, 0x0010)
-	tagPatientID      = tag.New(0x0010, 0x0020)
-	tagPixelData      = tag.New(0x7FE0, 0x0010)
+	tagPatientName = tag.New(0x0010, 0x0010)
+	tagPatientID   = tag.New(0x0010, 0x0020)
+	tagPixelData   = tag.New(0x7FE0, 0x0010)
 )
 
 func buildCodecTestDataset() *dataset.Dataset {

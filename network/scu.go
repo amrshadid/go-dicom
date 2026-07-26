@@ -444,34 +444,95 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 		return fmt.Errorf("failed to send C-GET query data: %w", err)
 	}
 
-	// Wait for final response (may receive C-STORE sub-operations on same association)
+	// The peer interleaves two kinds of message on this association: C-STORE-RQ
+	// sub-operations carrying the retrieved instances, and C-GET-RSP messages
+	// reporting progress. Dispatch on the command field rather than assuming.
 	for {
-		_, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		subCtxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
 		if err != nil {
 			return err
 		}
 		if !isCmd {
-			continue // Skip data PDUs (sub-operation datasets)
+			// A data set with no preceding command is not something we can
+			// attribute; skip it rather than misreading it as a response.
+			continue
 		}
 
-		respDS, err := DecodeCommandDataset(cmdData)
+		cmdDS, err := DecodeCommandDataset(cmdData)
 		if err != nil {
-			return fmt.Errorf("failed to decode C-GET-RSP: %w", err)
+			return fmt.Errorf("failed to decode C-GET response: %w", err)
 		}
 
-		_, _, status, err := ParseCommandDataset(respDS)
+		commandField, subMessageID, status, err := ParseCommandDataset(cmdDS)
 		if err != nil {
 			return err
 		}
 
+		if commandField == CommandCStoreRQ {
+			if err := s.handleGetSubOperation(ctx, assoc, subCtxID, subMessageID, cmdDS); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if !IsPending(status) {
-			if status != StatusSuccess && status != StatusWarning {
+			if status != StatusSuccess && status != StatusWarning &&
+				status != StatusGetWarningPartial {
 				return NewDIMSEError("GET_FAILED",
 					fmt.Sprintf("C-GET failed with status 0x%04X", status), status)
 			}
 			return nil
 		}
 	}
+}
+
+// handleGetSubOperation receives one instance pushed by the peer during a
+// C-GET and answers it with a C-STORE-RSP. Failing to respond would stall the
+// peer, which waits for each sub-operation to be acknowledged.
+func (s *SCU) handleGetSubOperation(ctx context.Context, assoc *Association,
+	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) error {
+
+	sopClassUID, _ := GetAffectedSOPClassUID(cmdDS)
+	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+
+	var ds *dataset.Dataset
+	if HasDataSet(cmdDS) {
+		_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to receive C-STORE sub-operation data: %w", err)
+		}
+		if isCmd {
+			return NewDIMSEError("UNEXPECTED",
+				"expected a data set for the C-STORE sub-operation, got a command", 0)
+		}
+		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		if err != nil {
+			// Report the failure to the peer rather than dropping the
+			// association; the remaining instances may still be usable.
+			return s.respondToSubOperation(ctx, assoc, ctxID, messageID,
+				sopClassUID, sopInstanceUID, StatusUnableToProcess)
+		}
+	}
+
+	status := StatusSuccess
+	if s.config.OnCStore != nil {
+		status = s.config.OnCStore(ctx, sopClassUID, sopInstanceUID, ds)
+	}
+
+	return s.respondToSubOperation(ctx, assoc, ctxID, messageID,
+		sopClassUID, sopInstanceUID, status)
+}
+
+// respondToSubOperation sends the C-STORE-RSP for a received sub-operation.
+func (s *SCU) respondToSubOperation(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID, sopInstanceUID string, status uint16) error {
+
+	rspDS := BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, status)
+	rspBytes, err := EncodeCommandDataset(rspDS)
+	if err != nil {
+		return fmt.Errorf("failed to encode C-STORE-RSP: %w", err)
+	}
+	return assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
 // Cancel sends a C-CANCEL-RQ to cancel an in-progress C-FIND, C-MOVE, or C-GET.

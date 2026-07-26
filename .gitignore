@@ -277,3 +277,6 @@ generated/
 # Vendored dependencies
 vendor/
 Godeps/
+
+# Built CLI binary
+/dicom

@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **C-GET sub-operations** — a C-GET previously invoked the handler and returned a status
+  but transferred nothing. The SCP now sends matching instances back as C-STORE
+  sub-operations over the same association (PS3.4 Annex C.4.3), each on the presentation
+  context negotiated for its own SOP Class, with pending responses carrying the
+  remaining/completed/failed/warning counts. The SCU dispatches incoming C-STORE-RQ
+  messages to `SCUConfig.OnCStore` and acknowledges each one.
+  - `CGetResponse.Instances` supplies the instances to transfer
+  - `SCUConfig.OnCStore` receives them on the requesting side
+  - `qrscp` retains received datasets and serves them, making it a working
+    in-memory query/retrieve server
+- **Sequence writing in `filewriter`** — `DataElement.Items` holds nested
+  `SequenceItem` values, closing the read → write → read round trip. Items are written
+  with explicit lengths and implicit-style item headers as PS3.5 Section 7.5 requires.
+- **Interoperability testing against pynetdicom and dcmtk** — `scripts/interop-test.sh`
+  plus a CI job. Exercises C-ECHO and C-STORE in both directions and C-GET
+  sub-operations, using pydicom's `CT_small.dcm` as the fixture and pydicom as the
+  verifier rather than this library's own reader. Fails when no third-party peer is
+  available, so a broken install cannot pass by skipping.
+
+### Fixed
+
+- **`ItemTag` was `0xFFFE0000`, not `0xFFFEE000`** *(critical)* — the constant was missing
+  a digit and decoded as (FFFE,0000). Sequence parsing, added in 1.2.0, therefore failed
+  on every real DICOM file containing a sequence, rejecting the correct item tag as
+  unexpected. The unit tests passed because they built their fixtures with the same wrong
+  constant.
+- **`tag.FromBytes` and `tag.ToBytes` transposed group and element** — both treated the
+  4-byte tag as a single uint32 rather than two consecutive 16-bit values. Undetected
+  because the only test case was PatientName (0010,0010), where group equals element, and
+  because the two functions were each other's inverse.
+- **Sequences were lost over the network** — `EncodeDataset` skipped sequence elements,
+  and `storescu` built its dataset from `elem.Value`, which is nil for a sequence. An
+  instance sent to a peer arrived with its sequence present but empty.
+- **An empty data set sent no PDU at all** — `SendPData` looped over the payload, so a
+  zero-length data set produced nothing after the command had already announced one,
+  leaving the peer blocked until the DIMSE timeout. Reachable with any keyless C-FIND or
+  C-GET identifier.
+- **`QueryRetrieveHandler.OnGet` results are now transferred** rather than only counted.
+
 ## [1.2.0] - 2026-07-26
 
 ### Security

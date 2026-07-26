@@ -39,6 +39,16 @@ const (
 	StatusMoveDestUnknown      uint16 = 0xA801
 	StatusClassNotSupported    uint16 = 0x0122
 	StatusDuplicateSOPInstance uint16 = 0x0111
+
+	// StatusGetWarningPartial reports that a C-GET or C-MOVE completed but one
+	// or more sub-operations failed (PS3.4 Annex C.4.3.1.4).
+	StatusGetWarningPartial uint16 = 0xB000
+)
+
+// Data set tags referenced when transferring instances.
+var (
+	tagSOPClassUID    = tag.New(0x0008, 0x0016)
+	tagSOPInstanceUID = tag.New(0x0008, 0x0018)
 )
 
 // DICOM command dataset type values.
@@ -160,6 +170,16 @@ type CGetResponse struct {
 	NumberOfFailed       uint16
 	NumberOfWarning      uint16
 	DataSet              *dataset.Dataset
+
+	// Instances are the matching instances to transfer to the requestor as
+	// C-STORE sub-operations over the same association. Populating this is
+	// what makes a C-GET actually move data; leaving it empty returns a
+	// status and nothing else.
+	//
+	// Each instance must carry SOP Class UID (0008,0016) and SOP Instance UID
+	// (0008,0018), and its SOP Class must have an accepted presentation
+	// context on the association with the SCP role negotiated.
+	Instances []*dataset.Dataset
 }
 
 // EncodeCommandDataset creates a DICOM command dataset as Implicit VR Little Endian bytes.

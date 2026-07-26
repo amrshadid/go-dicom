@@ -9,17 +9,21 @@
 //   - C-ECHO: Verification (ping) to test connectivity
 //   - C-STORE: Send/receive DICOM objects
 //   - C-FIND: Query for DICOM objects
-//   - C-MOVE: Retrieve DICOM objects via sub-operations
-//   - C-GET: Retrieve DICOM objects on the same association
+//   - C-MOVE: Retrieve DICOM objects to a third party (SCU only; as an SCP the
+//     handler runs but no sub-operations are performed)
+//   - C-GET: Retrieve DICOM objects over the same association, transferred as
+//     C-STORE sub-operations
 //
 // SCU (Client) Usage:
 //
-//	scu, err := network.NewSCU(network.SCUConfig{
+//	scu := network.NewSCU(network.SCUConfig{
 //	    CallingAE: "MY_APP",
 //	    CalledAE:  "PACS",
 //	    Address:   "pacs.hospital.com:11112",
 //	})
-//	if err != nil {
+//
+//	// An association must be established before any operation.
+//	if err := scu.Associate(ctx, nil); err != nil {
 //	    log.Fatal(err)
 //	}
 //	defer scu.Release(ctx)
@@ -28,20 +32,23 @@
 //	err = scu.Echo(ctx)
 //
 //	// Store a dataset
-//	err = scu.Store(ctx, dataset)
+//	err = scu.Store(ctx, ds)
 //
-//	// Query
+//	// Query — results stream on a channel
 //	results, err := scu.Find(ctx, queryDataset)
 //	for result := range results {
-//	    fmt.Println(result)
+//	    fmt.Println(result.DataSet)
 //	}
 //
 // SCP (Server) Usage:
 //
-//	scp, err := network.NewSCP(network.SCPConfig{
+//	scp := network.NewSCP(network.SCPConfig{
 //	    AETitle: "MY_SCP",
 //	    Port:    11112,
 //	})
 //	scp.SetHandler(&MyHandler{})
-//	err = scp.ListenAndServe(ctx)
+//	err := scp.ListenAndServe(ctx)
+//
+// See the package examples for C-GET, extended negotiation, and reading
+// association details from a handler's context.
 package network

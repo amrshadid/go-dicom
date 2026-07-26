@@ -9,12 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/amrshadid/go-dicom/dataelem"
-	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/network"
-	"github.com/amrshadid/go-dicom/tag"
 )
 
 // StoreSCUCommand implements the storescu CLI command.
@@ -90,8 +87,11 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 			continue
 		}
 
-		// Convert to dataset for network transfer
-		ds := dicomFileToDataset(dicomFile)
+		// Convert to a dataset for network transfer. GetDataset materializes
+		// nested sequences as child datasets; building one by hand from
+		// DataElements drops them, because a sequence element carries its
+		// content in Items rather than Value.
+		ds := dicomFile.GetDataset()
 		fmt.Printf("Sending: %s\n", filePath)
 
 		if err := scu.Store(ctx, ds); err != nil {
@@ -109,15 +109,4 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 		return fmt.Errorf("%d file(s) failed to send", failed)
 	}
 	return nil
-}
-
-// dicomFileToDataset converts a filereader.DICOMFile to a dataset.Dataset.
-func dicomFileToDataset(df *filereader.DICOMFile) *dataset.Dataset {
-	ds := dataset.NewDataset()
-	for _, elem := range df.DataElements {
-		t := tag.New(elem.Tag.Group(), elem.Tag.Element())
-		de := dataelem.NewDataElement(t, dataelem.VR(elem.VR), elem.Value)
-		_ = ds.Add(de)
-	}
-	return ds
 }
