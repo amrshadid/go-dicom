@@ -109,7 +109,12 @@ jobs:
         run: |
           TAG="${{ github.ref_name }}"
           VERSION="${TAG#v}"
-          NOTES=$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d')
+          # Drop the section's own "## [1.2.3] - date" heading. GitHub already
+          # shows the version as the release title and the date as the release
+          # timestamp, so repeating both reads as boilerplate.
+          # The range always begins with the section heading, so '1d' removes it;
+          # '/./,$!d' then drops the blank lines it left at the top.
+          NOTES=$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d' | sed '1d' | sed '/./,$!d')
           if [ -z "$NOTES" ]; then
             echo "::warning::no CHANGELOG.md section found for [$VERSION]; using the generic fallback"
             NOTES="See [CHANGELOG.md](https://github.com/amrshadid/go-dicom/blob/main/CHANGELOG.md) for details."
@@ -131,41 +136,35 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: "Release ${{ steps.version.outputs.tag }}"
+          name: ${{ steps.version.outputs.tag }}
           body: |
-            # go-dicom ${{ steps.version.outputs.tag }}
-
             ${{ steps.changelog.outputs.notes }}
 
-            ## Download Binaries
+            ---
 
-            | Platform | Download |
-            |----------|----------|
-            | Linux (x86_64) | `dicom-linux-amd64` |
-            | Linux (ARM64) | `dicom-linux-arm64` |
-            | macOS (Intel) | `dicom-macos-amd64` |
-            | macOS (Apple Silicon) | `dicom-macos-arm64` |
-            | Windows (x86_64) | `dicom-windows-amd64.exe` |
+            ## Install
 
-            ## Installation
-
-            ### Using Go
             ```bash
             go install github.com/amrshadid/go-dicom@${{ steps.version.outputs.tag }}
             ```
 
-            ### Download Binary
-            Download the appropriate binary for your platform above and add it to your PATH.
+            Or download a binary below and place it on your `PATH`:
 
-            ## Verification
+            | Platform | File |
+            |----------|------|
+            | Linux x86-64 | `dicom-linux-amd64` |
+            | Linux ARM64 | `dicom-linux-arm64` |
+            | macOS Intel | `dicom-macos-amd64` |
+            | macOS Apple Silicon | `dicom-macos-arm64` |
+            | Windows x86-64 | `dicom-windows-amd64.exe` |
 
-            Verify the integrity of downloaded binaries using the SHA256SUMS file:
+            Checksums are in `SHA256SUMS`:
 
             ```bash
             sha256sum -c SHA256SUMS
             ```
 
-            See [CHANGELOG.md](https://github.com/amrshadid/go-dicom/blob/main/CHANGELOG.md) for complete release notes.
+            [Full changelog](https://github.com/amrshadid/go-dicom/blob/main/CHANGELOG.md)
           files: |
             release/*
         env:
