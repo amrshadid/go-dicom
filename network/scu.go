@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -855,16 +856,21 @@ func (s *SCU) IsAssociated() bool {
 
 // Helper functions
 
+// extractStringValue reads a string value, removing the padding DICOM adds to
+// make every value an even number of bytes.
+//
+// The padding character depends on the VR: UI pads with NUL, while AE and the
+// other text VRs pad with a space. Both are stripped, because a value of odd
+// length is padded on the wire and the padding is not part of the value —
+// PS3.5 Section 6.2 makes trailing spaces non-significant for AE. Trimming only
+// NUL left every odd-length AE title with a trailing space, so a C-MOVE to a
+// destination whose title had an odd number of characters never matched.
 func extractStringValue(val interface{}) string {
 	switch v := val.(type) {
 	case string:
-		return v
+		return strings.TrimRight(v, "\x00 ")
 	case []byte:
-		s := string(v)
-		for len(s) > 0 && s[len(s)-1] == 0 {
-			s = s[:len(s)-1]
-		}
-		return s
+		return strings.TrimRight(string(v), "\x00 ")
 	default:
 		return fmt.Sprintf("%v", v)
 	}
