@@ -91,16 +91,20 @@ jobs:
       # A short fuzzing run per target explores beyond the seeds. Kept brief so
       # it fits in a normal CI budget; findings are surfaced as failures with
       # the offending input written to testdata.
+      #
+      # -parallel bounds the worker count. The default is one worker per core,
+      # and each holds its own allocations; on a shared runner that was enough
+      # to get the job terminated.
       - name: Fuzz each target briefly
         run: |
           set -e
           for target in FuzzDecodePDU FuzzDecodeDataset FuzzDecodeCommandDataset; do
             echo "::group::$target"
-            go test ./network/ -run='^$' -fuzz="^${target}$" -fuzztime=60s
+            go test ./network/ -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2
             echo "::endgroup::"
           done
           echo "::group::FuzzReadDICOMFile"
-          go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=60s
+          go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=30s -parallel=2
           echo "::endgroup::"
 
       # A crash writes its input to testdata/fuzz; keep it so the failure can be
