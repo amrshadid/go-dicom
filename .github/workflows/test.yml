@@ -71,6 +71,52 @@ jobs:
       - name: Run network integration tests (real TCP SCP+SCU)
         run: go test -v -race -timeout 5m -run TestIntegration ./network/...
 
+  fuzz:
+    name: Fuzz - parsers of untrusted input
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # The seed corpora run as ordinary tests on every push, so a seed that
+      # starts failing is caught immediately and cheaply.
+      - name: Run fuzz seed corpora
+        run: go test -run=Fuzz ./network/... ./filereader/...
+
+      # A short fuzzing run per target explores beyond the seeds. Kept brief so
+      # it fits in a normal CI budget; findings are surfaced as failures with
+      # the offending input written to testdata.
+      #
+      # -parallel bounds the worker count. The default is one worker per core,
+      # and each holds its own allocations; on a shared runner that was enough
+      # to get the job terminated.
+      - name: Fuzz each target briefly
+        run: |
+          set -e
+          for target in FuzzDecodePDU FuzzDecodeDataset FuzzDecodeCommandDataset; do
+            echo "::group::$target"
+            go test ./network/ -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2
+            echo "::endgroup::"
+          done
+          echo "::group::FuzzReadDICOMFile"
+          go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=30s -parallel=2
+          echo "::endgroup::"
+
+      # A crash writes its input to testdata/fuzz; keep it so the failure can be
+      # reproduced from the artifact rather than by re-fuzzing.
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
+
   interop:
     name: Interoperability - pynetdicom and dcmtk
     runs-on: ubuntu-latest

@@ -38,6 +38,13 @@ type DCMFileReader struct {
 	hookChain    *hooks.HookChain // Hook chain for element processing
 	elementCount int              // Count of elements read
 	metaWarnings []string         // Non-fatal issues found while reading the meta header
+
+	// Total size of the underlying stream, measured once and reused to bound
+	// every declared element length. streamSizeErr records a non-seekable
+	// source so the measurement is not retried per element.
+	streamSize      int64
+	streamSizeKnown bool
+	streamSizeErr   error
 }
 
 // NewDCMFileReader creates a new DICOM file reader.
@@ -108,7 +115,9 @@ func (dfr *DCMFileReader) ReadFileMetaInformationGroupLength() (uint32, error) {
 		return 0, fmt.Errorf("failed to read group length: %w", err)
 	}
 
-	dfr.position += 12
+	// ReadTag already accounted for the 4-byte tag; add only the VR (2),
+	// reserved (2), and length (4) read here.
+	dfr.position += 8
 	return length, nil
 }
 
@@ -139,7 +148,8 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 		}
 		vr := string(vrBytes)
 
-		dfr.position += 6
+		// ReadTag already accounted for the 4-byte tag; add only the VR.
+		dfr.position += 2
 
 		var valueLength uint32
 		if isShortVR(vr) {
@@ -357,25 +367,26 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 	return element, nil
 }
 
-// lengthCheckThreshold is the declared value length above which the reader
-// verifies the claim against the actual bytes remaining. Verification costs
-// three seeks, so small elements — the overwhelming majority — skip it; an
-// allocation of this size is harmless even when the length turns out to be
-// wrong.
-const lengthCheckThreshold = 16 << 20
-
 // checkValueLength rejects declared value lengths that cannot be satisfied by
-// the underlying stream. A corrupt or crafted file can claim a multi-gigabyte
-// element; allocating for it before reading would exhaust memory.
+// the underlying stream, so a corrupt or crafted file cannot make the reader
+// allocate for an element far larger than the data that exists.
+//
+// Every element is checked, not only large ones. An earlier version skipped
+// the check below 16 MiB on the theory that a small allocation is harmless,
+// but a 200-byte file declaring a 15 MiB element still allocated 15 MiB before
+// discovering the stream was short — cheap once, ruinous in a loop. The stream
+// size is measured once and cached, so the check costs nothing per element.
 func (dfr *DCMFileReader) checkValueLength(length uint32) error {
-	if length < lengthCheckThreshold {
-		return nil
-	}
-	remaining, err := dfr.remainingBytes()
+	size, err := dfr.streamSizeOnce()
 	if err != nil {
 		// Size is not knowable (non-seekable source); fall back to reading and
 		// letting the short-read check report the truncation.
 		return nil //nolint:nilerr // unknown size is not an error, just unverifiable
+	}
+
+	remaining := size - dfr.position
+	if remaining < 0 {
+		remaining = 0
 	}
 	if int64(length) > remaining {
 		return fmt.Errorf("declared length %d exceeds %d bytes remaining in stream", length, remaining)
@@ -383,21 +394,35 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 	return nil
 }
 
-// remainingBytes reports how many bytes are left in the underlying stream,
-// restoring the stream position before returning.
-func (dfr *DCMFileReader) remainingBytes() (int64, error) {
+// streamSizeOnce returns the total size of the underlying stream, measuring it
+// on first use and caching the result. Measuring costs three seeks, which is
+// why it is not repeated per element.
+func (dfr *DCMFileReader) streamSizeOnce() (int64, error) {
+	if dfr.streamSizeKnown {
+		if dfr.streamSizeErr != nil {
+			return 0, dfr.streamSizeErr
+		}
+		return dfr.streamSize, nil
+	}
+	dfr.streamSizeKnown = true
+
 	current, err := dfr.reader.Seek(0, io.SeekCurrent)
 	if err != nil {
+		dfr.streamSizeErr = err
 		return 0, err
 	}
 	end, err := dfr.reader.Seek(0, io.SeekEnd)
 	if err != nil {
+		dfr.streamSizeErr = err
 		return 0, err
 	}
 	if _, err := dfr.reader.Seek(current, io.SeekStart); err != nil {
+		dfr.streamSizeErr = err
 		return 0, err
 	}
-	return end - current, nil
+
+	dfr.streamSize = end
+	return end, nil
 }
 
 // readSequenceItems reads the items of a Sequence (SQ) element. A declared
