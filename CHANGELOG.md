@@ -223,11 +223,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README** rewritten with networking documentation, pynetdicom feature parity table, handler patterns, CLI network commands
 - **CLI help** updated to show file and network command categories
 
-## [1.3.0] - 2026-07-27
+## [Unreleased]
 
-> **Upgrade from 1.2.0 without delay.** The `ItemTag` constant in 1.2.0 was wrong, so the
-> nested sequence parsing introduced in that release failed on every real DICOM file
-> containing a sequence. 1.2.0 should be skipped.
+<!-- These entries predate the 1.1.0 release and were never assigned a version.
+     They are kept in place rather than folded in, since which release shipped
+     each one cannot now be determined from the history. -->
 
 ### Added
 - **Anonymization module** (`anonymize/`) - DICOM de-identification per PS3.15 Annex E
