@@ -287,7 +287,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | C-STORE (Storage) | Yes | Yes | `scu.Store(ctx, ds)` |
 | C-FIND (Query) | Yes | Yes | `scu.Find(ctx, ds)` — streams via Go channel |
 | C-MOVE (Retrieve) | Yes | SCU only | `scu.Move(ctx, ds, dest)`. SCP side returns status but does not perform C-STORE sub-operations — see Limitations |
-| C-GET (Get) | Yes | SCU only | `scu.Get(ctx, ds)`. SCP side returns status but does not perform C-STORE sub-operations — see Limitations |
+| C-GET (Get) | Yes | Yes | `scu.Get(ctx, ds)` with `SCUConfig.OnCStore`; SCP transfers instances via C-STORE sub-operations |
 | N-EVENT-REPORT | Yes | Yes | Full N-DIMSE service support |
 | N-GET | Yes | Yes | |
 | N-SET | Yes | Yes | |
@@ -317,12 +317,26 @@ Known gaps, stated plainly so you can judge fit before adopting:
 
 | Area | Status |
 |------|--------|
-| **C-MOVE / C-GET as an SCP** | The handler is invoked and a status is returned, but the SCP does **not** send C-STORE sub-operations to the destination. Acting as a retrieval *provider* requires implementing this yourself. Both work fully as an **SCU**. |
+| **C-MOVE as an SCP** | The handler is invoked and a status is returned, but the SCP does **not** open an association to the destination AE or send C-STORE sub-operations. Acting as a C-MOVE *provider* requires implementing that yourself. C-MOVE works fully as an **SCU**, and **C-GET as an SCP is implemented** — see below. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
 | **Transcoding between transfer syntaxes** | A data set is sent using the syntax negotiated for its presentation context. The library does not re-encode pixel data, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR will not decompress it for you. |
-| **Sequence writing** | The reader parses nested sequences; `filewriter` does not yet serialize `SQ` elements back out (waveform sequences are the exception). Reading and forwarding sequences works; round-tripping them to disk does not. |
-| **`show` / `info` / `convert` CLI commands** | Use a separate flat parser and do not descend into sequences. The network path and `filereader` do. |
+| **`show` / `info` / `convert` CLI commands** | Use a separate flat parser and do not descend into sequences. The network path, `filereader`, and `filewriter` do. |
 | **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
+
+### Interoperability
+
+Every release is tested against [pynetdicom](https://github.com/pydicom/pynetdicom) and
+[dcmtk](https://dcmtk.org/) in CI — C-ECHO and C-STORE in both directions, plus C-GET
+sub-operations — with the transferred data verified by pydicom rather than by this
+library's own reader:
+
+```bash
+go build -o dicom .
+PYNETDICOM_BIN=/path/to/venv/bin DCMTK_BIN=/usr/bin ./scripts/interop-test.sh
+```
+
+The fixture is pydicom's `CT_small.dcm`, not a file this project generates, so it
+exercises encodings the library would not think to produce itself.
 
 ### Supported File Formats
 
