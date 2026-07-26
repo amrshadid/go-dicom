@@ -1,5 +1,11 @@
 # go-dicom
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/amrshadid/go-dicom.svg)](https://pkg.go.dev/github.com/amrshadid/go-dicom)
+[![Tests](https://github.com/amrshadid/go-dicom/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/amrshadid/go-dicom/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/amrshadid/go-dicom?sort=semver)](https://github.com/amrshadid/go-dicom/releases/latest)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/amrshadid/go-dicom)](https://go.dev/dl/)
+[![License: MIT](https://img.shields.io/github/license/amrshadid/go-dicom)](./LICENSE)
+
 A comprehensive, high-performance Go library for reading, writing, manipulating, and **networking** DICOM (Digital Imaging and Communications in Medicine) data. The Go equivalent of Python's pydicom + pynetdicom.
 
 ## Overview
@@ -418,7 +424,8 @@ without changing the `Handler` interface:
 ```go
 scp.SetHandler(&network.StorageHandler{
     OnStore: func(ctx context.Context, sopClass, sopInstance string, ds *dataset.Dataset) uint16 {
-        if info, ok := network.AssociationInfoFromContext(ctx); ok {
+        // Returns nil when called outside an association, so check it.
+        if info := network.AssociationInfoFromContext(ctx); info != nil {
             log.Printf("from %s (%s) via %s",
                 info.CallingAE, info.RemoteAddr, info.PeerImplementationVersion)
         }
