@@ -546,9 +546,33 @@ func deflateBytes(data []byte) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-// inflateBytes decompresses a data set encoded with the Deflated syntax.
+// MaxInflatedDatasetSize bounds how much a Deflated Explicit VR Little Endian
+// data set may expand to.
+//
+// Deflate reaches ratios above 1000:1 on repetitive input, so a peer that
+// negotiates the deflated transfer syntax can send a few kilobytes that expand
+// without limit — a decompression bomb. The transfer syntax is negotiable by
+// any peer, so this path is reachable before authentication. 256 MiB is far
+// above any legitimate DICOM data set while keeping a hostile one cheap to
+// reject.
+const MaxInflatedDatasetSize int64 = 256 << 20
+
+// inflateBytes decompresses a data set encoded with the Deflated syntax,
+// refusing input that expands beyond MaxInflatedDatasetSize.
 func inflateBytes(data []byte) ([]byte, error) {
 	r := flate.NewReader(bytes.NewReader(data))
 	defer r.Close()
-	return io.ReadAll(r)
+
+	// Read one byte past the limit: if that byte materializes, the input
+	// expands beyond what is allowed and the rest is not worth decompressing.
+	limited := io.LimitReader(r, MaxInflatedDatasetSize+1)
+	out, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > MaxInflatedDatasetSize {
+		return nil, NewPDUErrorf("DECOMPRESSION_LIMIT",
+			"deflated data set expands beyond the %d byte limit", MaxInflatedDatasetSize)
+	}
+	return out, nil
 }

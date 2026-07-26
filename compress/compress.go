@@ -721,6 +721,16 @@ type DeflateDecompressor struct {
 	mu sync.RWMutex
 }
 
+// MaxDecompressedSize bounds how large decompressed output may become.
+//
+// DEFLATE reaches ratios above 1000:1 on repetitive input, so a few kilobytes
+// of crafted data can expand without limit — a decompression bomb. SECURITY.md
+// warns callers about this for compressed transfer syntaxes from untrusted
+// sources; this constant is what makes that warning enforceable rather than
+// advisory. 256 MiB is far above any legitimate DICOM pixel data while keeping
+// a hostile input cheap to reject.
+const MaxDecompressedSize int64 = 256 << 20
+
 // NewDeflateDecompressor creates a new DEFLATE decompressor.
 func NewDeflateDecompressor() *DeflateDecompressor {
 	return &DeflateDecompressor{}
@@ -742,9 +752,18 @@ func (d *DeflateDecompressor) Decompress(data []byte) ([]byte, error) {
 	}
 	defer zlibReader.Close()
 
-	decompressed, err := io.ReadAll(zlibReader)
+	// Read one byte past the limit: if that byte materializes, the input
+	// expands beyond what is allowed and the rest is not worth decompressing.
+	limited := io.LimitReader(zlibReader, MaxDecompressedSize+1)
+	decompressed, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decompress DEFLATE data: %w", err)
+	}
+	if int64(len(decompressed)) > MaxDecompressedSize {
+		return nil, fmt.Errorf(
+			"DEFLATE data expands beyond the %d byte limit; refusing to continue "+
+				"(input was %d bytes, a ratio of at least %d:1)",
+			MaxDecompressedSize, len(data), MaxDecompressedSize/int64(max(len(data), 1)))
 	}
 
 	return decompressed, nil
