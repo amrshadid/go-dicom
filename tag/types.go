@@ -20,36 +20,47 @@ func FromInt(val uint32) Tag {
 	return Tag(val)
 }
 
-// FromBytes creates a Tag from 4 bytes in little-endian or big-endian format.
+// FromBytes creates a Tag from its 4-byte on-the-wire encoding.
+//
+// A DICOM tag is encoded as two consecutive 16-bit values — the group number
+// then the element number — each in the transfer syntax's byte order. It is
+// not a single 32-bit value: in little endian, (FFFE,E000) is FE FF 00 E0, so
+// reading all four bytes as one uint32 yields the group and element
+// transposed.
 func FromBytes(data []byte, littleEndian bool) (Tag, error) {
 	if len(data) < 4 {
 		return 0, fmt.Errorf("insufficient bytes for tag: need 4, got %d", len(data))
 	}
 
-	var val uint32
+	var group, element uint16
 	if littleEndian {
-		val = uint32(data[0]) | (uint32(data[1]) << 8) | (uint32(data[2]) << 16) | (uint32(data[3]) << 24)
+		group = uint16(data[0]) | (uint16(data[1]) << 8)
+		element = uint16(data[2]) | (uint16(data[3]) << 8)
 	} else {
-		val = (uint32(data[0]) << 24) | (uint32(data[1]) << 16) | (uint32(data[2]) << 8) | uint32(data[3])
+		group = (uint16(data[0]) << 8) | uint16(data[1])
+		element = (uint16(data[2]) << 8) | uint16(data[3])
 	}
-	return Tag(val), nil
+	return New(group, element), nil
 }
 
-// ToBytes converts a Tag to 4 bytes in the specified endianness.
+// ToBytes converts a Tag to its 4-byte on-the-wire encoding.
+//
+// The group number is written first, then the element number, each as a 16-bit
+// value in the given byte order — not as one 32-bit value. See [FromBytes].
 func (t Tag) ToBytes(littleEndian bool) []byte {
 	result := make([]byte, 4)
-	val := uint32(t)
+	group, element := t.Group(), t.Element()
 
 	if littleEndian {
-		result[0] = byte(val)
-		result[1] = byte(val >> 8)
-		result[2] = byte(val >> 16)
-		result[3] = byte(val >> 24)
+		result[0] = byte(group)
+		result[1] = byte(group >> 8)
+		result[2] = byte(element)
+		result[3] = byte(element >> 8)
 	} else {
-		result[0] = byte(val >> 24)
-		result[1] = byte(val >> 16)
-		result[2] = byte(val >> 8)
-		result[3] = byte(val)
+		result[0] = byte(group >> 8)
+		result[1] = byte(group)
+		result[2] = byte(element >> 8)
+		result[3] = byte(element)
 	}
 
 	return result
@@ -126,10 +137,18 @@ func (t Tag) IsSpecial() bool {
 	return t == ItemTag || t == ItemDelimiterTag || t == SequenceDelimiterTag
 }
 
-// Special DICOM tags
+// Special DICOM tags used to delimit sequence items and encapsulated
+// fragments. See PS3.5 Section 7.5 and Table 7.5-1.
 const (
-	ItemTag              Tag = 0xFFFE0000
-	ItemDelimiterTag     Tag = 0xFFFEE00D
+	// ItemTag is (FFFE,E000), which begins a sequence item or an
+	// encapsulated pixel data fragment.
+	ItemTag Tag = 0xFFFEE000
+
+	// ItemDelimiterTag is (FFFE,E00D), which ends an undefined-length item.
+	ItemDelimiterTag Tag = 0xFFFEE00D
+
+	// SequenceDelimiterTag is (FFFE,E0DD), which ends an undefined-length
+	// sequence or run of encapsulated fragments.
 	SequenceDelimiterTag Tag = 0xFFFEE0DD
 )
 
