@@ -366,3 +366,67 @@ func TestGetDatasetMaterializesSequences(t *testing.T) {
 		}
 	}
 }
+
+// TestPositionTrackingIsAccurate verifies the reader's byte counter matches the
+// actual stream offset.
+//
+// The counter is used to bound declared element lengths against the bytes
+// remaining, so drift makes that guard reject valid files or admit oversized
+// ones. Two paths in the meta header previously added the tag length twice —
+// ReadTag had already accounted for it — which put the counter 4 bytes ahead
+// per meta element. Nothing noticed until the counter was used for a decision.
+func TestPositionTrackingIsAccurate(t *testing.T) {
+	var b dcmBuilder
+	b.explicitElement(0x0008, 0x0060, "CS", []byte("CT"))
+	b.explicitElement(0x0010, 0x0010, "PN", []byte("Doe^John"))
+	b.explicitElement(0x0010, 0x0020, "LO", []byte("PID-1234"))
+	raw := b.bytes()
+
+	dfr := newReaderFor(raw)
+
+	var consumed int64
+	for i := 0; i < 3; i++ {
+		elem, err := dfr.ReadDataElement(true)
+		if err != nil {
+			t.Fatalf("element %d: %v", i, err)
+		}
+		// 8-byte short-form explicit VR header plus the value.
+		consumed += 8 + int64(elem.Length)
+
+		if got := dfr.GetPosition(); got != consumed {
+			t.Errorf("after element %d: position = %d, want %d", i, got, consumed)
+		}
+	}
+
+	if consumed != int64(len(raw)) {
+		t.Errorf("consumed %d bytes, but the stream holds %d", consumed, len(raw))
+	}
+}
+
+// TestOversizedLengthRejectedWithoutLargeAllocation verifies that an element
+// declaring more bytes than the stream holds is rejected on the strength of the
+// declared length alone, at any size.
+//
+// An earlier version only verified lengths above 16 MiB, so a 200-byte file
+// claiming a 15 MiB element still allocated 15 MiB before discovering the
+// stream was short — negligible once, ruinous in a loop.
+func TestOversizedLengthRejectedWithoutLargeAllocation(t *testing.T) {
+	sizes := []uint32{1 << 10, 1 << 20, 15 << 20, 1 << 30}
+
+	for _, declared := range sizes {
+		var b dcmBuilder
+		// An OB element claiming `declared` bytes, with only 2 present.
+		_ = binary.Write(&b.buf, binary.LittleEndian, uint16(0x7FE0))
+		_ = binary.Write(&b.buf, binary.LittleEndian, uint16(0x0010))
+		b.buf.WriteString("OB")
+		b.buf.Write([]byte{0x00, 0x00})
+		_ = binary.Write(&b.buf, binary.LittleEndian, declared)
+		b.buf.Write([]byte{0x01, 0x02})
+
+		dfr := newReaderFor(b.bytes())
+		if _, err := dfr.ReadDataElement(true); err == nil {
+			t.Errorf("declared length %d in a %d byte stream was accepted",
+				declared, b.buf.Len())
+		}
+	}
+}
