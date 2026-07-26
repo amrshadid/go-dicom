@@ -176,3 +176,17 @@ jobs:
               test -f "$dir/doc.go" || (echo "Missing doc.go in $dir"; exit 1)
             fi
           done
+
+      # The module root is what pkg.go.dev shows first. Without a package
+      # comment it renders as "There is no documentation for this package",
+      # which is what visitors saw before v1.2.1.
+      - name: Verify the root package is documented
+        run: |
+          test -f doc.go || (echo "Missing doc.go at the module root"; exit 1)
+          lines=$(go doc . | wc -l)
+          if [ "$lines" -lt 10 ]; then
+            echo "Root package documentation is missing or too short ($lines lines)."
+            echo "pkg.go.dev renders this as the landing page for the whole module."
+            exit 1
+          fi
+          echo "Root package documented ($lines lines)."
