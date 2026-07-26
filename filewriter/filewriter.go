@@ -1,6 +1,7 @@
 package filewriter
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/config"
@@ -65,6 +66,15 @@ type DataElement struct {
 	VR     string
 	Value  []byte
 	Length uint32
+
+	// Items holds the nested items of a Sequence (SQ) element. When set, Value
+	// and Length are ignored and the sequence is serialized from these items.
+	Items []*SequenceItem
+}
+
+// SequenceItem is one item within a Sequence (SQ) element.
+type SequenceItem struct {
+	Elements []*DataElement
 }
 
 // DCMFileWriter writes DICOM files.
@@ -253,6 +263,11 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		return fmt.Errorf("data element is nil")
 	}
 
+	// A sequence is serialized from its items rather than from a byte value.
+	if elem.VR == "SQ" || elem.Items != nil {
+		return dfw.writeSequence(elem, forceExplicitVR)
+	}
+
 	// Undefined length (0xFFFFFFFF) marks a delimited element and must be
 	// written through as-is rather than treated as a byte count.
 	if elem.Length != undefinedLength && int(elem.Length) == len(elem.Value) && len(elem.Value)%2 != 0 {
@@ -313,6 +328,125 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 	}
 
 	return nil
+}
+
+// seekBuffer is an in-memory io.WriteSeeker used to serialize nested sequence
+// content so its length can be stated before it is written. Only append-style
+// writing is used, so Seek reports the current end.
+type seekBuffer struct {
+	buf bytes.Buffer
+}
+
+func (s *seekBuffer) Write(p []byte) (int, error) { return s.buf.Write(p) }
+
+func (s *seekBuffer) Seek(_ int64, _ int) (int64, error) { return int64(s.buf.Len()), nil }
+
+func (s *seekBuffer) Bytes() []byte { return s.buf.Bytes() }
+
+// writeSequence serializes a Sequence (SQ) element and its nested items.
+//
+// Items are written with explicit lengths rather than delimiters, so the
+// encoding is self-describing. Item tags always use the implicit-style header
+// — tag then 4-byte length, no VR — even inside an explicit VR transfer
+// syntax (PS3.5 Section 7.5).
+func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool) error {
+	// Serialize the items first so the sequence length is known up front.
+	itemBytes, err := dfw.encodeSequenceItems(elem.Items, forceExplicitVR)
+	if err != nil {
+		return err
+	}
+
+	if err := dfw.WriteTag(elem.Tag); err != nil {
+		return err
+	}
+
+	if dfw.explicitVR || forceExplicitVR {
+		if err := dfw.writer.WriteBytes([]byte("SQ")); err != nil {
+			return fmt.Errorf("failed to write SQ VR: %w", err)
+		}
+		if err := dfw.writer.WriteBytes([]byte{0x00, 0x00}); err != nil {
+			return fmt.Errorf("failed to write reserved bytes: %w", err)
+		}
+		dfw.position += 4
+	}
+
+	if err := dfw.writer.WriteUint32(uint32(len(itemBytes))); err != nil {
+		return fmt.Errorf("failed to write sequence length: %w", err)
+	}
+	dfw.position += 4
+
+	if len(itemBytes) > 0 {
+		if err := dfw.writer.WriteBytes(itemBytes); err != nil {
+			return fmt.Errorf("failed to write sequence items: %w", err)
+		}
+		dfw.position += int64(len(itemBytes))
+	}
+
+	return nil
+}
+
+// encodeSequenceItems serializes sequence items into a buffer so the enclosing
+// sequence can state its length.
+func (dfw *DCMFileWriter) encodeSequenceItems(items []*SequenceItem, forceExplicitVR bool) ([]byte, error) {
+	var out []byte
+
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+
+		body, err := dfw.encodeElements(item.Elements, forceExplicitVR)
+		if err != nil {
+			return nil, err
+		}
+
+		// Item header: (FFFE,E000) then a 4-byte length, no VR.
+		header := make([]byte, 8)
+		copy(header[0:4], tag.ItemTag.ToBytes(dfw.littleEndian))
+		if dfw.littleEndian {
+			header[4] = byte(len(body))
+			header[5] = byte(len(body) >> 8)
+			header[6] = byte(len(body) >> 16)
+			header[7] = byte(len(body) >> 24)
+		} else {
+			header[4] = byte(len(body) >> 24)
+			header[5] = byte(len(body) >> 16)
+			header[6] = byte(len(body) >> 8)
+			header[7] = byte(len(body))
+		}
+
+		out = append(out, header...)
+		out = append(out, body...)
+	}
+
+	return out, nil
+}
+
+// encodeElements serializes a list of elements to bytes using a scratch
+// writer, so nested content can be sized before being written.
+func (dfw *DCMFileWriter) encodeElements(elements []*DataElement, forceExplicitVR bool) ([]byte, error) {
+	buf := &seekBuffer{}
+	inner := filebase.NewFileWriter(buf)
+	if dfw.littleEndian {
+		inner.SetByteOrder(filebase.LittleEndian)
+	} else {
+		inner.SetByteOrder(filebase.BigEndian)
+	}
+
+	nested := NewDCMFileWriter(inner)
+	nested.explicitVR = dfw.explicitVR
+	nested.littleEndian = dfw.littleEndian
+
+	for _, e := range elements {
+		if e == nil {
+			continue
+		}
+		if err := nested.WriteDataElement(e, forceExplicitVR); err != nil {
+			return nil, err
+		}
+	}
+
+	return buf.Bytes(), nil
 }
 
 // WriteDataElements writes multiple data elements.
