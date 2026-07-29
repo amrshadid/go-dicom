@@ -250,9 +250,20 @@ jobs:
       - name: List dependencies
         run: go list -m all
 
+      # The version is pinned. With @latest, govulncheck v1.5.0 raised its own
+      # Go requirement to 1.25 and broke this job on a commit that changed
+      # nothing related to it — setup-go pins GOTOOLCHAIN=local, so the install
+      # could not fetch the newer toolchain it wanted. Pinning does not stale
+      # the results: the vulnerability database is fetched at run time.
+      #
+      # Only the install is allowed to pick its own toolchain. The scan itself
+      # must run under the project's Go version, because govulncheck's standard
+      # library findings are relative to the toolchain doing the analysis —
+      # scanning with a newer Go would report vulnerabilities that do not match
+      # what this project actually ships against.
       - name: Check for security vulnerabilities
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           govulncheck ./... || echo "::warning::govulncheck found vulnerabilities (may be stdlib-only, review output above)"
 
   docs:
