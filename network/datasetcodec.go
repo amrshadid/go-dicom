@@ -78,9 +78,15 @@ func EncodeDataset(ds *dataset.Dataset, transferSyntax string) ([]byte, error) {
 	var buf bytes.Buffer
 
 	for _, elem := range ds.GetAll() {
-		t, ok := elem.GetTag().(tag.Tag)
+		// An element whose tag cannot be read is an error, not something to
+		// skip. Skipping it sent a data set the peer accepted as complete while
+		// an attribute was missing from it — the worst outcome available, since
+		// nothing on either side reports a problem.
+		t, ok := elem.Tag()
 		if !ok {
-			continue
+			return nil, NewPDUErrorf("ENCODE_DS",
+				"element has an unreadable tag (%T); refusing to send a data set with it omitted",
+				elem.GetTag())
 		}
 
 		// A sequence holds nested data sets rather than a byte value, so it is
@@ -339,9 +345,11 @@ func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding) ([]byte,
 	var buf bytes.Buffer
 
 	for _, elem := range ds.GetAll() {
-		t, ok := elem.GetTag().(tag.Tag)
+		t, ok := elem.Tag()
 		if !ok {
-			continue
+			return nil, NewPDUErrorf("ENCODE_DS",
+				"element has an unreadable tag (%T); refusing to send a data set with it omitted",
+				elem.GetTag())
 		}
 		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
 			if err := writeSequence(&buf, enc, t, seq); err != nil {

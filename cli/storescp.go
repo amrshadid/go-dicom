@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,7 +15,6 @@ import (
 	"github.com/amrshadid/go-dicom/filewriter"
 	"github.com/amrshadid/go-dicom/network"
 	"github.com/amrshadid/go-dicom/sequence"
-	"github.com/amrshadid/go-dicom/tag"
 )
 
 // StoreSCPCommand implements the storescp CLI command.
@@ -128,8 +128,14 @@ func toWriterElements(ds *dataset.Dataset) []*filewriter.DataElement {
 	var out []*filewriter.DataElement
 
 	for _, elem := range ds.GetAll() {
-		t, ok := elem.GetTag().(tag.Tag)
+		// Skipping here writes a file that is missing an attribute the sender
+		// transmitted, with nothing recording that it happened. Reporting is
+		// the least a receiver can do; the element is still dropped, because
+		// there is no tag to write it under.
+		t, ok := elem.Tag()
 		if !ok {
+			log.Printf("storescp: dropping an element with an unreadable tag (%T) from the stored file",
+				elem.GetTag())
 			continue
 		}
 

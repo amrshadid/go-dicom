@@ -191,16 +191,11 @@ func convertDataElementToWriterFormat(de *dataelem.DataElement) (*DataElement, e
 		return nil, fmt.Errorf("data element is nil")
 	}
 
-	// Get tag
-	var tagValue tag.Tag
-	switch t := de.GetTag().(type) {
-	case uint32:
-		tagValue = tag.Tag(t)
-	case int:
-		tagValue = tag.Tag(uint32(t))
-	case tag.Tag:
-		tagValue = t
-	default:
+	// Get tag. Tag understands every form NewDataElement's untyped parameter
+	// allows, so this no longer has to enumerate them and fall over on the next
+	// one somebody uses.
+	tagValue, ok := de.Tag()
+	if !ok {
 		return nil, fmt.Errorf("unsupported tag type: %T", de.GetTag())
 	}
 

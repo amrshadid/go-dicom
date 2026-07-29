@@ -79,11 +79,61 @@ func NewDataElementWithKeyword(tag interface{}, vr VR, value interface{}, keywor
 	}
 }
 
-// GetTag returns the tag of the data element.
+// GetTag returns the tag exactly as it was stored, without interpretation.
+//
+// Prefer Tag for almost every purpose: it returns tag.Tag and reports whether
+// the stored value could be read as one. Callers of this have to assert the
+// concrete type themselves, and the assertions in this module all discarded the
+// element on failure — so an element whose tag arrived in an unexpected form was
+// silently dropped from encoding, from written output, and from anything else
+// walking a data set.
+//
+// This remains for the cases that need the original value rather than a tag:
+// copying an element without normalizing what it holds, and reporting the
+// concrete type in an error.
 func (de *DataElement) GetTag() interface{} {
 	de.mu.RLock()
 	defer de.mu.RUnlock()
 	return de.tag
+}
+
+// Tag returns the element's tag.
+//
+// The second result reports whether the stored value could be understood as a
+// tag. It is false only for an element built with something that is not a tag
+// at all, which the interface{} parameter on NewDataElement permits; checking it
+// is the difference between reporting such an element and quietly skipping it.
+//
+// A string is accepted because tags have been passed that way, in the
+// "(0008,0060)" and "00080060" forms the dictionary uses.
+func (de *DataElement) Tag() (tag.Tag, bool) {
+	de.mu.RLock()
+	defer de.mu.RUnlock()
+
+	switch v := de.tag.(type) {
+	case tag.Tag:
+		return v, true
+	case uint32:
+		return tag.Tag(v), true
+	case string:
+		parsed, err := tag.ParseTag(v)
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+// MustTag returns the element's tag, or zero if it is not a tag.
+//
+// For callers that have already established the element is well-formed, or for
+// which a zero tag is an acceptable sentinel. Prefer Tag where the distinction
+// matters.
+func (de *DataElement) MustTag() tag.Tag {
+	t, _ := de.Tag()
+	return t
 }
 
 // SetTag sets the tag of the data element.
