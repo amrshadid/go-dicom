@@ -64,19 +64,19 @@ func (reg *ExternalDecoderRegistry) GetExternalDecoder(compressionType Compressi
 	switch compressionType {
 	case JPEG_LS:
 		if reg.jpegLSDecoder == nil {
-			return nil, fmt.Errorf("JPEG-LS decoder not available - requires libcharls library")
+			return nil, errNoDecoder(JPEG_LS)
 		}
 		return reg.jpegLSDecoder, nil
 
 	case JPEG_2000:
 		if reg.jpeg2000Decoder == nil {
-			return nil, fmt.Errorf("JPEG-2000 decoder not available - requires OpenJPEG library")
+			return nil, errNoDecoder(JPEG_2000)
 		}
 		return reg.jpeg2000Decoder, nil
 
 	case JPEG_LOSSLESS:
 		if reg.jpegLosslessDecoder == nil {
-			return nil, fmt.Errorf("JPEG Lossless decoder not available - requires libjpeg or libjpeg-turbo")
+			return nil, errNoDecoder(JPEG_LOSSLESS)
 		}
 		return reg.jpegLosslessDecoder, nil
 
@@ -91,36 +91,37 @@ func (reg *ExternalDecoderRegistry) IsExternalDecoderAvailable(compressionType C
 	return err == nil
 }
 
-// Placeholder decoder functions - these will be implemented with cgo
+// errNoDecoder reports that a codec has no decoder, and says what to do.
+//
+// These messages used to instruct the caller to install a C library and rebuild
+// with CGO_ENABLED=1. There is no CGO implementation in this module, so
+// following that advice changed nothing: the library was named, the rebuild
+// succeeded, and the same error came back. The instruction that does work is to
+// supply a decoder.
+func errNoDecoder(compressionType CompressionType) error {
+	return fmt.Errorf("no %s decoder is registered. This module ships no %s implementation; "+
+		"supply one with compress.GetExternalRegistry().RegisterExternalDecoder(compress.%s, yourDecoder). "+
+		"Any type with Decompress([]byte) ([]byte, error) and CanDecompress([]byte) bool will do — "+
+		"see the ExampleExternalDecoderRegistry_RegisterExternalDecoder example",
+		compressionType, compressionType, compressionType)
+}
 
-// tryInitJPEGLSDecoder attempts to initialize JPEG-LS decoder.
-// Requires libcharls development library (brew install charls).
-// Returns an error explaining that the codec requires external CGO libraries
-// when the native implementation is not available.
+// tryInitJPEGLSDecoder reports that no JPEG-LS decoder is bundled.
+//
+// It is kept as a hook: a build that wires in a real codec can replace the body
+// without changing callers. It does not attempt CGO, and never did.
 func tryInitJPEGLSDecoder() (Decompressor, error) {
-	return nil, fmt.Errorf("JPEG-LS decoder is not available: this codec requires the libcharls " +
-		"external C library and CGO bindings. Install libcharls (e.g., 'brew install charls' on " +
-		"macOS or 'apt-get install libcharls-dev' on Debian/Ubuntu) and rebuild with CGO_ENABLED=1")
+	return nil, errNoDecoder(JPEG_LS)
 }
 
-// tryInitJPEG2000Decoder attempts to initialize JPEG-2000 decoder.
-// Requires OpenJPEG library (brew install openjpeg).
-// Returns an error explaining that the codec requires external CGO libraries
-// when the native implementation is not available.
+// tryInitJPEG2000Decoder reports that no JPEG 2000 decoder is bundled.
 func tryInitJPEG2000Decoder() (Decompressor, error) {
-	return nil, fmt.Errorf("JPEG-2000 decoder is not available: this codec requires the OpenJPEG (libopenjp2) " +
-		"external C library and CGO bindings. Install OpenJPEG (e.g., 'brew install openjpeg' on " +
-		"macOS or 'apt-get install libopenjp2-dev' on Debian/Ubuntu) and rebuild with CGO_ENABLED=1")
+	return nil, errNoDecoder(JPEG_2000)
 }
 
-// tryInitJPEGLosslessDecoder attempts to initialize JPEG Lossless decoder.
-// Requires libjpeg or libjpeg-turbo (brew install libjpeg).
-// Returns an error explaining that the codec requires external CGO libraries
-// when the native implementation is not available.
+// tryInitJPEGLosslessDecoder reports that no JPEG Lossless decoder is bundled.
 func tryInitJPEGLosslessDecoder() (Decompressor, error) {
-	return nil, fmt.Errorf("JPEG Lossless decoder is not available: this codec requires the libjpeg-turbo " +
-		"external C library and CGO bindings. Install libjpeg-turbo (e.g., 'brew install libjpeg-turbo' on " +
-		"macOS or 'apt-get install libjpeg-turbo-dev' on Debian/Ubuntu) and rebuild with CGO_ENABLED=1")
+	return nil, errNoDecoder(JPEG_LOSSLESS)
 }
 
 // ExternalCompressionStatus returns information about external compression support
@@ -140,21 +141,24 @@ func GetExternalCompressionStatus() []ExternalCompressionStatus {
 			IsAvailable:     registry.IsExternalDecoderAvailable(JPEG_LS),
 			RequiredLibrary: "libcharls",
 			InstallationSteps: `
-Installation Instructions for JPEG-LS Support:
+JPEG-LS is not implemented in this module. Reading pixel data in this syntax
+reports that no decoder is registered until you supply one.
 
-macOS:
-  brew install charls
-  CGO_ENABLED=1 go build
+Supply a decoder:
 
-Ubuntu/Debian:
-  sudo apt-get install libcharls-dev
-  CGO_ENABLED=1 go build
+  type myDecoder struct{}
 
-Windows (MSVC):
-  Download: https://github.com/team-charls/charls
-  Place headers in include/ directory
-  Place lib files in lib/ directory
-  CGO_ENABLED=1 go build
+  func (myDecoder) Decompress(frame []byte) ([]byte, error) { ... }
+  func (myDecoder) CanDecompress(frame []byte) bool         { ... }
+
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG-LS, myDecoder{})
+
+Dataset.PixelArray then routes frames through it automatically.
+
+What to wrap is your choice. CharLS is the usual C library for this codec
+(https://github.com/team-charls/charls), which means CGO and its build and distribution consequences; a pure
+Go implementation avoids both. This module takes no position and bundles
+neither.
 `,
 		},
 		{
@@ -162,20 +166,24 @@ Windows (MSVC):
 			IsAvailable:     registry.IsExternalDecoderAvailable(JPEG_2000),
 			RequiredLibrary: "libopenjp2 (OpenJPEG)",
 			InstallationSteps: `
-Installation Instructions for JPEG-2000 Support:
+JPEG 2000 is not implemented in this module. Reading pixel data in this syntax
+reports that no decoder is registered until you supply one.
 
-macOS:
-  brew install openjpeg
-  CGO_ENABLED=1 go build
+Supply a decoder:
 
-Ubuntu/Debian:
-  sudo apt-get install libopenjp2-dev
-  CGO_ENABLED=1 go build
+  type myDecoder struct{}
 
-Windows (MSVC):
-  Download: https://github.com/uclouvain/openjpeg
-  Build and install libraries
-  CGO_ENABLED=1 go build
+  func (myDecoder) Decompress(frame []byte) ([]byte, error) { ... }
+  func (myDecoder) CanDecompress(frame []byte) bool         { ... }
+
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG 2000, myDecoder{})
+
+Dataset.PixelArray then routes frames through it automatically.
+
+What to wrap is your choice. OpenJPEG is the usual C library for this codec
+(https://github.com/uclouvain/openjpeg), which means CGO and its build and distribution consequences; a pure
+Go implementation avoids both. This module takes no position and bundles
+neither.
 `,
 		},
 		{
@@ -183,20 +191,24 @@ Windows (MSVC):
 			IsAvailable:     registry.IsExternalDecoderAvailable(JPEG_LOSSLESS),
 			RequiredLibrary: "libjpeg-turbo (or libjpeg)",
 			InstallationSteps: `
-Installation Instructions for JPEG Lossless Support:
+JPEG Lossless is not implemented in this module. Reading pixel data in this syntax
+reports that no decoder is registered until you supply one.
 
-macOS:
-  brew install libjpeg-turbo
-  CGO_ENABLED=1 go build
+Supply a decoder:
 
-Ubuntu/Debian:
-  sudo apt-get install libjpeg-turbo-dev
-  CGO_ENABLED=1 go build
+  type myDecoder struct{}
 
-Windows (MSVC):
-  Download: https://github.com/libjpeg-turbo/libjpeg-turbo
-  Build and install libraries
-  CGO_ENABLED=1 go build
+  func (myDecoder) Decompress(frame []byte) ([]byte, error) { ... }
+  func (myDecoder) CanDecompress(frame []byte) bool         { ... }
+
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG Lossless, myDecoder{})
+
+Dataset.PixelArray then routes frames through it automatically.
+
+What to wrap is your choice. libjpeg-turbo is the usual C library for this codec
+(https://github.com/libjpeg-turbo/libjpeg-turbo), which means CGO and its build and distribution consequences; a pure
+Go implementation avoids both. This module takes no position and bundles
+neither.
 `,
 		},
 	}
