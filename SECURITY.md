@@ -9,18 +9,37 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in go-dicom, please report it responsibly.
+Report vulnerabilities privately through GitHub:
 
-**Do NOT open a public GitHub issue for security vulnerabilities.**
+**[Open a private security advisory →](https://github.com/amrshadid/go-dicom/security/advisories/new)**
 
-Instead, please send an email to the maintainers with:
+The form is visible only to you and the maintainers. It needs no email address
+from either side, and it is the same mechanism used to publish the advisory and
+request a CVE once a fix is ready.
+
+Please include:
 
 1. A description of the vulnerability
-2. Steps to reproduce the issue
-3. Potential impact assessment
-4. Any suggested fixes (optional)
+2. Steps to reproduce it
+3. What an attacker gains, and what access they need to start
+4. A suggested fix, if you have one
 
-We will acknowledge receipt within 48 hours and provide a detailed response within 7 days.
+**Please do not open a public issue for a vulnerability.** The reason is
+specific to what this library does: it parses files from untrusted sources and
+listens on a network port, often inside a clinical network where upgrades are
+slow and deployments are not centrally controlled. A public report is a working
+exploit recipe available to everyone before any operator has patched. That
+window is the whole risk — not the disclosure itself, which we want, but its
+ordering relative to a fix.
+
+This is a small project, so treat the response times as intent rather than a
+guarantee: acknowledgement within a few days, and an assessment with a fix or a
+timeline once the report has been reproduced. If a report goes unanswered for
+two weeks, opening a public issue that says a private report is outstanding —
+without the details — is a reasonable escalation.
+
+If you believe a vulnerability is being actively exploited, say so in the first
+line of the report.
 
 ## Protected Health Information (PHI)
 
@@ -52,10 +71,18 @@ advisory:
 | Limit | Value | Guards against |
 |-------|-------|----------------|
 | `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
-| `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs over the Deflated transfer syntax |
+| `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
+| `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file on disk |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
-| Element length verification | 16 MiB threshold | An element declaring more bytes than the stream holds |
+| Element length verification | Every element | An element declaring more bytes than the stream holds |
+
+The element length check applies to every element rather than only large ones.
+An earlier version skipped it below 16 MiB, reasoning that a small allocation is
+harmless; a 200-byte file declaring a 15 MiB element still allocated 15 MiB
+before discovering the stream was short, which is cheap once and ruinous in a
+loop. The stream size is measured once and cached, so checking every element
+costs nothing.
 
 The parsers that consume untrusted input — PDU decoding, data set decoding, DIMSE
 command decoding, and file reading — have fuzz targets that run in CI.
