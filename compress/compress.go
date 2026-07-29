@@ -1064,3 +1064,48 @@ func (c *RLECompressor) Compress(data []byte) ([]byte, error) {
 
 	return result, nil
 }
+
+// MaxInflateRatio is the largest expansion a deflated stream may claim relative
+// to its own compressed size.
+//
+// A ratio bound catches what an absolute bound alone cannot. An absolute limit
+// of 256 MiB permits a 300 KB file to allocate 256 MiB before being rejected,
+// and because io.ReadAll grows its buffer by doubling, the true peak is closer
+// to twice that. The attacker chooses the input size; without a ratio the cost
+// of rejecting a bomb is set entirely by the limit rather than by the effort
+// spent constructing it.
+//
+// 1000:1 is deliberately generous. Deflate reaches it on genuinely repetitive
+// medical data — an all-black CT frame is mostly zeros — so a tighter ratio
+// would reject legitimate files.
+const MaxInflateRatio int64 = 1000
+
+// MinInflateAllowance is the smallest output any deflated stream may produce
+// regardless of how small its compressed form is.
+//
+// Without a floor the ratio bound would reject a 500-byte stream holding a
+// legitimately blank 512 KiB frame. The floor is what keeps the ratio safe to
+// apply to genuinely tiny inputs.
+const MinInflateAllowance int64 = 8 << 20
+
+// InflateLimitFor returns how many bytes a deflated stream of compressedSize
+// bytes may be allowed to produce, given an absolute ceiling.
+//
+// Pass a non-positive compressedSize when the compressed length is unknown; the
+// absolute ceiling is then the only bound available.
+func InflateLimitFor(compressedSize, absoluteMax int64) int64 {
+	// Short-circuit before multiplying, so a large compressedSize cannot
+	// overflow into a small or negative limit.
+	if compressedSize <= 0 || compressedSize > absoluteMax/MaxInflateRatio {
+		return absoluteMax
+	}
+
+	limit := compressedSize * MaxInflateRatio
+	if limit < MinInflateAllowance {
+		limit = MinInflateAllowance
+	}
+	if limit > absoluteMax {
+		limit = absoluteMax
+	}
+	return limit
+}

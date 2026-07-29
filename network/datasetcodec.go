@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/sequence"
@@ -563,16 +564,23 @@ func inflateBytes(data []byte) ([]byte, error) {
 	r := flate.NewReader(bytes.NewReader(data))
 	defer r.Close()
 
+	// The limit is scaled to what the peer actually sent. The absolute ceiling
+	// alone lets a peer spend a few hundred kilobytes to make this allocate
+	// hundreds of megabytes — and this path is reachable before authentication,
+	// so the cost of rejecting a bomb should track the cost of building one.
+	limit := compress.InflateLimitFor(int64(len(data)), MaxInflatedDatasetSize)
+
 	// Read one byte past the limit: if that byte materializes, the input
 	// expands beyond what is allowed and the rest is not worth decompressing.
-	limited := io.LimitReader(r, MaxInflatedDatasetSize+1)
+	limited := io.LimitReader(r, limit+1)
 	out, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(out)) > MaxInflatedDatasetSize {
+	if int64(len(out)) > limit {
 		return nil, NewPDUErrorf("DECOMPRESSION_LIMIT",
-			"deflated data set expands beyond the %d byte limit", MaxInflatedDatasetSize)
+			"deflated data set of %d bytes expands beyond the %d byte limit allowed for its size",
+			len(data), limit)
 	}
 	return out, nil
 }
