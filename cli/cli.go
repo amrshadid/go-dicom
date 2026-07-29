@@ -38,6 +38,31 @@ func NewCLI(name, version string) *CLI {
 	}
 }
 
+// netCommands is the order network commands appear in the help output, and
+// netDescriptions their one-line summaries.
+//
+// These are declared here rather than inside ShowHelp so a test can check them
+// against the commands that actually exist. A name listed here with no entry in
+// netDescriptions is skipped by the loop that prints them, so the command
+// disappears from the help output while remaining perfectly runnable — nothing
+// reports it, and a user simply never learns the command is there.
+var netCommands = []string{
+	"echoscu", "echoscp", "storescu", "storescp",
+	"findscu", "movescu", "getscu", "commitscu", "qrscp",
+}
+
+var netDescriptions = map[string]string{
+	"echoscu":   "DICOM Echo SCU — verification (ping)",
+	"echoscp":   "DICOM Echo SCP — verification server",
+	"storescu":  "DICOM Store SCU — send DICOM files (.dcm, .ima, etc.)",
+	"storescp":  "DICOM Store SCP — receive and save DICOM files",
+	"findscu":   "DICOM Find SCU — query for patients/studies/series",
+	"movescu":   "DICOM Move SCU — retrieve studies to a destination",
+	"getscu":    "DICOM Get SCU — retrieve on same association",
+	"commitscu": "DICOM Storage Commitment SCU — ask a peer to take responsibility",
+	"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
+}
+
 // RegisterCommand adds a command to the CLI.
 func (c *CLI) RegisterCommand(cmd Command) {
 	c.Commands[cmd.Name()] = cmd
@@ -96,18 +121,6 @@ func (c *CLI) ShowHelp() {
 	}
 
 	fmt.Printf("\n  NETWORK COMMANDS:\n")
-	netCommands := []string{"echoscu", "echoscp", "storescu", "storescp", "findscu", "movescu", "getscu", "commitscu", "qrscp"}
-	netDescriptions := map[string]string{
-		"echoscu":   "DICOM Echo SCU — verification (ping)",
-		"echoscp":   "DICOM Echo SCP — verification server",
-		"storescu":  "DICOM Store SCU — send DICOM files (.dcm, .ima, etc.)",
-		"storescp":  "DICOM Store SCP — receive and save DICOM files",
-		"findscu":   "DICOM Find SCU — query for patients/studies/series",
-		"movescu":   "DICOM Move SCU — retrieve studies to a destination",
-		"getscu":    "DICOM Get SCU — retrieve on same association",
-		"commitscu": "DICOM Storage Commitment SCU — ask a peer to take responsibility",
-		"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
-	}
 	for _, cmdName := range netCommands {
 		if desc, ok := netDescriptions[cmdName]; ok {
 			fmt.Printf("    %-12s %s\n", cmdName, desc)
