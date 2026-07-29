@@ -7,6 +7,7 @@ import (
 
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -171,36 +172,88 @@ func (ds *Dataset) Clear() {
 }
 
 // Clone creates a deep copy of the dataset.
-// All elements are cloned including their values.
-// Modifications to the cloned dataset do not affect the original.
+//
+// Nothing is shared with the original: byte values are copied, and sequences
+// are rebuilt item by item so that a nested data set in the copy is a distinct
+// object. Modifying either data set, at any depth, leaves the other unchanged.
+//
+// It previously copied only []byte values and shared everything else by
+// reference, while documenting itself as a deep copy. A sequence therefore
+// pointed at the same nested data sets in both, so editing an item of the
+// original silently edited the copy — the exact thing a caller clones to avoid,
+// and invisible until the shared item is written to.
 func (ds *Dataset) Clone() *Dataset {
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 
 	cloned := NewDataset()
+
+	// The transfer syntax is part of what the data set is, not an element of
+	// it: it says how the values are encoded. Dropping it left a clone whose
+	// pixel data could no longer be decoded from its own metadata, so pixel
+	// access fell back to guessing the codec from structure.
+	cloned.transferSyntaxUID = ds.transferSyntaxUID
+
 	for _, tagVal := range ds.order {
 		origElem := ds.elements[tagVal]
 
-		// Extract original element properties
-		origTag := origElem.GetTag()
-		origVR := origElem.GetVR()
-		origValue := origElem.GetValue()
-
-		// Deep copy value (byte slices are copied, other types are referenced)
-		var copiedValue interface{}
-		if b, ok := origValue.([]byte); ok {
-			copiedValue = copyBytes(b)
-		} else {
-			copiedValue = origValue
-		}
-
-		// Create cloned element
-		clonedElem := dataelem.NewDataElement(origTag, origVR, copiedValue)
+		clonedElem := dataelem.NewDataElement(
+			origElem.GetTag(), origElem.GetVR(), cloneValue(origElem.GetValue()))
 		cloned.elements[tagVal] = clonedElem
 		cloned.order = append(cloned.order, tagVal)
 	}
 
 	return cloned
+}
+
+// cloneValue copies an element value so the copy shares no mutable state with
+// the original.
+//
+// Anything not listed here is immutable or a scalar, and returning it as-is is
+// correct. A new mutable value type added to the data model needs a case here,
+// or Clone quietly goes back to being shallow for it.
+func cloneValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case []byte:
+		return copyBytes(v)
+
+	case *sequence.Sequence:
+		return cloneSequence(v)
+
+	case []string:
+		out := make([]string, len(v))
+		copy(out, v)
+		return out
+
+	default:
+		return value
+	}
+}
+
+// cloneSequence rebuilds a sequence, cloning each item.
+//
+// Items are data sets, so this recurses through Clone and copies nested
+// sequences to any depth.
+func cloneSequence(seq *sequence.Sequence) *sequence.Sequence {
+	if seq == nil {
+		return nil
+	}
+
+	out := sequence.New()
+	for i := 0; i < seq.Length(); i++ {
+		item, err := seq.Get(i)
+		if err != nil {
+			continue
+		}
+		if nested, ok := item.(*Dataset); ok {
+			_ = out.Append(nested.Clone())
+			continue
+		}
+		// An item that is not a data set is not something this package
+		// created; copy the reference rather than guess at its structure.
+		_ = out.Append(item)
+	}
+	return out
 }
 
 // ForEach iterates over all elements in insertion order.
