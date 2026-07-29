@@ -381,3 +381,217 @@ func TestRequestedSOPInstanceUIDFallsBackToAffected(t *testing.T) {
 		t.Errorf("got %q, want the Affected value as a fallback", got)
 	}
 }
+
+// deferringArchive answers a commitment request without deciding it, the way an
+// archive that verifies durability before promising it must.
+type deferringArchive struct {
+	BaseHandler
+	requests chan *StorageCommitmentRequest
+}
+
+func (a *deferringArchive) HandleStorageCommitment(_ context.Context,
+	req *StorageCommitmentRequest) (*StorageCommitmentResult, error) {
+
+	a.requests <- req
+	// Nothing is promised yet. The result follows on a new association once the
+	// instances are genuinely safe.
+	return &StorageCommitmentResult{Deferred: true}, nil
+}
+
+// TestStorageCommitmentOnSecondAssociation covers the flow PS3.4 J.3 describes
+// for an archive that cannot answer immediately.
+//
+// The request and the result travel on different associations, minutes or hours
+// apart in a real deployment. The Transaction UID is the only thing connecting
+// them, which is why it is checked on both sides rather than assumed.
+func TestStorageCommitmentOnSecondAssociation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const (
+		transactionUID = "1.2.826.0.1.3680043.8.498.55501"
+		requestorAE    = "COMMIT_REQ"
+		archiveAE      = "COMMIT_ARC"
+	)
+
+	// The requestor runs a server so the archive can reach it later. Without
+	// one there is nowhere for a deferred result to be delivered.
+	results := make(chan *StorageCommitmentResult, 1)
+	requestorServer, err := StartServer(ctx, SCPConfig{
+		AETitle: requestorAE, Port: 0, BindAddress: "127.0.0.1",
+	}, &StorageCommitmentResultHandler{
+		OnResult: func(_ context.Context, result *StorageCommitmentResult) error {
+			results <- result
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartServer (requestor): %v", err)
+	}
+	defer requestorServer.Stop()
+
+	archive := &deferringArchive{requests: make(chan *StorageCommitmentRequest, 1)}
+	archiveServer, err := StartServer(ctx, SCPConfig{
+		AETitle:     archiveAE,
+		Port:        0,
+		BindAddress: "127.0.0.1",
+		// How the archive reaches the requestor when it is ready.
+		CommitmentRequestors: map[string]string{
+			requestorAE: requestorServer.Addr(),
+		},
+	}, archive)
+	if err != nil {
+		t.Fatalf("StartServer (archive): %v", err)
+	}
+	defer archiveServer.Stop()
+
+	// First association: the request.
+	scu := NewSCU(SCUConfig{
+		CallingAE: requestorAE, CalledAE: archiveAE, Address: archiveServer.Addr(),
+	})
+	if err := scu.Associate(ctx, nil); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+
+	resp, err := scu.RequestStorageCommitment(ctx, &StorageCommitmentRequest{
+		TransactionUID: transactionUID,
+		Instances:      instanceRefs("1.2.3.1", "1.2.3.2"),
+	})
+	if err != nil {
+		t.Fatalf("RequestStorageCommitment: %v", err)
+	}
+	if resp.Status != StatusSuccess {
+		t.Fatalf("N-ACTION status = 0x%04X, want success", resp.Status)
+	}
+
+	var request *StorageCommitmentRequest
+	select {
+	case request = <-archive.requests:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the archive never received the request")
+	}
+
+	// The first association ends here. In a real deployment the delay between
+	// this and the result is the whole point of the deferred flow.
+	if err := scu.Release(ctx); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	// Second association: the archive reports, having decided.
+	err = archiveServer.ReportStorageCommitment(ctx, requestorAE, &StorageCommitmentResult{
+		TransactionUID: request.TransactionUID,
+		Successful:     instanceRefs("1.2.3.1"),
+		Failed: []StorageCommitmentFailure{{
+			SOPInstanceReference: SOPInstanceReference{
+				SOPClassUID: ctImageStorage, SOPInstanceUID: "1.2.3.2",
+			},
+			Reason: StorageCommitmentFailureResourceLimitation,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ReportStorageCommitment: %v", err)
+	}
+
+	select {
+	case result := <-results:
+		if result.TransactionUID != transactionUID {
+			t.Errorf("result transaction = %q, want %q — the requestor cannot match "+
+				"this to the request it made", result.TransactionUID, transactionUID)
+		}
+		if len(result.Successful) != 1 || result.Successful[0].SOPInstanceUID != "1.2.3.1" {
+			t.Errorf("committed = %+v, want just 1.2.3.1", result.Successful)
+		}
+		if len(result.Failed) != 1 {
+			t.Fatalf("got %d failures, want 1", len(result.Failed))
+		}
+		if result.Failed[0].Reason != StorageCommitmentFailureResourceLimitation {
+			t.Errorf("failure reason = 0x%04X, want 0x%04X",
+				result.Failed[0].Reason, StorageCommitmentFailureResourceLimitation)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the requestor never received the deferred result")
+	}
+}
+
+// TestDeferredResultIsNotSentOnTheFirstAssociation verifies Deferred actually
+// suppresses the immediate report.
+//
+// If it did not, the requestor would receive a result before the archive had
+// decided anything — a promise made before it was true, which is the failure
+// this flag exists to prevent.
+func TestDeferredResultIsNotSentOnTheFirstAssociation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	archive := &deferringArchive{requests: make(chan *StorageCommitmentRequest, 1)}
+	server, err := StartServer(ctx, SCPConfig{
+		AETitle: "DEFER_ARC", Port: 0, BindAddress: "127.0.0.1",
+	}, archive)
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	defer server.Stop()
+
+	scu := NewSCU(SCUConfig{
+		CallingAE: "DEFER_REQ", CalledAE: "DEFER_ARC", Address: server.Addr(),
+	})
+	if err := scu.Associate(ctx, nil); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+	defer func() { _ = scu.Release(ctx) }()
+
+	if _, err := scu.RequestStorageCommitment(ctx, &StorageCommitmentRequest{
+		TransactionUID: "1.2.826.0.1.3680043.8.498.55502",
+		Instances:      instanceRefs("1.2.3.1"),
+	}); err != nil {
+		t.Fatalf("RequestStorageCommitment: %v", err)
+	}
+
+	select {
+	case <-archive.requests:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the archive never received the request")
+	}
+
+	// Nothing more should arrive on this association. A short read that times
+	// out is the expected outcome; a message is the failure.
+	readCtx, readCancel := context.WithTimeout(ctx, 700*time.Millisecond)
+	defer readCancel()
+
+	if _, _, _, err := scu.Association().ReceivePData(readCtx); err == nil {
+		t.Error("a deferred result was reported on the first association anyway")
+	}
+}
+
+// TestReportStorageCommitmentNeedsAnAddress verifies a deferred result that
+// cannot be delivered is reported as such.
+//
+// Silently failing here would leave the requestor waiting for a result that
+// will never come, with the archive believing it had answered.
+func TestReportStorageCommitmentNeedsAnAddress(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// No CommitmentRequestors configured.
+	server, err := StartServer(ctx, SCPConfig{
+		AETitle: "NOADDR", Port: 0, BindAddress: "127.0.0.1",
+	}, &StorageCommitmentHandler{})
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	defer server.Stop()
+
+	err = server.ReportStorageCommitment(ctx, "UNKNOWN_AE", &StorageCommitmentResult{
+		TransactionUID: "1.2.3",
+		Successful:     instanceRefs("1.2.3.1"),
+	})
+	if err == nil {
+		t.Fatal("reporting to an unresolvable requestor succeeded")
+	}
+
+	// And a result with no Transaction UID cannot be matched by anyone.
+	if err := server.ReportStorageCommitment(ctx, "UNKNOWN_AE",
+		&StorageCommitmentResult{Successful: instanceRefs("1.2.3.1")}); err == nil {
+		t.Error("reporting a result with no Transaction UID succeeded")
+	}
+}

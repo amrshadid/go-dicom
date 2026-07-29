@@ -124,6 +124,32 @@ type SCPConfig struct {
 	// address. It takes precedence over MoveDestinations, for callers that look
 	// destinations up in a database or configuration service.
 	ResolveMoveDestination func(aeTitle string) (address string, ok bool)
+
+	// CommitmentRequestors maps a requestor's AE title to its "host:port"
+	// address, for reporting a storage commitment result on a new association.
+	//
+	// PS3.4 §J.3 allows the N-EVENT-REPORT to arrive long after the N-ACTION,
+	// which is what an archive that verifies durability before promising it has
+	// to do. By then the original association is gone, so the SCP has to reach
+	// the requestor itself — and a request names its sender only by Calling AE
+	// title. Without a way to resolve it there is nowhere to send the result.
+	CommitmentRequestors map[string]string
+
+	// ResolveCommitmentRequestor resolves a requestor AE title to a "host:port"
+	// address, taking precedence over CommitmentRequestors.
+	ResolveCommitmentRequestor func(aeTitle string) (address string, ok bool)
+}
+
+// resolveCommitmentRequestor maps a requestor AE title to an address,
+// preferring the resolver function over the static map.
+func (c *SCPConfig) resolveCommitmentRequestor(aeTitle string) (string, bool) {
+	if c.ResolveCommitmentRequestor != nil {
+		if addr, ok := c.ResolveCommitmentRequestor(aeTitle); ok {
+			return addr, true
+		}
+	}
+	addr, ok := c.CommitmentRequestors[aeTitle]
+	return addr, ok
 }
 
 // resolveMoveDestination maps a destination AE title to an address, preferring

@@ -856,8 +856,32 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 		DataSet:             ds,
 	}
 
-	resp, err := handler.HandleNEventReport(ctx, req)
 	status := StatusSuccess
+
+	// A storage commitment result arriving as an N-EVENT-REPORT is the answer
+	// to an N-ACTION this AE sent earlier, possibly on an association that has
+	// since been released. Parsing it here spares the receiver from decoding
+	// the sequences itself, and from having to know that this particular
+	// N-EVENT-REPORT means something quite different from the others.
+	if sopClassUID == StorageCommitmentPushModelUID {
+		if receiver, ok := handler.(StorageCommitmentResultReceiver); ok {
+			result, parseErr := ParseStorageCommitmentResult(ds)
+			if parseErr != nil {
+				log.Printf("storage commitment result could not be read: %v", parseErr)
+				status = StatusUnableToProcess
+			} else if err := receiver.HandleStorageCommitmentResult(ctx, result); err != nil {
+				log.Printf("storage commitment result handler failed: %v", err)
+				status = StatusUnableToProcess
+			}
+
+			rspDS := BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, status)
+			rspBytes, _ := EncodeCommandDataset(rspDS)
+			_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+			return
+		}
+	}
+
+	resp, err := handler.HandleNEventReport(ctx, req)
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
@@ -1029,6 +1053,13 @@ func (s *SCP) handleStorageCommitment(ctx context.Context, assoc *Association, h
 
 	s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID, StatusSuccess)
 
+	// A deferred result is not ready to be reported. The handler will send it
+	// with ReportStorageCommitment once the commitment is genuinely decided,
+	// on an association it opens for the purpose.
+	if result.Deferred {
+		return
+	}
+
 	if err := s.sendCommitmentReport(ctx, assoc, ctxID, sopClassUID, sopInstanceUID, result); err != nil {
 		log.Printf("failed to report storage commitment (%s): %v",
 			storageCommitmentSummary(result), err)
@@ -1165,7 +1196,16 @@ func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Han
 // The map is copied rather than modified, since it is shared across
 // associations.
 func withoutUnprovidedServices(supported map[string]bool, handler Handler) map[string]bool {
+	// Two different roles use this SOP Class, and either is reason to keep it.
+	// An archive provides the commitment; the AE that asked for one receives
+	// the result, which arrives as an N-EVENT-REPORT on an association the
+	// archive opens back to it. Withdrawing the context from a receiver made
+	// the deferred flow impossible: the archive could not negotiate a context
+	// on which to deliver the answer it had been asked for.
 	if _, ok := handler.(StorageCommitmentProvider); ok {
+		return supported
+	}
+	if _, ok := handler.(StorageCommitmentResultReceiver); ok {
 		return supported
 	}
 	if !supported[StorageCommitmentPushModelUID] {
