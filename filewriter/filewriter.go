@@ -268,6 +268,18 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		return dfw.writeSequence(elem, forceExplicitVR)
 	}
 
+	// Values are held little endian in memory, so numeric ones must be
+	// converted when the target syntax is big endian. Swap a copy: the caller's
+	// value must not be mutated by writing.
+	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(elem.VR)) {
+		swapped := make([]byte, len(elem.Value))
+		copy(swapped, elem.Value)
+		dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
+		elem = &DataElement{
+			Tag: elem.Tag, VR: elem.VR, Value: swapped, Length: uint32(len(swapped)),
+		}
+	}
+
 	// Undefined length (0xFFFFFFFF) marks a delimited element and must be
 	// written through as-is rather than treated as a byte count.
 	if elem.Length != undefinedLength && int(elem.Length) == len(elem.Value) && len(elem.Value)%2 != 0 {
@@ -584,9 +596,22 @@ func (dfw *DICOMFileWriter) Write() error {
 		return fmt.Errorf("failed to write DICM prefix: %w", err)
 	}
 
-	// Write file meta information
+	// The file meta header is always Explicit VR Little Endian, whatever the
+	// transfer syntax it declares for the data set that follows (PS3.10
+	// Section 7.1). Writing it in the data set's byte order produced a header
+	// whose very first tag read back as (0200,0000).
 	if dfw.metaInfo != nil {
-		if err := dfw.writer.WriteFileMetaInfo(dfw.metaInfo); err != nil {
+		explicitVR, littleEndian := dfw.writer.explicitVR, dfw.writer.littleEndian
+		dfw.writer.SetExplicitVR(true)
+		dfw.writer.SetLittleEndian(true)
+
+		err := dfw.writer.WriteFileMetaInfo(dfw.metaInfo)
+
+		// Restore the data set's encoding before writing it.
+		dfw.writer.SetExplicitVR(explicitVR)
+		dfw.writer.SetLittleEndian(littleEndian)
+
+		if err != nil {
 			return fmt.Errorf("failed to write file meta information: %w", err)
 		}
 	}

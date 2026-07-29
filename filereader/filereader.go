@@ -198,11 +198,14 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 
 		var valueLength uint32
 		if isShortVR(vr) {
-			length := make([]byte, 2)
-			if err := dfr.reader.ReadBytes(length); err != nil {
+			// ReadUint16 honors the reader's byte order; assembling the two
+			// bytes by hand would hardcode little endian and corrupt every
+			// length in an explicit VR big endian file.
+			short, err := dfr.reader.ReadUint16()
+			if err != nil {
 				return nil, fmt.Errorf("failed to read value length: %w", err)
 			}
-			valueLength = uint32(length[0]) | (uint32(length[1]) << 8)
+			valueLength = uint32(short)
 			dfr.position += 2
 		} else {
 			reserved := make([]byte, 2)
@@ -336,11 +339,14 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 
 		var valueLength uint32
 		if isShortVR(element.VR) {
-			length := make([]byte, 2)
-			if err := dfr.reader.ReadBytes(length); err != nil {
+			// ReadUint16 honors the reader's byte order; assembling the two
+			// bytes by hand would hardcode little endian and corrupt every
+			// length in an explicit VR big endian file.
+			short, err := dfr.reader.ReadUint16()
+			if err != nil {
 				return nil, fmt.Errorf("failed to read value length: %w", err)
 			}
-			valueLength = uint32(length[0]) | (uint32(length[1]) << 8)
+			valueLength = uint32(short)
 			dfr.position += 2
 		} else {
 			reserved := make([]byte, 2)
@@ -885,6 +891,12 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 			return nil, fmt.Errorf("failed to read data element: %w", err)
 		}
 
+		// Big endian values are converted once here so that everything
+		// downstream can assume little endian; see normalizeByteOrder.
+		if !dicomFile.IsLittleEndian {
+			normalizeByteOrder(element)
+		}
+
 		if err := validateDataElement(element); err != nil {
 			dicomFile.Warnings = append(dicomFile.Warnings,
 				fmt.Sprintf("tag %s: %v", element.Tag.String(), err))
@@ -992,5 +1004,25 @@ func isValidVRVariant(actual, expected string) bool {
 		return actual == "OB" || actual == "OD" || actual == "OF" || actual == "OL" || actual == "OW" || actual == "UN"
 	default:
 		return false
+	}
+}
+
+// normalizeByteOrder converts an element's value from big endian to the little
+// endian representation the rest of the library assumes.
+//
+// Dataset stores values as opaque bytes with no record of how to interpret
+// them, and everything downstream — pixel access, numeric conversion, the JSON
+// model — reads them as little endian. Rather than thread the file's byte order
+// through all of that, big endian values are normalised once here, so a data
+// set means the same thing regardless of how the file was encoded.
+func normalizeByteOrder(elem *DataElementValue) {
+	// Swap in place: the value was allocated by this reader and is not shared.
+	dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+
+	// Sequence items carry their own elements, encoded the same way.
+	for _, item := range elem.Items {
+		for _, nested := range item.Elements {
+			normalizeByteOrder(nested)
+		}
 	}
 }
