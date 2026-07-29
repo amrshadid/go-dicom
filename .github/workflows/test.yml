@@ -179,6 +179,23 @@ jobs:
           export PATH="$HOME/dicomvenv/bin:$PATH"
           ./scripts/interop-test.sh
 
+      # Decoding is checked against pydicom's own reading of the same files,
+      # not against this library's writer. Unit tests build their fixtures with
+      # this library's encoder, so they cannot catch the two halves agreeing on
+      # a format no other implementation uses — which is how every serious
+      # defect in this project has hidden.
+      - name: Verify pixel decoding against the pydicom corpus
+        env:
+          GODICOM_PYDICOM_DATA: /home/runner/dicomvenv/lib/python3.11/site-packages/pydicom/data/test_files
+        run: |
+          if [ ! -d "$GODICOM_PYDICOM_DATA" ]; then
+            GODICOM_PYDICOM_DATA=$("$HOME/dicomvenv/bin/python" -c \
+              "import pydicom.data, os; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+            export GODICOM_PYDICOM_DATA
+          fi
+          echo "corpus: $GODICOM_PYDICOM_DATA"
+          go test ./dataset/ -run TestAgainstPydicomCorpus -v
+
       - name: Upload server logs on failure
         if: failure()
         uses: actions/upload-artifact@v7

@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -117,19 +118,9 @@ func (ds *Dataset) PixelArray() (interface{}, error) {
 		return nil, err
 	}
 
-	// Get pixel data element
-	pixelDataElem, ok := ds.Get(tag.New(0x7FE0, 0x0010))
-	if !ok {
-		return nil, fmt.Errorf("pixel data element (7FE0,0010) not found")
-	}
-
-	pixelBytes, err := extractBytesValue(pixelDataElem)
+	pixelBytes, err := ds.pixelBytesForDecoding(info)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract pixel data bytes: %w", err)
-	}
-
-	if len(pixelBytes) == 0 {
-		return nil, fmt.Errorf("pixel data is empty")
+		return nil, err
 	}
 
 	// Parse based on bit depth
@@ -544,12 +535,17 @@ func extractStringValue(elem *dataelem.DataElement) (string, error) {
 		return "", fmt.Errorf("element value is nil")
 	}
 
-	// Handle different types
+	// Trailing padding is stripped. PS3.5 §6.2 pads a text value to an even
+	// length with a space, or with NUL for UI, and that padding is not part of
+	// the value. Returning it untrimmed made NumberOfFrames of "2 " fail
+	// strconv.Atoi, so every multi-frame image silently reported one frame —
+	// and for a compressed image that means the frames after the first are
+	// dropped without an error.
 	switch v := value.(type) {
 	case string:
-		return v, nil
+		return strings.TrimRight(v, " \x00"), nil
 	case []byte:
-		return string(v), nil
+		return strings.TrimRight(string(v), " \x00"), nil
 	case uint32, uint16, uint8, int, int64:
 		return fmt.Sprintf("%v", v), nil
 	default:
@@ -577,4 +573,132 @@ func extractBytesValue(elem *dataelem.DataElement) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported type for bytes conversion: %T", v)
 	}
+}
+
+// pixelBytesForDecoding returns the raw, uncompressed pixel buffer for this
+// data set, decompressing encapsulated pixel data when necessary.
+//
+// PixelData under a compressed transfer syntax is not pixels: it is an
+// encapsulation holding one or more compressed frames. Handing those bytes to
+// the pixel parsers produced "insufficient pixel data at frame 0, row N, col M"
+// on every compressed file, because the parsers were reading a JPEG or RLE
+// stream as though it were samples.
+func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
+	pixelDataElem, ok := ds.Get(tag.New(0x7FE0, 0x0010))
+	if !ok {
+		return nil, fmt.Errorf("pixel data element (7FE0,0010) not found")
+	}
+
+	pixelBytes, err := extractBytesValue(pixelDataElem)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract pixel data bytes: %w", err)
+	}
+	if len(pixelBytes) == 0 {
+		return nil, fmt.Errorf("pixel data is empty")
+	}
+
+	compression, encapsulated := ds.pixelCompression(pixelBytes, info)
+	if !encapsulated {
+		return pixelBytes, nil
+	}
+
+	encData, err := ds.ExtractEncapsulatedFrames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read encapsulated pixel data: %w", err)
+	}
+
+	var out []byte
+	for i, fragment := range encData.Fragments {
+		frame, err := decompressPixelFrame(compression, fragment, info)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode %s frame %d: %w", compression, i, err)
+		}
+		out = append(out, frame...)
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("encapsulated pixel data held no frames")
+	}
+	return out, nil
+}
+
+// pixelCompression reports how the pixel data is compressed and whether it is
+// encapsulated.
+//
+// The transfer syntax is the authority, and readers record it on the data set.
+// When it is absent — a Dataset assembled by hand, or received without one —
+// the structure is used instead: encapsulated pixel data begins with an item
+// tag, and raw pixel data is exactly as long as the image dimensions require.
+func (ds *Dataset) pixelCompression(pixelBytes []byte, info *PixelDataInfo) (compress.CompressionType, bool) {
+	if uid := ds.TransferSyntaxUID(); uid != "" {
+		compression, err := compress.TransferSyntaxToCompressionType(uid)
+		if err != nil {
+			return compress.UNCOMPRESSED, false
+		}
+		// Deflate compresses the whole data set, not the pixel element, so by
+		// the time PixelData is in hand it is already raw.
+		if compression == compress.UNCOMPRESSED || compression == compress.DEFLATE {
+			return compression, false
+		}
+		return compression, true
+	}
+
+	expected := info.BytesPerFrame * info.NumberOfFrames
+	if expected > 0 && len(pixelBytes) == expected {
+		return compress.UNCOMPRESSED, false
+	}
+	if len(pixelBytes) >= 8 && pixelBytes[0] == 0xFE && pixelBytes[1] == 0xFF &&
+		pixelBytes[2] == 0x00 && pixelBytes[3] == 0xE0 {
+		return sniffPixelCompression(pixelBytes), true
+	}
+	return compress.UNCOMPRESSED, false
+}
+
+// sniffPixelCompression guesses a codec from the first fragment, for data sets
+// carrying no transfer syntax. RLE frames begin with a parseable segment
+// header; JPEG of every flavor begins with the SOI marker.
+func sniffPixelCompression(pixelBytes []byte) compress.CompressionType {
+	encData, err := ds_parseEncapsulated(pixelBytes)
+	if err != nil || len(encData.Fragments) == 0 {
+		return compress.UNCOMPRESSED
+	}
+	first := encData.Fragments[0]
+	if len(first) >= 2 && first[0] == 0xFF && first[1] == 0xD8 {
+		return compress.JPEG
+	}
+	if compress.NewRLEDecompressor().CanDecompress(first) {
+		return compress.RLE
+	}
+	return compress.UNCOMPRESSED
+}
+
+// ds_parseEncapsulated parses encapsulated pixel data bytes without needing a
+// Dataset, so sniffing does not have to re-enter the element lookup.
+func ds_parseEncapsulated(pixelBytes []byte) (*compress.EncapsulatedData, error) {
+	return encaps.NewParser(bytes.NewReader(pixelBytes), true).ParseEncapsulatedData()
+}
+
+// decompressPixelFrame decodes one compressed frame into raw samples.
+func decompressPixelFrame(compression compress.CompressionType, fragment []byte, info *PixelDataInfo) ([]byte, error) {
+	// RLE needs the image layout: its segments are planar, one per byte of
+	// each sample, and interleaving them requires knowing how many of each.
+	if compression == compress.RLE {
+		return compress.NewRLEDecompressor().DecompressFrame(
+			fragment, info.SamplesPerPixel, info.BitsAllocated)
+	}
+
+	// Baseline JPEG is decodable with the standard library.
+	if compression == compress.JPEG {
+		return compress.NewJPEGDecompressor().Decompress(fragment)
+	}
+
+	// Everything else — JPEG-LS, JPEG 2000, JPEG Lossless — needs a decoder the
+	// caller supplies. The built-in entry points for those are placeholders
+	// that only describe the C library they would need.
+	decoder, err := compress.GetExternalRegistry().GetExternalDecoder(compression)
+	if err != nil {
+		return nil, fmt.Errorf("no decoder available for %s; supply one with "+
+			"compress.GetExternalRegistry().RegisterExternalDecoder: %w", compression, err)
+	}
+	return decoder.Decompress(fragment)
 }

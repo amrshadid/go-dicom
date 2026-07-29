@@ -18,6 +18,15 @@ type Dataset struct {
 	elements map[uint32]*dataelem.DataElement // Tag -> DataElement mapping
 	order    []uint32                         // Maintains insertion order
 	parent   *Dataset                         // Parent dataset (for sequences)
+
+	// transferSyntaxUID records how the data set was encoded, when the caller
+	// knows. It is not an element: (0002,0010) lives in the file meta header,
+	// which is not part of the data set, so a Dataset built from a file would
+	// otherwise have no way to learn how its own pixel data is compressed.
+	//
+	// Empty means unknown, which is the case for a Dataset assembled by hand.
+	// Pixel access falls back to inspecting the data when it is empty.
+	transferSyntaxUID string
 }
 
 // NewDataset creates a new empty DICOM dataset.
@@ -26,6 +35,26 @@ func NewDataset() *Dataset {
 		elements: make(map[uint32]*dataelem.DataElement),
 		order:    make([]uint32, 0),
 	}
+}
+
+// SetTransferSyntaxUID records how this data set was encoded.
+//
+// Readers set this from the file meta header. It matters for pixel data:
+// whether PixelData is raw or encapsulated, and which codec compressed it, are
+// properties of the transfer syntax and cannot be derived from the data set's
+// own elements.
+func (ds *Dataset) SetTransferSyntaxUID(uid string) {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	ds.transferSyntaxUID = uid
+}
+
+// TransferSyntaxUID returns the transfer syntax this data set was encoded with,
+// or an empty string if it is unknown.
+func (ds *Dataset) TransferSyntaxUID() string {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+	return ds.transferSyntaxUID
 }
 
 // Add adds a data element to the dataset.
