@@ -135,6 +135,13 @@ throughout.
 
 ### Changed
 
+- **The JPEG-LS, JPEG 2000, and JPEG Lossless errors no longer give advice that
+  does not work.** They named a C library and told the caller to rebuild with
+  `CGO_ENABLED=1`; there is no CGO implementation in this module, so following
+  the instruction produced the same error. The messages, and the installation
+  text `GetExternalCompressionStatus` returns, now say plainly that no decoder
+  is bundled and show how to register one. An example demonstrates it.
+
 - The README transfer syntax table separated data set support, pixel decoding,
   and network transfer into distinct columns. A compressed syntax marked
   "Read/Write" had implied its pixels were usable when only the data set parsed.

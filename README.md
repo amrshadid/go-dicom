@@ -515,9 +515,16 @@ To decode a syntax with no bundled decoder, register one:
 compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
 ```
 
-The JPEG-LS, JPEG 2000, and JPEG Lossless entry points are placeholders that
-return an error describing the codec they would need; there is no bundled
-implementation behind them.
+These three codecs are not implemented in this module, and there is no hidden
+CGO path that enables them — the error messages used to name a C library and
+tell you to rebuild with `CGO_ENABLED=1`, which changed nothing because there
+was no CGO implementation to enable. They now say plainly that a decoder must be
+supplied.
+
+Any type with `Decompress([]byte) ([]byte, error)` and `CanDecompress([]byte) bool`
+will do; `Dataset.PixelArray()` routes frames through it automatically once
+registered. `compress.GetExternalCompressionStatus()` reports which codecs
+currently have a decoder.
 
 ### Thread Safety
 
