@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 
 	"github.com/amrshadid/go-dicom/dataset"
 )
@@ -25,6 +26,20 @@ type SCP struct {
 	// assocSlots bounds concurrent associations when MaxAssociations > 0.
 	// Nil means unlimited.
 	assocSlots chan struct{}
+
+	// messageID numbers messages this SCP originates, which it does when a
+	// service requires it to send a request of its own — the N-EVENT-REPORT
+	// carrying a storage commitment result, for instance. Incremented
+	// atomically because associations are handled concurrently.
+	messageID atomic.Uint32
+}
+
+// nextMessageID returns the next message ID for a request this SCP originates.
+//
+// DICOM message IDs are 16-bit, so the counter is taken modulo 2^16. Starting
+// at 1 rather than 0 follows the convention used by the SCU side.
+func (s *SCP) nextMessageID() uint16 {
+	return uint16(s.messageID.Add(1) & 0xFFFF)
 }
 
 // NewSCP creates a new SCP with the given configuration.
@@ -845,7 +860,7 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
 	sopClassUID, _ := getUIValue(cmdDS, tagRequestedSOPClassUID)
-	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+	sopInstanceUID, _ := GetRequestedSOPInstanceUID(cmdDS)
 
 	req := &NGetRequest{
 		MessageID:            messageID,
@@ -877,7 +892,7 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
 	sopClassUID, _ := getUIValue(cmdDS, tagRequestedSOPClassUID)
-	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+	sopInstanceUID, _ := GetRequestedSOPInstanceUID(cmdDS)
 
 	var ds *dataset.Dataset
 	if HasDataSet(cmdDS) {
@@ -912,7 +927,7 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
 	sopClassUID, _ := getUIValue(cmdDS, tagRequestedSOPClassUID)
-	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+	sopInstanceUID, _ := GetRequestedSOPInstanceUID(cmdDS)
 	actionTypeID, _ := getUSValue(cmdDS, tagActionTypeID)
 
 	var ds *dataset.Dataset
@@ -932,6 +947,15 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 		DataSet:              ds,
 	}
 
+	// Storage Commitment is an N-ACTION with a service flow of its own: the
+	// response only acknowledges receipt, and the commitment itself follows as
+	// an N-EVENT-REPORT. Routing it here keeps handlers from having to decode
+	// the request data set and drive that second message themselves.
+	if sopClassUID == StorageCommitmentPushModelUID && actionTypeID == StorageCommitmentActionType {
+		s.handleStorageCommitment(ctx, assoc, handler, ctxID, messageID, sopClassUID, sopInstanceUID, ds)
+		return
+	}
+
 	resp, err := handler.HandleNAction(ctx, req)
 	status := StatusSuccess
 	if err != nil {
@@ -943,6 +967,115 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 	rspDS := BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, status)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+}
+
+// handleStorageCommitment answers a commitment request and then reports the
+// outcome (PS3.4 Annex J).
+//
+// The N-ACTION-RSP is sent first and means only "request received"; sending it
+// before the handler runs would be wrong, but so would making the requestor
+// wait for a decision that the standard says arrives separately. The handler
+// therefore decides first, the acknowledgement goes out, and the result follows
+// as an N-EVENT-REPORT on this same association.
+//
+// Reporting on a new association is also permitted and is what an archive that
+// commits slowly would do. That is the caller's to arrange: hold the request,
+// release, and use SCU.SendStorageCommitmentResult later.
+func (s *SCP) handleStorageCommitment(ctx context.Context, assoc *Association, handler Handler,
+	ctxID byte, messageID uint16, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) {
+
+	commitHandler, ok := handler.(StorageCommitmentProvider)
+	if !ok {
+		log.Printf("storage commitment requested but the handler does not provide it")
+		s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID,
+			StatusStorageCommitmentRefused)
+		return
+	}
+
+	req, err := ParseStorageCommitmentRequest(ds)
+	if err != nil {
+		log.Printf("storage commitment request could not be read: %v", err)
+		s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID,
+			StatusUnableToProcess)
+		return
+	}
+
+	result, err := commitHandler.HandleStorageCommitment(ctx, req)
+	if err != nil || result == nil {
+		if err != nil {
+			log.Printf("storage commitment handler failed: %v", err)
+		}
+		s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID,
+			StatusUnableToProcess)
+		return
+	}
+
+	// The Transaction UID is what lets the requestor match this result to its
+	// request, so it is echoed rather than trusted from the handler.
+	result.TransactionUID = req.TransactionUID
+
+	s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID, StatusSuccess)
+
+	if err := s.sendCommitmentReport(ctx, assoc, ctxID, sopClassUID, sopInstanceUID, result); err != nil {
+		log.Printf("failed to report storage commitment (%s): %v",
+			storageCommitmentSummary(result), err)
+	}
+}
+
+// replyNAction sends an N-ACTION-RSP with the given status.
+func (s *SCP) replyNAction(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID, sopInstanceUID string, status uint16) {
+
+	rspDS := BuildNActionRSP(messageID, sopClassUID, sopInstanceUID,
+		StorageCommitmentActionType, status)
+	rspBytes, _ := EncodeCommandDataset(rspDS)
+	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+}
+
+// sendCommitmentReport sends the N-EVENT-REPORT carrying the outcome and reads
+// the acknowledgement.
+func (s *SCP) sendCommitmentReport(ctx context.Context, assoc *Association, ctxID byte,
+	sopClassUID, sopInstanceUID string, result *StorageCommitmentResult) error {
+
+	ds, err := BuildStorageCommitmentResult(result)
+	if err != nil {
+		return err
+	}
+
+	messageID := s.nextMessageID()
+	cmdDS := BuildNEventReportRQ(messageID, sopClassUID, sopInstanceUID, result.EventTypeID(), true)
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return err
+	}
+	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
+		return err
+	}
+
+	dsBytes, err := EncodeDataset(ds, assoc.TransferSyntaxFor(ctxID))
+	if err != nil {
+		return err
+	}
+	if err := assoc.SendPData(ctx, ctxID, dsBytes, false); err != nil {
+		return err
+	}
+
+	// The requestor acknowledges with N-EVENT-REPORT-RSP. Reading it keeps the
+	// association in step; leaving it unread would make the next message read
+	// from this connection pick up a response to a message it did not send.
+	_, respData, _, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		return err
+	}
+	respDS, err := DecodeCommandDataset(respData)
+	if err != nil {
+		return err
+	}
+	if _, _, status, _ := ParseCommandDataset(respDS); status != StatusSuccess {
+		return NewPDUErrorf("STORAGE_COMMITMENT",
+			"the requestor rejected the commitment report with status 0x%04X", status)
+	}
+	return nil
 }
 
 func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Handler,
@@ -984,7 +1117,7 @@ func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Han
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
 	sopClassUID, _ := getUIValue(cmdDS, tagRequestedSOPClassUID)
-	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+	sopInstanceUID, _ := GetRequestedSOPInstanceUID(cmdDS)
 
 	req := &NDeleteRequest{
 		MessageID:            messageID,
@@ -1027,6 +1160,10 @@ func defaultSupportedAbstractSyntaxes() map[string]bool {
 		PatientStudyOnlyQueryRetrieveFind: true,
 		PatientStudyOnlyQueryRetrieveMove: true,
 		PatientStudyOnlyQueryRetrieveGet:  true,
+
+		// Offered so a requestor can negotiate it; requests are refused unless
+		// the handler implements StorageCommitmentProvider.
+		StorageCommitmentPushModelUID: true,
 	}
 }
 

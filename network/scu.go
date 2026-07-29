@@ -66,6 +66,11 @@ func (s *SCU) defaultContexts() []PresentationContextItem {
 	storageCtx := DefaultStorageContexts()
 	qrCtx := DefaultQueryRetrieveContexts()
 
+	// Storage Commitment travels with storage: a requestor asks for commitment
+	// on instances it has just stored, and proposing it here saves the caller
+	// from hand-building contexts for the common case.
+	commitCtx := StorageCommitmentPresentationContexts()
+
 	// Re-number IDs to be unique odd numbers
 	id := byte(1)
 	for i := range contexts {
@@ -81,8 +86,14 @@ func (s *SCU) defaultContexts() []PresentationContextItem {
 		id += 2
 	}
 
+	for i := range commitCtx {
+		commitCtx[i].ID = id
+		id += 2
+	}
+
 	contexts = append(contexts, storageCtx...)
 	contexts = append(contexts, qrCtx...)
+	contexts = append(contexts, commitCtx...)
 	return contexts
 }
 

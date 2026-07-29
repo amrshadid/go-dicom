@@ -66,17 +66,24 @@ const (
 
 // Command tag constants (Group 0000).
 var (
-	tagCommandGroupLength             = tag.New(0x0000, 0x0000)
-	tagAffectedSOPClassUID            = tag.New(0x0000, 0x0002)
-	tagRequestedSOPClassUID           = tag.New(0x0000, 0x0003)
-	tagCommandField                   = tag.New(0x0000, 0x0100)
-	tagMessageID                      = tag.New(0x0000, 0x0110)
-	tagMessageIDBeingRespondedTo      = tag.New(0x0000, 0x0120)
-	tagMoveDestination                = tag.New(0x0000, 0x0600)
-	tagPriority                       = tag.New(0x0000, 0x0700)
-	tagCommandDataSetType             = tag.New(0x0000, 0x0800)
-	tagStatus                         = tag.New(0x0000, 0x0900)
-	tagAffectedSOPInstanceUID         = tag.New(0x0000, 0x1000)
+	tagCommandGroupLength        = tag.New(0x0000, 0x0000)
+	tagAffectedSOPClassUID       = tag.New(0x0000, 0x0002)
+	tagRequestedSOPClassUID      = tag.New(0x0000, 0x0003)
+	tagCommandField              = tag.New(0x0000, 0x0100)
+	tagMessageID                 = tag.New(0x0000, 0x0110)
+	tagMessageIDBeingRespondedTo = tag.New(0x0000, 0x0120)
+	tagMoveDestination           = tag.New(0x0000, 0x0600)
+	tagPriority                  = tag.New(0x0000, 0x0700)
+	tagCommandDataSetType        = tag.New(0x0000, 0x0800)
+	tagStatus                    = tag.New(0x0000, 0x0900)
+	tagAffectedSOPInstanceUID    = tag.New(0x0000, 0x1000)
+
+	// Requested SOP Instance UID. N-GET, N-SET, N-ACTION and N-DELETE name
+	// their target with this, not with Affected SOP Instance UID — the
+	// "affected" pair is for messages that create or report on an instance
+	// (PS3.7 Table 10.1-4 and neighbors). Sending the wrong one produced a
+	// command with no target at all as far as any other implementation was
+	tagRequestedSOPInstanceUID        = tag.New(0x0000, 0x1001)
 	tagNumberOfRemainingSuboperations = tag.New(0x0000, 0x1020)
 	tagNumberOfCompletedSuboperations = tag.New(0x0000, 0x1021)
 	tagNumberOfFailedSuboperations    = tag.New(0x0000, 0x1022)
@@ -450,6 +457,20 @@ func GetAffectedSOPClassUID(ds *dataset.Dataset) (string, error) {
 
 // GetAffectedSOPInstanceUID extracts the Affected SOP Instance UID from a command dataset.
 func GetAffectedSOPInstanceUID(ds *dataset.Dataset) (string, error) {
+	return getUIValue(ds, tagAffectedSOPInstanceUID)
+}
+
+// GetRequestedSOPInstanceUID reads (0000,1001) from a command data set, falling
+// back to Affected SOP Instance UID.
+//
+// The fallback is for peers that make the mistake this library used to make:
+// N-GET, N-SET, N-ACTION and N-DELETE name their target with Requested SOP
+// Instance UID, but an implementation that sends Affected instead is otherwise
+// well-formed, and refusing it gains nothing.
+func GetRequestedSOPInstanceUID(ds *dataset.Dataset) (string, error) {
+	if uid, err := getUIValue(ds, tagRequestedSOPInstanceUID); err == nil && uid != "" {
+		return uid, nil
+	}
 	return getUIValue(ds, tagAffectedSOPInstanceUID)
 }
 

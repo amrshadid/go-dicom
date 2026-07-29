@@ -96,16 +96,17 @@ func (c *CLI) ShowHelp() {
 	}
 
 	fmt.Printf("\n  NETWORK COMMANDS:\n")
-	netCommands := []string{"echoscu", "echoscp", "storescu", "storescp", "findscu", "movescu", "getscu", "qrscp"}
+	netCommands := []string{"echoscu", "echoscp", "storescu", "storescp", "findscu", "movescu", "getscu", "commitscu", "qrscp"}
 	netDescriptions := map[string]string{
-		"echoscu":  "DICOM Echo SCU — verification (ping)",
-		"echoscp":  "DICOM Echo SCP — verification server",
-		"storescu": "DICOM Store SCU — send DICOM files (.dcm, .ima, etc.)",
-		"storescp": "DICOM Store SCP — receive and save DICOM files",
-		"findscu":  "DICOM Find SCU — query for patients/studies/series",
-		"movescu":  "DICOM Move SCU — retrieve studies to a destination",
-		"getscu":   "DICOM Get SCU — retrieve on same association",
-		"qrscp":    "DICOM Q/R SCP — combined store + query/retrieve server",
+		"echoscu":   "DICOM Echo SCU — verification (ping)",
+		"echoscp":   "DICOM Echo SCP — verification server",
+		"storescu":  "DICOM Store SCU — send DICOM files (.dcm, .ima, etc.)",
+		"storescp":  "DICOM Store SCP — receive and save DICOM files",
+		"findscu":   "DICOM Find SCU — query for patients/studies/series",
+		"movescu":   "DICOM Move SCU — retrieve studies to a destination",
+		"getscu":    "DICOM Get SCU — retrieve on same association",
+		"commitscu": "DICOM Storage Commitment SCU — ask a peer to take responsibility",
+		"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
 	}
 	for _, cmdName := range netCommands {
 		if desc, ok := netDescriptions[cmdName]; ok {

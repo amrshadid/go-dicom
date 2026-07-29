@@ -167,7 +167,7 @@ func BuildNGetRQ(messageID uint16, sopClassUID, sopInstanceUID string) *dataset.
 	addUSElement(ds, tagCommandField, CommandNGetRQ)
 	addUSElement(ds, tagMessageID, messageID)
 	addUSElement(ds, tagCommandDataSetType, CommandDataSetTypeNull)
-	addUIElement(ds, tagAffectedSOPInstanceUID, sopInstanceUID)
+	addUIElement(ds, tagRequestedSOPInstanceUID, sopInstanceUID)
 	return ds
 }
 
@@ -194,7 +194,7 @@ func BuildNSetRQ(messageID uint16, sopClassUID, sopInstanceUID string) *dataset.
 	addUSElement(ds, tagCommandField, CommandNSetRQ)
 	addUSElement(ds, tagMessageID, messageID)
 	addUSElement(ds, tagCommandDataSetType, CommandDataSetTypePresent)
-	addUIElement(ds, tagAffectedSOPInstanceUID, sopInstanceUID)
+	addUIElement(ds, tagRequestedSOPInstanceUID, sopInstanceUID)
 	return ds
 }
 
@@ -221,7 +221,7 @@ func BuildNActionRQ(messageID uint16, sopClassUID, sopInstanceUID string, action
 		dsType = CommandDataSetTypePresent
 	}
 	addUSElement(ds, tagCommandDataSetType, dsType)
-	addUIElement(ds, tagAffectedSOPInstanceUID, sopInstanceUID)
+	addUIElement(ds, tagRequestedSOPInstanceUID, sopInstanceUID)
 	addUSElement(ds, tagActionTypeID, actionTypeID)
 	return ds
 }
@@ -275,7 +275,7 @@ func BuildNDeleteRQ(messageID uint16, sopClassUID, sopInstanceUID string) *datas
 	addUSElement(ds, tagCommandField, CommandNDeleteRQ)
 	addUSElement(ds, tagMessageID, messageID)
 	addUSElement(ds, tagCommandDataSetType, CommandDataSetTypeNull)
-	addUIElement(ds, tagAffectedSOPInstanceUID, sopInstanceUID)
+	addUIElement(ds, tagRequestedSOPInstanceUID, sopInstanceUID)
 	return ds
 }
 

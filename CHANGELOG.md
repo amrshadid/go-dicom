@@ -13,6 +13,16 @@ throughout.
 
 ### Fixed
 
+- **Four N-DIMSE requests named their target with the wrong element.** N-GET,
+  N-SET, N-ACTION and N-DELETE identify what they act on with Requested SOP
+  Instance UID `(0000,1001)`; this library sent Affected SOP Instance UID
+  `(0000,1000)` — the element for messages that create or report on an instance
+  — and `(0000,1001)` did not exist in the codebase at all. Its own SCP read
+  back the same wrong tag, so every test passed while no other implementation
+  could see a target: pynetdicom answered a well-formed N-ACTION with "Received
+  unexpected N-ACTION service message" and aborted the association. Found by
+  running against pynetdicom, which now happens in CI.
+
 - **Multi-frame images reported a single frame.** `NumberOfFrames` is IS, and
   PS3.5 §6.2 pads a value to an even length with a trailing space, so `"2 "`
   failed `strconv.Atoi` and the count silently fell back to its default of 1.
@@ -58,6 +68,31 @@ throughout.
   tool raised its own Go requirement.
 
 ### Added
+
+- **Storage Commitment (PS3.4 Annex J)**, as both SCU and SCP. An SCU asks a
+  peer to take permanent responsibility for instances it has already sent, so it
+  can delete its own copies:
+
+      resp, err := scu.RequestStorageCommitment(ctx, &network.StorageCommitmentRequest{
+          TransactionUID: network.GenerateUID(),
+          Instances:      refs,
+      })
+      result, err := scu.ReceiveStorageCommitmentResult(ctx)
+
+  An SCP provides it by implementing `StorageCommitmentProvider`, or with the
+  `StorageCommitmentHandler` convenience type. A handler that does not implement
+  it causes requests to be **refused** rather than silently accepted — accepting
+  tells the requestor it may delete its only copy.
+
+  The event type is derived from the result rather than passed in, so a report
+  cannot claim everything succeeded while listing failures.
+
+  *Verified against pynetdicom*, which reads the transaction UID, action type,
+  and every instance reference. That check runs in CI.
+
+- **`commitscu` CLI command**, and **`network.GenerateUID()`** for minting UIDs
+  under the UUID-derived arc (`2.25`, ITU-T X.667), which needs no registered
+  root.
 
 - **Compressed frames can be extracted.** `filereader` discarded the Basic
   Offset Table and item headers of encapsulated Pixel Data and concatenated the
