@@ -353,6 +353,64 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Storage Commitment: go-dicom SCU -> pynetdicom SCP.
+#
+# This exchange is what exposed go-dicom naming its N-ACTION target with
+# Affected SOP Instance UID (0000,1000) instead of Requested (0000,1001). Its
+# own SCP read the same wrong tag, so every internal test passed while
+# pynetdicom answered "Received unexpected N-ACTION service message" and
+# aborted. The same defect was in N-GET, N-SET and N-DELETE.
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "Storage Commitment: go-dicom -> pynetdicom"
+
+  commit_scp_py="$WORKDIR/commit_scp.py"
+  cat > "$commit_scp_py" <<'PYEOF'
+import sys
+from pynetdicom import AE, evt, ALL_TRANSFER_SYNTAXES
+from pynetdicom.sop_class import StorageCommitmentPushModel
+
+def handle_action(event):
+    ds = event.action_information
+    print("TRANSACTION:", ds.TransactionUID, flush=True)
+    print("ACTION_TYPE:", event.action_type, flush=True)
+    for item in ds.ReferencedSOPSequence:
+        print("INSTANCE:", item.ReferencedSOPClassUID, item.ReferencedSOPInstanceUID, flush=True)
+    return 0x0000, None
+
+ae = AE(ae_title="PYCOMMIT")
+ae.add_supported_context(StorageCommitmentPushModel, ALL_TRANSFER_SYNTAXES)
+ae.start_server(("127.0.0.1", int(sys.argv[1])), evt_handlers=[(evt.EVT_N_ACTION, handle_action)])
+PYEOF
+
+  commit_port=11701
+  "$PYNETDICOM_BIN/python" "$commit_scp_py" "$commit_port" > "$WORKDIR/commit_scp.log" 2>&1 &
+  commit_pid=$!
+
+  if wait_for_port "$commit_port"; then
+    if "$GODICOM" commitscu -aec PYCOMMIT \
+        -transaction 1.2.826.0.1.3680043.8.498.999 \
+        -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.111 \
+        "127.0.0.1:$commit_port" > "$WORKDIR/commit_scu.log" 2>&1; then
+
+      if grep -q "TRANSACTION: 1.2.826.0.1.3680043.8.498.999" "$WORKDIR/commit_scp.log" &&
+         grep -q "ACTION_TYPE: 1" "$WORKDIR/commit_scp.log" &&
+         grep -q "INSTANCE: 1.2.840.10008.5.1.4.1.1.2 1.2.3.111" "$WORKDIR/commit_scp.log"; then
+        pass "N-ACTION storage commitment — pynetdicom read the transaction and instances"
+        RAN_ANY=1
+      else
+        fail "pynetdicom did not read the commitment request correctly"
+        sed -n '1,20p' "$WORKDIR/commit_scp.log" >&2
+      fi
+    else
+      skip "go-dicom has no commitscu command; skipping the storage commitment check"
+    fi
+  else
+    fail "pynetdicom storage commitment SCP did not start listening"
+  fi
+  stop_server "$commit_pid"
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2

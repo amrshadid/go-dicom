@@ -212,6 +212,9 @@ go build -o dicom .
 # Retrieve studies to a destination
 ./dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 
+# Ask an archive to take responsibility for instances you have sent
+./dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
+
 # Get help
 ./dicom -h
 ```
@@ -302,6 +305,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |
 | Storage SOP Classes | 100+ | 80+ | CT, MR, US, PET, RT, XR, SR, waveforms, encapsulated docs |
 | Transfer Syntax Support | 15+ | 15 | All standard + compressed syntaxes |
+| Storage Commitment | Yes | Yes | N-ACTION request, N-EVENT-REPORT result |
 | Query/Retrieve Models | Patient/Study Root | Yes | Find, Move, Get for both models |
 | Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |
 | MPPS | Yes | Yes | Via N-CREATE/N-SET |
