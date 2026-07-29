@@ -44,6 +44,22 @@ throughout.
 
 ### Added
 
+- **Compressed frames can be extracted.** `filereader` discarded the Basic
+  Offset Table and item headers of encapsulated Pixel Data and concatenated the
+  fragment payloads, on the reasoning that frame boundaries would be recovered
+  later. They could not be — the `encaps` package recovers them by parsing that
+  structure, so `ExtractEncapsulatedFrames` failed with "failed to parse basic
+  offset table" on every compressed file, and multi-frame images could not be
+  split at all. `PixelData` now holds the encapsulation exactly as it appears in
+  the file, matching what pydicom exposes.
+
+  *Verified against pydicom:* `MR_small_RLE.dcm` gives one 6108-byte fragment
+  from 6128 bytes of pixel data, and `SC_rgb_rle_2frame.dcm` splits into two
+  664-byte fragments with a two-entry offset table — identical in both cases.
+
+  This does not decode anything: `PixelArray()` still cannot decompress. It is
+  the step that had to come first.
+
 - **Deflated Explicit VR Little Endian files can be read.** `filereader` never
   inflated, so `image_dfl.dcm` parsed to **0 elements**; it now parses to 29,
   matching pydicom, with its pixel data decoding correctly. Writing is *not*
@@ -82,10 +98,11 @@ throughout.
 
 ### Known limitations
 
-- No compressed pixel data decodes, RLE included. The reader discards the
-  encapsulation structure before anything can split frames, and the RLE decoder
-  is itself incorrect. Compressed instances still parse, store, and transfer
-  with their pixel data intact as opaque bytes.
+- No compressed pixel data decodes, RLE included. Frames can now be separated,
+  but the RLE decoder itself is still wrong — it returns 8736 bytes where 8192
+  is correct — and `PixelArray()` does not yet route compressed data through a
+  decoder. Compressed instances parse, store, and transfer with their pixel data
+  intact.
 - Deflated files can be read but not written.
 - Handlers still cannot observe a C-CANCEL and stop early; that needs streaming
   handler signatures.

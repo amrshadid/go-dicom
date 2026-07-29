@@ -495,6 +495,20 @@ syntax parse, store, and transfer with their pixel data intact as opaque bytes,
 but `Dataset.PixelArray()` cannot decompress them. This affects RLE as well,
 whose decoder is present but does not yet produce correct output.
 
+**Compressed frames can be extracted**, which is the step before decoding. For a
+compressed instance, `PixelData` holds the encapsulation exactly as it appears in
+the file — the Basic Offset Table and each fragment with its `(FFFE,E000)`
+header, the same bytes pydicom exposes — so frames can be separated and handed to
+a decoder of your choosing:
+
+```go
+frames, err := ds.ExtractEncapsulatedFrames() // fragments and offset table
+frame, err := ds.GetEncapsulatedFrame(0)      // one frame, still compressed
+```
+
+Multi-frame compressed images split correctly; verified against pydicom on
+`SC_rgb_rle_2frame.dcm`.
+
 To decode compressed pixels today, register a decoder:
 
 ```go

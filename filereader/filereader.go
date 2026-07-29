@@ -3,6 +3,7 @@ package filereader
 import (
 	"bytes"
 	"compress/flate"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strings"
@@ -586,25 +587,37 @@ func (dfr *DCMFileReader) readSequenceItem(explicitVR bool, depth int, declaredL
 	}
 }
 
-// readEncapsulatedValue reads the fragments of an undefined-length,
-// non-sequence element (encapsulated Pixel Data) and returns them
-// concatenated. The Basic Offset Table, when present, is the first item and is
-// skipped since frame boundaries are recovered by the encaps package.
+// readEncapsulatedValue reads an undefined-length, non-sequence element
+// (encapsulated Pixel Data) and returns the encapsulation exactly as it appears
+// in the file: the Basic Offset Table item, every fragment item, and each of
+// their (FFFE,E000) headers.
+//
+// An earlier version skipped the offset table and concatenated the fragment
+// payloads, on the stated reasoning that frame boundaries would be recovered by
+// the encaps package. They could not be. That package parses the item
+// structure, and by the time it saw the value there was no structure left —
+// ExtractEncapsulatedFrames failed with "failed to parse basic offset table"
+// because there was no longer a table to parse, and multi-frame compressed
+// images could not be split at all.
+//
+// Keeping the encapsulation also matches what pydicom exposes as PixelData for
+// a compressed instance, so a value read here means the same thing as the value
+// a user would see there.
 func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, error) {
-	var value []byte
-	first := true
+	var raw bytes.Buffer
 
 	for {
 		marker, err := dfr.readItemHeader()
 		if err != nil {
 			if err == io.EOF {
-				return value, nil
+				return raw.Bytes(), nil
 			}
 			return nil, err
 		}
 
 		if marker.tag == tag.SequenceDelimiterTag {
-			return value, nil
+			// The delimiter closes the encapsulation and is not part of it.
+			return raw.Bytes(), nil
 		}
 		if marker.tag != tag.ItemTag {
 			return nil, fmt.Errorf("unexpected tag %s in encapsulated data (expected item or delimiter)",
@@ -613,6 +626,8 @@ func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, error) {
 		if marker.length == UndefinedLength {
 			return nil, fmt.Errorf("encapsulated data item has undefined length")
 		}
+
+		writeItemHeader(&raw, dfr.reader.GetByteOrder(), marker)
 
 		if marker.length > 0 {
 			if err := dfr.checkValueLength(marker.length); err != nil {
@@ -624,14 +639,31 @@ func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, error) {
 					marker.length, err)
 			}
 			dfr.position += int64(marker.length)
-
-			// The first item is the Basic Offset Table, not pixel data.
-			if !first {
-				value = append(value, fragment...)
-			}
+			raw.Write(fragment)
 		}
-		first = false
 	}
+}
+
+// writeItemHeader re-serializes an item header into buf.
+//
+// The header is rebuilt rather than captured because the reader is consumed
+// forward and may not be seekable. Using the reader's own byte order is what
+// makes the result byte-identical to the file: readItemHeader decoded the tag
+// and length with that order, so encoding them back with it round-trips.
+func writeItemHeader(buf *bytes.Buffer, order filebase.ByteOrder, marker *itemHeader) {
+	var b [8]byte
+	group, element := marker.tag.Group(), marker.tag.Element()
+
+	if order == filebase.BigEndian {
+		binary.BigEndian.PutUint16(b[0:2], group)
+		binary.BigEndian.PutUint16(b[2:4], element)
+		binary.BigEndian.PutUint32(b[4:8], marker.length)
+	} else {
+		binary.LittleEndian.PutUint16(b[0:2], group)
+		binary.LittleEndian.PutUint16(b[2:4], element)
+		binary.LittleEndian.PutUint32(b[4:8], marker.length)
+	}
+	buf.Write(b[:])
 }
 
 // isSequenceVR reports whether a VR denotes a Sequence of Items.
