@@ -1,6 +1,8 @@
 package filereader
 
 import (
+	"bytes"
+	"compress/flate"
 	"fmt"
 	"io"
 	"strings"
@@ -863,6 +865,21 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
 
+	// Under the Deflated syntax the meta header is uncompressed but everything
+	// after it is raw DEFLATE. Inflate the remainder and continue from that,
+	// since the element parser reads a plain data set.
+	if ts == DeflatedExplicitVRLittleEndianUID {
+		inflated, err := inflateRemainder(reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inflate deflated data set: %w", err)
+		}
+		reader = filebase.NewFileReader(bytes.NewReader(inflated))
+		dfr.reader = reader
+		// Offsets now refer to the inflated data set, which begins at zero.
+		dfr.position = 0
+		dfr.streamSizeKnown = false
+	}
+
 	if dicomFile.IsLittleEndian {
 		reader.SetByteOrder(filebase.LittleEndian)
 	} else {
@@ -913,6 +930,35 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 
 	return dicomFile, nil
+}
+
+// DeflatedExplicitVRLittleEndianUID is the transfer syntax whose data set is
+// DEFLATE-compressed after the file meta header (PS3.5 Annex A.5).
+const DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
+
+// MaxInflatedDatasetSize bounds how far a deflated data set may expand.
+//
+// DEFLATE reaches ratios above 1000:1 on repetitive input, so a small file can
+// otherwise expand without limit. 256 MiB is far above any legitimate DICOM
+// data set while keeping a hostile one cheap to reject.
+const MaxInflatedDatasetSize int64 = 256 << 20
+
+// inflateRemainder reads everything left in the stream and inflates it,
+// refusing input that expands past MaxInflatedDatasetSize.
+func inflateRemainder(reader filebase.Reader) ([]byte, error) {
+	zr := flate.NewReader(reader)
+	defer zr.Close()
+
+	// Read one byte past the limit: if it materializes, the input expands
+	// beyond what is allowed and the rest is not worth decompressing.
+	out, err := io.ReadAll(io.LimitReader(zr, MaxInflatedDatasetSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > MaxInflatedDatasetSize {
+		return nil, fmt.Errorf("data set expands beyond the %d byte limit", MaxInflatedDatasetSize)
+	}
+	return out, nil
 }
 
 // determineTransferSyntax determines the VR type and byte order from a transfer syntax UID.
