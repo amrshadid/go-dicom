@@ -260,9 +260,18 @@ func TestUndefinedLengthDoesNotAllocate(t *testing.T) {
 	if !elem.UndefinedLength {
 		t.Error("UndefinedLength = false, want true")
 	}
-	// The Basic Offset Table is skipped; only the fragment payload is kept.
-	if !bytes.Equal(elem.Value, []byte{0xAA, 0xBB, 0xCC, 0xDD}) {
-		t.Errorf("value = % x, want AA BB CC DD", elem.Value)
+
+	// The encapsulation is kept intact: the offset table item, the fragment
+	// item, and both of their headers. This assertion previously expected only
+	// the fragment payload, which was the behavior that made frame boundaries
+	// unrecoverable — see readEncapsulatedValue.
+	want := []byte{
+		0xFE, 0xFF, 0x00, 0xE0, 0x00, 0x00, 0x00, 0x00, // empty BOT item
+		0xFE, 0xFF, 0x00, 0xE0, 0x04, 0x00, 0x00, 0x00, // fragment item, 4 bytes
+		0xAA, 0xBB, 0xCC, 0xDD,
+	}
+	if !bytes.Equal(elem.Value, want) {
+		t.Errorf("value  = % X\nwant   = % X", elem.Value, want)
 	}
 }
 
