@@ -99,10 +99,17 @@ throughout.
   syntax; the meta header is not part of the data set, so a `Dataset` had no way
   to learn how its own pixels were encoded.
 
-- **Deflated Explicit VR Little Endian files can be read.** `filereader` never
-  inflated, so `image_dfl.dcm` parsed to **0 elements**; it now parses to 29,
-  matching pydicom, with its pixel data decoding correctly. Writing is *not*
-  supported — `filewriter` does not deflate, and the README says so.
+- **Deflated Explicit VR Little Endian files can be read and written.**
+  `filereader` never inflated, so `image_dfl.dcm` parsed to **0 elements**; it
+  now parses to 29, matching pydicom, with its pixel data decoding correctly.
+
+  Writing was equally broken in the other direction: `filewriter` ignored the
+  transfer syntax and wrote an uncompressed body, so a file declaring
+  `1.2.840.10008.1.2.1.99` could be read by nothing — including this library,
+  whose reader inflates on the strength of that declaration and failed with
+  "flate: corrupt input before offset 5". *Verified:* a file written this way is
+  read back by **pydicom** with matching element values and identical pixel
+  data.
 - **Patient/Study Only query/retrieve information model**
   (`1.2.840.10008.5.1.4.1.2.3.x`). Retired in the current standard but still the
   only model some archives offer. Added to the SCP's default contexts and to the
@@ -145,7 +152,6 @@ throughout.
 - `PixelArray` flattens color samples into the column dimension, so a 100x100
   RGB frame is reported as 100x300 rather than 100x100x3. The values and their
   order are correct; the shape is not.
-- Deflated files can be read but not written.
 - Handlers still cannot observe a C-CANCEL and stop early; that needs streaming
   handler signatures.
 

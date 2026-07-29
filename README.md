@@ -474,7 +474,7 @@ which is enough for an archive or a router, and not enough for a viewer.
 | Implicit VR Little Endian | Read/Write | Yes | Yes |
 | Explicit VR Little Endian | Read/Write | Yes | Yes |
 | Explicit VR Big Endian | Read/Write | Yes | Yes |
-| Deflated Explicit VR LE | Read | Yes | Yes |
+| Deflated Explicit VR LE | Read/Write | Yes | Yes |
 | RLE Lossless | Read/Write | **Yes** | Yes |
 | JPEG Baseline | Read/Write | **No** | Yes |
 | JPEG Extended | Read/Write | **No** | Yes |
@@ -482,13 +482,9 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG-LS Lossless / Near-Lossless | Read/Write | **No** | Yes |
 | JPEG 2000 Lossless / Lossy | Read/Write | **No** | Yes |
 
-Deflated is read-only as a *file* syntax: `filereader` inflates the data set, but
-`filewriter` does not deflate, so writing a file that declares
-`1.2.840.10008.1.2.1.99` produces one nothing can read. Over the network the
-syntax works in both directions — the association path compresses and
-decompresses. Values in an Explicit VR Big Endian file are normalised to little
-endian while parsing and converted back on write, so byte order never reaches
-code above `filereader`.
+Values in an Explicit VR Big Endian file are normalised to little endian while
+parsing and converted back on write, so byte order never reaches code above
+`filereader`.
 
 **RLE Lossless decodes.** `Dataset.PixelArray()` decompresses RLE pixel data,
 single- and multi-frame, grayscale and color. Verified against pydicom on its
