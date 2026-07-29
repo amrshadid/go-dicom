@@ -38,9 +38,12 @@ jobs:
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.24'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
-          file: ./coverage.out
+          # The input is `files`, plural. `file` was silently ignored, leaving
+          # codecov to discover the report by scanning instead of being told
+          # where it is.
+          files: ./coverage.out
           flags: unittests
           name: codecov-umbrella
 
