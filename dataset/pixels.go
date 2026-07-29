@@ -104,6 +104,12 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 }
 
 // PixelArray returns the pixel data as a multi-dimensional array interface.
+//
+// Color samples are flattened into the column dimension: a 100x100 RGB frame
+// comes back as 100 rows of 300 values, with each pixel's samples adjacent.
+// That differs from PixelDataShape, which reports color data as four
+// dimensions. Use PixelArrayBySample for that shape.
+//
 // The return type depends on BitsAllocated:
 //   - For 8-bit: returns [][][]uint8 (frames, rows, cols) for grayscale or [][][][][]uint8 (frames, rows, cols, samples)
 //   - For 16-bit: returns [][][]uint16 (frames, rows, cols) for grayscale
@@ -701,4 +707,99 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 			"compress.GetExternalRegistry().RegisterExternalDecoder: %w", compression, err)
 	}
 	return decoder.Decompress(fragment)
+}
+
+// PixelArrayBySample returns pixel data with color samples in their own
+// dimension, matching the shape PixelDataShape reports.
+//
+// For multi-sample data the result is [frames][rows][columns][samples]; for
+// single-sample data it is [frames][rows][columns], the same as PixelArray.
+// The concrete type follows BitsAllocated as it does there.
+//
+// This exists because PixelArray flattens samples into the column dimension: a
+// 100x100 RGB frame comes back from it as 100 rows of 300 values, R, G and B
+// adjacent. Those values and their order are correct, and code that indexes
+// them accordingly works — but the shape contradicts PixelDataShape, which has
+// always reported four dimensions for color data. Changing PixelArray would
+// break every caller that type-switches on [][][]uint8, so the honest shape is
+// offered alongside rather than in place of it.
+func (ds *Dataset) PixelArrayBySample() (interface{}, error) {
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	if info.SamplesPerPixel <= 1 {
+		return ds.PixelArray()
+	}
+
+	pixelBytes, err := ds.pixelBytesForDecoding(info)
+	if err != nil {
+		return nil, err
+	}
+
+	switch info.BitsAllocated {
+	case 8:
+		return reshapeBySample(pixelBytes, info, func(b []byte) uint8 { return b[0] }, 1)
+	case 16:
+		return reshapeBySample16(pixelBytes, info)
+	default:
+		return nil, fmt.Errorf("unsupported bit depth for per-sample access: %d", info.BitsAllocated)
+	}
+}
+
+// reshapeBySample splits 8-bit pixel data into [frames][rows][columns][samples].
+func reshapeBySample(data []byte, info *PixelDataInfo, get func([]byte) uint8, width int) ([][][][]uint8, error) {
+	need := info.NumberOfFrames * info.Rows * info.Columns * info.SamplesPerPixel * width
+	if len(data) < need {
+		return nil, fmt.Errorf("pixel data holds %d bytes, need %d for %d frames of %dx%d with %d samples",
+			len(data), need, info.NumberOfFrames, info.Rows, info.Columns, info.SamplesPerPixel)
+	}
+
+	out := make([][][][]uint8, info.NumberOfFrames)
+	offset := 0
+	for f := range out {
+		out[f] = make([][][]uint8, info.Rows)
+		for r := range out[f] {
+			out[f][r] = make([][]uint8, info.Columns)
+			for c := range out[f][r] {
+				samples := make([]uint8, info.SamplesPerPixel)
+				for s := range samples {
+					samples[s] = get(data[offset:])
+					offset += width
+				}
+				out[f][r][c] = samples
+			}
+		}
+	}
+	return out, nil
+}
+
+// reshapeBySample16 splits 16-bit pixel data into [frames][rows][columns][samples].
+func reshapeBySample16(data []byte, info *PixelDataInfo) ([][][][]uint16, error) {
+	need := info.NumberOfFrames * info.Rows * info.Columns * info.SamplesPerPixel * 2
+	if len(data) < need {
+		return nil, fmt.Errorf("pixel data holds %d bytes, need %d for %d frames of %dx%d with %d samples",
+			len(data), need, info.NumberOfFrames, info.Rows, info.Columns, info.SamplesPerPixel)
+	}
+
+	out := make([][][][]uint16, info.NumberOfFrames)
+	offset := 0
+	for f := range out {
+		out[f] = make([][][]uint16, info.Rows)
+		for r := range out[f] {
+			out[f][r] = make([][]uint16, info.Columns)
+			for c := range out[f][r] {
+				samples := make([]uint16, info.SamplesPerPixel)
+				for s := range samples {
+					// Values reach here little endian: filereader normalizes
+					// big endian files while parsing.
+					samples[s] = binary.LittleEndian.Uint16(data[offset:])
+					offset += 2
+				}
+				out[f][r][c] = samples
+			}
+		}
+	}
+	return out, nil
 }
