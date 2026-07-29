@@ -343,8 +343,18 @@ func ValidateUID(uid string) error {
 	if !reUI.MatchString(uid) {
 		return fmt.Errorf("invalid UID format: %s", uid)
 	}
+	// PS3.5 §9.1 caps a UID at 64 characters. The format alone was checked, so
+	// a longer one passed — and a peer holding to the limit rejects the whole
+	// object rather than the one attribute.
+	if len(uid) > MaxUIDLength {
+		return fmt.Errorf("UID is %d characters, exceeding the %d permitted: %s",
+			len(uid), MaxUIDLength, uid)
+	}
 	return nil
 }
+
+// MaxUIDLength is the longest a UID may be (PS3.5 §9.1).
+const MaxUIDLength = 64
 
 // GetVRMetadata returns metadata for a VR code.
 func GetVRMetadata(vrCode string) (VRMetadata, error) {
