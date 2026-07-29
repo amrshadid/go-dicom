@@ -111,7 +111,13 @@ func TestRLEDecompressor(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result, err := decompressor.Decompress(test.input)
+			// The inputs above are bare PackBits streams. A DICOM RLE frame is
+			// a 64-byte segment header followed by such streams, so each is
+			// wrapped in a single-segment frame here. These cases previously
+			// passed the bare stream, which is what the decompressor expected
+			// before it read the header at all — decoder and tests agreed on a
+			// format no DICOM file uses.
+			result, err := decompressor.Decompress(rleFrame(test.input))
 			if err != nil {
 				t.Fatalf("Decompress failed: %v", err)
 			}
