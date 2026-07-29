@@ -75,7 +75,18 @@ advisory:
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file on disk |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
+| `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
 | Element length verification | Every element | An element declaring more bytes than the stream holds |
+
+The two inflate bounds work together, and the second exists because the first is
+not enough on its own. An absolute ceiling lets an attacker choose the cost of
+the attack: a 5 KB file was permitted to allocate 256 MiB before being rejected,
+and since `io.ReadAll` grows its buffer by doubling, the real peak was close to
+twice that — roughly a 50,000x amplification from a file that costs nothing to
+send. Scaling the allowance to the compressed size ties the cost of rejection to
+the effort of construction. The 8 MiB floor keeps that safe for legitimate
+files: DEFLATE reaches its theoretical maximum ratio on genuinely blank medical
+images, so a ratio alone would reject an all-black frame.
 
 The element length check applies to every element rather than only large ones.
 An earlier version skipped it below 16 MiB, reasoning that a small allocation is

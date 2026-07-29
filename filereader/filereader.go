@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
@@ -869,7 +870,15 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	// after it is raw DEFLATE. Inflate the remainder and continue from that,
 	// since the element parser reads a plain data set.
 	if ts == DeflatedExplicitVRLittleEndianUID {
-		inflated, err := inflateRemainder(reader)
+		// How many compressed bytes are left bounds how far they may expand.
+		// A non-seekable source cannot answer, and inflateRemainder falls back
+		// to the absolute ceiling when told a non-positive size.
+		compressedSize := int64(-1)
+		if size, sizeErr := dfr.streamSizeOnce(); sizeErr == nil {
+			compressedSize = size - dfr.position
+		}
+
+		inflated, err := inflateRemainder(reader, compressedSize)
 		if err != nil {
 			return nil, fmt.Errorf("failed to inflate deflated data set: %w", err)
 		}
@@ -944,19 +953,31 @@ const DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
 const MaxInflatedDatasetSize int64 = 256 << 20
 
 // inflateRemainder reads everything left in the stream and inflates it,
-// refusing input that expands past MaxInflatedDatasetSize.
-func inflateRemainder(reader filebase.Reader) ([]byte, error) {
+// refusing input that expands past what a stream of compressedSize bytes is
+// allowed to produce.
+//
+// Pass a non-positive compressedSize when the remaining length is unknown, as
+// it is for a non-seekable source; MaxInflatedDatasetSize is then the only
+// bound available.
+func inflateRemainder(reader filebase.Reader, compressedSize int64) ([]byte, error) {
 	zr := flate.NewReader(reader)
 	defer zr.Close()
 
+	// Scaling the limit to the compressed size is what keeps rejecting a bomb
+	// cheap. Against the absolute ceiling alone, a 300 KB file allocated
+	// 600 MiB before being refused — io.ReadAll grows by doubling, so the peak
+	// is roughly twice the limit, and the attacker picks the input size.
+	limit := compress.InflateLimitFor(compressedSize, MaxInflatedDatasetSize)
+
 	// Read one byte past the limit: if it materializes, the input expands
 	// beyond what is allowed and the rest is not worth decompressing.
-	out, err := io.ReadAll(io.LimitReader(zr, MaxInflatedDatasetSize+1))
+	out, err := io.ReadAll(io.LimitReader(zr, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(out)) > MaxInflatedDatasetSize {
-		return nil, fmt.Errorf("data set expands beyond the %d byte limit", MaxInflatedDatasetSize)
+	if int64(len(out)) > limit {
+		return nil, fmt.Errorf("data set of %d compressed bytes expands beyond the %d byte limit allowed for its size",
+			compressedSize, limit)
 	}
 	return out, nil
 }
