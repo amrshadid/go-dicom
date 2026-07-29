@@ -24,7 +24,7 @@ Thank you for your interest in contributing to go-dicom! This document provides 
 ### Prerequisites
 
 - **Go 1.22+** - [Download Go](https://go.dev/dl/)
-- **golangci-lint** - [Install](https://golangci-lint.run/usage/install/)
+- **golangci-lint v2** - [Install](https://golangci-lint.run/usage/install/). `.golangci.yml` uses the v2 configuration format, so a v1 binary will refuse to read it. CI pins v2.12.2.
 - **Make** (optional)
 
 ### Setup

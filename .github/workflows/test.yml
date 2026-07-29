@@ -1,7 +1,5 @@
 name: Tests and Quality Checks
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
@@ -22,10 +20,10 @@ jobs:
         go-version: ['1.24']
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -40,9 +38,12 @@ jobs:
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.24'
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
-          file: ./coverage.out
+          # The input is `files`, plural. `file` was silently ignored, leaving
+          # codecov to discover the report by scanning instead of being told
+          # where it is.
+          files: ./coverage.out
           flags: unittests
           name: codecov-umbrella
 
@@ -55,10 +56,10 @@ jobs:
         go-version: ['1.24']
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -76,10 +77,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24'
 
@@ -122,7 +123,7 @@ jobs:
       # reproduced from the artifact rather than by re-fuzzing.
       - name: Upload failing inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-failures
           path: '**/testdata/fuzz/**'
@@ -133,15 +134,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24'
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -180,7 +181,7 @@ jobs:
 
       - name: Upload server logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: interop-logs
           path: /tmp/tmp.*/
@@ -191,10 +192,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24'
 
@@ -208,9 +209,9 @@ jobs:
           fi
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
+          version: v2.12.2
           args: --timeout=5m
 
   build:
@@ -218,10 +219,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24'
 
@@ -250,10 +251,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.24'
 
@@ -263,9 +264,20 @@ jobs:
       - name: List dependencies
         run: go list -m all
 
+      # The version is pinned. With @latest, govulncheck v1.5.0 raised its own
+      # Go requirement to 1.25 and broke this job on a commit that changed
+      # nothing related to it — setup-go pins GOTOOLCHAIN=local, so the install
+      # could not fetch the newer toolchain it wanted. Pinning does not stale
+      # the results: the vulnerability database is fetched at run time.
+      #
+      # Only the install is allowed to pick its own toolchain. The scan itself
+      # must run under the project's Go version, because govulncheck's standard
+      # library findings are relative to the toolchain doing the analysis —
+      # scanning with a newer Go would report vulnerabilities that do not match
+      # what this project actually ships against.
       - name: Check for security vulnerabilities
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           govulncheck ./... || echo "::warning::govulncheck found vulnerabilities (may be stdlib-only, review output above)"
 
   docs:
@@ -273,7 +285,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check README exists
         run: test -f README.md

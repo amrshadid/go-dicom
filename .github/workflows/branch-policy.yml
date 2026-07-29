@@ -1,7 +1,5 @@
 name: Branch Policy
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 # Enforces that main only ever receives work that has already been through
 # develop.
