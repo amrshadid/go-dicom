@@ -227,3 +227,76 @@ func TestUncompressedPixelDataStillWorks(t *testing.T) {
 		t.Errorf("uncompressed pixels changed: %v", frames[0])
 	}
 }
+
+// TestPixelArrayBySampleShape verifies color samples get their own dimension,
+// which is the shape PixelDataShape has always reported.
+//
+// PixelArray flattens them into the column dimension, so a 2x2 RGB frame comes
+// back from it as 2 rows of 6 values. The values are right and their order is
+// right; only the shape disagrees with what the library says elsewhere about
+// itself.
+func TestPixelArrayBySampleShape(t *testing.T) {
+	const rows, cols, samples = 2, 2, 3
+
+	// Pixel (r,c) has samples 10*n, 10*n+1, 10*n+2 where n is its index.
+	raw := make([]byte, rows*cols*samples)
+	for i := 0; i < rows*cols; i++ {
+		for s := 0; s < samples; s++ {
+			raw[i*samples+s] = byte(10*i + s)
+		}
+	}
+
+	ds := rleDataset(t, rows, cols, samples, 8, 1, [][]byte{raw})
+
+	shape, err := ds.PixelDataShape()
+	if err != nil {
+		t.Fatalf("PixelDataShape: %v", err)
+	}
+	want := []int{1, rows, cols, samples}
+	if len(shape) != len(want) {
+		t.Fatalf("PixelDataShape = %v, want %v", shape, want)
+	}
+
+	got, err := ds.PixelArrayBySample()
+	if err != nil {
+		t.Fatalf("PixelArrayBySample: %v", err)
+	}
+	frames, ok := got.([][][][]uint8)
+	if !ok {
+		t.Fatalf("PixelArrayBySample returned %T, want [][][][]uint8", got)
+	}
+
+	// The array's own dimensions must equal what PixelDataShape promised.
+	if len(frames) != shape[0] || len(frames[0]) != shape[1] ||
+		len(frames[0][0]) != shape[2] || len(frames[0][0][0]) != shape[3] {
+		t.Fatalf("array shape [%d %d %d %d] contradicts PixelDataShape %v",
+			len(frames), len(frames[0]), len(frames[0][0]), len(frames[0][0][0]), shape)
+	}
+
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			i := r*cols + c
+			for s := 0; s < samples; s++ {
+				if want := uint8(10*i + s); frames[0][r][c][s] != want {
+					t.Errorf("pixel (%d,%d) sample %d = %d, want %d",
+						r, c, s, frames[0][r][c][s], want)
+				}
+			}
+		}
+	}
+}
+
+// TestPixelArrayBySampleGrayscaleUnchanged verifies single-sample data is not
+// given a spurious fourth dimension.
+func TestPixelArrayBySampleGrayscaleUnchanged(t *testing.T) {
+	raw := []byte{0x01, 0x02, 0x03, 0x04}
+	ds := rleDataset(t, 2, 2, 1, 8, 1, [][]byte{raw})
+
+	got, err := ds.PixelArrayBySample()
+	if err != nil {
+		t.Fatalf("PixelArrayBySample: %v", err)
+	}
+	if _, ok := got.([][][]uint8); !ok {
+		t.Errorf("grayscale returned %T, want [][][]uint8 — the same as PixelArray", got)
+	}
+}
