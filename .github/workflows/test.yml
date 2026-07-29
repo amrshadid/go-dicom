@@ -7,7 +7,7 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 permissions:
   contents: read
@@ -294,3 +294,40 @@ jobs:
             exit 1
           fi
           echo "Root package documented ($lines lines)."
+
+  # A single required status check.
+  #
+  # Requiring the individual jobs instead would mean naming every matrix leg
+  # ("Test - Go 1.24 (ubuntu-latest, 1.24)") in the branch protection rule, and
+  # any change to the matrix silently stops enforcing the legs that were
+  # renamed — the rule keeps waiting for a check that no longer runs, or worse,
+  # passes because nothing reported. One gate that depends on everything else
+  # moves that list into this file, where it is reviewed with the code.
+  ci-passed:
+    name: CI Passed
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - test
+      - network-integration
+      - fuzz
+      - interop
+      - lint
+      - build
+      - module-check
+      - docs
+    steps:
+      # `needs` alone does not fail this job when a dependency fails, because
+      # `if: always()` runs it regardless — that is deliberate, so a skipped or
+      # cancelled dependency is reported here rather than leaving the required
+      # check pending forever. The results are inspected explicitly instead.
+      - name: Verify every job succeeded
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          failed=$(echo "$results" | grep -c '"result": "\(failure\|cancelled\|skipped\)"' || true)
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$failed required job(s) did not succeed."
+            exit 1
+          fi
+          echo "All required jobs succeeded."
