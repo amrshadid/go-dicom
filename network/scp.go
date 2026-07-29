@@ -1022,6 +1022,11 @@ func defaultSupportedAbstractSyntaxes() map[string]bool {
 		StudyRootQueryRetrieveFind:      true,
 		StudyRootQueryRetrieveMove:      true,
 		StudyRootQueryRetrieveGet:       true,
+
+		// Retired in the current standard, but still offered by some archives.
+		PatientStudyOnlyQueryRetrieveFind: true,
+		PatientStudyOnlyQueryRetrieveMove: true,
+		PatientStudyOnlyQueryRetrieveGet:  true,
 	}
 }
 

@@ -22,6 +22,12 @@ const (
 	StudyRootQueryRetrieveFind   = "1.2.840.10008.5.1.4.1.2.2.1"
 	StudyRootQueryRetrieveMove   = "1.2.840.10008.5.1.4.1.2.2.2"
 	StudyRootQueryRetrieveGet    = "1.2.840.10008.5.1.4.1.2.2.3"
+
+	// Patient/Study Only Root is retired in the current standard but still
+	// offered by some archives, so it is proposed after the two current models.
+	PatientStudyOnlyQueryRetrieveFind = "1.2.840.10008.5.1.4.1.2.3.1"
+	PatientStudyOnlyQueryRetrieveMove = "1.2.840.10008.5.1.4.1.2.3.2"
+	PatientStudyOnlyQueryRetrieveGet  = "1.2.840.10008.5.1.4.1.2.3.3"
 )
 
 // DICOM Transfer Syntax UIDs — complete set matching pynetdicom.
@@ -163,6 +169,9 @@ func DefaultQueryRetrieveContexts() []PresentationContextItem {
 		StudyRootQueryRetrieveFind,
 		StudyRootQueryRetrieveMove,
 		StudyRootQueryRetrieveGet,
+		PatientStudyOnlyQueryRetrieveFind,
+		PatientStudyOnlyQueryRetrieveMove,
+		PatientStudyOnlyQueryRetrieveGet,
 	}
 
 	ts := DefaultTransferSyntaxes()
