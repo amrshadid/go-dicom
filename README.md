@@ -464,20 +464,46 @@ scp.SetHandler(&network.StorageHandler{
 
 ### Transfer Syntax Support
 
-| Transfer Syntax | File I/O | Network |
-|----------------|----------|---------|
-| Implicit VR Little Endian | Read/Write | Yes |
-| Explicit VR Little Endian | Read/Write | Yes |
-| Explicit VR Big Endian | Read/Write | Yes |
-| Deflated Explicit VR LE | Read | Yes |
-| RLE Lossless | Read | Yes |
-| JPEG Baseline | Read | Yes |
-| JPEG Extended | Read | Yes |
-| JPEG Lossless | Read | Yes |
-| JPEG-LS Lossless | Read | Yes |
-| JPEG-LS Near-Lossless | Read | Yes |
-| JPEG 2000 Lossless | Read | Yes |
-| JPEG 2000 | Read | Yes |
+Two capabilities are distinct and worth separating: whether the **data set**
+parses, and whether **pixel data** can be decoded. A compressed instance
+transfers and stores correctly even when its pixels cannot be decompressed —
+which is enough for an archive or a router, and not enough for a viewer.
+
+| Transfer Syntax | Data set | Pixel data | Network |
+|-----------------|----------|------------|---------|
+| Implicit VR Little Endian | Read/Write | Yes | Yes |
+| Explicit VR Little Endian | Read/Write | Yes | Yes |
+| Explicit VR Big Endian | Read/Write | Yes | Yes |
+| Deflated Explicit VR LE | Read | Yes | Yes |
+| RLE Lossless | Read/Write | **No** | Yes |
+| JPEG Baseline | Read/Write | **No** | Yes |
+| JPEG Extended | Read/Write | **No** | Yes |
+| JPEG Lossless | Read/Write | **No** | Yes |
+| JPEG-LS Lossless / Near-Lossless | Read/Write | **No** | Yes |
+| JPEG 2000 Lossless / Lossy | Read/Write | **No** | Yes |
+
+Deflated is read-only as a *file* syntax: `filereader` inflates the data set, but
+`filewriter` does not deflate, so writing a file that declares
+`1.2.840.10008.1.2.1.99` produces one nothing can read. Over the network the
+syntax works in both directions — the association path compresses and
+decompresses. Values in an Explicit VR Big Endian file are normalised to little
+endian while parsing and converted back on write, so byte order never reaches
+code above `filereader`.
+
+**No compressed pixel data can be decoded yet.** Instances in any compressed
+syntax parse, store, and transfer with their pixel data intact as opaque bytes,
+but `Dataset.PixelArray()` cannot decompress them. This affects RLE as well,
+whose decoder is present but does not yet produce correct output.
+
+To decode compressed pixels today, register a decoder:
+
+```go
+compress.RegisterExternalDecoder(compress.CompressionJPEG2000, myDecoder)
+```
+
+The JPEG-LS, JPEG 2000, and JPEG Lossless entry points are placeholders that
+return an error describing the codec they would need; there is no bundled
+implementation behind them.
 
 ### Thread Safety
 

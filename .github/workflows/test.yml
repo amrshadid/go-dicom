@@ -95,7 +95,18 @@ jobs:
       # -parallel bounds the worker count. The default is one worker per core,
       # and each holds its own allocations; on a shared runner that was enough
       # to get the job terminated.
+      # GOMEMLIMIT makes Go collect aggressively instead of growing the heap
+      # toward the runner's ceiling. This job has been killed with SIGTERM
+      # (exit 143) intermittently on the same commit that passes on a re-run,
+      # which is the signature of the runner reclaiming memory rather than a
+      # defect in the code under test: a 60s local run of the same target
+      # completes 2.2M executions at a 120 MiB peak.
+      #
+      # The limit is a soft one, so a target that genuinely needs more still
+      # gets it; it only changes when the collector runs.
       - name: Fuzz each target briefly
+        env:
+          GOMEMLIMIT: 1GiB
         run: |
           set -e
           for target in FuzzDecodePDU FuzzDecodeDataset FuzzDecodeCommandDataset; do

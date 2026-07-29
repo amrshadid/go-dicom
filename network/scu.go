@@ -236,6 +236,11 @@ func (s *SCU) Find(ctx context.Context, queryDS *dataset.Dataset) (<-chan *CFind
 		sopClassUID = StudyRootQueryRetrieveFind
 		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 		if !ok {
+			// Patient/Study Only is retired but still served by some archives.
+			sopClassUID = PatientStudyOnlyQueryRetrieveFind
+			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		}
+		if !ok {
 			return nil, NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-FIND")
 		}
 	}
@@ -353,6 +358,11 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 		sopClassUID = StudyRootQueryRetrieveMove
 		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 		if !ok {
+			// Patient/Study Only is retired but still served by some archives.
+			sopClassUID = PatientStudyOnlyQueryRetrieveMove
+			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		}
+		if !ok {
 			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-MOVE")
 		}
 	}
@@ -421,6 +431,11 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 	if !ok {
 		sopClassUID = StudyRootQueryRetrieveGet
 		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		if !ok {
+			// Patient/Study Only is retired but still served by some archives.
+			sopClassUID = PatientStudyOnlyQueryRetrieveGet
+			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		}
 		if !ok {
 			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-GET")
 		}

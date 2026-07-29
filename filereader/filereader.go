@@ -1,10 +1,13 @@
 package filereader
 
 import (
+	"bytes"
+	"compress/flate"
 	"fmt"
 	"io"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
@@ -198,11 +201,14 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 
 		var valueLength uint32
 		if isShortVR(vr) {
-			length := make([]byte, 2)
-			if err := dfr.reader.ReadBytes(length); err != nil {
+			// ReadUint16 honors the reader's byte order; assembling the two
+			// bytes by hand would hardcode little endian and corrupt every
+			// length in an explicit VR big endian file.
+			short, err := dfr.reader.ReadUint16()
+			if err != nil {
 				return nil, fmt.Errorf("failed to read value length: %w", err)
 			}
-			valueLength = uint32(length[0]) | (uint32(length[1]) << 8)
+			valueLength = uint32(short)
 			dfr.position += 2
 		} else {
 			reserved := make([]byte, 2)
@@ -336,11 +342,14 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 
 		var valueLength uint32
 		if isShortVR(element.VR) {
-			length := make([]byte, 2)
-			if err := dfr.reader.ReadBytes(length); err != nil {
+			// ReadUint16 honors the reader's byte order; assembling the two
+			// bytes by hand would hardcode little endian and corrupt every
+			// length in an explicit VR big endian file.
+			short, err := dfr.reader.ReadUint16()
+			if err != nil {
 				return nil, fmt.Errorf("failed to read value length: %w", err)
 			}
-			valueLength = uint32(length[0]) | (uint32(length[1]) << 8)
+			valueLength = uint32(short)
 			dfr.position += 2
 		} else {
 			reserved := make([]byte, 2)
@@ -857,6 +866,29 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
 
+	// Under the Deflated syntax the meta header is uncompressed but everything
+	// after it is raw DEFLATE. Inflate the remainder and continue from that,
+	// since the element parser reads a plain data set.
+	if ts == DeflatedExplicitVRLittleEndianUID {
+		// How many compressed bytes are left bounds how far they may expand.
+		// A non-seekable source cannot answer, and inflateRemainder falls back
+		// to the absolute ceiling when told a non-positive size.
+		compressedSize := int64(-1)
+		if size, sizeErr := dfr.streamSizeOnce(); sizeErr == nil {
+			compressedSize = size - dfr.position
+		}
+
+		inflated, err := inflateRemainder(reader, compressedSize)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inflate deflated data set: %w", err)
+		}
+		reader = filebase.NewFileReader(bytes.NewReader(inflated))
+		dfr.reader = reader
+		// Offsets now refer to the inflated data set, which begins at zero.
+		dfr.position = 0
+		dfr.streamSizeKnown = false
+	}
+
 	if dicomFile.IsLittleEndian {
 		reader.SetByteOrder(filebase.LittleEndian)
 	} else {
@@ -885,6 +917,12 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 			return nil, fmt.Errorf("failed to read data element: %w", err)
 		}
 
+		// Big endian values are converted once here so that everything
+		// downstream can assume little endian; see normalizeByteOrder.
+		if !dicomFile.IsLittleEndian {
+			normalizeByteOrder(element)
+		}
+
 		if err := validateDataElement(element); err != nil {
 			dicomFile.Warnings = append(dicomFile.Warnings,
 				fmt.Sprintf("tag %s: %v", element.Tag.String(), err))
@@ -901,6 +939,47 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 
 	return dicomFile, nil
+}
+
+// DeflatedExplicitVRLittleEndianUID is the transfer syntax whose data set is
+// DEFLATE-compressed after the file meta header (PS3.5 Annex A.5).
+const DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
+
+// MaxInflatedDatasetSize bounds how far a deflated data set may expand.
+//
+// DEFLATE reaches ratios above 1000:1 on repetitive input, so a small file can
+// otherwise expand without limit. 256 MiB is far above any legitimate DICOM
+// data set while keeping a hostile one cheap to reject.
+const MaxInflatedDatasetSize int64 = 256 << 20
+
+// inflateRemainder reads everything left in the stream and inflates it,
+// refusing input that expands past what a stream of compressedSize bytes is
+// allowed to produce.
+//
+// Pass a non-positive compressedSize when the remaining length is unknown, as
+// it is for a non-seekable source; MaxInflatedDatasetSize is then the only
+// bound available.
+func inflateRemainder(reader filebase.Reader, compressedSize int64) ([]byte, error) {
+	zr := flate.NewReader(reader)
+	defer zr.Close()
+
+	// Scaling the limit to the compressed size is what keeps rejecting a bomb
+	// cheap. Against the absolute ceiling alone, a 300 KB file allocated
+	// 600 MiB before being refused — io.ReadAll grows by doubling, so the peak
+	// is roughly twice the limit, and the attacker picks the input size.
+	limit := compress.InflateLimitFor(compressedSize, MaxInflatedDatasetSize)
+
+	// Read one byte past the limit: if it materializes, the input expands
+	// beyond what is allowed and the rest is not worth decompressing.
+	out, err := io.ReadAll(io.LimitReader(zr, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(out)) > limit {
+		return nil, fmt.Errorf("data set of %d compressed bytes expands beyond the %d byte limit allowed for its size",
+			compressedSize, limit)
+	}
+	return out, nil
 }
 
 // determineTransferSyntax determines the VR type and byte order from a transfer syntax UID.
@@ -992,5 +1071,25 @@ func isValidVRVariant(actual, expected string) bool {
 		return actual == "OB" || actual == "OD" || actual == "OF" || actual == "OL" || actual == "OW" || actual == "UN"
 	default:
 		return false
+	}
+}
+
+// normalizeByteOrder converts an element's value from big endian to the little
+// endian representation the rest of the library assumes.
+//
+// Dataset stores values as opaque bytes with no record of how to interpret
+// them, and everything downstream — pixel access, numeric conversion, the JSON
+// model — reads them as little endian. Rather than thread the file's byte order
+// through all of that, big endian values are normalised once here, so a data
+// set means the same thing regardless of how the file was encoded.
+func normalizeByteOrder(elem *DataElementValue) {
+	// Swap in place: the value was allocated by this reader and is not shared.
+	dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+
+	// Sequence items carry their own elements, encoded the same way.
+	for _, item := range elem.Items {
+		for _, nested := range item.Elements {
+			normalizeByteOrder(nested)
+		}
 	}
 }

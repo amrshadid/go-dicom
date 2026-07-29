@@ -286,6 +286,16 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			s.handleNCreate(ctx, assoc, handler, ctxID, messageID, cmdDS)
 		case CommandNDeleteRQ:
 			s.handleNDelete(ctx, assoc, handler, ctxID, messageID, cmdDS)
+		case CommandCCancelRQ:
+			// A cancel refers to an operation already in flight. Operations are
+			// handled synchronously here, so by the time this is read the
+			// operation it names has finished; there is nothing left to stop.
+			//
+			// Aborting would be worse than useless: it tears down the
+			// association and discards results the requestor already has. Log
+			// and carry on, which is what PS3.7 9.3.2.3 permits when the
+			// operation is no longer in progress.
+			log.Printf("C-CANCEL received for message %d; no operation in progress", messageID)
 		default:
 			log.Printf("unsupported command: 0x%04X", commandField)
 			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
@@ -1012,6 +1022,11 @@ func defaultSupportedAbstractSyntaxes() map[string]bool {
 		StudyRootQueryRetrieveFind:      true,
 		StudyRootQueryRetrieveMove:      true,
 		StudyRootQueryRetrieveGet:       true,
+
+		// Retired in the current standard, but still offered by some archives.
+		PatientStudyOnlyQueryRetrieveFind: true,
+		PatientStudyOnlyQueryRetrieveMove: true,
+		PatientStudyOnlyQueryRetrieveGet:  true,
 	}
 }
 
