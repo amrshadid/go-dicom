@@ -209,6 +209,18 @@ func (s *Server) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedAbstractSyntaxes(syntaxes)
 }
 
+// ReportStorageCommitment sends a deferred commitment result on a new
+// association it opens to the requestor.
+//
+// The counterpart to returning a result marked Deferred from a
+// StorageCommitmentProvider: the request is acknowledged, the archive verifies
+// durability on its own schedule, and this delivers the answer once there is
+// one. See SCP.ReportStorageCommitment.
+func (s *Server) ReportStorageCommitment(ctx context.Context, requestorAE string,
+	result *StorageCommitmentResult) error {
+	return s.scp.ReportStorageCommitment(ctx, requestorAE, result)
+}
+
 // SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server accepts.
 func (s *Server) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedTransferSyntaxes(syntaxes)

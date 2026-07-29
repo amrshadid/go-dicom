@@ -362,3 +362,45 @@ func (h *StorageCommitmentHandler) HandleStorageCommitment(ctx context.Context,
 	}
 	return h.OnCommit(ctx, req)
 }
+
+// StorageCommitmentResultReceiver is implemented by an AE that sent a storage
+// commitment request and wants the result delivered as a parsed value.
+//
+// The result arrives as an N-EVENT-REPORT, and PS3.4 §J.3 allows it long after
+// the request — on a new association the archive opens back. An AE that defers
+// to that flow therefore has to run a server, and this is what that server's
+// handler implements.
+//
+// Without it, the report reaches HandleNEventReport as a generic event whose
+// data set the receiver must decode itself, including the two instance
+// sequences and their failure reasons.
+type StorageCommitmentResultReceiver interface {
+	// HandleStorageCommitmentResult receives the outcome of a commitment
+	// request this AE made earlier.
+	//
+	// Match it to the request by Transaction UID: nothing else connects them,
+	// and several requests may be outstanding at once. Returning an error makes
+	// the SCP report a failure status to the archive, which will treat the
+	// result as undelivered.
+	HandleStorageCommitmentResult(ctx context.Context, result *StorageCommitmentResult) error
+}
+
+// StorageCommitmentResultHandler receives commitment results through a
+// function, in the style of the other handlers here.
+type StorageCommitmentResultHandler struct {
+	BaseHandler
+
+	// OnResult receives each result. If nil, results are accepted and discarded,
+	// which is rarely what anyone wants.
+	OnResult func(ctx context.Context, result *StorageCommitmentResult) error
+}
+
+// HandleStorageCommitmentResult implements StorageCommitmentResultReceiver.
+func (h *StorageCommitmentResultHandler) HandleStorageCommitmentResult(ctx context.Context,
+	result *StorageCommitmentResult) error {
+
+	if h.OnResult == nil {
+		return nil
+	}
+	return h.OnResult(ctx, result)
+}

@@ -96,6 +96,21 @@ type StorageCommitmentRequest struct {
 
 // StorageCommitmentResult is the outcome the SCP reports back.
 type StorageCommitmentResult struct {
+	// Deferred stops the SCP reporting this result on the current association.
+	//
+	// Set it when the commitment is not decided yet. PS3.4 §J.3 allows the
+	// N-EVENT-REPORT to arrive long after the N-ACTION, which is what an
+	// archive that verifies durability before promising it has to do — writing
+	// to permanent storage, confirming a backup, whatever its policy requires.
+	// Reporting success on the spot would be a promise made before it was true.
+	//
+	// The SCP still acknowledges the request. Send the result later with
+	// SCP.ReportStorageCommitment, which opens an association back to the
+	// requestor. Nothing else will send it: a deferred result the caller
+	// forgets leaves the requestor waiting indefinitely, which is why this is
+	// opt-in rather than the default.
+	Deferred bool
+
 	// TransactionUID echoes the request this result answers.
 	TransactionUID string
 
@@ -418,4 +433,60 @@ func (s *SCU) ReceiveStorageCommitmentResult(ctx context.Context) (*StorageCommi
 		return nil, err
 	}
 	return result, nil
+}
+
+// ReportStorageCommitment sends a commitment result on a new association it
+// opens to the requestor.
+//
+// This is the other half of a deferred result. An archive that verifies
+// durability before promising it answers the N-ACTION, returns a result marked
+// Deferred, and calls this once the instances are genuinely safe — by which
+// time the original association is long gone.
+//
+// The requestor is named by the Calling AE title of the association that asked,
+// which is what handlers receive. Its address comes from
+// SCPConfig.CommitmentRequestors or ResolveCommitmentRequestor; without one
+// there is nowhere to send the result and this reports that rather than
+// silently dropping a promise the requestor is waiting on.
+//
+// The Transaction UID must be the one from the request. It is the only thing
+// tying this result to it, and the requestor has no other way to match them.
+func (s *SCP) ReportStorageCommitment(ctx context.Context, requestorAE string,
+	result *StorageCommitmentResult) error {
+
+	if result == nil {
+		return NewPDUError("STORAGE_COMMITMENT", "result is nil")
+	}
+	if result.TransactionUID == "" {
+		return NewPDUError("STORAGE_COMMITMENT",
+			"a Transaction UID is required; the requestor cannot match a result without it")
+	}
+
+	address, ok := s.config.resolveCommitmentRequestor(requestorAE)
+	if !ok {
+		return NewPDUErrorf("STORAGE_COMMITMENT",
+			"no address known for requestor %q; set SCPConfig.CommitmentRequestors or "+
+				"ResolveCommitmentRequestor so a deferred result can be delivered", requestorAE)
+	}
+
+	// The roles invert for this exchange: the archive is the one initiating,
+	// so it associates as an SCU on the Storage Commitment SOP Class.
+	requestor := NewSCU(SCUConfig{
+		CallingAE: s.config.AETitle,
+		CalledAE:  requestorAE,
+		Address:   address,
+		Network:   s.config.Network,
+	})
+
+	if err := requestor.Associate(ctx, StorageCommitmentPresentationContexts()); err != nil {
+		return NewPDUErrorf("STORAGE_COMMITMENT",
+			"could not associate with requestor %s at %s: %v", requestorAE, address, err)
+	}
+	defer func() { _ = requestor.Release(ctx) }()
+
+	if _, err := requestor.SendStorageCommitmentResult(ctx, result); err != nil {
+		return NewPDUErrorf("STORAGE_COMMITMENT",
+			"failed to report %s to %s: %v", storageCommitmentSummary(result), requestorAE, err)
+	}
+	return nil
 }
