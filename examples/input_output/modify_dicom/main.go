@@ -291,14 +291,15 @@ func main() {
 	if len(updates) > 0 {
 		fmt.Println("Verifying modified values in dataset:")
 		for _, upd := range updates {
-			if upd.Status == "DELETED" {
+			switch upd.Status {
+			case "DELETED":
 				// For deleted elements, check they no longer exist
 				if ds.HasKeyword(upd.Keyword) {
 					fmt.Printf("❌ %s - Still exists in dataset (should be removed)\n", upd.Keyword)
 				} else {
 					fmt.Printf("✓ %s - Successfully removed\n", upd.Keyword)
 				}
-			} else if upd.Status == "CLEARED" {
+			case "CLEARED":
 				// For cleared elements, check they're empty
 				val := ds.GetStringByKeyword(upd.Keyword)
 				if val == "" {
@@ -306,7 +307,7 @@ func main() {
 				} else {
 					fmt.Printf("❌ %s - Value is '%s' (should be empty)\n", upd.Keyword, val)
 				}
-			} else {
+			default:
 				// For updated elements, verify new value
 				newVal := ds.GetStringByKeyword(upd.Keyword)
 				if newVal == upd.NewValue {

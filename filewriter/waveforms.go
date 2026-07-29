@@ -148,7 +148,7 @@ func (dfww *DICOMFileWriterWithWaveforms) WriteWaveformSequence() error {
 	}
 
 	// Add the element to the dataset
-	if err := dfww.DICOMFileWriter.AddDataElement(writerElem); err != nil {
+	if err := dfww.AddDataElement(writerElem); err != nil {
 		return fmt.Errorf("failed to add waveform sequence: %w", err)
 	}
 

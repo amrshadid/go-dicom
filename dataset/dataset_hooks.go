@@ -305,27 +305,30 @@ func RegisterDatasetHook(eventType DatasetEventType, position string, fn Dataset
 
 	switch eventType {
 	case EventElementAdded:
-		if position == "before" {
+		switch position {
+		case "before":
 			GlobalDatasetEventHooks.AddBeforeAddHook(fn)
-		} else if position == "after" {
+		case "after":
 			GlobalDatasetEventHooks.AddAfterAddHook(fn)
-		} else {
+		default:
 			return fmt.Errorf("invalid position: %s (use 'before' or 'after')", position)
 		}
 	case EventElementRemoved:
-		if position == "before" {
+		switch position {
+		case "before":
 			GlobalDatasetEventHooks.AddBeforeRemoveHook(fn)
-		} else if position == "after" {
+		case "after":
 			GlobalDatasetEventHooks.AddAfterRemoveHook(fn)
-		} else {
+		default:
 			return fmt.Errorf("invalid position: %s", position)
 		}
 	case EventElementUpdated:
-		if position == "before" {
+		switch position {
+		case "before":
 			GlobalDatasetEventHooks.AddBeforeUpdateHook(fn)
-		} else if position == "after" {
+		case "after":
 			GlobalDatasetEventHooks.AddAfterUpdateHook(fn)
-		} else {
+		default:
 			return fmt.Errorf("invalid position: %s", position)
 		}
 	case EventDatasetCleared:
