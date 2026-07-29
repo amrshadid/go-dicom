@@ -141,15 +141,53 @@ func TestStorageCommitmentRefusedWithoutProvider(t *testing.T) {
 	}
 	defer func() { _ = scu.Release(ctx) }()
 
-	resp, err := scu.RequestStorageCommitment(ctx, &StorageCommitmentRequest{
+	// The refusal must come at negotiation, not after the request. A peer that
+	// negotiates the context successfully has been told the service is
+	// available, and only finds out otherwise after building a transaction and
+	// sending it.
+	accepted := scu.Association().AcceptedContexts()
+	if _, ok := FindPresentationContextID(accepted, StorageCommitmentPushModelUID); ok {
+		t.Error("the storage commitment context was accepted by an SCP that cannot provide it")
+	}
+
+	_, err = scu.RequestStorageCommitment(ctx, &StorageCommitmentRequest{
 		TransactionUID: "1.2.826.0.1.3680043.8.498.77702",
 		Instances:      instanceRefs("1.2.3.1"),
 	})
-	if err != nil {
-		t.Fatalf("RequestStorageCommitment: %v", err)
+	if err == nil {
+		t.Error("the request succeeded against an SCP with no commitment provider")
 	}
-	if resp.Status == StatusSuccess {
-		t.Error("an SCP with no commitment provider reported success; it must refuse")
+}
+
+// TestStorageCommitmentNegotiatedWhenProvided is the other half: an SCP that
+// can commit must offer the context, or no requestor can ever use it.
+func TestStorageCommitmentNegotiatedWhenProvided(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	server, err := StartServer(ctx, SCPConfig{
+		AETitle: "CANCOMMIT", Port: 0, BindAddress: "127.0.0.1",
+	}, &StorageCommitmentHandler{
+		OnCommit: func(_ context.Context, req *StorageCommitmentRequest) (*StorageCommitmentResult, error) {
+			return &StorageCommitmentResult{Successful: req.Instances}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	defer server.Stop()
+
+	scu := NewSCU(SCUConfig{
+		CallingAE: "COMMIT_SCU", CalledAE: "CANCOMMIT", Address: server.Addr(),
+	})
+	if err := scu.Associate(ctx, nil); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+	defer func() { _ = scu.Release(ctx) }()
+
+	accepted := scu.Association().AcceptedContexts()
+	if _, ok := FindPresentationContextID(accepted, StorageCommitmentPushModelUID); !ok {
+		t.Fatal("an SCP that provides storage commitment did not offer the context")
 	}
 }
 

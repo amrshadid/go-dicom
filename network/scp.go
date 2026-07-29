@@ -217,6 +217,8 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	handler := s.handler
 	s.mu.RUnlock()
 
+	supportedAS = withoutUnprovidedServices(supportedAS, handler)
+
 	// Accept association
 	if err := assoc.AcceptAssociation(ctx, rq, supportedAS, supportedTS, s.config.Network.MaxPDUSize); err != nil {
 		log.Printf("failed to accept association: %v", err)
@@ -1138,6 +1140,37 @@ func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Han
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
+// withoutUnprovidedServices removes abstract syntaxes the handler cannot
+// actually serve, so they are rejected during negotiation rather than accepted
+// and refused later.
+//
+// Presentation context negotiation exists to tell a requestor what it can use
+// before it commits to anything. Accepting Storage Commitment from every SCP
+// and refusing at N-ACTION time defeats that: the peer learns the service is
+// unavailable only after building a transaction and sending it, and a
+// requestor that reads the accepted context as a capability could conclude the
+// service is present when it is not.
+//
+// The map is copied rather than modified, since it is shared across
+// associations.
+func withoutUnprovidedServices(supported map[string]bool, handler Handler) map[string]bool {
+	if _, ok := handler.(StorageCommitmentProvider); ok {
+		return supported
+	}
+	if !supported[StorageCommitmentPushModelUID] {
+		return supported
+	}
+
+	filtered := make(map[string]bool, len(supported))
+	for syntax, ok := range supported {
+		if syntax == StorageCommitmentPushModelUID {
+			continue
+		}
+		filtered[syntax] = ok
+	}
+	return filtered
+}
+
 func defaultSupportedAbstractSyntaxes() map[string]bool {
 	return map[string]bool{
 		VerificationSOPClassUID:         true,
@@ -1161,8 +1194,8 @@ func defaultSupportedAbstractSyntaxes() map[string]bool {
 		PatientStudyOnlyQueryRetrieveMove: true,
 		PatientStudyOnlyQueryRetrieveGet:  true,
 
-		// Offered so a requestor can negotiate it; requests are refused unless
-		// the handler implements StorageCommitmentProvider.
+		// Withdrawn during negotiation unless the handler implements
+		// StorageCommitmentProvider — see withoutUnprovidedServices.
 		StorageCommitmentPushModelUID: true,
 	}
 }
