@@ -53,6 +53,22 @@ type Association struct {
 
 	// Extended negotiation as agreed with the peer.
 	peerUserInfo UserInformationItem
+
+	// pending holds messages read ahead of the caller that asked for them.
+	//
+	// An operation that watches for C-CANCEL while it works has to read the
+	// association to see one, and what arrives may be something else. Dropping
+	// that would lose a message the peer believes it sent; leaving it in the
+	// stream is impossible once read. It is queued here and returned by the
+	// next ReceivePData, so reading ahead is transparent to whoever reads next.
+	pending []pendingMessage
+}
+
+// pendingMessage is a message read before its recipient asked for it.
+type pendingMessage struct {
+	contextID byte
+	data      []byte
+	isCommand bool
 }
 
 // PeerUserInformation returns the User Information the peer sent during
@@ -435,12 +451,20 @@ func (a *Association) SendPData(ctx context.Context, contextID byte, data []byte
 // ReceivePData reads and reassembles P-DATA-TF PDUs until a complete message is received.
 // Returns the context ID, the assembled data, whether it's a command, and any error.
 func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, error) {
-	a.mu.RLock()
+	a.mu.Lock()
 	if a.state != StateAssociated {
-		a.mu.RUnlock()
+		a.mu.Unlock()
 		return 0, nil, false, NewAssociationError("INVALID_STATE", fmt.Sprintf("cannot receive data in state %s", a.state))
 	}
-	a.mu.RUnlock()
+	// Anything read ahead is delivered before touching the connection, so a
+	// message queued by a cancel watcher reaches its real recipient in order.
+	if len(a.pending) > 0 {
+		msg := a.pending[0]
+		a.pending = a.pending[1:]
+		a.mu.Unlock()
+		return msg.contextID, msg.data, msg.isCommand, nil
+	}
+	a.mu.Unlock()
 
 	var assembled []byte
 	var contextID byte
@@ -485,4 +509,23 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 			}
 		}
 	}
+}
+
+// PushBack queues a message to be returned by the next ReceivePData.
+//
+// It exists for readers that have to consume a message to find out whether it
+// is the one they wanted — a C-CANCEL watcher, for instance. Without it such a
+// reader must either drop what it did not want, losing a message the peer
+// believes it delivered, or not read at all, which is what made cancellation
+// undetectable.
+//
+// Order is preserved: messages come back in the order they were pushed.
+func (a *Association) PushBack(contextID byte, data []byte, isCommand bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.pending = append(a.pending, pendingMessage{
+		contextID: contextID,
+		data:      data,
+		isCommand: isCommand,
+	})
 }

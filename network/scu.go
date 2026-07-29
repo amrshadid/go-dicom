@@ -30,6 +30,22 @@ func (s *SCU) nextMessageID() uint16 {
 	return uint16(s.messageID.Add(1))
 }
 
+// PeekNextMessageID returns the ID the next operation will use, without
+// consuming it.
+//
+// C-CANCEL names the message it cancels, so a caller that wants to cancel an
+// operation needs its ID — and the operations here allocate one internally. The
+// alternative is to have each return its ID, which changes every signature for
+// the sake of the rare caller that cancels.
+//
+// Peeking races with a concurrent operation on the same SCU, which would take
+// the ID first. Cancellation is only meaningful against an operation the caller
+// started and is still waiting on, so the sequence to use is: peek, start, then
+// cancel that ID.
+func (s *SCU) PeekNextMessageID() uint16 {
+	return uint16(s.messageID.Load() + 1)
+}
+
 // Associate establishes an association with the SCP, proposing the given presentation contexts.
 // If contexts is nil, default verification + storage + query/retrieve contexts are proposed.
 func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem) error {
