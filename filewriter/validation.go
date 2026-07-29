@@ -163,6 +163,18 @@ func ValidateDataElement(elem *DataElement) error {
 		return fmt.Errorf("invalid VR: %s", elem.VR)
 	}
 
+	// Length is what gets written to the file, not len(Value), so the two
+	// disagreeing produces a header that misdescribes its own value. A reader
+	// then takes the wrong number of bytes and every element after this one is
+	// read from the wrong offset — the whole file is lost, not just this
+	// element. An undefined length is exempt: it means the extent is delimited
+	// rather than stated.
+	if elem.Length != undefinedLength && int(elem.Length) != len(elem.Value) {
+		return fmt.Errorf("element %s states length %d but holds %d bytes; "+
+			"the stated length is what is written, so a reader would lose the rest of the file",
+			elem.Tag, elem.Length, len(elem.Value))
+	}
+
 	// Validate value against VR
 	// Convert []byte to appropriate type based on VR
 	metadata, err := valuerep.GetVRMetadata(elem.VR)
