@@ -2,6 +2,7 @@ package filewriter
 
 import (
 	"bytes"
+	"compress/flate"
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/config"
@@ -616,11 +617,54 @@ func (dfw *DICOMFileWriter) Write() error {
 		}
 	}
 
+	// Under the Deflated syntax the data set that follows the meta header is
+	// raw DEFLATE. Without this the writer produced a file declaring
+	// 1.2.840.10008.1.2.1.99 whose body was uncompressed, so nothing —
+	// including this library's own reader — could read it back.
+	if dfw.metaInfo != nil && dfw.metaInfo.TransferSyntaxUID == DeflatedExplicitVRLittleEndianUID {
+		return dfw.writeDeflatedDataSet()
+	}
+
 	// Write dataset elements
 	if err := dfw.writer.WriteDataElements(dfw.dataElements); err != nil {
 		return fmt.Errorf("failed to write data elements: %w", err)
 	}
 
+	return nil
+}
+
+// DeflatedExplicitVRLittleEndianUID is the transfer syntax whose data set is
+// DEFLATE-compressed after the file meta header (PS3.5 Annex A.5).
+const DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
+
+// writeDeflatedDataSet serializes the elements, compresses them, and writes the
+// result after the meta header.
+//
+// The elements are encoded to memory first because DEFLATE has to see the whole
+// data set: it is a single stream over the body, not a per-element encoding.
+func (dfw *DICOMFileWriter) writeDeflatedDataSet() error {
+	raw, err := dfw.writer.encodeElements(dfw.dataElements, false)
+	if err != nil {
+		return fmt.Errorf("failed to encode data set for deflating: %w", err)
+	}
+
+	var compressed bytes.Buffer
+	zw, err := flate.NewWriter(&compressed, flate.DefaultCompression)
+	if err != nil {
+		return fmt.Errorf("failed to start the deflate stream: %w", err)
+	}
+	if _, err := zw.Write(raw); err != nil {
+		_ = zw.Close()
+		return fmt.Errorf("failed to deflate the data set: %w", err)
+	}
+	// Close flushes the final block; a stream left unclosed decompresses short.
+	if err := zw.Close(); err != nil {
+		return fmt.Errorf("failed to finish the deflate stream: %w", err)
+	}
+
+	if err := dfw.writer.writer.WriteBytes(compressed.Bytes()); err != nil {
+		return fmt.Errorf("failed to write the deflated data set: %w", err)
+	}
 	return nil
 }
 
