@@ -836,7 +836,15 @@ type DICOMFile struct {
 // GetDataset converts the parsed file into a Dataset, recursively materializing
 // any nested sequences as sequence.Sequence values holding child Datasets.
 func (df *DICOMFile) GetDataset() *dataset.Dataset {
-	return elementsToDataset(df.DataElements)
+	ds := elementsToDataset(df.DataElements)
+
+	// The transfer syntax lives in the file meta header, which is not part of
+	// the data set. Carrying it across is what lets pixel access know whether
+	// PixelData is raw or encapsulated, and which codec to use.
+	if df.FileMetaInfo != nil {
+		ds.SetTransferSyntaxUID(df.FileMetaInfo.TransferSyntaxUID)
+	}
+	return ds
 }
 
 // elementsToDataset builds a Dataset from parsed elements, descending into

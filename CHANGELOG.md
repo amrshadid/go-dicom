@@ -13,6 +13,21 @@ throughout.
 
 ### Fixed
 
+- **Multi-frame images reported a single frame.** `NumberOfFrames` is IS, and
+  PS3.5 §6.2 pads a value to an even length with a trailing space, so `"2 "`
+  failed `strconv.Atoi` and the count silently fell back to its default of 1.
+  For compressed data that meant every frame after the first was discarded with
+  no error at all. Text values now have their padding stripped, as the standard
+  says they should.
+- **The deflated transfer syntax UID was wrong** in `compress`, recorded as
+  `1.2.840.10008.1.2.4.1` — a UID in the JPEG arc that is not a transfer syntax.
+  Real deflated files fell through to "unknown transfer syntax".
+- **The RLE encoder produced frames nothing could read.** It emitted no segment
+  header, and this package's decompressor accepted that because it had the
+  matching defect. Its PackBits runs were also capped out of range: a replicate
+  run at 256 emitted a control byte meaning a two-byte literal, and a literal
+  run at 129 emitted the no-op marker.
+
 - **Explicit VR Big Endian files could not be read, and files written as big
   endian could not be read by anything else.** Three separate defects:
   - The short-form value length was assembled by hand as little endian at two
@@ -60,6 +75,30 @@ throughout.
   This does not decode anything: `PixelArray()` still cannot decompress. It is
   the step that had to come first.
 
+- **RLE Lossless pixel data decodes.** `Dataset.PixelArray()` now decompresses
+  encapsulated pixel data instead of handing it to the sample parsers as though
+  it were raw, which failed on every compressed file with "insufficient pixel
+  data at frame 0, row N, col M".
+
+  The RLE decoder itself was rewritten. It had ignored the 64-byte segment
+  header (PS3.5 §G.5) and PackBits-decoded the whole frame as one stream,
+  treating the header's offsets as control bytes — 8736 bytes out of
+  `MR_small_RLE.dcm` where 8192 is correct, and not pixel data at any offset.
+  Segments are now decoded separately and interleaved, since each sample is
+  split across one segment per byte, most significant first.
+
+  *Verified against pydicom in both directions:* `MR_small_RLE.dcm` and both
+  frames of `SC_rgb_rle_2frame.dcm` decode byte for byte to what pydicom reads,
+  and pydicom decodes a frame this library encoded back to the original pixels.
+  `MR_small_RLE.dcm` also decodes to exactly the values of its uncompressed
+  twin `MR_small.dcm`. These comparisons run in CI.
+
+- **`Dataset` carries its transfer syntax.** `SetTransferSyntaxUID` and
+  `TransferSyntaxUID`, populated by `filereader`. Whether PixelData is raw or
+  encapsulated, and which codec compressed it, are properties of the transfer
+  syntax; the meta header is not part of the data set, so a `Dataset` had no way
+  to learn how its own pixels were encoded.
+
 - **Deflated Explicit VR Little Endian files can be read.** `filereader` never
   inflated, so `image_dfl.dcm` parsed to **0 elements**; it now parses to 29,
   matching pydicom, with its pixel data decoding correctly. Writing is *not*
@@ -98,11 +137,14 @@ throughout.
 
 ### Known limitations
 
-- No compressed pixel data decodes, RLE included. Frames can now be separated,
-  but the RLE decoder itself is still wrong — it returns 8736 bytes where 8192
-  is correct — and `PixelArray()` does not yet route compressed data through a
-  decoder. Compressed instances parse, store, and transfer with their pixel data
-  intact.
+- Only RLE and baseline JPEG decode. JPEG-LS, JPEG 2000, and JPEG Lossless have
+  no bundled decoder — their entry points describe a C library that is not
+  present — so those instances parse, store, and transfer with pixel data intact
+  but need a decoder supplied through
+  `compress.GetExternalRegistry().RegisterExternalDecoder`.
+- `PixelArray` flattens color samples into the column dimension, so a 100x100
+  RGB frame is reported as 100x300 rather than 100x100x3. The values and their
+  order are correct; the shape is not.
 - Deflated files can be read but not written.
 - Handlers still cannot observe a C-CANCEL and stop early; that needs streaming
   handler signatures.

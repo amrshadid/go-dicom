@@ -475,7 +475,7 @@ which is enough for an archive or a router, and not enough for a viewer.
 | Explicit VR Little Endian | Read/Write | Yes | Yes |
 | Explicit VR Big Endian | Read/Write | Yes | Yes |
 | Deflated Explicit VR LE | Read | Yes | Yes |
-| RLE Lossless | Read/Write | **No** | Yes |
+| RLE Lossless | Read/Write | **Yes** | Yes |
 | JPEG Baseline | Read/Write | **No** | Yes |
 | JPEG Extended | Read/Write | **No** | Yes |
 | JPEG Lossless | Read/Write | **No** | Yes |
@@ -490,10 +490,14 @@ decompresses. Values in an Explicit VR Big Endian file are normalised to little
 endian while parsing and converted back on write, so byte order never reaches
 code above `filereader`.
 
-**No compressed pixel data can be decoded yet.** Instances in any compressed
-syntax parse, store, and transfer with their pixel data intact as opaque bytes,
-but `Dataset.PixelArray()` cannot decompress them. This affects RLE as well,
-whose decoder is present but does not yet produce correct output.
+**RLE Lossless decodes.** `Dataset.PixelArray()` decompresses RLE pixel data,
+single- and multi-frame, grayscale and color. Verified against pydicom on its
+own test corpus, and checked in CI on every push.
+
+**No other compressed syntax decodes.** JPEG, JPEG-LS, and JPEG 2000 instances
+parse, store, and transfer with their pixel data intact as opaque bytes, but
+have no bundled decoder. Baseline JPEG goes through the standard library and
+works for ordinary 8-bit images; the rest need a decoder you supply.
 
 **Compressed frames can be extracted**, which is the step before decoding. For a
 compressed instance, `PixelData` holds the encapsulation exactly as it appears in
@@ -509,10 +513,10 @@ frame, err := ds.GetEncapsulatedFrame(0)      // one frame, still compressed
 Multi-frame compressed images split correctly; verified against pydicom on
 `SC_rgb_rle_2frame.dcm`.
 
-To decode compressed pixels today, register a decoder:
+To decode a syntax with no bundled decoder, register one:
 
 ```go
-compress.RegisterExternalDecoder(compress.CompressionJPEG2000, myDecoder)
+compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
 ```
 
 The JPEG-LS, JPEG 2000, and JPEG Lossless entry points are placeholders that

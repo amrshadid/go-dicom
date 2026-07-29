@@ -13,10 +13,15 @@ import (
 
 const (
 	// Uncompressed transfer syntaxes
-	ImplicitVRLittleEndian      = "1.2.840.10008.1.2"
-	ExplicitVRLittleEndian      = "1.2.840.10008.1.2.1"
-	ExplicitVRBigEndian         = "1.2.840.10008.1.2.2"
-	DeflatedExplicitVRLittleEnd = "1.2.840.10008.1.2.4.1"
+	ImplicitVRLittleEndian = "1.2.840.10008.1.2"
+	ExplicitVRLittleEndian = "1.2.840.10008.1.2.1"
+	ExplicitVRBigEndian    = "1.2.840.10008.1.2.2"
+	// The deflated syntax is 1.2.840.10008.1.2.1.99, an extension of Explicit
+	// VR Little Endian. This constant previously read 1.2.840.10008.1.2.4.1,
+	// which is in the JPEG arc and is not a transfer syntax at all — so a real
+	// deflated file fell through to "unknown transfer syntax" while a UID no
+	// file carries mapped to DEFLATE.
+	DeflatedExplicitVRLittleEnd = "1.2.840.10008.1.2.1.99"
 
 	// Compressed transfer syntaxes
 	RLELossless             = "1.2.840.10008.1.2.5"
