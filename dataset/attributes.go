@@ -1,25 +1,61 @@
 package dataset
 
 import (
-	"fmt"
+	"strconv"
 
 	"github.com/amrshadid/go-dicom/dataelem"
 )
 
+// parseTagHex converts a group/element hex pair into a tag.
+//
+// The error from parsing was previously discarded, leaving the value at zero on
+// failure — so a caller passing anything unparseable asked for (0000,0000) and
+// got it if the data set held Command Group Length, which every DIMSE command
+// data set does. HasTag("garbage", "garbage") could therefore return true.
+//
+// Both components must parse completely. Sscanf stops at the first character it
+// cannot use, so "00ZZ" would otherwise yield 0x0000 without complaint.
+func parseTagHex(groupHex, elemHex string) (uint32, bool) {
+	group, ok := parseHex16(groupHex)
+	if !ok {
+		return 0, false
+	}
+	elem, ok := parseHex16(elemHex)
+	if !ok {
+		return 0, false
+	}
+	return uint32(group)<<16 | uint32(elem), true
+}
+
+// parseHex16 parses a 16-bit hex value, requiring the whole string to be
+// consumed.
+func parseHex16(s string) (uint16, bool) {
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(s, 16, 16)
+	if err != nil {
+		return 0, false
+	}
+	return uint16(v), true
+}
+
 // GetByTag retrieves an element by group/element hex strings.
+//
+// Returns nil if either component is not valid hexadecimal, rather than
+// silently treating it as zero.
 func (ds *Dataset) GetByTag(groupHex, elemHex string) *dataelem.DataElement {
+	tagVal, ok := parseTagHex(groupHex, elemHex)
+	if !ok {
+		return nil
+	}
+
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 
-	var group, elem uint16
-	_, _ = fmt.Sscanf(groupHex, "%X", &group)
-	_, _ = fmt.Sscanf(elemHex, "%X", &elem)
-
-	tagVal := uint32(group)<<16 | uint32(elem)
 	if el, exists := ds.elements[tagVal]; exists {
 		return el
 	}
-
 	return nil
 }
 
@@ -55,14 +91,17 @@ func (ds *Dataset) HasTag(groupHex, elemHex string) bool {
 
 // RemoveByTag removes an element by group/element hex values.
 func (ds *Dataset) RemoveByTag(groupHex, elemHex string) bool {
+	tagVal, ok := parseTagHex(groupHex, elemHex)
+	if !ok {
+		return false
+	}
+
 	ds.mu.Lock()
 	defer ds.mu.Unlock()
 
-	var group, elem uint16
-	_, _ = fmt.Sscanf(groupHex, "%X", &group)
-	_, _ = fmt.Sscanf(elemHex, "%X", &elem)
-
-	tagVal := uint32(group)<<16 | uint32(elem)
+	if !ok {
+		return false
+	}
 
 	if _, exists := ds.elements[tagVal]; !exists {
 		return false
@@ -85,9 +124,14 @@ func (ds *Dataset) GetRange(startGroupHex string, endGroupHex string) []*dataele
 	ds.mu.RLock()
 	defer ds.mu.RUnlock()
 
-	var startGroup, endGroup uint16
-	_, _ = fmt.Sscanf(startGroupHex, "%X", &startGroup)
-	_, _ = fmt.Sscanf(endGroupHex, "%X", &endGroup)
+	startGroup, ok := parseHex16(startGroupHex)
+	if !ok {
+		return nil
+	}
+	endGroup, ok := parseHex16(endGroupHex)
+	if !ok {
+		return nil
+	}
 
 	var result []*dataelem.DataElement
 
