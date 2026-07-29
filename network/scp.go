@@ -430,6 +430,17 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 		DataSet:          queryDS,
 	}
 
+	// A streaming handler emits matches as it finds them and can be stopped by
+	// a C-CANCEL. The slice-returning path below cannot: it computes every
+	// match before the first is sent, so a cancel has nowhere to arrive.
+	if streamer, ok := handler.(CFindStreamer); ok {
+		status := s.streamCFindResponses(ctx, assoc, streamer, req, ctxID, messageID, sopClassUID)
+		rspDS := BuildCFindRSP(messageID, sopClassUID, status, false)
+		rspBytes, _ := EncodeCommandDataset(rspDS)
+		_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+		return
+	}
+
 	responses, err := handler.HandleCFind(ctx, req)
 	if err != nil {
 		// Send failure response
