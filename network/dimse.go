@@ -208,8 +208,7 @@ func EncodeCommandDataset(ds *dataset.Dataset) ([]byte, error) {
 	var elemBuf bytes.Buffer
 	elements := ds.GetAll()
 	for _, elem := range elements {
-		t := elem.GetTag()
-		elemTag, ok := t.(tag.Tag)
+		elemTag, ok := elem.Tag()
 		if !ok {
 			continue
 		}

@@ -2,6 +2,7 @@ package dataelem
 
 import (
 	"fmt"
+	"github.com/amrshadid/go-dicom/tag"
 	"io"
 	"sync"
 )
@@ -217,6 +218,18 @@ func (bde *BufferedDataElement) SetValue(value interface{}) {
 // Delegate methods to wrapped DataElement
 func (bde *BufferedDataElement) GetTag() interface{} {
 	return bde.elem.GetTag()
+}
+
+// Tag returns the element's tag, reporting whether the stored value could be
+// read as one. It mirrors DataElement.Tag so a buffered element can be used
+// wherever a plain one can without the caller reaching for the untyped form.
+func (bde *BufferedDataElement) Tag() (tag.Tag, bool) {
+	return bde.elem.Tag()
+}
+
+// MustTag returns the element's tag, or zero if it is not a tag.
+func (bde *BufferedDataElement) MustTag() tag.Tag {
+	return bde.elem.MustTag()
 }
 
 func (bde *BufferedDataElement) GetVR() VR {

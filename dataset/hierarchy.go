@@ -132,8 +132,11 @@ func (ds *Dataset) Equals(other *Dataset) bool {
 			return false
 		}
 
-		// Compare tags (shallow equality check)
-		if elem.GetTag() != otherElem.GetTag() {
+		// Compare the tags as tags. Comparing the interface{} values compares
+		// their dynamic types too, so the same tag stored as a tag.Tag in one
+		// element and a uint32 in the other compared unequal — two data sets
+		// holding identical attributes could be reported as different.
+		if elem.MustTag() != otherElem.MustTag() {
 			return false
 		}
 	}
