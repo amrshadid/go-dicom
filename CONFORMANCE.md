@@ -280,7 +280,24 @@ than none.
   JPEG-compressed instance over a context that negotiated uncompressed explicit
   VR will not decompress it.
 
-### 8.3 Service classes
+### 8.3 Truncated files
+
+An element declaring more bytes than the file holds is **dropped**, with the
+elements before it kept and a warning naming the offset. pydicom instead returns
+the element with whatever bytes were present.
+
+This is a deliberate difference. A partially read pixel buffer handed back as
+PixelData can be rendered as an image with nothing looking wrong, and for a value
+the caller cannot tell is short, dropping it is safer than shortening it. Two
+files in pydicom's own corpus — `MR_truncated.dcm` and `rtplan_truncated.dcm` —
+show the difference: pydicom reports 72 and 32 elements, go-dicom 71 and 31, and
+the missing one is incomplete in both cases.
+
+Anyone migrating from pydicom and relying on partial values should know this
+before it surprises them; the warning carries the offset needed to recover the
+bytes directly.
+
+### 8.4 Service classes
 
 The dictionary defines UID constants for far more SOP classes than are
 implemented. Verification, Storage, Query/Retrieve and Storage Commitment have
