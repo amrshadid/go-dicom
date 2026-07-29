@@ -336,6 +336,26 @@ jobs:
       - name: Check CHANGELOG exists
         run: test -f CHANGELOG.md
 
+      # A conformance statement is what a hospital's integration team asks for,
+      # and it is only useful if it stays in step with the code. Checking that
+      # it exists does not verify that, but it does stop it being deleted
+      # silently — and it names the sections whose absence would make it
+      # incomplete rather than merely out of date.
+      - name: Check the conformance statement is present and structured
+        run: |
+          test -f CONFORMANCE.md
+          for section in \
+            "AE specifications" \
+            "Presentation contexts and transfer syntaxes" \
+            "Communication profiles" \
+            "Support of character sets" \
+            "Security and enforced limits" \
+            "Limitations"; do
+            grep -q "$section" CONFORMANCE.md || {
+              echo "CONFORMANCE.md is missing the \"$section\" section"; exit 1; }
+          done
+          echo "conformance statement present with all required sections"
+
       - name: Verify module documentation
         run: |
           for dir in anonymize charset cli compress config dataelem dataset element encaps errors filebase filereader fileset fileutil filewriter hooks jsonrep multival network overlays pixels sequence sr tag uid util valuerep values waveforms; do

@@ -69,6 +69,17 @@ throughout.
 
 ### Added
 
+- **A DICOM Conformance Statement** ([CONFORMANCE.md](./CONFORMANCE.md)), in the
+  structure of PS3.2: SOP classes per role, transfer syntaxes negotiated versus
+  those readable from a file, extended negotiation, configuration, character
+  sets, enforced limits, and a plainly stated list of limitations. Every UID and
+  exported symbol it names was checked against the code.
+
+  One thing it makes explicit that was easy to miss: the SCP negotiates only
+  Implicit and Explicit VR Little Endian by default. A big endian, deflated or
+  compressed data set is read correctly from a file but is not accepted on the
+  wire unless the application calls `SetSupportedTransferSyntaxes`.
+
 - **Storage Commitment (PS3.4 Annex J)**, as both SCU and SCP. An SCU asks a
   peer to take permanent responsibility for instances it has already sent, so it
   can delete its own copies:
