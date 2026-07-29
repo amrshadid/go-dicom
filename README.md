@@ -466,6 +466,15 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM JSON Model (Part 18) | Supported |
 | ISO 2022 - Character set escape sequences | Supported |
 
+### Conformance
+
+[CONFORMANCE.md](./CONFORMANCE.md) is a DICOM Conformance Statement in the
+structure of PS3.2: the SOP classes negotiated in each role, the transfer
+syntaxes, the enforced limits, and a plainly stated list of what the library does
+not do. It is the document to hand to someone evaluating go-dicom for a clinical
+deployment, and every claim in it was checked against the code rather than
+described from memory.
+
 ### Transfer Syntax Support
 
 Two capabilities are distinct and worth separating: whether the **data set**
