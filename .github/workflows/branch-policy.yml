@@ -10,9 +10,17 @@ env:
 # require a pull request, require reviews, and require status checks, but it has
 # no setting for which branch a pull request may come *from*. The only place to
 # enforce it is a check that the protection rule then requires.
+#
+# It also runs on pull requests into develop, where it always passes. That
+# looks redundant but is not: a check run is attached to a commit SHA, not to a
+# pull request. Retargeting a rejected pull request from main to develop — the
+# exact thing this check tells people to do — otherwise leaves the failed run
+# attached to the commit with nothing to supersede it, so following the
+# instructions correctly still shows a red X. Running on both bases means the
+# retarget re-reports the same check name as a pass.
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
     types: [ opened, reopened, synchronize, edited ]
 
 permissions:
@@ -31,7 +39,13 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          if [ "$BASE_REF" != "main" ]; then
+            echo "Base branch is '$BASE_REF', not main. Any source branch is allowed."
+            exit 0
+          fi
+
           if [ "$HEAD_REF" = "develop" ] && [ "$HEAD_REPO" = "$BASE_REPO" ]; then
             echo "Source branch is develop. Allowed."
             exit 0
