@@ -5,6 +5,91 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Correctness release. Everything below was found by running this library against
+pydicom's test corpus or a live peer — not by its own tests, which passed
+throughout.
+
+### Fixed
+
+- **Explicit VR Big Endian files could not be read, and files written as big
+  endian could not be read by anything else.** Three separate defects:
+  - The short-form value length was assembled by hand as little endian at two
+    sites in `filereader`, ignoring the byte order the reader had already been
+    given. `MR_small_bigendian.dcm` parsed to **1 element**; pydicom reads 72.
+  - Values themselves stayed in big endian once the lengths were fixed, so
+    BitsAllocated of 16 read back as 4096 — the same bits reversed. Values are
+    now normalised to little endian as they are parsed, so `Dataset` needs no
+    byte-order concept and everything downstream can assume one order.
+  - The write side had no inverse. A file round-tripped through the library
+    declared big endian while holding little endian values, and `filewriter`
+    wrote the file meta header in the data set's byte order although PS3.10
+    §7.1 requires it always be Explicit VR Little Endian — producing a header
+    whose first tag read back as `(0200,0000)`.
+
+  *Verified:* `MR_small_bigendian.dcm` now parses to 72 elements and decodes to
+  pixels identical to pydicom's; a file written by this library and re-read in
+  pydicom matches on both element values and pixel data.
+
+- **C-CANCEL aborted the association.** `SCU.Cancel` sent a well-formed
+  C-CANCEL-RQ and the SCP had no case for it, so it fell to the default branch,
+  which aborts. Cancelling did not merely fail — it tore down the connection and
+  discarded results the requestor had already received. It is now dispatched and
+  the association survives.
+
+- **The `file` input to the coverage upload was silently ignored** in CI, and
+  `govulncheck` was installed from `@latest`, which broke the build when the
+  tool raised its own Go requirement.
+
+### Added
+
+- **Deflated Explicit VR Little Endian files can be read.** `filereader` never
+  inflated, so `image_dfl.dcm` parsed to **0 elements**; it now parses to 29,
+  matching pydicom, with its pixel data decoding correctly. Writing is *not*
+  supported — `filewriter` does not deflate, and the README says so.
+- **Patient/Study Only query/retrieve information model**
+  (`1.2.840.10008.5.1.4.1.2.3.x`). Retired in the current standard but still the
+  only model some archives offer. Added to the SCP's default contexts and to the
+  SCU's Find/Move/Get fallback chain as a third rung.
+- `dataelem.SwapByteOrder` and `dataelem.IsByteOrderSensitive` — one byte-order
+  implementation shared by the reader and the writer, so they cannot drift apart.
+- `compress.InflateLimitFor`, `MaxInflateRatio`, `MinInflateAllowance`.
+
+### Security
+
+- **A deflated file could force an allocation 50,000x its own size.** The 256 MiB
+  decompression-bomb ceiling bounded the output but let the attacker choose the
+  cost: a 300 KB file produced a measured **603 MiB peak heap** before being
+  rejected, because `io.ReadAll` grows its buffer by doubling. The allowance is
+  now the smaller of the ceiling and 1000x the compressed size, with an 8 MiB
+  floor — DEFLATE reaches its theoretical maximum ratio on genuinely blank
+  medical images, so a ratio alone would reject an all-black frame. Both the
+  file and network paths share one implementation.
+- **The security policy named a reporting channel that did not exist.** It
+  forbade public issues and asked for an email that appeared nowhere in the
+  repository. Reports now go through GitHub private vulnerability reporting,
+  which has been enabled.
+
+### Changed
+
+- The README transfer syntax table separated data set support, pixel decoding,
+  and network transfer into distinct columns. A compressed syntax marked
+  "Read/Write" had implied its pixels were usable when only the data set parsed.
+  No compressed syntax claims pixel decoding — including RLE, whose decoder
+  returns 8736 bytes where 8192 is correct.
+- CI runs on Node 24 actions throughout, and lints with golangci-lint v2.
+
+### Known limitations
+
+- No compressed pixel data decodes, RLE included. The reader discards the
+  encapsulation structure before anything can split frames, and the RLE decoder
+  is itself incorrect. Compressed instances still parse, store, and transfer
+  with their pixel data intact as opaque bytes.
+- Deflated files can be read but not written.
+- Handlers still cannot observe a C-CANCEL and stop early; that needs streaming
+  handler signatures.
+
 ## [1.3.0] - 2026-07-27
 
 > **Upgrade from 1.2.0 without delay.** The `ItemTag` constant in 1.2.0 was wrong, so the
@@ -223,11 +308,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **README** rewritten with networking documentation, pynetdicom feature parity table, handler patterns, CLI network commands
 - **CLI help** updated to show file and network command categories
 
-## [Unreleased]
+## Unversioned — predates 1.1.0
 
 <!-- These entries predate the 1.1.0 release and were never assigned a version.
      They are kept in place rather than folded in, since which release shipped
-     each one cannot now be determined from the history. -->
+     each one cannot now be determined from the history.
+
+     This section was previously headed "[Unreleased]", which collided with the
+     real Unreleased section at the top of the file: an edit intended for one
+     matched both, and release-note extraction had two candidate ranges. -->
 
 ### Added
 - **Anonymization module** (`anonymize/`) - DICOM de-identification per PS3.15 Annex E
