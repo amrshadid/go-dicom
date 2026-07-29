@@ -1,0 +1,215 @@
+package cli
+
+import (
+	"flag"
+	"strings"
+	"testing"
+)
+
+// allCommands returns one of every command the binary registers.
+//
+// Kept in step with the help output by TestHelpListingMatchesRealCommands, so a
+// network command cannot be added to one without the other noticing.
+func allCommands() []Command {
+	return []Command{
+		&ShowCommand{},
+		&InfoCommand{},
+		&ConvertCommand{},
+		&TagDocCommand{},
+		&CodifyCommand{},
+		&HelpCommand{},
+		&VersionCommand{},
+		&EchoSCUCommand{},
+		&EchoSCPCommand{},
+		&StoreSCUCommand{},
+		&StoreSCPCommand{},
+		&CommitSCUCommand{},
+		&FindSCUCommand{},
+		&MoveSCUCommand{},
+		&GetSCUCommand{},
+		&QRSCPCommand{},
+	}
+}
+
+// TestEveryCommandIsWellFormed covers the contract the CLI relies on for each
+// command it dispatches to.
+//
+// A command with an empty name is unreachable — RegisterCommand keys the map by
+// it, so it silently overwrites whatever else has an empty name. A duplicate
+// name is worse: the second registration replaces the first, and the command
+// that vanishes does so with no error anywhere.
+func TestEveryCommandIsWellFormed(t *testing.T) {
+	seen := make(map[string]Command)
+
+	for _, cmd := range allCommands() {
+		name := cmd.Name()
+
+		if name == "" {
+			t.Errorf("%T has an empty name; RegisterCommand keys on it, so it is unreachable", cmd)
+			continue
+		}
+		if strings.TrimSpace(name) != name {
+			t.Errorf("%T name %q has surrounding whitespace; it will never match an argument", cmd, name)
+		}
+		if previous, dup := seen[name]; dup {
+			t.Errorf("%T and %T both claim the name %q; registration order decides which survives",
+				previous, cmd, name)
+		}
+		seen[name] = cmd
+
+		if cmd.Description() == "" {
+			t.Errorf("%s has no description; it appears blank in the help output", name)
+		}
+	}
+}
+
+// TestAddFlagsIsSafeOnAFreshFlagSet verifies every command can install its flags
+// without panicking.
+//
+// Registering the same flag name twice panics rather than returning an error, so
+// a command that defines a duplicate takes the whole binary down the first time
+// anybody runs it — including on --help.
+func TestAddFlagsIsSafeOnAFreshFlagSet(t *testing.T) {
+	for _, cmd := range allCommands() {
+		t.Run(cmd.Name(), func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("AddFlags panicked: %v", r)
+				}
+			}()
+			fs := flag.NewFlagSet(cmd.Name(), flag.ContinueOnError)
+			fs.SetOutput(&strings.Builder{})
+			cmd.AddFlags(fs)
+		})
+	}
+}
+
+// TestRegisterAndRunUnknownCommand covers the dispatch path for a name that was
+// never registered, which is what a typo produces.
+func TestRegisterAndRunUnknownCommand(t *testing.T) {
+	c := NewCLI("dicom", "test")
+	c.RegisterCommand(&EchoSCUCommand{})
+
+	if err := c.Run([]string{"echoscp"}); err == nil {
+		t.Error("running an unregistered command succeeded")
+	}
+}
+
+// TestRegisterCommandIsKeyedByName documents that registration is a map write,
+// so two commands sharing a name means one disappears.
+func TestRegisterCommandIsKeyedByName(t *testing.T) {
+	c := NewCLI("dicom", "test")
+
+	c.RegisterCommand(&EchoSCUCommand{})
+	if _, ok := c.Commands["echoscu"]; !ok {
+		t.Fatal("the command was not registered under its own name")
+	}
+	if len(c.Commands) != 1 {
+		t.Errorf("registered one command, map holds %d", len(c.Commands))
+	}
+}
+
+// TestInstanceListParsing covers the repeatable -instance flag on commitscu.
+//
+// The value is "sopClassUID:sopInstanceUID", and a UID contains no colon, so the
+// split is on the last one. Accepting a malformed value would send a storage
+// commitment request naming an instance the archive cannot identify — and the
+// requestor would then delete its copy on the strength of an answer about
+// something else.
+func TestInstanceListParsing(t *testing.T) {
+	t.Run("accepts a well-formed pair", func(t *testing.T) {
+		var l instanceList
+		if err := l.Set("1.2.840.10008.5.1.4.1.1.2:1.2.3.4"); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if len(l) != 1 {
+			t.Fatalf("got %d instances, want 1", len(l))
+		}
+		if l[0].SOPClassUID != "1.2.840.10008.5.1.4.1.1.2" {
+			t.Errorf("SOP class = %q", l[0].SOPClassUID)
+		}
+		if l[0].SOPInstanceUID != "1.2.3.4" {
+			t.Errorf("SOP instance = %q", l[0].SOPInstanceUID)
+		}
+	})
+
+	t.Run("repeatable", func(t *testing.T) {
+		var l instanceList
+		for _, v := range []string{"1.2.3:4.5.6", "1.2.3:7.8.9"} {
+			if err := l.Set(v); err != nil {
+				t.Fatalf("Set(%q): %v", v, err)
+			}
+		}
+		if len(l) != 2 {
+			t.Errorf("got %d instances after two Set calls, want 2", len(l))
+		}
+	})
+
+	t.Run("rejects malformed values", func(t *testing.T) {
+		for _, v := range []string{
+			"",       // nothing
+			"1.2.3",  // no separator
+			":1.2.3", // no SOP class
+			"1.2.3:", // no instance
+			":",      // both empty
+		} {
+			var l instanceList
+			if err := l.Set(v); err == nil {
+				t.Errorf("Set(%q) was accepted, giving %+v", v, l)
+			}
+		}
+	})
+
+	t.Run("String reports the count", func(t *testing.T) {
+		var l instanceList
+		_ = l.Set("1.2.3:4.5.6")
+		if got := l.String(); !strings.Contains(got, "1") {
+			t.Errorf("String() = %q, want it to mention the count", got)
+		}
+	})
+}
+
+// TestHelpListingMatchesRealCommands verifies the help output names commands
+// that exist, and that every command it names has a description.
+//
+// The listing is a hardcoded slice and map. A name in the slice with no entry in
+// the map is skipped by the loop that prints them, so the command vanishes from
+// the help output while remaining perfectly runnable — nothing reports it, and a
+// user simply never learns the command is there. A name in neither is a command
+// nobody can discover at all.
+func TestHelpListingMatchesRealCommands(t *testing.T) {
+	real := make(map[string]bool)
+	for _, cmd := range allCommands() {
+		real[cmd.Name()] = true
+	}
+
+	for _, name := range netCommands {
+		if !real[name] {
+			t.Errorf("help lists %q, which is not a command", name)
+		}
+		if netDescriptions[name] == "" {
+			t.Errorf("help lists %q with no description, so it is silently omitted from the output", name)
+		}
+	}
+
+	// The reverse: a network command missing from the listing.
+	networkish := []string{"echoscu", "echoscp", "storescu", "storescp",
+		"findscu", "movescu", "getscu", "commitscu", "qrscp"}
+	listed := make(map[string]bool)
+	for _, n := range netCommands {
+		listed[n] = true
+	}
+	for _, n := range networkish {
+		if real[n] && !listed[n] {
+			t.Errorf("%q exists but is not in the help listing, so nobody can discover it", n)
+		}
+	}
+
+	// A description for a name that is not listed is dead weight, and usually
+	// means a rename happened in one place only.
+	for name := range netDescriptions {
+		if !listed[name] {
+			t.Errorf("netDescriptions has an entry for %q, which the listing does not include", name)
+		}
+	}
+}
