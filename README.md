@@ -320,15 +320,15 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Association Negotiation | Yes | Yes | Full A-ASSOCIATE-RQ/AC/RJ state machine |
 | Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
 | Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |
-| Storage SOP Classes | 100+ | 80+ | CT, MR, US, PET, RT, XR, SR, waveforms, encapsulated docs |
+| Storage SOP Classes | 165 | 169 | Every one pynetdicom lists, plus 4 recent standard additions |
 | Transfer Syntax Support | 37 | 37 | 4 negotiated by default, all via `AllTransferSyntaxes()` |
 | Storage Commitment | Yes | Yes | N-ACTION request, N-EVENT-REPORT result |
-| Query/Retrieve Models | Patient/Study Root | Yes | Find, Move, Get for both models |
+| Query/Retrieve Models | 2 | 4 | Patient Root, Study Root, Patient/Study Only, Modality Worklist |
 | Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |
-| MPPS | Yes | Yes | Via N-CREATE/N-SET |
-| Print Management | Yes | Yes | SOP Class UIDs defined |
+| MPPS | Yes | Yes | N-CREATE/N-SET both directions, verified against pynetdicom |
+| Print Management | Yes | Yes | Film session, film box, image box, print action |
 | Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
-| CLI Tools | 7 tools | 5 tools | echoscu, storescu, storescp, findscu, movescu |
+| CLI Tools | 7 | 9 | All 7 of pynetdicom's, plus `echoscp` and `commitscu` |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
 | Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
 
@@ -340,15 +340,20 @@ Known gaps, stated plainly so you can judge fit before adopting:
 |------|--------|
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
-| **Transcoding between transfer syntaxes** | A data set is sent using the syntax negotiated for its presentation context. The library does not re-encode pixel data, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR will not decompress it for you. |
+| **Transcoding of pixel data** | The data set itself is always encoded in the syntax its presentation context negotiated, in either byte order, deflated or not. Pixel data is not re-encoded, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR transfers the compressed bytes rather than decompressing them. |
 | **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
 
 ### Interoperability
 
 Every release is tested against [pynetdicom](https://github.com/pydicom/pynetdicom) and
-[dcmtk](https://dcmtk.org/) in CI — C-ECHO and C-STORE in both directions, plus C-GET
-and C-MOVE sub-operations — with the transferred data verified by pydicom rather than by
-this library's own reader:
+[dcmtk](https://dcmtk.org/) in CI — C-ECHO and C-STORE in both directions, C-GET and
+C-MOVE sub-operations, storage commitment, MPPS and print management — with the
+transferred data verified by pydicom rather than by this library's own reader.
+
+This matters more than the unit suite: every serious defect this project has had was
+code agreeing with itself. Reintroducing one of them, the N-SET that named its target
+with Affected instead of Requested SOP Instance UID, leaves the unit tests green and
+fails the interoperability tests.
 
 ```bash
 go build -o dicom .
