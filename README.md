@@ -283,7 +283,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
 | [sr](./sr/) | Structured reports with coded concepts (SNOMED-CT, LOINC) |
-| [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E |
+| [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities
 | Package | Description |
@@ -487,7 +487,7 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.7 - Message Exchange (DIMSE) | Supported |
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
-| DICOM PS3.15 - Security (TLS, de-identification) | Supported |
+| DICOM PS3.15 - Security (TLS, de-identification) | Supported — the Basic Profile covers every attribute in Table E.1-1, verified to leave none of them unchanged across pydicom's corpus |
 | DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus |
 | ISO 2022 - Character set escape sequences | Supported |
 
