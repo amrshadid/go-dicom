@@ -65,11 +65,14 @@ operations are answered in the order received.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()` |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
-The SCU falls back through the Q/R information models in order — Patient Root,
-Study Root, then Patient/Study Only — so a peer offering only one is reachable
-without the caller knowing which.
+`SCU.Find` chooses an information model from what the peer accepted, in the order
+Patient Root, Study Root, Patient/Study Only, Modality Worklist. Use
+`FindWithSOPClass` to name one — the right call whenever more than one was
+negotiated, since these models answer different questions and picking by
+availability is a convenience rather than a substitute for saying what you meant.
 
 ### 2.2 SOP classes supported as SCP
 
@@ -90,6 +93,11 @@ Negotiated by default:
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` |
+
+Modality Worklist (`1.2.840.10008.5.1.4.31`) is served by `WorklistHandler` but
+is **not** in the default set, since an SCP that accepts worklist queries without
+a worklist to answer them from is worse than one that declines. Add it with
+`SetSupportedAbstractSyntaxes`.
 
 Any other SOP class may be added with `SetSupportedAbstractSyntaxes`. The
 dictionary holds UID constants for far more classes than this list; a constant is
