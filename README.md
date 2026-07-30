@@ -272,7 +272,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 #### Encoding and Compression
 | Package | Description |
 |---------|-------------|
-| [charset](./charset/) | 30+ character set encodings (ISO 2022, Unicode, CJK) |
+| [charset](./charset/) | 30+ encodings (ISO 2022, Unicode, CJK), applied automatically on read |
 | [compress](./compress/) | Compression/decompression (DEFLATE, RLE, JPEG) |
 | [encaps](./encaps/) | Encapsulated pixel data parsing and frame extraction |
 

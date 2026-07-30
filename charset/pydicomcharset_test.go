@@ -3,10 +3,14 @@ package charset_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
+	"github.com/amrshadid/go-dicom/sequence"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // pydicom ships a set of files whose only purpose is to exercise character sets:
@@ -54,6 +58,23 @@ func charsetDir(t *testing.T) string {
 		t.Skipf("pydicom's charset_files are not beside the corpus: %v", err)
 	}
 	return dir
+}
+
+// readCharsetFixture opens a fixture and returns its data set.
+func readCharsetFixture(t *testing.T, path string) *dataset.Dataset {
+	t.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Skipf("%s is not present: %v", filepath.Base(path), err)
+	}
+	defer func() { _ = f.Close() }()
+
+	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
+	if err != nil {
+		t.Fatalf("ReadDICOMFile: %v", err)
+	}
+	return df.GetDataset()
 }
 
 // TestPersonNamesAgainstPydicomCharsetFiles decodes every charset fixture and
@@ -112,4 +133,96 @@ func trimName(s string) string {
 		break
 	}
 	return s
+}
+
+// TestTextIsDecodedWithoutAskingForIt reads the same files through the ordinary
+// accessor and expects text, not bytes.
+//
+// This is the behavior that matters. Decoding used to be reachable only through
+// DecodePersonName and DecodeTextValue, so a caller who did not know to ask got
+// the stored bytes: a name written in Greek, Hebrew, Japanese or plain accented
+// Latin came back as mojibake. Two of seventeen fixtures matched pydicom. There
+// is no way for a caller to discover that from a wrong-looking string, and most
+// of the world writes names that are not ASCII.
+func TestTextIsDecodedWithoutAskingForIt(t *testing.T) {
+	dir := charsetDir(t)
+
+	for file, want := range pydicomCharsetNames {
+		t.Run(file, func(t *testing.T) {
+			ds := readCharsetFixture(t, filepath.Join(dir, file))
+
+			elem, ok := ds.Get(tag.New(0x0010, 0x0010))
+			if !ok {
+				t.Fatal("the data set has no Patient Name")
+			}
+			value, _ := elem.GetValue().([]byte)
+
+			if got := trimName(string(value)); got != trimName(want) {
+				t.Errorf("Patient Name reads %q, pydicom reads %q", got, want)
+			}
+		})
+	}
+}
+
+// TestDecodedDataSetDeclaresUTF8 checks the data set stays self-consistent.
+//
+// The values are UTF-8 once decoded, so Specific Character Set has to say so.
+// Leaving the original term would describe UTF-8 bytes as Latin-1 or JIS, and
+// anything writing the data set back out would produce a file that is wrong in
+// exactly the way this change exists to prevent.
+func TestDecodedDataSetDeclaresUTF8(t *testing.T) {
+	dir := charsetDir(t)
+
+	for _, file := range []string{"chrJapMulti.dcm", "chrGerm.dcm", "chrRuss.dcm"} {
+		t.Run(file, func(t *testing.T) {
+			ds := readCharsetFixture(t, filepath.Join(dir, file))
+
+			elem, ok := ds.Get(tag.New(0x0008, 0x0005))
+			if !ok {
+				t.Fatal("Specific Character Set is missing")
+			}
+			value, _ := elem.GetValue().([]byte)
+			if got := strings.TrimRight(string(value), " \x00"); got != "ISO_IR 192" {
+				t.Errorf("Specific Character Set is %q, want ISO_IR 192 to match the decoded values", got)
+			}
+		})
+	}
+}
+
+// TestSequenceItemCharacterSet covers Specific Character Set inside an item.
+//
+// PS3.5 allows an item to declare its own, and it applies to that item and
+// anything below it. Reading only the top-level attribute left the Japanese name
+// in chrSQEncoding.dcm undecoded.
+func TestSequenceItemCharacterSet(t *testing.T) {
+	dir := charsetDir(t)
+	const want = "ﾔﾏﾀﾞ^ﾀﾛｳ=山田^太郎=やまだ^たろう"
+
+	for _, file := range []string{"chrSQEncoding.dcm", "chrSQEncoding1.dcm"} {
+		t.Run(file, func(t *testing.T) {
+			ds := readCharsetFixture(t, filepath.Join(dir, file))
+
+			var found string
+			for _, elem := range ds.GetAll() {
+				seq, ok := elem.GetValue().(*sequence.Sequence)
+				if !ok {
+					continue
+				}
+				for i := 0; i < seq.Length(); i++ {
+					item, _ := seq.Get(i)
+					inner, ok := item.(*dataset.Dataset)
+					if !ok {
+						continue
+					}
+					if pn, ok := inner.Get(tag.New(0x0010, 0x0010)); ok {
+						b, _ := pn.GetValue().([]byte)
+						found = trimName(string(b))
+					}
+				}
+			}
+			if found != trimName(want) {
+				t.Errorf("the item's Patient Name reads %q, pydicom reads %q", found, want)
+			}
+		})
+	}
 }

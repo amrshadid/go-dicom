@@ -234,10 +234,23 @@ selection, and user identity negotiation. The window defaults to one.
 
 ## 6. Support of character sets
 
-Specific Character Set (0008,0005) is honoured on read and written when a
-non-default repertoire is in use. Over 30 encodings are supported, including
-ISO 2022 escape sequences for Japanese, Chinese and Korean text, and the
-single-byte ISO_IR sets.
+Specific Character Set (0008,0005) is applied when a file is read. Text values
+reach the caller as UTF-8 through the ordinary accessors — `Get`, `GetValue`,
+`GetAll` — with no separate decoding step, and the data set's own Specific
+Character Set reads `ISO_IR 192` to match the values it now describes.
+
+An item may declare its own character set, and it applies to that item and
+everything below it, as PS3.5 allows.
+
+Over 30 encodings are supported: the single-byte ISO_IR sets, and ISO 2022
+escape sequences for Japanese, Chinese and Korean. Measured against pydicom's
+seventeen character set fixtures — Arabic, Greek, Hebrew, Japanese, Korean,
+Russian, Chinese and accented Latin — every patient name matches what pydicom
+reads, and every file survives a round trip through this writer with dcmtk able
+to read the result.
+
+`DICOMFile.DataElements` still holds the bytes exactly as stored, for a caller
+who needs them.
 
 A writer that encodes text in a non-default set declares it; one that reverts to
 the default removes the declaration. A file whose text is encoded in a set it
