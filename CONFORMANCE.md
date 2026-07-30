@@ -278,8 +278,13 @@ than none.
 ### 8.1 Pixel data
 
 RLE, JPEG Baseline, JPEG Lossless (`.57` and `.70`, every prediction selection
-value, single or multi component) and grayscale JPEG-LS all decode in pure Go.
-What follows is what does not.
+value, single or multi component) and grayscale JPEG-LS all decode in pure Go,
+at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
+horizontally subsampled `YBR_FULL_422` expanded.
+
+Every file in pydicom's corpus that pydicom can decode decodes here to the same
+samples, bar the two gaps below — 42 of its 49, compared whole rather than by
+their leading values. What follows is what does not decode.
 
 - **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
   path: wavelet transforms plus EBCOT arithmetic coding is thousands of lines to
@@ -308,6 +313,12 @@ What follows is what does not.
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
   order are correct. `PixelArrayBySample` returns the four-dimensional shape that
   `PixelDataShape` reports.
+
+- **Samples are returned in the color space the Photometric Interpretation
+  names.** A `YBR_FULL` instance yields YBR, not RGB, because the attribute
+  describes the samples as stored and converting them while it still says YBR
+  would leave a reader to convert a second time. This matches pydicom. Convert
+  with the attribute, not despite it.
 
 ### 8.2 Network
 
