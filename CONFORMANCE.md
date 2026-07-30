@@ -277,6 +277,10 @@ than none.
 
 ### 8.1 Pixel data
 
+RLE, JPEG Baseline, JPEG Lossless (`.57` and `.70`, every prediction selection
+value, single or multi component) and grayscale JPEG-LS all decode in pure Go.
+What follows is what does not.
+
 - **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
   path: wavelet transforms plus EBCOT arithmetic coding is thousands of lines to
   implement correctly, and binding openjpeg would cost this library a property it
@@ -300,9 +304,7 @@ than none.
   larger ones, and a decoder that is right until row 11 is worse than one that
   declines, because the output looks like an image either way.
 
-- JPEG Lossless (`.57` and `.70`) decodes in pure Go at every prediction
-  selection value, single or multi component.
-- **`PixelArray` flattens colour samples into the column dimension**, so a
+- **`PixelArray` flattens color samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
   order are correct. `PixelArrayBySample` returns the four-dimensional shape that
   `PixelDataShape` reports.
