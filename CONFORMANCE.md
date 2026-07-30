@@ -316,13 +316,16 @@ than none.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Pixel data is not transcoded.** The data set itself *is* — it is always
-  encoded in the syntax the presentation context negotiated, in either byte
-  order, deflated or not, so a value reaches the peer intact whichever was
-  agreed. What is not re-encoded is compressed pixel data: sending a
-  JPEG-compressed instance over a context that negotiated uncompressed explicit
-  VR transfers the compressed bytes rather than decompressing them, since that
-  would need a codec this library does not bundle.
+- **Pixel data is decompressed to be sent uncompressed, but never compressed.**
+  A data set stored under a compressed syntax and sent over a context that
+  negotiated an uncompressed one has its pixel data decoded first. If it cannot
+  be decoded — JPEG 2000, 12-bit JPEG Extended, color JPEG-LS — the send fails
+  rather than putting encapsulated fragments on the wire described as native
+  pixels, which the receiver could not detect.
+
+  The reverse is not available: this library compresses no pixel data, so a
+  native instance cannot be sent over a context that negotiated a compressed
+  syntax. Negotiate an uncompressed syntax for those, which the defaults do.
 
 ### 8.3 Truncated files
 
