@@ -209,6 +209,26 @@ func (ds *Dataset) RawPixelData() ([]byte, error) {
 	return extractBytesValue(pixelDataElem)
 }
 
+// DecodedPixelData returns the pixel data as native, uncompressed bytes,
+// decompressing it if the data set's transfer syntax says it is compressed.
+//
+// This is what RawPixelData is not: that returns the element's value as stored,
+// which for a compressed instance is encapsulated fragments rather than pixels.
+// Anything that has to hand pixel data to something expecting an uncompressed
+// layout — writing a native file, or sending over a presentation context that
+// negotiated an uncompressed syntax — needs this instead.
+//
+// It fails rather than returning the compressed bytes when no decoder is
+// available for the syntax, because bytes that are not pixels are worse than an
+// error to whatever receives them.
+func (ds *Dataset) DecodedPixelData() ([]byte, error) {
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, err
+	}
+	return ds.pixelBytesForDecoding(info)
+}
+
 // ExtractEncapsulatedFrames extracts individual frames from encapsulated (compressed) pixel data.
 // Uses the encaps module Parser and Extractor for standard DICOM encapsulation handling.
 // Returns the extracted frame data as bytes.
