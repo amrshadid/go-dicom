@@ -74,6 +74,14 @@ func EncodeDataset(ds *dataset.Dataset, transferSyntax string) ([]byte, error) {
 		return nil, nil
 	}
 
+	// Pixel data compressed under one syntax is not pixel data under another.
+	// Sending it unchanged puts encapsulated fragments on the wire described as
+	// native pixels, which the receiver cannot detect.
+	ds, err := transcodePixelData(ds, transferSyntax)
+	if err != nil {
+		return nil, NewPDUErrorf("ENCODE_DS", "%s", err)
+	}
+
 	enc := encodingForTransferSyntax(transferSyntax)
 	var buf bytes.Buffer
 
