@@ -44,6 +44,14 @@ func initializeExternalDecoders() {
 
 // RegisterExternalDecoder registers an external decoder
 func (reg *ExternalDecoderRegistry) RegisterExternalDecoder(compressionType CompressionType, decoder Decompressor) error {
+	// A nil decoder is never what a caller wants, and it is no longer harmless:
+	// JPEG-LS and JPEG Lossless are decoded in this package now, so accepting
+	// nil would quietly replace a working decoder with one that cannot be
+	// called, and the failure would surface far from the registration.
+	if decoder == nil {
+		return fmt.Errorf("cannot register a nil decoder for %s", compressionType)
+	}
+
 	switch compressionType {
 	case JPEG_LS:
 		reg.jpegLSDecoder = decoder
@@ -111,7 +119,9 @@ func errNoDecoder(compressionType CompressionType) error {
 // It is kept as a hook: a build that wires in a real codec can replace the body
 // without changing callers. It does not attempt CGO, and never did.
 func tryInitJPEGLSDecoder() (Decompressor, error) {
-	return nil, errNoDecoder(JPEG_LS)
+	// JPEG-LS is decoded in this package, in pure Go. The registry entry remains
+	// so a caller can still substitute their own decoder.
+	return NewJPEGLSDecompressor(), nil
 }
 
 // tryInitJPEG2000Decoder reports that no JPEG 2000 decoder is bundled.
