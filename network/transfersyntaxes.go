@@ -32,8 +32,8 @@ func AllTransferSyntaxes() []string {
 var compressedTransferSyntaxes = []string{
 	JPEGBaselineUID,
 	JPEGExtendedUID,
+	JPEGLosslessProcess14UID,
 	JPEGLosslessSV1UID,
-	JPEGLosslessUID,
 	JPEGLSLosslessUID,
 	JPEGLSNearLosslessUID,
 	JPEG2000LosslessUID,

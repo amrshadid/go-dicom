@@ -109,21 +109,22 @@ var uids = map[string]*UIDInfo{
 		IsRetired:   false,
 		Description: "JPEG extended lossy compression",
 	},
-	// JPEG Lossless (Process 14)
+	// JPEG Lossless, Non-Hierarchical (Process 14)
+	"1.2.840.10008.1.2.4.57": {
+		UID:         "1.2.840.10008.1.2.4.57",
+		Name:        "JPEG Lossless, Non-Hierarchical (Process 14)",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "JPEG lossless compression, any prediction selection value",
+	},
+	// JPEG Lossless, Non-Hierarchical, First-Order Prediction
+	// (Process 14 [Selection Value 1]) — the one archives use in practice.
 	"1.2.840.10008.1.2.4.70": {
 		UID:         "1.2.840.10008.1.2.4.70",
-		Name:        "JPEG Lossless (Process 14)",
+		Name:        "JPEG Lossless, Non-Hierarchical, First-Order Prediction (Process 14 [Selection Value 1])",
 		Type:        "TransferSyntax",
 		IsRetired:   false,
-		Description: "JPEG lossless compression",
-	},
-	// JPEG Lossless (Process 14, SV1)
-	"1.2.840.10008.1.2.4.71": {
-		UID:         "1.2.840.10008.1.2.4.71",
-		Name:        "JPEG Lossless (Process 14, SV1)",
-		Type:        "TransferSyntax",
-		IsRetired:   false,
-		Description: "JPEG lossless compression with SV1",
+		Description: "JPEG lossless compression fixed to selection value 1",
 	},
 	// JPEG-LS Lossless
 	"1.2.840.10008.1.2.4.80": {
@@ -321,8 +322,8 @@ func CompressedTransferSyntaxes() []UID {
 	return []UID{
 		New("1.2.840.10008.1.2.4.50"), // JPEG Baseline
 		New("1.2.840.10008.1.2.4.51"), // JPEG Extended
-		New("1.2.840.10008.1.2.4.70"), // JPEG Lossless
-		New("1.2.840.10008.1.2.4.71"), // JPEG Lossless SV1
+		New("1.2.840.10008.1.2.4.57"), // JPEG Lossless (Process 14)
+		New("1.2.840.10008.1.2.4.70"), // JPEG Lossless (Process 14 SV1)
 		New("1.2.840.10008.1.2.4.80"), // JPEG-LS Lossless
 		New("1.2.840.10008.1.2.4.81"), // JPEG-LS Lossy
 		New("1.2.840.10008.1.2.4.90"), // JPEG 2000 Lossless
@@ -348,8 +349,8 @@ func IsLossless(uid UID) bool {
 		"1.2.840.10008.1.2",      // Implicit VR Little Endian
 		"1.2.840.10008.1.2.1",    // Explicit VR Little Endian
 		"1.2.840.10008.1.2.2",    // Explicit VR Big Endian
-		"1.2.840.10008.1.2.4.70", // JPEG Lossless
-		"1.2.840.10008.1.2.4.71", // JPEG Lossless SV1
+		"1.2.840.10008.1.2.4.57", // JPEG Lossless (Process 14)
+		"1.2.840.10008.1.2.4.70", // JPEG Lossless (Process 14 SV1)
 		"1.2.840.10008.1.2.4.80", // JPEG-LS Lossless
 		"1.2.840.10008.1.2.4.90", // JPEG 2000 Lossless
 		"1.2.840.10008.1.2.4.92", // JPEG 2000 Part 2 Multicomponent Lossless
