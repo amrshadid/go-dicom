@@ -3,6 +3,9 @@ package network
 import (
 	"context"
 	"log"
+	"sync/atomic"
+
+	"github.com/amrshadid/go-dicom/dataset"
 )
 
 // CFindStreamer is an optional interface for C-FIND handlers that produce
@@ -25,6 +28,63 @@ type CFindStreamer interface {
 	// respects it stops doing work nobody is waiting for. Returning ctx.Err()
 	// is fine; the SCP reports the cancellation to the requestor either way.
 	StreamCFind(ctx context.Context, req *CFindRequest, out chan<- *CFindResponse) error
+}
+
+// CGetStreamer is an optional interface for C-GET handlers that produce their
+// matching instances incrementally.
+//
+// Handler.HandleCGet returns a slice, so every instance of a study is held in
+// memory before the first one is sent, and the matching phase cannot be
+// interrupted. A streaming handler emits instances as it finds them and stops
+// when ctx is done because the requestor sent C-CANCEL.
+//
+// It is two methods rather than one because PS3.4 requires each pending
+// response to carry the number of sub-operations still outstanding, and that
+// cannot be derived from a stream that has not finished. An archive can answer
+// it with a count query before fetching anything, which is the same order it
+// would do the work in anyway.
+//
+// Implementing it is optional; a handler that does not is served by the slice
+// path unchanged. The SCP owns the channel and closes it — return when there is
+// nothing more to send, or when ctx is done.
+type CGetStreamer interface {
+	// CountCGetMatches returns how many instances match, before any are sent.
+	CountCGetMatches(ctx context.Context, req *CGetRequest) (int, error)
+
+	// StreamCGet sends each matching instance on out.
+	StreamCGet(ctx context.Context, req *CGetRequest, out chan<- *dataset.Dataset) error
+}
+
+// CMoveStreamer is the C-MOVE equivalent of CGetStreamer.
+type CMoveStreamer interface {
+	// CountCMoveMatches returns how many instances match, before any are sent.
+	CountCMoveMatches(ctx context.Context, req *CMoveRequest) (int, error)
+
+	// StreamCMove sends each matching instance on out.
+	StreamCMove(ctx context.Context, req *CMoveRequest, out chan<- *dataset.Dataset) error
+}
+
+// cancelFlag records that a C-CANCEL arrived for an operation in progress.
+//
+// C-GET needs this rather than a cancelWatcher. Its sub-operations travel on the
+// same association as the request, so the SCP is already reading that connection
+// to collect each C-STORE-RSP; a watcher reading concurrently would be a second
+// reader on one connection, which interleaves PDU bodies. The cancel is noticed
+// where it actually arrives — in that response read — instead.
+type cancelFlag struct {
+	canceled atomic.Bool
+}
+
+func (f *cancelFlag) set()         { f.canceled.Store(true) }
+func (f *cancelFlag) wasSet() bool { return f.canceled.Load() }
+
+// isCancelFor reports whether a command data set is a C-CANCEL naming messageID.
+func isCancelFor(cmdDS *dataset.Dataset, messageID uint16) bool {
+	commandField, msgID, _, err := ParseCommandDataset(cmdDS)
+	if err != nil {
+		return false
+	}
+	return commandField == CommandCCancelRQ && msgID == messageID
 }
 
 // cancelWatcher watches an association for a C-CANCEL naming a given message
