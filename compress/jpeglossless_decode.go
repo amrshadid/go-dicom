@@ -6,9 +6,13 @@ import (
 )
 
 // maxLosslessPixels bounds the frame a header may declare, so a corrupt or
-// hostile SOF3 cannot ask for an allocation the machine cannot serve. 2^28
-// samples is far beyond any DICOM frame and still allocates predictably.
-const maxLosslessPixels = 1 << 28
+// hostile SOF3 cannot ask for an allocation the machine cannot serve.
+//
+// 2^25 samples is 8192x4096, past digital mammography and the largest CR
+// plates. It bounds work as well as memory: a frame this size claimed by a
+// handful of bytes would otherwise be allocated and walked before the missing
+// entropy data was noticed.
+const maxLosslessPixels = 1 << 25
 
 // maxTrailingSlack is how many bytes past the end of the entropy-coded data a
 // valid frame may appear to need.

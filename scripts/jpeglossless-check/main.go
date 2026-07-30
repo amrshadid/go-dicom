@@ -71,19 +71,25 @@ func main() {
 			failures++
 			continue
 		}
-		if len(want)%len(samples) != 0 {
+		// DICOM pads an odd-length value to an even one, so the stored pixel
+		// data can carry a trailing byte that is not a sample.
+		truth := want
+		if len(truth)%len(samples) != 0 && (len(truth)-1)%len(samples) == 0 {
+			truth = truth[:len(truth)-1]
+		}
+		if len(truth)%len(samples) != 0 {
 			fmt.Fprintf(os.Stderr, "%s: decoded %d samples, which does not divide %d bytes of original pixels\n",
-				name, len(samples), len(want))
+				name, len(samples), len(truth))
 			failures++
 			continue
 		}
 
 		// Compare bit patterns rather than numbers, so the comparison does not
 		// have to agree with pydicom about signedness.
-		got := pack(samples, len(want)/len(samples))
-		if i, ok := firstDifference(got, want); !ok {
+		got := pack(samples, len(truth)/len(samples))
+		if i, ok := firstDifference(got, truth); !ok {
 			fmt.Fprintf(os.Stderr, "%s: byte %d is 0x%02X, the original has 0x%02X\n",
-				name, i, got[i], want[i])
+				name, i, got[i], truth[i])
 			failures++
 			continue
 		}

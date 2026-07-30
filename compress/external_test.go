@@ -36,16 +36,22 @@ func TestExternalDecoderAvailability(t *testing.T) {
 func TestExternalDecoderRegistration(t *testing.T) {
 	registry := compress.GetExternalRegistry()
 
-	// Test registering a nil decoder (should not error, but decoder won't work)
-	err := registry.RegisterExternalDecoder(compress.JPEG_LS, nil)
-	if err != nil {
-		t.Errorf("RegisterExternalDecoder(JPEG_LS, nil) error = %v", err)
+	// A nil decoder is rejected. It used to be accepted, which was harmless
+	// only while this package bundled no decoders: now it would replace a
+	// working one with something that cannot be called, and the registry is
+	// global, so the damage would outlive the caller that did it.
+	if err := registry.RegisterExternalDecoder(compress.JPEG_LS, nil); err == nil {
+		t.Error("RegisterExternalDecoder(JPEG_LS, nil) was accepted; a nil decoder cannot be used")
 	}
 
-	// Test registering with invalid compression type
-	err = registry.RegisterExternalDecoder(compress.CompressionType("INVALID"), nil)
-	if err == nil {
-		t.Error("RegisterExternalDecoder with invalid type should error")
+	// An unknown compression type is rejected whatever the decoder.
+	if err := registry.RegisterExternalDecoder(compress.CompressionType("INVALID"), passthroughDecoder{}); err == nil {
+		t.Error("RegisterExternalDecoder with an invalid type should error")
+	}
+
+	// The bundled decoder survives a rejected registration.
+	if _, err := registry.GetExternalDecoder(compress.JPEG_LS); err != nil {
+		t.Errorf("the built-in JPEG-LS decoder was lost: %v", err)
 	}
 }
 

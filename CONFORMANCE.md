@@ -277,15 +277,22 @@ than none.
 
 ### 8.1 Pixel data
 
-- **JPEG Extended, JPEG-LS and JPEG 2000 do not decode.** There is no bundled
-  codec for these and no hidden CGO path. Instances in these syntaxes parse,
-  store, and transfer with their pixel data intact as opaque bytes. Supply a
-  decoder with `compress.GetExternalRegistry().RegisterExternalDecoder`.
+- **JPEG Extended and JPEG 2000 do not decode.** There is no bundled codec for
+  these and no hidden CGO path. Instances in these syntaxes parse, store, and
+  transfer with their pixel data intact as opaque bytes. Supply a decoder with
+  `compress.GetExternalRegistry().RegisterExternalDecoder`. JPEG Extended fails
+  specifically on precision: the standard library handles 8-bit baseline, and
+  `.51` is usually 12-bit.
 
-  JPEG Lossless (`1.2.840.10008.1.2.4.57` and `.70`) does decode, in pure Go, at
-  every prediction selection value. JPEG Extended fails specifically on
-  precision: the standard library handles 8-bit baseline, and `.51` is usually
-  12-bit.
+- **JPEG-LS decodes single-component frames only.** Lossless (`.80`) and
+  near-lossless (`.81`), 2 to 16 bits, which covers CT, MR, CR and the other
+  grayscale modalities. A multi-component frame is **refused rather than
+  decoded**: the interleaved paths were correct on small frames and diverged on
+  larger ones, and a decoder that is right until row 11 is worse than one that
+  declines, because the output looks like an image either way.
+
+- JPEG Lossless (`.57` and `.70`) decodes in pure Go at every prediction
+  selection value, single or multi component.
 - **`PixelArray` flattens colour samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
   order are correct. `PixelArrayBySample` returns the four-dimensional shape that

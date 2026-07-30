@@ -526,6 +526,47 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG-LS: dcmtk encodes, pydicom supplies the answer, same as above.
+#
+# Only single-component frames are checked, because that is all this library
+# decodes; a colour frame is refused rather than decoded, which the unit tests
+# cover.
+if [ -x "$DCMTK_BIN/dcmcjpls" ] && command -v python3 >/dev/null 2>&1; then
+  note "JPEG-LS: dcmtk encoder, pydicom ground truth"
+
+  jls_dir="$WORKDIR/jpegls"
+  mkdir -p "$jls_dir"
+
+  if python3 - "$jls_dir" <<'PYEOF'
+import os, shutil, sys
+import pydicom, pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+src = os.path.join(corpus, "MR_small.dcm")
+shutil.copy(src, os.path.join(sys.argv[1], "orig.dcm"))
+
+ds = pydicom.dcmread(src)
+with open(os.path.join(sys.argv[1], "orig.pixels"), "wb") as fh:
+    fh.write(ds.PixelData)
+PYEOF
+  then
+    if "$DCMTK_BIN/dcmcjpls" +el "$jls_dir/orig.dcm" "$jls_dir/lossless.dcm" >/dev/null 2>&1; then
+      if go run ./scripts/jpeglossless-check "$jls_dir" "$jls_dir/orig.pixels" > "$WORKDIR/jls.log" 2>&1; then
+        pass "JPEG-LS — a grayscale frame decodes to the original pixels"
+        RAN_ANY=1
+      else
+        fail "go-dicom did not reproduce the original pixels from JPEG-LS"
+        sed -n '1,20p' "$WORKDIR/jls.log" >&2
+      fi
+    else
+      skip "dcmcjpls produced no JPEG-LS fixture"
+    fi
+  else
+    skip "pydicom is not available to supply the JPEG-LS fixture"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2
