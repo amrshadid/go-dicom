@@ -567,6 +567,63 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# Round trip: go-dicom writes, dcmtk judges.
+#
+# Writing was only ever checked by reading the output back with this library,
+# which cannot catch a file that is self-consistent and non-conformant. dcmtk
+# refused 34 of pydicom's 69 corpus files written this way, every one of them
+# compressed: encapsulated pixel data carried an explicit length where PS3.5 A.4
+# requires an undefined one. pydicom read them all.
+if [ -x "$DCMTK_BIN/dcmdump" ] && command -v python3 >/dev/null 2>&1; then
+  note "Round trip: go-dicom writer, dcmtk reader"
+
+  rt_src="$WORKDIR/rt-src"
+  rt_out="$WORKDIR/rt-out"
+  mkdir -p "$rt_src" "$rt_out"
+
+  if python3 - "$rt_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom.data
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if name.endswith(".dcm"):
+        shutil.copy(os.path.join(corpus, name), os.path.join(sys.argv[1], name))
+        copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check "$rt_src" "$rt_out" > "$WORKDIR/rt.log" 2>&1; then
+      rt_total=0
+      rt_bad=0
+      for written in "$rt_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        rt_total=$((rt_total + 1))
+        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>&1; then
+          rt_bad=$((rt_bad + 1))
+          echo "   dcmtk rejects $(basename "$written")" >&2
+        fi
+      done
+
+      # Two of pydicom's fixtures are themselves non-conformant — one holds
+      # implicit VR inside a file declaring explicit, the other has no transfer
+      # syntax at all — and dcmtk refuses them however they are written.
+      if [ "$rt_bad" -le 2 ]; then
+        pass "round trip — dcmtk reads $((rt_total - rt_bad)) of $rt_total files this writer produced"
+        RAN_ANY=1
+      else
+        fail "dcmtk rejects $rt_bad of $rt_total files this writer produced"
+      fi
+    else
+      fail "the round trip harness failed"
+      sed -n '1,20p' "$WORKDIR/rt.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2
