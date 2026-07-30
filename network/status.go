@@ -62,13 +62,71 @@ const (
 )
 
 // --- Unified Procedure Step Status Codes ---
+//
+// PS3.4 Table CC.2.5-3 and CC.2.6-3. Five of the six constants that used to be
+// here had values belonging to a different condition than their names described
+// — 0xC301 is a missing Transaction UID, not an unupdatable step, and "already
+// IN PROGRESS" is 0xC302 rather than 0xC310. Nothing used them, so they are
+// corrected rather than aliased.
 const (
-	StatusUPSUnknownActionType   uint16 = 0xC300
-	StatusUPSRefusedNotUpdatable uint16 = 0xC301
-	StatusUPSCannotDelete        uint16 = 0xC302
-	StatusUPSAlreadyCompleted    uint16 = 0xC303
+	// StatusUPSNotUpdatable is returned when the step has reached a final state.
+	StatusUPSNotUpdatable uint16 = 0xC300
+
+	// StatusUPSTransactionUIDMissing is returned when the Transaction UID is
+	// absent or does not match the one issued when the step went IN PROGRESS.
+	// It is the lock that keeps two performers from updating one step.
+	StatusUPSTransactionUIDMissing uint16 = 0xC301
+
+	// StatusUPSAlreadyInProgress is returned when a step is asked to start twice.
+	StatusUPSAlreadyInProgress uint16 = 0xC302
+
+	// StatusUPSMayOnlyBeScheduledByCreate is returned when SCHEDULED is
+	// requested by N-SET or N-ACTION; a step only enters that state at creation.
+	StatusUPSMayOnlyBeScheduledByCreate uint16 = 0xC303
+
+	// StatusUPSFinalStateRequirementsNotMet is returned when the attributes a
+	// state change requires are absent.
+	StatusUPSFinalStateRequirementsNotMet uint16 = 0xC304
+
+	// StatusUPSNoSuchProcedureStep is returned for a SOP Instance UID this SCP
+	// does not manage.
 	StatusUPSNoSuchProcedureStep uint16 = 0xC307
-	StatusUPSAlreadyInProgress   uint16 = 0xC310
+
+	// StatusUPSUnknownReceivingAE is returned when a requested receiving AE
+	// title is not one this SCP knows.
+	StatusUPSUnknownReceivingAE uint16 = 0xC308
+
+	// StatusUPSStateWasNotScheduled is returned when a step created with a state
+	// other than SCHEDULED was expected to be scheduled.
+	StatusUPSStateWasNotScheduled uint16 = 0xC309
+
+	// StatusUPSNotInProgress is returned when an update requires the step to be
+	// running and it is not.
+	StatusUPSNotInProgress uint16 = 0xC310
+
+	// StatusUPSAlreadyCompleted is returned when a completed step is asked to
+	// change state.
+	StatusUPSAlreadyCompleted uint16 = 0xC311
+
+	// StatusUPSPerformerCannotBeContacted and StatusUPSPerformerChoosesNotToCancel
+	// answer a cancellation request that the performer did not honor.
+	StatusUPSPerformerCannotBeContacted  uint16 = 0xC312
+	StatusUPSPerformerChoosesNotToCancel uint16 = 0xC313
+
+	// StatusUPSActionNotAppropriate is returned for an action type that does not
+	// apply to the named instance.
+	StatusUPSActionNotAppropriate uint16 = 0xC314
+
+	// StatusUPSEventReportsNotSupported is returned by an SCP that does not
+	// implement the Watch service's event reporting.
+	StatusUPSEventReportsNotSupported uint16 = 0xC315
+
+	// Warnings: the operation succeeded, with something worth saying.
+	StatusUPSCreatedWithModifications uint16 = 0xB300
+	StatusUPSDeletionLockNotGranted   uint16 = 0xB301
+	StatusUPSAlreadyCanceled          uint16 = 0xB304
+	StatusUPSCoercedInvalidValues     uint16 = 0xB305
+	StatusUPSAlreadyInStateCompleted  uint16 = 0xB306
 )
 
 // --- Storage Commitment Status Codes ---

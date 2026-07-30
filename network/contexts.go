@@ -156,3 +156,49 @@ func NonPatientObjectPresentationContexts() []PresentationContextItem {
 	}
 	return contexts
 }
+
+// RelevantPatientInformationPresentationContexts returns contexts for the three
+// Relevant Patient Information Query SOP classes.
+//
+// The service is C-FIND, so an SCP serving it implements FindHandler and
+// distinguishes the model by the abstract syntax the request arrived on —
+// FindWithSOPClass on the requesting side names one explicitly.
+func RelevantPatientInformationPresentationContexts() []PresentationContextItem {
+	return contextsFor(
+		GeneralRelevantPatientInfoQueryUID,
+		BreastImagingRelevantPatientInfoQueryUID,
+		CardiacRelevantPatientInfoQueryUID,
+	)
+}
+
+// DisplaySystemPresentationContexts returns contexts for the Display System SOP
+// class, whose service is N-GET against DisplaySystemInstanceUID.
+func DisplaySystemPresentationContexts() []PresentationContextItem {
+	return contextsFor(DisplaySystemUID)
+}
+
+// MediaCreationManagementPresentationContexts returns contexts for Media
+// Creation Management, whose services are N-CREATE, N-ACTION and N-GET.
+func MediaCreationManagementPresentationContexts() []PresentationContextItem {
+	return contextsFor(MediaCreationManagementUID)
+}
+
+// EventLoggingPresentationContexts returns contexts for the two logging SOP
+// classes, whose service is N-ACTION against a well-known instance.
+func EventLoggingPresentationContexts() []PresentationContextItem {
+	return contextsFor(ProceduralEventLoggingUID, SubstanceAdministrationLoggingUID)
+}
+
+// contextsFor builds one presentation context per abstract syntax, numbered with
+// the odd IDs the standard requires.
+func contextsFor(abstractSyntaxes ...string) []PresentationContextItem {
+	contexts := make([]PresentationContextItem, 0, len(abstractSyntaxes))
+	for i, syntax := range abstractSyntaxes {
+		contexts = append(contexts, PresentationContextItem{
+			ID:               byte(i*2 + 1),
+			AbstractSyntax:   syntax,
+			TransferSyntaxes: DefaultTransferSyntaxes(),
+		})
+	}
+	return contexts
+}

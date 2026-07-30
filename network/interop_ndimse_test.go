@@ -450,3 +450,96 @@ func runPynetdicomSCU(t *testing.T, source string) {
 		t.Fatalf("pynetdicom SCU failed: %v\n%s", err, out)
 	}
 }
+
+// TestUPSAgainstPynetdicom drives a Unified Procedure Step through its whole
+// life against a peer that did not learn the state machine from this code.
+//
+// The Transaction UID lock is the part worth checking against a third party: it
+// only works if both sides agree on which attribute carries it and when it is
+// required, and a disagreement produces success responses on both sides rather
+// than an error.
+func TestUPSAgainstPynetdicom(t *testing.T) {
+	store := newMemoryUPSStore()
+	scp := network.NewSCP(network.SCPConfig{
+		AETitle: "GO_UPS_SCP", Port: 0, BindAddress: "127.0.0.1",
+	})
+	scp.SetHandler(&network.UPSHandler{Store: store})
+	scp.SetSupportedAbstractSyntaxes([]string{network.UnifiedProcedureStepPushUID})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = scp.ListenAndServe(ctx) }()
+
+	addr := waitForSCP(t, scp)
+	host, port := splitHostPort(t, addr)
+
+	runPynetdicomSCU(t, `
+import sys
+from pydicom.dataset import Dataset
+from pynetdicom import AE
+from pynetdicom.sop_class import UnifiedProcedureStepPush
+
+INSTANCE = "1.2.826.0.1.3680043.10.511.4.1"
+TXN      = "1.2.826.0.1.3680043.10.511.4.99"
+OTHER    = "1.2.826.0.1.3680043.10.511.4.98"
+
+ae = AE(ae_title="PY_UPS")
+ae.add_requested_context(UnifiedProcedureStepPush)
+assoc = ae.associate(`+quote(host)+`, `+port+`, ae_title="GO_UPS_SCP")
+assert assoc.is_established, "association rejected"
+
+def action(state, txn, expect, what):
+    ds = Dataset()
+    ds.ProcedureStepState = state
+    if txn:
+        ds.TransactionUID = txn
+    status, _ = assoc.send_n_action(ds, 1, UnifiedProcedureStepPush, INSTANCE)
+    got = status.Status
+    assert got == expect, "%s: got 0x%04X, want 0x%04X" % (what, got, expect)
+
+# Scheduled.
+create = Dataset()
+create.ProcedureStepState = "SCHEDULED"
+create.Modality = "CT"
+status, _ = assoc.send_n_create(create, UnifiedProcedureStepPush, INSTANCE)
+assert status.Status == 0x0000, "N-CREATE 0x%04X" % status.Status
+
+# Cannot finish without starting.
+action("COMPLETED", TXN, 0xC310, "completing a scheduled step")
+
+# Claim it.
+action("IN PROGRESS", TXN, 0x0000, "starting the step")
+
+# Another performer cannot finish it.
+action("COMPLETED", OTHER, 0xC301, "a second performer completing it")
+
+# Nor can one presenting no Transaction UID.
+action("CANCELED", None, 0xC301, "canceling without a Transaction UID")
+
+# The holder can update it.
+upd = Dataset()
+upd.TransactionUID = TXN
+upd.PerformedProcedureStepStartDateTime = "20260730120000"
+status, _ = assoc.send_n_set(upd, UnifiedProcedureStepPush, INSTANCE)
+assert status.Status == 0x0000, "N-SET 0x%04X" % status.Status
+
+# And finish it.
+action("COMPLETED", TXN, 0x0000, "completing the step")
+
+# After which nothing more is allowed.
+action("CANCELED", TXN, 0xC311, "canceling a completed step")
+
+assoc.release()
+`)
+
+	step, found, _ := store.FindUPS(context.Background(), "1.2.826.0.1.3680043.10.511.4.1")
+	if !found {
+		t.Fatal("the step pynetdicom created is not in the store")
+	}
+	if step.State != network.UPSCompleted {
+		t.Errorf("the step ended in state %q, want COMPLETED", step.State)
+	}
+	if step.TransactionUID != "" {
+		t.Errorf("a completed step still holds Transaction UID %q", step.TransactionUID)
+	}
+}

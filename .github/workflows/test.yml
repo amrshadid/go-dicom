@@ -225,7 +225,7 @@ jobs:
         run: |
           export PATH="$HOME/dicomvenv/bin:$PATH"
           go test ./network/ -race -v \
-            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom'
+            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom|TestUPSAgainstPynetdicom'
 
       - name: Upload server logs on failure
         if: failure()

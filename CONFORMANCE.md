@@ -349,24 +349,36 @@ bytes directly.
 The dictionary defines UID constants for far more SOP classes than have a
 service behind them, in three tiers.
 
-**Dedicated handlers.** Verification, Storage, Query/Retrieve, Storage Commitment
-and Modality Worklist each have a handler interface that models the service:
-`StorageHandler`, `FindHandler`, `WorklistHandler` and so on.
+**Dedicated handlers.** Verification, Storage, Query/Retrieve, Storage Commitment,
+Modality Worklist and Unified Procedure Step each have a handler interface that
+models the service: `StorageHandler`, `FindHandler`, `WorklistHandler`,
+`UPSHandler` and so on.
+
+Unified Procedure Step is the Push SOP class — N-CREATE, N-SET, N-GET, and
+N-ACTION for changing state and requesting cancellation. `UPSHandler` enforces
+the transition table in PS3.4 CC.1.1 and the Transaction UID that stops two
+performers claiming one step, over a `UPSStore` the caller supplies. Subscription
+and event reporting, the Watch SOP class, are **answered as unsupported rather
+than accepted**: a subscription this SCP never honors would leave the requestor
+waiting for reports that cannot arrive. The workflow is exercised against
+pynetdicom in `network/interop_ndimse_test.go`, including the refusals.
 
 **Reachable through the N-DIMSE primitives.** MPPS and Basic Grayscale Print
 Management have no dedicated abstraction, but they are built entirely from
 N-CREATE, N-SET, N-ACTION and N-DELETE, all of which are implemented in both
 directions. A caller adds the SOP class with `SetSupportedAbstractSyntaxes` and
 implements `HandleNCreate`/`HandleNSet`; this is also how pynetdicom serves them.
-Both workflows are exercised against pynetdicom in
-`network/interop_ndimse_test.go` — MPPS in both directions, print management as
-film session, film box, image box and print action.
+Both workflows are exercised against pynetdicom — MPPS in both directions, print
+management as film session, film box, image box and print action.
 
-**UIDs only.** Unified Procedure Step, Media Creation, Display System,
-Application Event Logging and Relevant Patient Information Query have constants
-and, in some cases, presentation-context helpers. Nothing verifies them. UPS in
-particular has a state machine and required attributes that this library does not
-model, so treat the constants as a starting point rather than as support.
+Relevant Patient Information Query, Display System, Media Creation Management
+and the two event logging classes are the same shape: C-FIND or a single
+N-service against a well-known instance, with UID constants and
+presentation-context helpers provided. Nothing verifies them against a peer.
+
+**UIDs only.** The remaining constants in the dictionary have no service behind
+them and nothing exercising them. Treat them as a starting point rather than as
+support.
 
 ---
 
