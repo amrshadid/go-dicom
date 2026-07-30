@@ -407,9 +407,15 @@ and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
 presentation-context helpers provided. Nothing verifies them against a peer.
 
-**UIDs only.** The remaining constants in the dictionary have no service behind
-them and nothing exercising them. Treat them as a starting point rather than as
-support.
+**UIDs only.** The remaining constants have no service behind them and nothing
+exercising them: the non-patient object information models (hanging protocols,
+color palettes, implant templates, procedure protocols), composite instance
+retrieval, inventory and repository query, RT machine verification, and the
+well-known instances the logging and print services are addressed through.
+
+They are present so a caller can name them, and the set matches pynetdicom's
+exactly — 256 SOP class UIDs, each value checked against pynetdicom's own table
+rather than transcribed. Treat them as a starting point rather than as support.
 
 ---
 

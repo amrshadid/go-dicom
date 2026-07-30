@@ -321,6 +321,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
 | Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |
 | Storage SOP Classes | 165 | 169 | Every one pynetdicom lists, plus 4 recent standard additions |
+| SOP Class UIDs named | 256 | 256 | Full parity, checked against pynetdicom's own table |
 | Transfer Syntax Support | 37 | 37 | 4 negotiated by default, all via `AllTransferSyntaxes()` |
 | Storage Commitment | Yes | Yes | N-ACTION request, N-EVENT-REPORT result |
 | Query/Retrieve Models | 2 | 4 | Patient Root, Study Root, Patient/Study Only, Modality Worklist |
@@ -329,7 +330,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Print Management | Yes | Yes | Film session, film box, image box, print action |
 | Unified Procedure Step | Yes | Yes | Push: state machine and Transaction UID enforced by `UPSHandler` |
 | Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
-| CLI Tools | 7 | 9 | All 7 of pynetdicom's, plus `echoscp` and `commitscu` |
+| CLI Tools | 8 | 9 | All 8 of pynetdicom's, plus `commitscu` |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
 | Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
 
