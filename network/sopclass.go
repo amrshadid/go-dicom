@@ -310,8 +310,35 @@ const (
 	UnifiedProcedureStepQueryUID = "1.2.840.10008.5.1.4.34.6.5"
 )
 
-// --- Substance Administration ---
+// --- Relevant Patient Information Query ---
+//
+// A C-FIND service that returns a single composite result describing a patient
+// rather than a list of matches, which is why it has its own SOP classes instead
+// of being another query/retrieve model.
 const (
+	GeneralRelevantPatientInfoQueryUID       = "1.2.840.10008.5.1.4.37.1"
+	BreastImagingRelevantPatientInfoQueryUID = "1.2.840.10008.5.1.4.37.2"
+	CardiacRelevantPatientInfoQueryUID       = "1.2.840.10008.5.1.4.37.3"
+)
+
+// --- Display System ---
+//
+// N-GET against a single well-known instance, which is how a display reports its
+// calibration and capabilities.
+const (
+	DisplaySystemUID = "1.2.840.10008.5.1.1.40"
+
+	// DisplaySystemInstanceUID is the well-known instance the SOP class is
+	// queried through; there is exactly one per display system.
+	DisplaySystemInstanceUID = "1.2.840.10008.5.1.1.40.1"
+)
+
+// --- Media Creation Management ---
+const MediaCreationManagementUID = "1.2.840.10008.5.1.1.33"
+
+// --- Substance Administration and event logging ---
+const (
+	ProceduralEventLoggingUID         = "1.2.840.10008.1.40"
 	SubstanceAdministrationLoggingUID = "1.2.840.10008.1.42"
 	ProductCharacteristicsQueryUID    = "1.2.840.10008.5.1.4.41"
 	SubstanceApprovalQueryUID         = "1.2.840.10008.5.1.4.42"
