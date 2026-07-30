@@ -106,7 +106,7 @@ func decodeFragment(ctx context.Context, fragment Fragment, encodings []string, 
 
 // decodeWithDelimiters decodes data that may contain delimiters that reset encoding.
 func decodeWithDelimiters(ctx context.Context, data []byte, currentEncoding, baseEncoding string, delimiters DelimiterSet, validationMode config.ValidationMode) (string, error) {
-	delimPositions := findDelimiters(data, delimiters)
+	delimPositions := findDelimiters(data, delimiters, currentEncoding)
 	if len(delimPositions) == 0 {
 		return decodeSimple(ctx, data, currentEncoding, validationMode)
 	}
@@ -143,11 +143,38 @@ func decodeWithDelimiters(ctx context.Context, data []byte, currentEncoding, bas
 }
 
 // findDelimiters returns the positions of all delimiters in the data.
-func findDelimiters(data []byte, delimiters DelimiterSet) []int {
+func findDelimiters(data []byte, delimiters DelimiterSet, encoding string) []int {
 	positions := make([]int, 0)
-	for i, b := range data {
-		if delimiters.Contains(b) {
+
+	// A delimiter byte only delimits when it stands for itself. In the
+	// double-byte sets the second byte of a character occupies the same range as
+	// printable ASCII, so a scan that walks one byte at a time finds delimiters
+	// inside characters and splits them in half.
+	//
+	// The Japanese name やまだ^たろう is the case that shows it: ま is 0x24 0x5E,
+	// and 0x5E is the ^ that separates Person Name components. Splitting there
+	// left the decoder mid-character and it lost the rest of the string.
+	// The fragment may still carry the escape sequence that selected its
+	// encoding. Those bytes are not text and must not be scanned: skipping them
+	// is also what keeps the two-byte stride aligned to character boundaries.
+	i := 0
+	if stripped, _ := StripEscapeSequence(data); len(stripped) < len(data) {
+		i = len(data) - len(stripped)
+	}
+
+	// The encoding here is named the way Go names it, which is what the fragment
+	// carries — GetEncodingInfo takes the DICOM name and would find nothing.
+	step := 1
+	if info := GetEncodingInfoByGoName(encoding); info != nil && info.IsMultiByte() {
+		step = 2
+	}
+
+	for ; i < len(data); i += step {
+		if delimiters.Contains(data[i]) {
 			positions = append(positions, i)
+			// A delimiter returns the stream to the base set, so what follows is
+			// single byte again until the next escape sequence says otherwise.
+			step = 1
 		}
 	}
 	return positions
