@@ -530,8 +530,10 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Grayscale** | Yes |
-| JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **No** | Yes |
+| JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Supply a decoder** | Yes |
 
+JPEG 2000 needs a decoder you supply — `examples/jpeg2000` is a working one that
+shells out to openjpeg, verified sample-for-sample against pydicom.
 JPEG Extended decodes at 8 bits; 12-bit frames are refused, with precision named as
 the reason. JPEG-LS decodes single-component frames — the grayscale modalities — at 2 to 16 bits,
 lossless and near-lossless. Multi-component JPEG-LS is refused rather than decoded, so

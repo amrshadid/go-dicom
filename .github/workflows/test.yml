@@ -211,6 +211,11 @@ jobs:
           # the corpus supplies; they skip without it, so this is the one job
           # where they run.
           go test ./network/ -run 'TestCompressedInstanceIsDecodedBeforeSending|TestTranscodingDoesNotMutateTheCaller' -v
+          # The reference JPEG 2000 decoder, and the registry consulting it. The
+          # library bundles no codec, so this is what verifies the documented
+          # escape hatch actually works.
+          sudo apt-get install -y -qq libopenjp2-tools
+          go test ./examples/... -v
 
       # Services the shell script above cannot reach, because they have no CLI
       # command to drive them: MPPS, print management, and cancelling a
