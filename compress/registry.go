@@ -24,11 +24,18 @@ const (
 	DeflatedExplicitVRLittleEnd = "1.2.840.10008.1.2.1.99"
 
 	// Compressed transfer syntaxes
-	RLELossless             = "1.2.840.10008.1.2.5"
-	JPEGBaseline            = "1.2.840.10008.1.2.4.50"
-	JPEGExtended            = "1.2.840.10008.1.2.4.51"
+	RLELossless  = "1.2.840.10008.1.2.5"
+	JPEGBaseline = "1.2.840.10008.1.2.4.50"
+	JPEGExtended = "1.2.840.10008.1.2.4.51"
+	// JPEGLosslessNonHierarch is Process 14 with any selection value, and
+	// JPEGLossless is the same process fixed to selection value 1.
+	//
+	// This constant previously read 1.2.840.10008.1.2.4.71, which the standard
+	// does not define at all, so a real Process 14 frame matched nothing and
+	// fell through to UNCOMPRESSED — its compressed bytes handed back as though
+	// they were pixels.
+	JPEGLosslessNonHierarch = "1.2.840.10008.1.2.4.57"
 	JPEGLossless            = "1.2.840.10008.1.2.4.70"
-	JPEGLosslessNonHierarch = "1.2.840.10008.1.2.4.71"
 	JPEGLSLossless          = "1.2.840.10008.1.2.4.80"
 	JPEGLSNearLossless      = "1.2.840.10008.1.2.4.81"
 	JPEG2000Lossless        = "1.2.840.10008.1.2.4.90"

@@ -121,7 +121,9 @@ func tryInitJPEG2000Decoder() (Decompressor, error) {
 
 // tryInitJPEGLosslessDecoder reports that no JPEG Lossless decoder is bundled.
 func tryInitJPEGLosslessDecoder() (Decompressor, error) {
-	return nil, errNoDecoder(JPEG_LOSSLESS)
+	// Lossless JPEG is decoded in this package, in pure Go. The registry entry
+	// remains so a caller can still substitute their own decoder.
+	return NewJPEGLosslessDecompressor(), nil
 }
 
 // ExternalCompressionStatus returns information about external compression support

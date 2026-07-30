@@ -321,7 +321,7 @@ func (ci *CodecIntegration) GetTransferSyntaxSupport(uidStr string) TransferSynt
 			case "1.2.840.10008.1.2.5": // RLE Lossless
 				compressionType = compress.RLE
 			case "1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51", // JPEG Baseline, Extended
-				"1.2.840.10008.1.2.4.70", "1.2.840.10008.1.2.4.71": // JPEG Lossless
+				"1.2.840.10008.1.2.4.57", "1.2.840.10008.1.2.4.70": // JPEG Lossless
 				compressionType = compress.JPEG
 			case "1.2.840.10008.1.2.1.99": // Deflated Explicit VR
 				compressionType = compress.DEFLATE

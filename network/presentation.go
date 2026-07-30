@@ -39,10 +39,18 @@ const (
 	ExplicitVRBigEndianUID            = "1.2.840.10008.1.2.2"
 
 	// JPEG
-	JPEGBaselineUID    = "1.2.840.10008.1.2.4.50"
-	JPEGExtendedUID    = "1.2.840.10008.1.2.4.51"
-	JPEGLosslessSV1UID = "1.2.840.10008.1.2.4.57"
-	JPEGLosslessUID    = "1.2.840.10008.1.2.4.70"
+	JPEGBaselineUID = "1.2.840.10008.1.2.4.50"
+	JPEGExtendedUID = "1.2.840.10008.1.2.4.51"
+	// The two lossless syntaxes were named the wrong way round: .57 is Process
+	// 14 with any selection value, and .70 is the one fixed to selection value
+	// 1. A caller reaching for JPEGLosslessSV1UID got the syntax that is not
+	// SV1, which is the sort of mistake a name is supposed to prevent.
+	JPEGLosslessProcess14UID = "1.2.840.10008.1.2.4.57"
+	JPEGLosslessSV1UID       = "1.2.840.10008.1.2.4.70"
+
+	// Deprecated: use JPEGLosslessSV1UID, which names the same syntax
+	// accurately. Retained so existing callers keep compiling.
+	JPEGLosslessUID = JPEGLosslessSV1UID
 
 	// JPEG-LS
 	JPEGLSLosslessUID     = "1.2.840.10008.1.2.4.80"

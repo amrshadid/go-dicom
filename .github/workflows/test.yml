@@ -87,7 +87,7 @@ jobs:
       # The seed corpora run as ordinary tests on every push, so a seed that
       # starts failing is caught immediately and cheaply.
       - name: Run fuzz seed corpora
-        run: go test -run=Fuzz ./network/... ./filereader/...
+        run: go test -run=Fuzz ./network/... ./filereader/... ./compress/...
 
       # A short fuzzing run per target explores beyond the seeds. Kept brief so
       # it fits in a normal CI budget; findings are surfaced as failures with
@@ -117,6 +117,12 @@ jobs:
           done
           echo "::group::FuzzReadDICOMFile"
           go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=30s -parallel=2
+          echo "::endgroup::"
+          # The lossless JPEG parser reads offsets and lengths out of the same
+          # attacker-controlled bytes it then indexes with; fuzzing it found two
+          # panics within a minute.
+          echo "::group::FuzzJPEGLosslessDecompress"
+          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLosslessDecompress$' -fuzztime=30s -parallel=2
           echo "::endgroup::"
 
       # A crash writes its input to testdata/fuzz; keep it so the failure can be

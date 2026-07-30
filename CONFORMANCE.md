@@ -277,10 +277,15 @@ than none.
 
 ### 8.1 Pixel data
 
-- **JPEG Extended, JPEG Lossless, JPEG-LS and JPEG 2000 do not decode.** There is
-  no bundled codec and no hidden CGO path. Instances in these syntaxes parse,
+- **JPEG Extended, JPEG-LS and JPEG 2000 do not decode.** There is no bundled
+  codec for these and no hidden CGO path. Instances in these syntaxes parse,
   store, and transfer with their pixel data intact as opaque bytes. Supply a
   decoder with `compress.GetExternalRegistry().RegisterExternalDecoder`.
+
+  JPEG Lossless (`1.2.840.10008.1.2.4.57` and `.70`) does decode, in pure Go, at
+  every prediction selection value. JPEG Extended fails specifically on
+  precision: the standard library handles 8-bit baseline, and `.51` is usually
+  12-bit.
 - **`PixelArray` flattens colour samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
   order are correct. `PixelArrayBySample` returns the four-dimensional shape that
