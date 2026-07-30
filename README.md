@@ -530,7 +530,7 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Baseline (`.50`) | Read/Write | **Yes** | Yes |
 | JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
-| JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Grayscale** | Yes |
+| JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Supply a decoder** | Yes |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
@@ -540,9 +540,8 @@ configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
 JPEG 2000 needs a decoder you supply — `examples/jpeg2000` is a working one that
 shells out to openjpeg, verified sample-for-sample against pydicom.
 JPEG Extended decodes at 8 bits; 12-bit frames are refused, with precision named as
-the reason. JPEG-LS decodes single-component frames — the grayscale modalities — at 2 to 16 bits,
-lossless and near-lossless. Multi-component JPEG-LS is refused rather than decoded, so
-a color frame produces an error and not a plausible-looking wrong image.
+the reason. JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
+in both line- and sample-interleaved modes.
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above

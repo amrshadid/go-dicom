@@ -278,7 +278,8 @@ than none.
 ### 8.1 Pixel data
 
 RLE, JPEG Baseline, JPEG Lossless (`.57` and `.70`, every prediction selection
-value, single or multi component) and grayscale JPEG-LS all decode in pure Go,
+value) and JPEG-LS (`.80` and `.81`, lossless and near-lossless, both interleave
+modes) all decode in pure Go, single or multi component,
 at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded.
 
@@ -301,13 +302,6 @@ their leading values. What follows is what does not decode.
 - **JPEG Extended (`.51`) decodes at 8 bits but not at 12.** The transfer syntax
   permits both, and the limitation is precision alone. A 12-bit frame is refused
   with an error naming precision as the reason.
-
-- **JPEG-LS decodes single-component frames only.** Lossless (`.80`) and
-  near-lossless (`.81`), 2 to 16 bits, which covers CT, MR, CR and the other
-  grayscale modalities. A multi-component frame is **refused rather than
-  decoded**: the interleaved paths were correct on small frames and diverged on
-  larger ones, and a decoder that is right until row 11 is worse than one that
-  declines, because the output looks like an image either way.
 
 - **`PixelArray` flattens color samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
