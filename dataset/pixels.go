@@ -41,6 +41,17 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 		}
 	}
 
+	// PlanarConfiguration (0028,0006) — only meaningful when SamplesPerPixel > 1.
+	//
+	// The field existed on PixelDataInfo and was never read from the data set, so
+	// it was always 0 and color-by-plane images came back with their channels
+	// scrambled: the first pixel reading as the first three reds.
+	if planarElem, ok := ds.Get(tag.New(0x0028, 0x0006)); ok {
+		if val, err := extractUintValue(planarElem); err == nil {
+			info.PlanarConfiguration = int(val)
+		}
+	}
+
 	// HighBit (0028,0102)
 	if highBitElem, ok := ds.Get(tag.New(0x0028, 0x0102)); ok {
 		if val, err := extractUintValue(highBitElem); err == nil {
@@ -131,6 +142,8 @@ func (ds *Dataset) PixelArray() (interface{}, error) {
 
 	// Parse based on bit depth
 	switch info.BitsAllocated {
+	case 1:
+		return parsePixelData1Bit(pixelBytes, info)
 	case 8:
 		return parsePixelData8Bit(pixelBytes, info)
 	case 16:
@@ -405,6 +418,38 @@ func (ds *Dataset) GetPixelStatisticsSampled(sampleRate float64) (*pixels.Statis
 
 // Helper functions
 
+// parsePixelData1Bit unpacks single-bit pixel data, which is how Segmentation
+// objects and overlays store a mask.
+//
+// The bits run continuously across the whole frame, least significant first
+// within each byte, with no padding between rows — so a row does not begin on a
+// byte boundary unless its width happens to be a multiple of eight, and
+// unpacking row by row would shear the image.
+func parsePixelData1Bit(data []byte, info *PixelDataInfo) ([][][]uint8, error) {
+	perFrame := info.Rows * info.Columns * info.SamplesPerPixel
+	total := perFrame * info.NumberOfFrames
+	need := (total + 7) / 8
+	if len(data) < need {
+		return nil, fmt.Errorf("pixel data holds %d bytes, need %d for %d frames of %dx%d single-bit samples",
+			len(data), need, info.NumberOfFrames, info.Rows, info.Columns)
+	}
+
+	out := make([][][]uint8, info.NumberOfFrames)
+	bit := 0
+	for f := range out {
+		out[f] = make([][]uint8, info.Rows)
+		for r := range out[f] {
+			row := make([]uint8, info.Columns*info.SamplesPerPixel)
+			for c := range row {
+				row[c] = (data[bit/8] >> (bit % 8)) & 1
+				bit++
+			}
+			out[f][r] = row
+		}
+	}
+	return out, nil
+}
+
 func parsePixelData8Bit(data []byte, info *PixelDataInfo) ([][][]uint8, error) {
 	result := make([][][]uint8, info.NumberOfFrames)
 
@@ -625,7 +670,11 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 
 	compression, encapsulated := ds.pixelCompression(pixelBytes, info)
 	if !encapsulated {
-		return pixelBytes, nil
+		// Native pixel data is laid out exactly as the header describes, so both
+		// corrections belong here. Encapsulated data does not: a decoder's output
+		// convention governs it, and the ones in this package already produce
+		// pixel-interleaved little-endian samples.
+		return normalizeNativePixelBytes(pixelBytes, info, ds.TransferSyntaxUID()), nil
 	}
 
 	encData, err := ds.ExtractEncapsulatedFrames()
@@ -646,6 +695,129 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 		return nil, fmt.Errorf("encapsulated pixel data held no frames")
 	}
 	return out, nil
+}
+
+// normalizeNativePixelBytes puts native pixel data into the layout every
+// accessor above assumes: samples pixel-interleaved, little endian.
+func normalizeNativePixelBytes(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
+	pixelBytes = fixWideBigEndianSamples(pixelBytes, info, transferSyntax)
+	pixelBytes = upsampleYBR422(pixelBytes, info)
+	return deinterleavePlanes(pixelBytes, info)
+}
+
+// upsampleYBR422 expands horizontally subsampled chroma to one sample per pixel.
+//
+// YBR_FULL_422 native data stores a luminance for every pixel but a chroma pair
+// for every second one, laid out Y1 Y2 Cb Cr per pixel pair — two bytes per
+// pixel where SamplesPerPixel says three. Everything downstream sizes from
+// SamplesPerPixel, so without expanding it here a frame is simply reported as
+// too short, which is what it was.
+//
+// The chroma is replicated across the pair, which is what pydicom does and the
+// only choice that needs no filter.
+func upsampleYBR422(pixelBytes []byte, info *PixelDataInfo) []byte {
+	if info.PhotometricInterpretation != "YBR_FULL_422" || info.SamplesPerPixel != 3 {
+		return pixelBytes
+	}
+	if info.BitsAllocated != 8 {
+		// Subsampling at other depths is not something encoders produce, and
+		// guessing at the layout would be worse than the length error.
+		return pixelBytes
+	}
+
+	pixels := info.Rows * info.Columns * info.NumberOfFrames
+	if pixels <= 0 || pixels%2 != 0 {
+		return pixelBytes
+	}
+	stored := pixels * 2
+	if len(pixelBytes) < stored || len(pixelBytes) >= pixels*3 {
+		// Either too short to be 4:2:2, or already full size — in which case the
+		// attribute describes the color space but not a subsampled layout.
+		return pixelBytes
+	}
+
+	out := make([]byte, pixels*3)
+	for pair := 0; pair*4+3 < stored; pair++ {
+		y1, y2 := pixelBytes[pair*4], pixelBytes[pair*4+1]
+		cb, cr := pixelBytes[pair*4+2], pixelBytes[pair*4+3]
+		i := pair * 6
+		out[i], out[i+1], out[i+2] = y1, cb, cr
+		out[i+3], out[i+4], out[i+5] = y2, cb, cr
+	}
+	return out
+}
+
+// fixWideBigEndianSamples repairs samples wider than the VR they arrived in.
+//
+// Explicit VR Big Endian is byte-swapped on read according to the VR, and pixel
+// data is OW — two-byte words. That is right until BitsAllocated is 32 or 64, at
+// which point each sample has had its 16-bit halves swapped but not its whole
+// width, and every value comes out scrambled. RT Dose is the common case: a dose
+// of 1249000 reads back as 250085395.
+//
+// Swapping the 16-bit words within each sample completes the reversal. pydicom
+// reaches the same values by interpreting the raw bytes at the sample width,
+// which is what archives expect regardless of what the VR alone would imply.
+func fixWideBigEndianSamples(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
+	const explicitVRBigEndian = "1.2.840.10008.1.2.2"
+	if transferSyntax != explicitVRBigEndian {
+		return pixelBytes
+	}
+	width := info.BitsAllocated / 8
+	if width <= 2 {
+		return pixelBytes
+	}
+
+	out := make([]byte, len(pixelBytes))
+	copy(out, pixelBytes)
+	for start := 0; start+width <= len(out); start += width {
+		sample := out[start : start+width]
+		for i, j := 0, len(sample)-2; i < j; i, j = i+2, j-2 {
+			sample[i], sample[j] = sample[j], sample[i]
+			sample[i+1], sample[j+1] = sample[j+1], sample[i+1]
+		}
+	}
+	return out
+}
+
+// deinterleavePlanes converts color-by-plane pixel data to color-by-pixel.
+//
+// Planar Configuration 1 stores every red sample, then every green, then every
+// blue. The accessors above all assume the interleaved form, so without this a
+// color image comes back with its channels scrambled — the first pixel reading
+// as the first three reds rather than as one pixel's red, green and blue.
+func deinterleavePlanes(pixelBytes []byte, info *PixelDataInfo) []byte {
+	if info.PlanarConfiguration != 1 || info.SamplesPerPixel < 2 {
+		return pixelBytes
+	}
+	width := info.BitsAllocated / 8
+	if width < 1 {
+		return pixelBytes
+	}
+
+	samples := info.SamplesPerPixel
+	perFrame := info.Rows * info.Columns
+	frameBytes := perFrame * samples * width
+	if perFrame <= 0 || frameBytes <= 0 || len(pixelBytes) < frameBytes {
+		// Not enough to reorder safely; the callers below report the shortfall
+		// with the sizes involved, which is more use than a silent reshuffle.
+		return pixelBytes
+	}
+
+	out := make([]byte, len(pixelBytes))
+	copy(out, pixelBytes)
+
+	for frame := 0; frame+frameBytes <= len(pixelBytes); frame += frameBytes {
+		src := pixelBytes[frame : frame+frameBytes]
+		dst := out[frame : frame+frameBytes]
+		for sample := 0; sample < samples; sample++ {
+			plane := src[sample*perFrame*width:]
+			for pixel := 0; pixel < perFrame; pixel++ {
+				copy(dst[(pixel*samples+sample)*width:], plane[pixel*width:(pixel+1)*width])
+			}
+		}
+	}
+	return out
 }
 
 // pixelCompression reports how the pixel data is compressed and whether it is
@@ -713,9 +885,12 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 			fragment, info.SamplesPerPixel, info.BitsAllocated)
 	}
 
-	// Baseline JPEG is decodable with the standard library.
+	// Baseline and extended JPEG are decodable with the standard library. The
+	// Photometric Interpretation goes with it: it decides whether a
+	// color-transformed frame should come back as RGB or stay in YBR.
 	if compression == compress.JPEG {
-		return compress.NewJPEGDecompressor().Decompress(fragment)
+		return compress.NewJPEGDecompressorForPhotometric(info.PhotometricInterpretation).
+			Decompress(fragment)
 	}
 
 	// Everything else — JPEG-LS, JPEG 2000, JPEG Lossless — needs a decoder the
@@ -763,9 +938,41 @@ func (ds *Dataset) PixelArrayBySample() (interface{}, error) {
 		return reshapeBySample(pixelBytes, info, func(b []byte) uint8 { return b[0] }, 1)
 	case 16:
 		return reshapeBySample16(pixelBytes, info)
+	case 32:
+		return reshapeBySample32(pixelBytes, info)
 	default:
 		return nil, fmt.Errorf("unsupported bit depth for per-sample access: %d", info.BitsAllocated)
 	}
+}
+
+// reshapeBySample32 is the 32-bit form.
+//
+// PixelArray has handled 32 bits since it existed; only the per-sample accessor
+// stopped at 16, so a 32-bit color image had no route to its channels at all.
+func reshapeBySample32(data []byte, info *PixelDataInfo) ([][][][]uint32, error) {
+	need := info.NumberOfFrames * info.Rows * info.Columns * info.SamplesPerPixel * 4
+	if len(data) < need {
+		return nil, fmt.Errorf("pixel data holds %d bytes, need %d for %d frames of %dx%d with %d samples",
+			len(data), need, info.NumberOfFrames, info.Rows, info.Columns, info.SamplesPerPixel)
+	}
+
+	out := make([][][][]uint32, info.NumberOfFrames)
+	offset := 0
+	for f := range out {
+		out[f] = make([][][]uint32, info.Rows)
+		for r := range out[f] {
+			out[f][r] = make([][]uint32, info.Columns)
+			for c := range out[f][r] {
+				samples := make([]uint32, info.SamplesPerPixel)
+				for s := range samples {
+					samples[s] = binary.LittleEndian.Uint32(data[offset:])
+					offset += 4
+				}
+				out[f][r][c] = samples
+			}
+		}
+	}
+	return out, nil
 }
 
 // reshapeBySample splits 8-bit pixel data into [frames][rows][columns][samples].
