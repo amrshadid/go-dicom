@@ -277,12 +277,14 @@ than none.
 
 ### 8.1 Pixel data
 
-- **JPEG Extended and JPEG 2000 do not decode.** There is no bundled codec for
-  these and no hidden CGO path. Instances in these syntaxes parse, store, and
-  transfer with their pixel data intact as opaque bytes. Supply a decoder with
-  `compress.GetExternalRegistry().RegisterExternalDecoder`. JPEG Extended fails
-  specifically on precision: the standard library handles 8-bit baseline, and
-  `.51` is usually 12-bit.
+- **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
+  path. Instances parse, store, and transfer with their pixel data intact as
+  opaque bytes; supply a decoder with
+  `compress.GetExternalRegistry().RegisterExternalDecoder`.
+
+- **JPEG Extended (`.51`) decodes at 8 bits but not at 12.** The transfer syntax
+  permits both, and the limitation is precision alone. A 12-bit frame is refused
+  with an error naming precision as the reason.
 
 - **JPEG-LS decodes single-component frames only.** Lossless (`.80`) and
   near-lossless (`.81`), 2 to 16 bits, which covers CT, MR, CR and the other

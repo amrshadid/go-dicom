@@ -526,14 +526,15 @@ which is enough for an archive or a router, and not enough for a viewer.
 | Deflated Explicit VR LE | Read/Write | Yes | Yes |
 | RLE Lossless | Read/Write | **Yes** | Yes |
 | JPEG Baseline (`.50`) | Read/Write | **Yes** | Yes |
-| JPEG Extended (`.51`) | Read/Write | **No** | Yes |
+| JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Grayscale** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **No** | Yes |
 
-JPEG-LS decodes single-component frames — the grayscale modalities — at 2 to 16 bits,
+JPEG Extended decodes at 8 bits; 12-bit frames are refused, with precision named as
+the reason. JPEG-LS decodes single-component frames — the grayscale modalities — at 2 to 16 bits,
 lossless and near-lossless. Multi-component JPEG-LS is refused rather than decoded, so
-a colour frame produces an error and not a plausible-looking wrong image.
+a color frame produces an error and not a plausible-looking wrong image.
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above
