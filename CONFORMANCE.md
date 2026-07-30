@@ -347,7 +347,18 @@ their leading values. What follows is what does not decode.
   native instance cannot be sent over a context that negotiated a compressed
   syntax. Negotiate an uncompressed syntax for those, which the defaults do.
 
-### 8.3 Truncated files
+### 8.3 Writing
+
+Files this library writes are read by dcmtk and pydicom. Encapsulated pixel data
+is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
+requires.
+
+Two of pydicom's own fixtures are refused by dcmtk however they are written —
+`SC_rgb_jpeg.dcm`, which holds implicit VR inside a file declaring explicit, and
+`meta_missing_tsyntax.dcm`, which carries no transfer syntax at all. Both are
+read here, and both come back out no more conformant than they went in.
+
+### 8.4 Truncated files
 
 An element declaring more bytes than the file holds is **dropped**, with the
 elements before it kept and a warning naming the offset. pydicom instead returns
@@ -364,7 +375,7 @@ Anyone migrating from pydicom and relying on partial values should know this
 before it surprises them; the warning carries the offset needed to recover the
 bytes directly.
 
-### 8.4 Service classes
+### 8.5 Service classes
 
 The dictionary defines UID constants for far more SOP classes than have a
 service behind them, in three tiers.

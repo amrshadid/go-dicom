@@ -29,6 +29,44 @@ type FileMetaInfo struct {
 	FileMetaInformationVersion []byte
 }
 
+// isEncapsulatedSyntax reports whether a transfer syntax carries pixel data as
+// fragments rather than as a contiguous value.
+//
+// Everything outside the four uncompressed syntaxes does. Listing those rather
+// than enumerating the compressed ones means a syntax added to the standard
+// later is treated as compressed, which is the safe direction: writing an
+// explicit length for encapsulated data produces a file strict parsers reject,
+// while undefined length for native data would be caught by any round trip.
+func isEncapsulatedSyntax(uid string) bool {
+	switch uid {
+	case "1.2.840.10008.1.2", // Implicit VR Little Endian
+		"1.2.840.10008.1.2.1",    // Explicit VR Little Endian
+		"1.2.840.10008.1.2.1.99", // Deflated Explicit VR Little Endian
+		"1.2.840.10008.1.2.2":    // Explicit VR Big Endian
+		return false
+	}
+	return uid != ""
+}
+
+// pixelDataTag is (7FE0,0010).
+var pixelDataTag = tag.New(0x7FE0, 0x0010)
+
+// writeSequenceDelimiter closes an undefined-length element with the
+// (FFFE,E0DD) item that PS3.5 requires.
+func (dfw *DCMFileWriter) writeSequenceDelimiter() error {
+	if err := dfw.writer.WriteUint16(0xFFFE); err != nil {
+		return fmt.Errorf("failed to write sequence delimiter group: %w", err)
+	}
+	if err := dfw.writer.WriteUint16(0xE0DD); err != nil {
+		return fmt.Errorf("failed to write sequence delimiter element: %w", err)
+	}
+	if err := dfw.writer.WriteUint32(0); err != nil {
+		return fmt.Errorf("failed to write sequence delimiter length: %w", err)
+	}
+	dfw.position += 8
+	return nil
+}
+
 // undefinedLength is the DICOM sentinel (0xFFFFFFFF) marking an element whose
 // extent is delimited rather than stated. Such elements are written through
 // unchanged rather than having their length treated as a byte count.
@@ -87,6 +125,10 @@ type DCMFileWriter struct {
 	settings     *config.Settings // Configuration settings for writing behavior
 	hookChain    *hooks.HookChain // Hook chain for element processing
 	elementCount int              // Count of elements written
+
+	// encapsulated records that the target transfer syntax carries pixel data
+	// as fragments, which PS3.5 A.4 requires be written with undefined length.
+	encapsulated bool
 }
 
 // NewDCMFileWriter creates a new DICOM file writer.
@@ -105,6 +147,12 @@ func NewDCMFileWriter(writer filebase.Writer) *DCMFileWriter {
 // SetExplicitVR sets whether to use explicit VR.
 func (dfw *DCMFileWriter) SetExplicitVR(explicit bool) {
 	dfw.explicitVR = explicit
+}
+
+// SetEncapsulated records that the target transfer syntax carries pixel data as
+// encapsulated fragments, which changes how (7FE0,0010) is written.
+func (dfw *DCMFileWriter) SetEncapsulated(encapsulated bool) {
+	dfw.encapsulated = encapsulated
 }
 
 // SetLittleEndian sets the byte order (little-endian or big-endian).
@@ -259,7 +307,7 @@ func (dfw *DCMFileWriter) WriteTag(t tag.Tag) error {
 // using the VR's designated padding character. Padding is applied here rather
 // than left to callers because an odd-length value misaligns every element
 // after it, silently corrupting the file.
-func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bool) error {
+func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bool) (err error) {
 	if elem == nil {
 		return fmt.Errorf("data element is nil")
 	}
@@ -279,6 +327,31 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		elem = &DataElement{
 			Tag: elem.Tag, VR: elem.VR, Value: swapped, Length: uint32(len(swapped)),
 		}
+	}
+
+	// Encapsulated pixel data is a sequence of fragments, not a value with a
+	// byte count. PS3.5 A.4 requires undefined length and a closing sequence
+	// delimiter, and dcmtk refuses a file without them:
+	//
+	//   Found explicit length Pixel Data in top level dataset with transfer
+	//   syntax RLE Lossless: Only undefined length permitted
+	//
+	// The fragments themselves were already correct, so every compressed file
+	// this wrote held the right bytes behind a length field that made it
+	// unreadable to a strict parser. pydicom accepted them, which is why it went
+	// unnoticed.
+	if dfw.encapsulated && elem.Tag == pixelDataTag && elem.Length != undefinedLength {
+		elem = &DataElement{
+			Tag:    elem.Tag,
+			VR:     elem.VR,
+			Value:  elem.Value,
+			Length: undefinedLength,
+		}
+		defer func() {
+			if err == nil {
+				err = dfw.writeSequenceDelimiter()
+			}
+		}()
 	}
 
 	// Undefined length (0xFFFFFFFF) marks a delimited element and must be
@@ -560,6 +633,7 @@ func (dfw *DICOMFileWriter) SetFileMetaInfo(metaInfo *FileMetaInfo) {
 
 	// Set transfer syntax properties
 	if metaInfo != nil && metaInfo.TransferSyntaxUID != "" {
+		dfw.writer.SetEncapsulated(isEncapsulatedSyntax(metaInfo.TransferSyntaxUID))
 		explicitVR, littleEndian := determineTransferSyntax(metaInfo.TransferSyntaxUID)
 		dfw.writer.SetExplicitVR(explicitVR)
 		dfw.writer.SetLittleEndian(littleEndian)
