@@ -28,6 +28,7 @@ const (
 	OD VR = "OD" // Other Double
 	OF VR = "OF" // Other Float
 	OL VR = "OL" // Other Long
+	OV VR = "OV" // Other 64-bit Very Long
 	OW VR = "OW" // Other Word
 	PN VR = "PN" // Person Name
 	SH VR = "SH" // Short String
@@ -35,6 +36,7 @@ const (
 	SQ VR = "SQ" // Sequence of Items
 	SS VR = "SS" // Signed Short
 	ST VR = "ST" // Short Text
+	SV VR = "SV" // Signed 64-bit Very Long
 	TM VR = "TM" // Time
 	UC VR = "UC" // Unlimited Characters
 	UI VR = "UI" // Unique Identifier
@@ -43,6 +45,7 @@ const (
 	UR VR = "UR" // Universal Resource Identifier
 	US VR = "US" // Unsigned Short
 	UT VR = "UT" // Unlimited Text
+	UV VR = "UV" // Unsigned 64-bit Very Long
 )
 
 // DataElement represents a DICOM data element.
@@ -340,6 +343,9 @@ func GetVRInfo(vr VR) *VRInfo {
 		SL: {VR: SL, Name: "Signed Long", ByteLength: 4, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
 		SQ: {VR: SQ, Name: "Sequence of Items", ByteLength: -1, PadValue: 0, IsText: false, IsNumeric: false, SupportsVM: false, IsStandard: true},
 		SS: {VR: SS, Name: "Signed Short", ByteLength: 2, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
+		SV: {VR: SV, Name: "Signed 64-bit Very Long", ByteLength: 8, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
+		UV: {VR: UV, Name: "Unsigned 64-bit Very Long", ByteLength: 8, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
+		OV: {VR: OV, Name: "Other 64-bit Very Long", ByteLength: -1, PadValue: 0, IsText: false, IsNumeric: false, SupportsVM: false, IsStandard: true},
 		ST: {VR: ST, Name: "Short Text", ByteLength: -1, PadValue: ' ', IsText: true, IsNumeric: false, SupportsVM: false, IsStandard: true},
 		TM: {VR: TM, Name: "Time", ByteLength: -1, PadValue: ' ', IsText: true, IsNumeric: false, SupportsVM: true, IsStandard: true},
 		UC: {VR: UC, Name: "Unlimited Characters", ByteLength: -1, PadValue: ' ', IsText: true, IsNumeric: false, SupportsVM: false, IsStandard: true},

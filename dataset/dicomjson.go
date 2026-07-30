@@ -42,19 +42,10 @@ import (
 // array — the standard distinguishes them, and a consumer checking for the key
 // is entitled to rely on it.
 
-// The 64-bit value representations DICOM added in 2018. They are handled here
-// so a JSON document carrying them round trips, but dataelem does not define
-// them yet, so nothing produces them from a file read.
-const (
-	vrSV = dataelem.VR("SV") // Signed 64-bit Very Long
-	vrUV = dataelem.VR("UV") // Unsigned 64-bit Very Long
-	vrOV = dataelem.VR("OV") // Other 64-bit Very Long
-)
-
 // jsonBinaryVRs are the value representations carried as InlineBinary.
 var jsonBinaryVRs = map[dataelem.VR]bool{
 	dataelem.OB: true, dataelem.OD: true, dataelem.OF: true,
-	dataelem.OL: true, vrOV: true, dataelem.OW: true,
+	dataelem.OL: true, dataelem.OV: true, dataelem.OW: true,
 	dataelem.UN: true,
 }
 
@@ -295,7 +286,7 @@ func dicomJSONValues(vr dataelem.VR, raw []byte) ([]any, error) {
 	case dataelem.AT:
 		return attributeTagValues(raw)
 	case dataelem.US, dataelem.SS, dataelem.UL, dataelem.SL,
-		vrSV, vrUV, dataelem.FL, dataelem.FD:
+		dataelem.SV, dataelem.UV, dataelem.FL, dataelem.FD:
 		return binaryNumberValues(vr, raw)
 	}
 
@@ -371,7 +362,7 @@ func binaryNumberValues(vr dataelem.VR, raw []byte) ([]any, error) {
 	width := map[dataelem.VR]int{
 		dataelem.US: 2, dataelem.SS: 2,
 		dataelem.UL: 4, dataelem.SL: 4, dataelem.FL: 4,
-		vrSV: 8, vrUV: 8, dataelem.FD: 8,
+		dataelem.SV: 8, dataelem.UV: 8, dataelem.FD: 8,
 	}[vr]
 	if width == 0 {
 		return nil, fmt.Errorf("no width known for %s", vr)
@@ -393,9 +384,9 @@ func binaryNumberValues(vr dataelem.VR, raw []byte) ([]any, error) {
 			out = append(out, binary.LittleEndian.Uint32(chunk))
 		case dataelem.SL:
 			out = append(out, int32(binary.LittleEndian.Uint32(chunk)))
-		case vrUV:
+		case dataelem.UV:
 			out = append(out, binary.LittleEndian.Uint64(chunk))
-		case vrSV:
+		case dataelem.SV:
 			out = append(out, int64(binary.LittleEndian.Uint64(chunk)))
 		case dataelem.FL:
 			f := float64(math.Float32frombits(binary.LittleEndian.Uint32(chunk)))
@@ -564,7 +555,7 @@ func dicomJSONToBytes(vr dataelem.VR, values []any) ([]byte, error) {
 		return buf, nil
 
 	case dataelem.US, dataelem.SS, dataelem.UL, dataelem.SL,
-		vrSV, vrUV, dataelem.FL, dataelem.FD:
+		dataelem.SV, dataelem.UV, dataelem.FL, dataelem.FD:
 		var buf []byte
 		for _, v := range values {
 			f, ok := jsonNumber(v)
@@ -580,9 +571,9 @@ func dicomJSONToBytes(vr dataelem.VR, values []any) ([]byte, error) {
 				buf = binary.LittleEndian.AppendUint32(buf, uint32(f))
 			case dataelem.SL:
 				buf = binary.LittleEndian.AppendUint32(buf, uint32(int32(f)))
-			case vrUV:
+			case dataelem.UV:
 				buf = binary.LittleEndian.AppendUint64(buf, uint64(f))
-			case vrSV:
+			case dataelem.SV:
 				buf = binary.LittleEndian.AppendUint64(buf, uint64(int64(f)))
 			case dataelem.FL:
 				buf = binary.LittleEndian.AppendUint32(buf, math.Float32bits(float32(f)))
