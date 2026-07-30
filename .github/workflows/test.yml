@@ -124,6 +124,12 @@ jobs:
           echo "::group::FuzzJPEGLosslessDecompress"
           go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLosslessDecompress$' -fuzztime=30s -parallel=2
           echo "::endgroup::"
+          # JPEG-LS has more attacker-reachable arithmetic than the others: the
+          # coding parameters come from the frame header and an optional preset
+          # segment, and they feed shift counts and loop bounds.
+          echo "::group::FuzzJPEGLSDecompress"
+          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLSDecompress$' -fuzztime=30s -parallel=2
+          echo "::endgroup::"
 
       # A crash writes its input to testdata/fuzz; keep it so the failure can be
       # reproduced from the artifact rather than by re-fuzzing.
