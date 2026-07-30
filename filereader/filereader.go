@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/charset"
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -902,7 +903,7 @@ type DICOMFile struct {
 // GetDataset converts the parsed file into a Dataset, recursively materializing
 // any nested sequences as sequence.Sequence values holding child Datasets.
 func (df *DICOMFile) GetDataset() *dataset.Dataset {
-	ds := elementsToDataset(df.DataElements)
+	ds := elementsToDataset(df.DataElements, nil)
 
 	// The transfer syntax lives in the file meta header, which is not part of
 	// the data set. Carrying it across is what lets pixel access know whether
@@ -914,23 +915,102 @@ func (df *DICOMFile) GetDataset() *dataset.Dataset {
 }
 
 // elementsToDataset builds a Dataset from parsed elements, descending into
-// sequence items.
-func elementsToDataset(elements []*DataElementValue) *dataset.Dataset {
+// sequence items and decoding text into UTF-8.
+//
+// inherited is the character set in force from the enclosing data set, which an
+// item may override: PS3.5 allows Specific Character Set inside a sequence item,
+// and it applies to that item and anything below it. Passing nil at the top
+// level means "read it from these elements".
+func elementsToDataset(elements []*DataElementValue, inherited []string) *dataset.Dataset {
 	ds := dataset.NewDataset()
+
+	encodings := inherited
+	if declared := specificCharacterSetOf(elements); declared != nil {
+		encodings = declared
+	}
 
 	for _, elem := range elements {
 		if elem.Items != nil || isSequenceVR(elem.VR) {
 			seq := sequence.New()
 			for _, item := range elem.Items {
-				_ = seq.Append(elementsToDataset(item.Elements))
+				_ = seq.Append(elementsToDataset(item.Elements, encodings))
 			}
 			_ = ds.AddSequence(elem.Tag, seq)
 			continue
 		}
-		_ = ds.Add(dataelem.NewDataElement(elem.Tag, dataelem.VR(elem.VR), elem.Value))
+
+		value := elem.Value
+		if elem.Tag == specificCharacterSetTag {
+			// The values below are UTF-8 now, so the attribute has to say so or
+			// the data set contradicts itself — and anything writing it back out
+			// would label UTF-8 bytes as something else.
+			value = []byte(utf8CharacterSet)
+		} else {
+			value = decodeTextValue(dataelem.VR(elem.VR), value, encodings)
+		}
+		_ = ds.Add(dataelem.NewDataElement(elem.Tag, dataelem.VR(elem.VR), value))
 	}
 
 	return ds
+}
+
+// specificCharacterSetTag is (0008,0005).
+const specificCharacterSetTag = tag.Tag(0x00080005)
+
+// utf8CharacterSet is the defined term for UTF-8, which every decoded data set
+// declares.
+const utf8CharacterSet = "ISO_IR 192"
+
+// specificCharacterSetOf reads (0008,0005) from a flat element list, or nil when
+// it is absent.
+func specificCharacterSetOf(elements []*DataElementValue) []string {
+	for _, elem := range elements {
+		if elem.Tag != specificCharacterSetTag {
+			continue
+		}
+		if strings.TrimSpace(string(elem.Value)) == "" {
+			return nil
+		}
+		// DecodeBytes works in Go's encoding names; the file names them the way
+		// DICOM does. Passing the DICOM name straight through finds no decoder,
+		// and the failure is silent — the bytes come back unchanged, which reads
+		// as "this text needed no decoding" rather than as an error.
+		declared := parseSpecificCharacterSetValue(strings.TrimSpace(string(elem.Value)))
+		converted, err := charset.ConvertEncodings(declared)
+		if err != nil {
+			return nil
+		}
+		return converted
+	}
+	return nil
+}
+
+// decodeTextValue converts a text value from its declared character set to
+// UTF-8, leaving everything else alone.
+//
+// Without this the ordinary accessors hand back whatever bytes were in the file,
+// so a name written in Greek, Hebrew, Japanese or plain accented Latin comes out
+// as mojibake unless the caller knows to reach for the decoding API. That is
+// most of the world, and it is not something a caller can be expected to
+// discover from a wrong-looking string.
+func decodeTextValue(vr dataelem.VR, value []byte, encodings []string) []byte {
+	if len(value) == 0 || len(encodings) == 0 || !dataelem.IsTextVR(vr) {
+		return value
+	}
+
+	delimiters := charset.DefaultTextDelimiters
+	if vr == dataelem.PN {
+		delimiters = charset.PersonNameDelimiters
+	}
+
+	decoded, err := charset.DecodeBytes(value, encodings, delimiters)
+	if err != nil {
+		// A value that will not decode is left as it was found. Dropping it
+		// would lose data that is merely in an encoding this build does not
+		// know, and the caller can still reach the bytes through the file.
+		return value
+	}
+	return []byte(decoded)
 }
 
 // ReadDICOMFile reads an entire DICOM file.

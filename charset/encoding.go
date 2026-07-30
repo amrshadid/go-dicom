@@ -50,6 +50,29 @@ func initializeEncodingMaps() {
 				goEncodingToEscape[info.GoEncoding] = info.EscapeSequence
 			}
 		}
+
+		// A character set can be reached by more than one escape sequence, and
+		// the table above holds only the one each entry is named for.
+		//
+		// ISO 2022 IR 13 is the case that matters: it designates Katakana into
+		// G1 with ESC ) I and JIS X 0201 Roman into G0 with ESC ( J, and a file
+		// using it emits both. Without the second, the escape is unrecognized and
+		// its three bytes are left in the decoded text — chrH32.dcm reads back as
+		// "山田\x1b(J^太郎\x1b(J" instead of "山田^太郎".
+		//
+		// Shift_JIS is the right target: its single-byte range is JIS X 0201, so
+		// the bytes that follow decode to the same characters, including the yen
+		// sign and overline that distinguish it from ASCII.
+		for _, alias := range []struct {
+			escape     []byte
+			goEncoding string
+		}{
+			{[]byte{ESC, '(', 'J'}, "Shift_JIS"},
+		} {
+			if _, taken := escapeToGoEncoding[string(alias.escape)]; !taken {
+				escapeToGoEncoding[string(alias.escape)] = alias.goEncoding
+			}
+		}
 	})
 }
 
