@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filewriter"
 	"github.com/amrshadid/go-dicom/network"
-	"github.com/amrshadid/go-dicom/sequence"
 )
 
 // StoreSCPCommand implements the storescp CLI command.
@@ -109,7 +107,7 @@ func writeDICOMFile(filename, sopClassUID, sopInstanceUID string, ds *dataset.Da
 		ImplementationVersionName:  network.DefaultImplementationVersionName,
 	})
 
-	for _, elem := range toWriterElements(ds) {
+	for _, elem := range filewriter.ElementsFromDataset(ds) {
 		if err := w.AddDataElement(elem); err != nil {
 			return fmt.Errorf("add element %s: %w", elem.Tag, err)
 		}
@@ -123,50 +121,3 @@ func writeDICOMFile(filename, sopClassUID, sopInstanceUID string, ds *dataset.Da
 
 // toWriterElements converts a dataset into writer elements, descending into
 // sequences so nested items are preserved. Reading elem.Value alone would drop
-// them: a sequence holds child datasets, not a byte value.
-func toWriterElements(ds *dataset.Dataset) []*filewriter.DataElement {
-	var out []*filewriter.DataElement
-
-	for _, elem := range ds.GetAll() {
-		// Skipping here writes a file that is missing an attribute the sender
-		// transmitted, with nothing recording that it happened. Reporting is
-		// the least a receiver can do; the element is still dropped, because
-		// there is no tag to write it under.
-		t, ok := elem.Tag()
-		if !ok {
-			log.Printf("storescp: dropping an element with an unreadable tag (%T) from the stored file",
-				elem.GetTag())
-			continue
-		}
-
-		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
-			items := make([]*filewriter.SequenceItem, 0, seq.Length())
-			for _, item := range seq.Items() {
-				child, ok := item.(*dataset.Dataset)
-				if !ok {
-					continue
-				}
-				items = append(items, &filewriter.SequenceItem{
-					Elements: toWriterElements(child),
-				})
-			}
-			out = append(out, &filewriter.DataElement{
-				Tag: t, VR: "SQ", Items: items,
-			})
-			continue
-		}
-
-		data, ok := elem.GetValue().([]byte)
-		if !ok {
-			continue
-		}
-		out = append(out, &filewriter.DataElement{
-			Tag:    t,
-			VR:     string(elem.GetVR()),
-			Value:  data,
-			Length: uint32(len(data)),
-		})
-	}
-
-	return out
-}
