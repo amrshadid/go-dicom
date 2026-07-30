@@ -282,7 +282,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [pixels](./pixels/) | Pixel data access and statistical analysis |
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
-| [sr](./sr/) | Structured reports with coded concepts (SNOMED-CT, LOINC) |
+| [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. `StructuredReport` alongside it is a simpler bespoke model, not the DICOM tree |
 | [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities
