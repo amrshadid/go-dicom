@@ -174,21 +174,41 @@ func (dfr *DCMFileReader) ReadFileMetaInformationGroupLength() (uint32, error) {
 func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 	metaInfo := &FileMetaInfo{}
 
-	groupLength, err := dfr.ReadFileMetaInformationGroupLength()
+	// (0002,0000) File Meta Information Group Length is the usual way to know
+	// where the meta header ends, but it is not always written. A file without
+	// it was rejected outright, though its meta header is perfectly readable —
+	// the group itself marks its own end, since every element in it is in group
+	// 0002 and the data set that follows is not.
+	groupLength, haveGroupLength, err := dfr.tryReadMetaGroupLength()
 	if err != nil {
 		return nil, err
 	}
+	if haveGroupLength {
+		metaInfo.FileMetaInformationGroupLength = groupLength
+	}
 
-	metaInfo.FileMetaInformationGroupLength = groupLength
 	startPosition := dfr.position
 
-	for dfr.position-startPosition < int64(groupLength) {
+	// A stated group length bounds the header. Without one the loop relies on the
+	// group check inside it, which is also a useful guard when a stated length is
+	// wrong.
+	for !haveGroupLength || dfr.position-startPosition < int64(groupLength) {
 		tagValue, err := dfr.ReadTag()
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
 			return nil, fmt.Errorf("failed to read meta element tag: %w", err)
+		}
+
+		// The first element outside group 0002 belongs to the data set. Put it
+		// back so the data set parser reads it.
+		if tagValue.Group() != 0x0002 {
+			if _, seekErr := dfr.reader.Seek(-4, io.SeekCurrent); seekErr != nil {
+				return nil, fmt.Errorf("failed to rewind past the end of the meta header: %w", seekErr)
+			}
+			dfr.position -= 4
+			break
 		}
 
 		vrBytes := make([]byte, 2)
@@ -333,40 +353,62 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 		return element, nil
 	}
 
+	// Set when this element turns out to be implicitly encoded despite the data
+	// set declaring explicit VR, so its nested items are parsed the same way.
+	elementIsImplicit := false
+
 	if explicitVR {
 		vrBytes := make([]byte, 2)
 		if err := dfr.reader.ReadBytes(vrBytes); err != nil {
 			return nil, fmt.Errorf("failed to read VR: %w", err)
 		}
-		element.VR = string(vrBytes)
 		dfr.position += 2
 
-		var valueLength uint32
-		if isShortVR(element.VR) {
-			// ReadUint16 honors the reader's byte order; assembling the two
-			// bytes by hand would hardcode little endian and corrupt every
-			// length in an explicit VR big endian file.
-			short, err := dfr.reader.ReadUint16()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read value length: %w", err)
-			}
-			valueLength = uint32(short)
-			dfr.position += 2
-		} else {
-			reserved := make([]byte, 2)
-			if err := dfr.reader.ReadBytes(reserved); err != nil {
-				return nil, fmt.Errorf("failed to read reserved bytes: %w", err)
+		// Where a VR should be, something that is not one means this element was
+		// written implicitly inside a file that declares explicit VR. Writers do
+		// it — most often inside sequences — and the result is non-conformant
+		// but common enough that both pydicom and dcmtk try to cope.
+		//
+		// pydicom's approach is taken here: those two bytes are not a VR at all,
+		// they are the low half of a 4-byte length, so the element is read as
+		// implicit and its VR comes from the dictionary. dcmtk instead assumes a
+		// 2-byte length and still loses the file.
+		//
+		// Without this, parsing stops at the first such element: the two bytes
+		// are read as a length, the value is taken from the wrong offset, and
+		// every tag after it is read out of the middle of a value.
+		// SC_rgb_jpeg.dcm yielded 1 element of the 34 it holds.
+		if !isPlausibleVR(vrBytes) {
+			high := make([]byte, 2)
+			if err := dfr.reader.ReadBytes(high); err != nil {
+				return nil, fmt.Errorf("failed to read the rest of an implicit length for %s: %w",
+					element.Tag.String(), err)
 			}
 			dfr.position += 2
 
-			length, err := dfr.reader.ReadUint32()
-			if err != nil {
-				return nil, fmt.Errorf("failed to read value length: %w", err)
+			combined := []byte{vrBytes[0], vrBytes[1], high[0], high[1]}
+			if dfr.reader.GetByteOrder() == filebase.BigEndian {
+				element.Length = binary.BigEndian.Uint32(combined)
+			} else {
+				element.Length = binary.LittleEndian.Uint32(combined)
 			}
-			valueLength = length
-			dfr.position += 4
+			element.VR = tagValue.GetVR()
+
+			config.Logger.Warn("filereader: element is implicitly encoded in an explicit VR data set",
+				"tag", element.Tag.String(), "vr", element.VR)
+
+			// An element encoded this way sits in a data set the writer was
+			// treating as implicit, so anything nested inside it is implicit
+			// too. Parsing its items as explicit would fail the same way one
+			// level down.
+			elementIsImplicit = true
+		} else {
+			element.VR = string(vrBytes)
+
+			if err := dfr.readExplicitLength(element); err != nil {
+				return nil, err
+			}
 		}
-		element.Length = valueLength
 	} else {
 		length, err := dfr.reader.ReadUint32()
 		if err != nil {
@@ -387,7 +429,7 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 			return nil, fmt.Errorf("sequence nesting exceeds maximum depth %d at tag %s",
 				MaxSequenceDepth, element.Tag.String())
 		}
-		items, err := dfr.readSequenceItems(explicitVR, depth+1, element.Length)
+		items, err := dfr.readSequenceItems(explicitVR && !elementIsImplicit, depth+1, element.Length)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read sequence %s: %w", element.Tag.String(), err)
 		}
@@ -395,9 +437,33 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 		return element, nil
 	}
 
-	// An undefined length on a non-sequence element means encapsulated
-	// (fragmented) pixel data: a run of items terminated by a Sequence
-	// Delimitation Item. Concatenate the fragments into the element value.
+	// Undefined length on an element the dictionary does not call a sequence is
+	// still almost always a sequence. Only pixel data uses undefined length to
+	// mean encapsulation, so anything else carrying it holds items — most often
+	// a private element written with VR UN because the writer had no dictionary
+	// entry for it, which PS3.5 §6.2.2 says to read as a sequence.
+	//
+	// Routing these to the encapsulation reader failed at the first item: a
+	// sequence item may itself have undefined length, which a pixel fragment
+	// never does. UN_sequence.dcm and nested_priv_SQ.dcm were both unreadable
+	// for that reason while pydicom read them.
+	if element.UndefinedLength && !isEncapsulatedPixelDataTag(element.Tag) {
+		if depth >= MaxSequenceDepth {
+			return nil, fmt.Errorf("sequence nesting exceeds maximum depth %d at tag %s",
+				MaxSequenceDepth, element.Tag.String())
+		}
+		items, err := dfr.readSequenceItems(explicitVR && !elementIsImplicit, depth+1, element.Length)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read undefined-length sequence %s: %w",
+				element.Tag.String(), err)
+		}
+		element.VR = "SQ"
+		element.Items = items
+		return element, nil
+	}
+
+	// An undefined length on pixel data means encapsulated (fragmented) pixel
+	// data: a run of items terminated by a Sequence Delimitation Item.
 	if element.UndefinedLength {
 		value, err := dfr.readEncapsulatedValue()
 		if err != nil {
@@ -945,13 +1011,26 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 			if strings.Contains(errMsg, "reached end of file") {
 				break
 			}
-			// Check if this is a length-related error (corrupted element)
+			// An element declaring more bytes than the file holds means the file
+			// is truncated. Everything read so far is kept and the incomplete
+			// element is dropped, with a warning naming it.
+			//
+			// pydicom instead returns the element with whatever bytes were
+			// present — 8130 of a declared 8192 for MR_truncated.dcm. That is a
+			// deliberate difference rather than an oversight: a partially read
+			// pixel buffer handed back as PixelData can be rendered as an image
+			// without anything looking wrong, and for a value the caller cannot
+			// tell is short, dropping it is safer than shortening it. Callers
+			// wanting the partial bytes have the file and the offset from the
+			// warning.
 			if strings.Contains(errMsg, "claimed") && strings.Contains(errMsg, "bytes") ||
 				strings.Contains(errMsg, "exceeds") {
-				config.Logger.Warn("filereader: stopping at corrupted element",
+				config.Logger.Warn("filereader: file is truncated; dropping the incomplete element",
 					"position", dfr.position, "err", err)
 				dicomFile.Warnings = append(dicomFile.Warnings,
-					fmt.Sprintf("stopped at corrupted element at position %d: %v", dfr.position, err))
+					fmt.Sprintf("file is truncated at position %d; the incomplete element was "+
+						"dropped and the %d elements before it are intact: %v",
+						dfr.position, len(dicomFile.DataElements), err))
 				break
 			}
 			return nil, fmt.Errorf("failed to read data element: %w", err)
@@ -1132,4 +1211,109 @@ func normalizeByteOrder(elem *DataElementValue) {
 			normalizeByteOrder(nested)
 		}
 	}
+}
+
+// isPlausibleVR reports whether two bytes could be a Value Representation.
+//
+// Every VR is two uppercase ASCII letters (PS3.5 §6.2). Checking the shape
+// rather than membership in the list of known VRs is deliberate: a private or
+// future VR this build does not recognize is still a VR, and treating it as a
+// length would corrupt the rest of the file. The check only has to separate
+// "this is a VR" from "this is the low half of a length".
+func isPlausibleVR(b []byte) bool {
+	if len(b) != 2 {
+		return false
+	}
+	return b[0] >= 'A' && b[0] <= 'Z' && b[1] >= 'A' && b[1] <= 'Z'
+}
+
+// readExplicitLength reads the value length of an explicit VR element.
+//
+// Short-form VRs carry a 2-byte length; the rest carry two reserved bytes and
+// then a 4-byte one (PS3.5 §7.1.2). Both are read through the reader so its byte
+// order applies — assembling them by hand hardcodes little endian and corrupts
+// every length in a big endian file.
+func (dfr *DCMFileReader) readExplicitLength(element *DataElementValue) error {
+	if isShortVR(element.VR) {
+		short, err := dfr.reader.ReadUint16()
+		if err != nil {
+			return fmt.Errorf("failed to read value length: %w", err)
+		}
+		element.Length = uint32(short)
+		dfr.position += 2
+		return nil
+	}
+
+	reserved := make([]byte, 2)
+	if err := dfr.reader.ReadBytes(reserved); err != nil {
+		return fmt.Errorf("failed to read reserved bytes: %w", err)
+	}
+	dfr.position += 2
+
+	length, err := dfr.reader.ReadUint32()
+	if err != nil {
+		return fmt.Errorf("failed to read value length: %w", err)
+	}
+	element.Length = length
+	dfr.position += 4
+	return nil
+}
+
+// isEncapsulatedPixelDataTag reports whether a tag may carry encapsulated pixel
+// data, which is the only legitimate use of undefined length outside a sequence.
+//
+// PixelData is the familiar one; the float variants were added for pixel data
+// that cannot be represented as integers and use the same encapsulation.
+func isEncapsulatedPixelDataTag(t tag.Tag) bool {
+	switch t {
+	case tag.New(0x7FE0, 0x0010), // PixelData
+		tag.New(0x7FE0, 0x0008), // FloatPixelData
+		tag.New(0x7FE0, 0x0009): // DoubleFloatPixelData
+		return true
+	default:
+		return false
+	}
+}
+
+// tryReadMetaGroupLength reads (0002,0000) if it is the next element.
+//
+// It reports whether the element was there. A file that omits it is
+// non-conformant but readable, so the absence is not an error — the tag is put
+// back and the caller finds the end of the header by watching the group instead.
+func (dfr *DCMFileReader) tryReadMetaGroupLength() (uint32, bool, error) {
+	start, err := dfr.reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		// Not seekable, so the tag cannot be put back: require the element,
+		// which is what a conformant file has anyway.
+		length, err := dfr.ReadFileMetaInformationGroupLength()
+		return length, err == nil, err
+	}
+
+	tagValue, err := dfr.ReadTag()
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to read the first meta element tag: %w", err)
+	}
+
+	if tagValue != tag.New(0x0002, 0x0000) {
+		if _, seekErr := dfr.reader.Seek(start, io.SeekStart); seekErr != nil {
+			return 0, false, seekErr
+		}
+		dfr.position = start
+		config.Logger.Warn("filereader: file meta header has no group length element",
+			"firstTag", tagValue.String())
+		return 0, false, nil
+	}
+
+	// Rewind and let the dedicated reader consume the whole element, so its
+	// VR and length checks still apply.
+	if _, err := dfr.reader.Seek(start, io.SeekStart); err != nil {
+		return 0, false, err
+	}
+	dfr.position = start
+
+	length, err := dfr.ReadFileMetaInformationGroupLength()
+	if err != nil {
+		return 0, false, err
+	}
+	return length, true, nil
 }

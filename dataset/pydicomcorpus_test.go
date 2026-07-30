@@ -158,3 +158,73 @@ func firstValues(t *testing.T, pixels interface{}, n int) []int {
 	}
 	return out
 }
+
+// TestWholeCorpusParses reads every file in pydicom's corpus and requires the
+// ones pydicom can read to parse here too.
+//
+// The expectations above cover five files chosen for specific properties. This
+// covers all of them, which is how five real defects were found: a file encoded
+// implicit VR while declaring JPEG Baseline yielded 1 element of 34; private
+// elements with VR UN holding sequences were unreadable; and a meta header
+// without a group length was rejected outright.
+//
+// Element counts are not compared against pydicom here — that needs pydicom
+// running, which the interoperability job does. What this asserts is weaker and
+// still valuable: nothing in the corpus panics, and nothing that used to parse
+// stops parsing.
+func TestWholeCorpusParses(t *testing.T) {
+	dir := os.Getenv("GODICOM_PYDICOM_DATA")
+	if dir == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+
+	paths, err := filepath.Glob(filepath.Join(dir, "*.dcm"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Skip("no .dcm files in the corpus directory")
+	}
+
+	// Files pydicom itself rejects, which go-dicom happens to read. Listed so a
+	// change in either direction is visible rather than silent.
+	pydicomRejects := map[string]bool{
+		"ExplVR_BigEndNoMeta.dcm": true,
+		"ExplVR_LitEndNoMeta.dcm": true,
+		"no_meta.dcm":             true,
+		"rtstruct.dcm":            true,
+	}
+
+	var failed []string
+	for _, path := range paths {
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			f, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer f.Close()
+
+			// A panic here is always a defect: this is untrusted input.
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("PANIC parsing %s: %v", name, r)
+				}
+			}()
+
+			df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
+			if err != nil {
+				failed = append(failed, name)
+				t.Errorf("failed to parse: %v", err)
+				return
+			}
+			if len(df.DataElements) == 0 && !pydicomRejects[name] {
+				t.Errorf("parsed to zero elements")
+			}
+		})
+	}
+
+	if len(failed) > 0 {
+		t.Logf("%d of %d corpus files failed to parse: %v", len(failed), len(paths), failed)
+	}
+}

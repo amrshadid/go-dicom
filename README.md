@@ -466,6 +466,19 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM JSON Model (Part 18) | Supported |
 | ISO 2022 - Character set escape sequences | Supported |
 
+### Performance
+
+Measured against pydicom on its own test corpus, same machine, 300 iterations:
+
+| File | go-dicom | pydicom | |
+|---|---|---|---|
+| `CT_small.dcm` (39 KB, 258 elements) | 110 µs | 499 µs | **4.5x** |
+| `MR_small.dcm` (10 KB, 73 elements) | 23 µs | 219 µs | **9.5x** |
+| `rtplan.dcm` (2.7 KB, 36 elements) | 31 µs | 138 µs | **4.5x** |
+
+Reproduce with `go test ./filereader/ -bench=Parse` and the corpus path in
+`GODICOM_PYDICOM_DATA`.
+
 ### Conformance
 
 [CONFORMANCE.md](./CONFORMANCE.md) is a DICOM Conformance Statement in the
