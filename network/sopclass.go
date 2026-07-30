@@ -69,6 +69,10 @@ const (
 	RTIonPlanStorageUID           = "1.2.840.10008.5.1.4.1.1.481.8"
 	RTIonBeamsTreatmentRecordUID  = "1.2.840.10008.5.1.4.1.1.481.9"
 	RTBeamsDeliveryInstructionUID = "1.2.840.10008.5.1.4.34.7"
+
+	// RTPatientPositionAcquisitionInstructionStorage had no constant at all,
+	// so it could not be negotiated even by a caller naming it explicitly.
+	RTPatientPositionAcquisitionInstrUID = "1.2.840.10008.5.1.4.1.1.481.25"
 )
 
 // X-Ray Angiographic and Fluoroscopy
@@ -523,6 +527,18 @@ func AllStorageSOPClassUIDs() []string {
 		BasicStructuredDisplayStorageUID,
 		CTPerformedProcedureProtocolStorageUID,
 		XAPerformedProcedureProtocolStorageUID,
+
+		// Classes whose constants existed but which this list omitted, so an
+		// SCU proposed no context for them and an SCP refused them. The
+		// constant being present made the omission easy to miss: the SOP class
+		// looked supported everywhere except the one list that decides.
+		BreastProjectionXRayImageStoragePUID,
+		BreastProjectionXRayImageStoragePrUID,
+		PhotoacousticImageStorageUID,
+		SurfaceScanPointCloudUID,
+		VLSlideCoordinatesMicroscopicUID,
+		RTBeamsDeliveryInstructionUID,
+		RTPatientPositionAcquisitionInstrUID,
 	}
 }
 

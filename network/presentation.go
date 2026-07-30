@@ -116,10 +116,24 @@ func (pc *PresentationContext) IsAccepted() bool {
 }
 
 // DefaultTransferSyntaxes returns the default set of transfer syntaxes to propose.
+// DefaultTransferSyntaxes returns the uncompressed transfer syntaxes proposed
+// and accepted unless the caller asks for more.
+//
+// All four are fully supported: the data set codec encodes and decodes each of
+// them, including the byte swap for big endian and the deflate stream. Only two
+// were listed, so a peer offering deflated or big endian data had no context to
+// send it on even though this library reads both.
+//
+// Compressed syntaxes are not here, matching pynetdicom, whose default is these
+// same four with the rest behind ALL_TRANSFER_SYNTAXES. Use AllTransferSyntaxes
+// to accept compressed pixel data, which an archive or router wants: it stores
+// and forwards the bytes without needing to decode them.
 func DefaultTransferSyntaxes() []string {
 	return []string{
 		ExplicitVRLittleEndianUID,
 		ImplicitVRLittleEndianUID,
+		DeflatedExplicitVRLittleEndianUID,
+		ExplicitVRBigEndianUID,
 	}
 }
 

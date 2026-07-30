@@ -165,13 +165,24 @@ Answering immediately is a promise made before it is true.
 |---|---|
 | Implicit VR Little Endian | `1.2.840.10008.1.2` |
 | Explicit VR Little Endian | `1.2.840.10008.1.2.1` |
+| Deflated Explicit VR Little Endian | `1.2.840.10008.1.2.1.99` |
+| Explicit VR Big Endian | `1.2.840.10008.1.2.2` |
 
-**This is narrower than what the library can read from a file.** A data set in
-any other syntax — big endian, deflated, or any compressed syntax — is parsed
-correctly from disk but is not negotiated on the wire unless the application
-calls `SetSupportedTransferSyntaxes`. That is a deliberate default rather than a
-gap: an SCP that accepts a syntax it cannot do anything useful with has accepted
-data it will only store opaquely.
+These four are the same default pynetdicom uses, and all four are fully
+supported: the data set codec encodes and decodes each, including the byte swap
+for big endian and the deflate stream.
+
+**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns all 37 the
+standard defines; pass it to `SetSupportedTransferSyntaxes` on an SCP, or use it
+when building presentation contexts on an SCU. It is not the default for the
+same reason it is not pynetdicom's: a context list grows with the product of SOP
+classes and transfer syntaxes, and proposing every combination makes an
+association request large enough to matter.
+
+Negotiating a compressed syntax does **not** require being able to decode it.
+An archive or router receives an instance, stores it, and forwards it later; the
+pixel data travels as opaque bytes. [§8.1](#81-pixel-data) lists which of them
+this library can actually decode.
 
 ### 3.2 Transfer syntaxes supported for files
 

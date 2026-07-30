@@ -321,7 +321,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
 | Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |
 | Storage SOP Classes | 100+ | 80+ | CT, MR, US, PET, RT, XR, SR, waveforms, encapsulated docs |
-| Transfer Syntax Support | 15+ | 15 | All standard + compressed syntaxes |
+| Transfer Syntax Support | 37 | 37 | 4 negotiated by default, all via `AllTransferSyntaxes()` |
 | Storage Commitment | Yes | Yes | N-ACTION request, N-EVENT-REPORT result |
 | Query/Retrieve Models | Patient/Study Root | Yes | Find, Move, Get for both models |
 | Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |

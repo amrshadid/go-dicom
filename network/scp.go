@@ -1252,8 +1252,9 @@ func defaultSupportedAbstractSyntaxes() map[string]bool {
 }
 
 func defaultSupportedTransferSyntaxes() map[string]bool {
-	return map[string]bool{
-		ImplicitVRLittleEndianUID: true,
-		ExplicitVRLittleEndianUID: true,
+	out := make(map[string]bool, 4)
+	for _, ts := range DefaultTransferSyntaxes() {
+		out[ts] = true
 	}
+	return out
 }
