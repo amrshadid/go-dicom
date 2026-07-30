@@ -154,6 +154,11 @@ func buildHuffTable(counts []byte, values []byte) (*huffTable, error) {
 		if n == 0 {
 			t.maxcode[length] = -1
 			t.mincode[length] = -1
+			// The code still lengthens by a bit even though no code has this
+			// length. Skipping the shift makes every longer code one bit too
+			// short, and the table decodes a different symbol than the encoder
+			// wrote — see T.81 figure C.2, where the shift is outside the test.
+			code <<= 1
 			continue
 		}
 		t.valptr[length] = k
