@@ -690,3 +690,94 @@ func IsQueryRetrieveSOPClass(uid string) bool {
 	}
 	return false
 }
+
+// --- Non-patient object information models ---
+//
+// C-FIND, C-MOVE and C-GET over objects that belong to no patient: hanging
+// protocols, color palettes, implant templates and procedure protocols. The
+// services are the ordinary query/retrieve ones, so a handler serves them by
+// distinguishing the abstract syntax the request arrived on.
+const (
+	HangingProtocolInformationModelFindUID = "1.2.840.10008.5.1.4.38.2"
+	HangingProtocolInformationModelMoveUID = "1.2.840.10008.5.1.4.38.3"
+	HangingProtocolInformationModelGetUID  = "1.2.840.10008.5.1.4.38.4"
+
+	ColorPaletteInformationModelFindUID = "1.2.840.10008.5.1.4.39.2"
+	ColorPaletteInformationModelMoveUID = "1.2.840.10008.5.1.4.39.3"
+	ColorPaletteInformationModelGetUID  = "1.2.840.10008.5.1.4.39.4"
+
+	DefinedProcedureProtocolInformationModelFindUID = "1.2.840.10008.5.1.4.20.1"
+	DefinedProcedureProtocolInformationModelMoveUID = "1.2.840.10008.5.1.4.20.2"
+	DefinedProcedureProtocolInformationModelGetUID  = "1.2.840.10008.5.1.4.20.3"
+
+	GenericImplantTemplateInformationModelFindUID = "1.2.840.10008.5.1.4.43.2"
+	GenericImplantTemplateInformationModelMoveUID = "1.2.840.10008.5.1.4.43.3"
+	GenericImplantTemplateInformationModelGetUID  = "1.2.840.10008.5.1.4.43.4"
+
+	ImplantAssemblyTemplateInformationModelFindUID = "1.2.840.10008.5.1.4.44.2"
+	ImplantAssemblyTemplateInformationModelMoveUID = "1.2.840.10008.5.1.4.44.3"
+	ImplantAssemblyTemplateInformationModelGetUID  = "1.2.840.10008.5.1.4.44.4"
+
+	ImplantTemplateGroupInformationModelFindUID = "1.2.840.10008.5.1.4.45.2"
+	ImplantTemplateGroupInformationModelMoveUID = "1.2.840.10008.5.1.4.45.3"
+	ImplantTemplateGroupInformationModelGetUID  = "1.2.840.10008.5.1.4.45.4"
+
+	ProtocolApprovalInformationModelFindUID = "1.2.840.10008.5.1.4.1.1.200.4"
+	ProtocolApprovalInformationModelMoveUID = "1.2.840.10008.5.1.4.1.1.200.5"
+	ProtocolApprovalInformationModelGetUID  = "1.2.840.10008.5.1.4.1.1.200.6"
+)
+
+// --- Composite instance retrieval ---
+//
+// Retrieval rooted at the instance rather than at a patient or study, and a
+// variant that omits bulk data so a client can fetch metadata cheaply.
+const (
+	CompositeInstanceRootRetrieveMoveUID        = "1.2.840.10008.5.1.4.1.2.4.2"
+	CompositeInstanceRootRetrieveGetUID         = "1.2.840.10008.5.1.4.1.2.4.3"
+	CompositeInstanceRetrieveWithoutBulkDataUID = "1.2.840.10008.5.1.4.1.2.5.3"
+)
+
+// --- Inventory and repository query ---
+//
+// Added to the standard for describing what an archive holds without walking it
+// study by study.
+const (
+	InventoryFindUID     = "1.2.840.10008.5.1.4.1.1.201.2"
+	InventoryMoveUID     = "1.2.840.10008.5.1.4.1.1.201.3"
+	InventoryGetUID      = "1.2.840.10008.5.1.4.1.1.201.4"
+	InventoryCreationUID = "1.2.840.10008.5.1.4.1.1.201.5"
+	RepositoryQueryUID   = "1.2.840.10008.5.1.4.1.1.201.6"
+
+	// StorageManagementInstanceUID is the well-known instance the inventory
+	// services are addressed through.
+	StorageManagementInstanceUID = "1.2.840.10008.5.1.4.1.1.201.1.1"
+)
+
+// --- RT machine verification ---
+const (
+	RTConventionalMachineVerificationUID = "1.2.840.10008.5.1.4.34.8"
+	RTIonMachineVerificationUID          = "1.2.840.10008.5.1.4.34.9"
+)
+
+// --- Well-known instances ---
+//
+// SOP classes whose service is addressed to a single fixed instance rather than
+// to one the caller names.
+const (
+	ProceduralEventLoggingInstanceUID         = "1.2.840.10008.1.40.1"
+	SubstanceAdministrationLoggingInstanceUID = "1.2.840.10008.1.42.1"
+	PrinterInstanceUID                        = "1.2.840.10008.5.1.1.17"
+	PrinterConfigurationRetrievalInstanceUID  = "1.2.840.10008.5.1.1.17.376"
+
+	// UPSGlobalSubscriptionInstanceUID and its filtered form are the instances a
+	// Watch subscription is addressed to, standing for every procedure step
+	// rather than a named one.
+	UPSGlobalSubscriptionInstanceUID         = "1.2.840.10008.5.1.4.34.5"
+	UPSFilteredGlobalSubscriptionInstanceUID = "1.2.840.10008.5.1.4.34.5.1"
+)
+
+// --- Print management, remaining boxes ---
+const (
+	BasicAnnotationBoxSOPClassUID = "1.2.840.10008.5.1.1.15"
+	PresentationLUTSOPClassUID    = "1.2.840.10008.5.1.1.23"
+)
