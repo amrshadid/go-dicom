@@ -19,6 +19,8 @@ import (
 // next, so a single wrong bit diverges the rest of the image. Either a frame
 // comes out exactly right or it comes out visibly wrong, which makes
 // whole-image comparison against a third party the only test worth writing.
+//
+// Single and multi component, both interleave modes, lossless and near-lossless.
 
 const (
 	markerSOF55 = 0xF7 // JPEG-LS frame header
