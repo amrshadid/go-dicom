@@ -27,18 +27,37 @@ import (
 // the workflows against pynetdicom, which has no reason to agree with our
 // mistakes.
 
+// requirePynetdicom skips the test when pynetdicom is not importable — except
+// where GODICOM_REQUIRE_INTEROP is set, which makes the absence a failure.
+//
+// These tests are the only thing standing behind the README's claim that MPPS
+// and print management are verified against pynetdicom, and they skip on any
+// machine without it. That is right for a contributor's laptop and wrong for CI,
+// where a skip is indistinguishable from a pass and the claim would quietly stop
+// being true. The interoperability job sets the variable.
+func requirePynetdicom(t *testing.T) {
+	t.Helper()
+
+	_, pathErr := exec.LookPath("python3")
+	importErr := pathErr
+	if pathErr == nil {
+		importErr = exec.Command("python3", "-c", "import pynetdicom").Run()
+	}
+	if importErr == nil {
+		return
+	}
+	if os.Getenv("GODICOM_REQUIRE_INTEROP") != "" {
+		t.Fatalf("GODICOM_REQUIRE_INTEROP is set but pynetdicom is not importable: %v", importErr)
+	}
+	t.Skipf("pynetdicom not available (%v); skipping third-party interoperability check", importErr)
+}
+
 // startPynetdicomSCP writes the given python source to a temp file, runs it, and
 // returns the address it bound. The script must bind port 0 and print
 // "PORT <n>" so tests never collide on a fixed port.
 func startPynetdicomSCP(t *testing.T, source string) string {
 	t.Helper()
-
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
-	}
-	if err := exec.Command("python3", "-c", "import pynetdicom").Run(); err != nil {
-		t.Skip("pynetdicom not installed; skipping third-party interoperability check")
-	}
+	requirePynetdicom(t)
 
 	script := t.TempDir() + "/scp.py"
 	if err := os.WriteFile(script, []byte(source), 0o600); err != nil {
@@ -420,12 +439,7 @@ func waitForSCP(t *testing.T, scp *network.SCP) string {
 // it exits non-zero, so an association pynetdicom rejected cannot pass silently.
 func runPynetdicomSCU(t *testing.T, source string) {
 	t.Helper()
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
-	}
-	if err := exec.Command("python3", "-c", "import pynetdicom").Run(); err != nil {
-		t.Skip("pynetdicom not installed; skipping third-party interoperability check")
-	}
+	requirePynetdicom(t)
 
 	script := t.TempDir() + "/scu.py"
 	if err := os.WriteFile(script, []byte(source), 0o600); err != nil {
