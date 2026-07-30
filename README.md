@@ -525,11 +525,11 @@ which is enough for an archive or a router, and not enough for a viewer.
 | Explicit VR Big Endian | Read/Write | Yes | Yes |
 | Deflated Explicit VR LE | Read/Write | Yes | Yes |
 | RLE Lossless | Read/Write | **Yes** | Yes |
-| JPEG Baseline | Read/Write | **No** | Yes |
-| JPEG Extended | Read/Write | **No** | Yes |
-| JPEG Lossless | Read/Write | **No** | Yes |
-| JPEG-LS Lossless / Near-Lossless | Read/Write | **No** | Yes |
-| JPEG 2000 Lossless / Lossy | Read/Write | **No** | Yes |
+| JPEG Baseline (`.50`) | Read/Write | **Yes** | Yes |
+| JPEG Extended (`.51`) | Read/Write | **No** | Yes |
+| JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
+| JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **No** | Yes |
+| JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **No** | Yes |
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above

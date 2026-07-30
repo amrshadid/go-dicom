@@ -462,6 +462,70 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG Lossless: dcmtk encodes, go-dicom decodes, pydicom judges.
+#
+# The decoder was written from ITU-T T.81, so testing it against frames this
+# project produced would only show that it agrees with itself. dcmtk encodes an
+# uncompressed fixture with each of the seven prediction selection values, and
+# the comparison is against the original pixels rather than against anything
+# go-dicom or dcmtk decoded.
+if [ -x "$DCMTK_BIN/dcmcjpeg" ] && command -v python3 >/dev/null 2>&1; then
+  note "JPEG Lossless: dcmtk encoder, pydicom ground truth"
+
+  jl_dir="$WORKDIR/jpeglossless"
+  mkdir -p "$jl_dir"
+
+  if python3 -c "import pydicom.data, shutil, os; \
+      src=os.path.join(os.path.dirname(pydicom.data.__file__),'test_files','CT_small.dcm'); \
+      shutil.copy(src, '$jl_dir/orig.dcm')" 2>/dev/null; then
+
+    jl_encoded=0
+    for sv in 1 2 3 4 5 6 7; do
+      if "$DCMTK_BIN/dcmcjpeg" +el +sv "$sv" "$jl_dir/orig.dcm" "$jl_dir/sv$sv.dcm" >/dev/null 2>&1; then
+        jl_encoded=$((jl_encoded + 1))
+      fi
+    done
+    # Selection value 1 also has its own transfer syntax, which is the one
+    # archives actually store.
+    "$DCMTK_BIN/dcmcjpeg" +e1 "$jl_dir/orig.dcm" "$jl_dir/e1.dcm" >/dev/null 2>&1 && jl_encoded=$((jl_encoded + 1))
+
+    if [ "$jl_encoded" -eq 0 ]; then
+      skip "dcmcjpeg produced no lossless JPEG fixtures"
+    elif "$GODICOM" info "$jl_dir/e1.dcm" >/dev/null 2>&1; then
+      jl_failures=0
+      for f in "$jl_dir"/sv*.dcm "$jl_dir"/e1.dcm; do
+        [ -f "$f" ] || continue
+        if ! python3 - "$f" "$jl_dir/orig.dcm" <<'PYEOF'
+import sys, numpy as np, pydicom
+got = pydicom.dcmread(sys.argv[1]).pixel_array
+want = pydicom.dcmread(sys.argv[2]).pixel_array
+sys.exit(0 if np.array_equal(got, want) else 1)
+PYEOF
+        then
+          fail "pydicom and the original disagree for $(basename "$f")"
+          jl_failures=$((jl_failures + 1))
+        fi
+      done
+
+      # go-dicom decodes the same files and its pixels are compared with the
+      # original, which is what the check is actually for.
+      if go run ./scripts/jpeglossless-check "$jl_dir" >"$WORKDIR/jl.log" 2>&1; then
+        pass "JPEG Lossless — $jl_encoded fixtures decode to the original pixels"
+        RAN_ANY=1
+      else
+        fail "go-dicom did not reproduce the original pixels"
+        sed -n '1,20p' "$WORKDIR/jl.log" >&2
+        jl_failures=$((jl_failures + 1))
+      fi
+    else
+      skip "go-dicom could not read the encoded fixture"
+    fi
+  else
+    skip "pydicom is not available to supply the fixture"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2
