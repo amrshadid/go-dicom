@@ -327,6 +327,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |
 | MPPS | Yes | Yes | N-CREATE/N-SET both directions, verified against pynetdicom |
 | Print Management | Yes | Yes | Film session, film box, image box, print action |
+| Unified Procedure Step | Yes | Yes | Push: state machine and Transaction UID enforced by `UPSHandler` |
 | Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
 | CLI Tools | 7 | 9 | All 7 of pynetdicom's, plus `echoscp` and `commitscu` |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
