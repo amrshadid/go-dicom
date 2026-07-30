@@ -207,6 +207,9 @@ jobs:
           fi
           echo "corpus: $GODICOM_PYDICOM_DATA"
           go test ./dataset/ -run TestAgainstPydicomCorpus -v
+          # Every sample of every corpus file, not the first eight of a curated
+          # list — which is what three pixel layout defects lived through.
+          go test ./dataset/ -run TestPixelsAgainstWholePydicomCorpus -v
           # The transcoding checks need a genuinely compressed instance, which
           # the corpus supplies; they skip without it, so this is the one job
           # where they run.

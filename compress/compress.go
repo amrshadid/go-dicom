@@ -6,8 +6,10 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"fmt"
+	"image"
 	"image/jpeg"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -1021,11 +1023,27 @@ func (d *RLEDecompressor) CanDecompress(data []byte) bool {
 // JPEGDecompressor handles JPEG decompression.
 type JPEGDecompressor struct {
 	mu sync.RWMutex
+
+	// KeepYCbCr leaves a color-transformed JPEG in its own color space rather
+	// than converting to RGB. Set it when the instance's Photometric
+	// Interpretation is one of the YBR forms.
+	KeepYCbCr bool
 }
 
 // NewJPEGDecompressor creates a new JPEG decompressor.
 func NewJPEGDecompressor() *JPEGDecompressor {
 	return &JPEGDecompressor{}
+}
+
+// NewJPEGDecompressorForPhotometric returns a decompressor that leaves the
+// samples in the color space the Photometric Interpretation names.
+//
+// A JPEG carrying YCbCr is normally converted to RGB on decode. That is right
+// for an instance whose attribute says RGB and wrong for one that says
+// YBR_FULL, where the attribute describes the samples as stored and a reader
+// will convert them itself.
+func NewJPEGDecompressorForPhotometric(photometric string) *JPEGDecompressor {
+	return &JPEGDecompressor{KeepYCbCr: strings.HasPrefix(photometric, "YBR")}
 }
 
 // Decompress decompresses JPEG data and returns raw pixel data.
@@ -1043,22 +1061,61 @@ func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode JPEG: %w", err)
 	}
 
-	// Convert image to raw pixel data
+	return samplesFromImage(img, d.KeepYCbCr), nil
+}
+
+// samplesFromImage flattens a decoded JPEG to DICOM pixel data.
+//
+// The sample count has to follow the image, not a guess. This emitted three
+// bytes per pixel unconditionally, so a grayscale frame came back at triple
+// length with every value repeated — and the accessors above, sizing from
+// SamplesPerPixel, then kept the first third of it. The picture was the first
+// third of the rows, each pixel smeared across three, and nothing reported a
+// problem.
+//
+// keepYCbCr leaves a color-transformed JPEG in its own color space. A DICOM
+// instance whose Photometric Interpretation is YBR_FULL describes the samples
+// as stored, and converting them to RGB while the attribute still says YBR
+// leaves a reader to apply the conversion a second time.
+func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 	bounds := img.Bounds()
-	width := bounds.Max.X - bounds.Min.X
-	height := bounds.Max.Y - bounds.Min.Y
+	width := bounds.Dx()
+	height := bounds.Dy()
 
-	pixelData := make([]byte, 0, width*height*3) // Assume RGB
+	switch src := img.(type) {
+	case *image.Gray:
+		out := make([]byte, 0, width*height)
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				out = append(out, src.GrayAt(x, y).Y)
+			}
+		}
+		return out
 
+	case *image.YCbCr:
+		out := make([]byte, 0, width*height*3)
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				if keepYCbCr {
+					c := src.YCbCrAt(x, y)
+					out = append(out, c.Y, c.Cb, c.Cr)
+					continue
+				}
+				r, g, b, _ := src.At(x, y).RGBA()
+				out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+			}
+		}
+		return out
+	}
+
+	out := make([]byte, 0, width*height*3)
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
 			r, g, b, _ := img.At(x, y).RGBA()
-			// Convert from 16-bit to 8-bit
-			pixelData = append(pixelData, byte(r>>8), byte(g>>8), byte(b>>8))
+			out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
 		}
 	}
-
-	return pixelData, nil
+	return out
 }
 
 // CanDecompress checks if data looks like JPEG.

@@ -532,6 +532,10 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Grayscale** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Supply a decoder** | Yes |
 
+Pixel data is returned in the color space the Photometric Interpretation names, so a
+`YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
+configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
+
 JPEG 2000 needs a decoder you supply — `examples/jpeg2000` is a working one that
 shells out to openjpeg, verified sample-for-sample against pydicom.
 JPEG Extended decodes at 8 bits; 12-bit frames are refused, with precision named as
