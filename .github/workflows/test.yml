@@ -196,18 +196,20 @@ jobs:
           echo "corpus: $GODICOM_PYDICOM_DATA"
           go test ./dataset/ -run TestAgainstPydicomCorpus -v
 
-      # MPPS and print management have no CLI commands, so the shell script
-      # above cannot reach them; they are driven from Go instead. These tests
-      # skip wherever pynetdicom is absent, which is every other job — so this
-      # is the one place they run, and GODICOM_REQUIRE_INTEROP makes a skip here
-      # a failure rather than a silent pass.
-      - name: Verify N-DIMSE services against pynetdicom
+      # Services the shell script above cannot reach, because they have no CLI
+      # command to drive them: MPPS, print management, and cancelling a
+      # retrieval. They are driven from Go instead.
+      #
+      # These tests skip wherever pynetdicom is absent, which is every other job
+      # — so this is the one place they run, and GODICOM_REQUIRE_INTEROP makes a
+      # skip here a failure rather than a silent pass.
+      - name: Verify N-DIMSE services and cancellation against pynetdicom
         env:
           GODICOM_REQUIRE_INTEROP: "1"
         run: |
           export PATH="$HOME/dicomvenv/bin:$PATH"
           go test ./network/ -race -v \
-            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom'
+            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom'
 
       - name: Upload server logs on failure
         if: failure()

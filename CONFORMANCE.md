@@ -291,10 +291,17 @@ than none.
 - **Compressed transfer syntaxes are not negotiated by default**, though all
   four uncompressed ones are. Pass `AllTransferSyntaxes()` to accept compressed
   pixel data; see [§3.1](#31-transfer-syntaxes-negotiated-by-default).
-- **A C-FIND handler that returns a complete result set cannot observe a
-  cancellation.** Implement `CFindStreamer` to be interruptible. C-GET and C-MOVE
-  stream their sub-operations but do not expose an equivalent hook for the
-  matching phase.
+- **A handler that returns a complete result set cannot observe a
+  cancellation.** C-FIND, C-GET and C-MOVE each accept an optional streaming
+  interface — `CFindStreamer`, `CGetStreamer`, `CMoveStreamer` — whose context is
+  canceled when the requestor sends C-CANCEL, so matching stops rather than
+  running to completion with its results discarded. A handler that returns a
+  slice is served unchanged, but cannot be interrupted while it builds one.
+
+  The sub-operations of a C-GET or C-MOVE are abandoned on cancel either way,
+  slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
+  canceled retrieval is reported as status 0xFE00 with the number of
+  sub-operations still outstanding.
 - **Pixel data is not transcoded.** The data set itself *is* — it is always
   encoded in the syntax the presentation context negotiated, in either byte
   order, deflated or not, so a value reaches the peer intact whichever was

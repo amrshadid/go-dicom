@@ -510,8 +510,33 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 		DataSet:          queryDS,
 	}
 
-	resp, err := handler.HandleCMove(ctx, req)
+	// Unlike C-GET, a C-MOVE's sub-operations go to a third party, so nothing
+	// reads the requestor's association while they run and a watcher can hold
+	// it. That covers the matching phase too — the handler may take a while over
+	// a large archive, and a cancel arriving then should reach it.
+	opCtx, watcher := watchForCancel(ctx, assoc, messageID)
+	defer watcher.finish()
+
+	if streamer, ok := handler.(CMoveStreamer); ok {
+		address, ok := s.config.resolveMoveDestination(moveDest)
+		if !ok {
+			log.Printf("C-MOVE destination %q is not configured; set SCPConfig.MoveDestinations "+
+				"or SCPConfig.ResolveMoveDestination", moveDest)
+			s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusMoveDestUnknown, 0, 0, 0)
+			return
+		}
+		s.streamMoveSubOperations(ctx, assoc, streamer, req, ctxID, messageID, sopClassUID,
+			address, watcher)
+		return
+	}
+
+	resp, err := handler.HandleCMove(opCtx, req)
 	if err != nil {
+		if watcher.wasCanceled() {
+			s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID,
+				StatusQRCancelMatchingTerminated, 0, 0, 0)
+			return
+		}
 		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0)
 		return
 	}
@@ -521,6 +546,12 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 	if resp != nil {
 		status = resp.Status
 		instances = resp.Instances
+	}
+
+	if watcher.wasCanceled() {
+		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID,
+			StatusQRCancelMatchingTerminated, uint16(len(instances)), 0, 0)
+		return
 	}
 
 	if len(instances) == 0 {
@@ -539,20 +570,37 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 		return
 	}
 
-	completed, failed, warning := s.sendMoveSubOperations(ctx, assoc, ctxID,
-		messageID, sopClassUID, moveDest, address, instances)
+	completed, failed, warning, remaining := s.sendMoveSubOperations(ctx, assoc, ctxID,
+		messageID, sopClassUID, moveDest, address, instances, watcher)
 
 	if failed > 0 && status == StatusSuccess {
 		status = StatusGetWarningPartial
 	}
-	s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, status, completed, failed, warning)
+	if watcher.wasCanceled() {
+		status = StatusQRCancelMatchingTerminated
+	}
+	s.sendMoveFinalRemaining(ctx, assoc, ctxID, messageID, sopClassUID, status,
+		remaining, completed, failed, warning)
 }
 
-// sendMoveFinal sends the terminating C-MOVE-RSP.
+// sendMoveFinal sends the terminating C-MOVE-RSP with nothing outstanding.
 func (s *SCP) sendMoveFinal(ctx context.Context, assoc *Association, ctxID byte,
 	messageID uint16, sopClassUID string, status, completed, failed, warning uint16) {
 
-	rspDS := BuildCMoveRSP(messageID, sopClassUID, status, 0, completed, failed, warning)
+	s.sendMoveFinalRemaining(ctx, assoc, ctxID, messageID, sopClassUID, status,
+		0, completed, failed, warning)
+}
+
+// sendMoveFinalRemaining sends the terminating C-MOVE-RSP, reporting how many
+// sub-operations were never attempted.
+//
+// A canceled move is the only case where that count is non-zero: the requestor
+// stopped the transfer and is owed the number still outstanding, which a final
+// response claiming zero remaining would misreport as a completed retrieval.
+func (s *SCP) sendMoveFinalRemaining(ctx context.Context, assoc *Association, ctxID byte,
+	messageID uint16, sopClassUID string, status, remaining, completed, failed, warning uint16) {
+
+	rspDS := BuildCMoveRSP(messageID, sopClassUID, status, remaining, completed, failed, warning)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
 		log.Printf("failed to encode C-MOVE-RSP: %v", err)
@@ -570,13 +618,13 @@ func (s *SCP) sendMoveFinal(ctx context.Context, assoc *Association, ctxID byte,
 // counts (PS3.4 Annex C.4.2).
 func (s *SCP) sendMoveSubOperations(ctx context.Context, assoc *Association, ctxID byte,
 	messageID uint16, sopClassUID, destAE, destAddress string,
-	instances []*dataset.Dataset) (completed, failed, warning uint16) {
+	instances []*dataset.Dataset, watcher *cancelWatcher) (completed, failed, warning, remaining uint16) {
 
 	// Propose a presentation context for each distinct SOP Class being sent,
 	// so every instance has a context to travel on.
 	contexts := storageContextsFor(instances)
 	if len(contexts) == 0 {
-		return 0, uint16(len(instances)), 0
+		return 0, uint16(len(instances)), 0, 0
 	}
 
 	dest := NewSCU(SCUConfig{
@@ -589,12 +637,18 @@ func (s *SCP) sendMoveSubOperations(ctx context.Context, assoc *Association, ctx
 	if err := dest.Associate(ctx, contexts); err != nil {
 		log.Printf("C-MOVE could not associate with destination %s at %s: %v",
 			destAE, destAddress, err)
-		return 0, uint16(len(instances)), 0
+		return 0, uint16(len(instances)), 0, 0
 	}
 	defer func() { _ = dest.Release(ctx) }()
 
 	for i, inst := range instances {
-		remaining := uint16(len(instances) - i - 1)
+		left := uint16(len(instances) - i - 1)
+
+		// Checked before each instance rather than only at the top: the point of
+		// a cancel is to stop work that has not happened yet.
+		if watcher != nil && watcher.wasCanceled() {
+			return completed, failed, warning, uint16(len(instances) - i)
+		}
 
 		if inst == nil {
 			failed++
@@ -609,19 +663,19 @@ func (s *SCP) sendMoveSubOperations(ctx context.Context, assoc *Association, ctx
 
 		// Progress goes back to the requestor, not the destination.
 		pendingDS := BuildCMoveRSP(messageID, sopClassUID, StatusPending,
-			remaining, completed, failed, warning)
+			left, completed, failed, warning)
 		pendingBytes, err := EncodeCommandDataset(pendingDS)
 		if err != nil {
 			continue
 		}
 		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
 			log.Printf("C-MOVE pending response failed, abandoning sub-operations: %v", err)
-			failed += remaining
-			return completed, failed, warning
+			failed += left
+			return completed, failed, warning, 0
 		}
 	}
 
-	return completed, failed, warning
+	return completed, failed, warning, 0
 }
 
 // storageContextsFor builds presentation contexts covering the distinct SOP
@@ -679,6 +733,13 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 		DataSet:          queryDS,
 	}
 
+	// A streaming handler produces instances one at a time and can be stopped
+	// mid-match; the slice path below cannot.
+	if streamer, ok := handler.(CGetStreamer); ok {
+		s.streamGetSubOperations(ctx, assoc, streamer, req, ctxID, messageID, sopClassUID)
+		return
+	}
+
 	resp, err := handler.HandleCGet(ctx, req)
 	if err != nil {
 		rspDS := BuildCGetRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0)
@@ -696,15 +757,22 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 
 	// Transfer each matching instance as a C-STORE sub-operation over this
 	// same association (PS3.4 Annex C.4.3), reporting progress as we go.
-	completed, failed, warning := s.sendGetSubOperations(ctx, assoc, ctxID,
-		messageID, sopClassUID, instances)
+	canceled := &cancelFlag{}
+	completed, failed, warning, remaining := s.sendGetSubOperations(ctx, assoc, ctxID,
+		messageID, sopClassUID, instances, canceled)
 
 	// A partial failure is reported as a warning rather than success.
 	if failed > 0 && status == StatusSuccess {
 		status = StatusGetWarningPartial
 	}
 
-	rspDS := BuildCGetRSP(messageID, sopClassUID, status, 0, completed, failed, warning)
+	// A cancel outranks both: the requestor is owed the cancel status and the
+	// count still outstanding, not a success for a retrieval it stopped.
+	if canceled.wasSet() {
+		status = StatusQRCancelMatchingTerminated
+	}
+
+	rspDS := BuildCGetRSP(messageID, sopClassUID, status, remaining, completed, failed, warning)
 	rspBytes, _ := EncodeCommandDataset(rspDS)
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
@@ -715,13 +783,21 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 //
 // Returns the completed, failed, and warning counts.
 func (s *SCP) sendGetSubOperations(ctx context.Context, assoc *Association, ctxID byte,
-	messageID uint16, sopClassUID string, instances []*dataset.Dataset) (completed, failed, warning uint16) {
+	messageID uint16, sopClassUID string, instances []*dataset.Dataset,
+	canceled *cancelFlag) (completed, failed, warning uint16, remainingAtCancel uint16) {
 
 	// Sub-operations carry their own message IDs, independent of the C-GET's.
 	var subMessageID uint16
 
 	for i, inst := range instances {
 		remaining := uint16(len(instances) - i - 1)
+
+		// A cancel seen while collecting the previous response ends the
+		// retrieval here. What has already been sent stays sent; the rest is
+		// reported as remaining, which is what the requestor asked for.
+		if canceled.wasSet() {
+			return completed, failed, warning, uint16(len(instances) - i)
+		}
 
 		if inst == nil {
 			failed++
@@ -745,7 +821,8 @@ func (s *SCP) sendGetSubOperations(ctx context.Context, assoc *Association, ctxI
 		}
 
 		subMessageID++
-		if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID, instClass, instUID, inst); err != nil {
+		if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID,
+			instClass, instUID, inst, messageID, canceled); err != nil {
 			log.Printf("C-GET sub-operation for %s failed: %v", instUID, err)
 			failed++
 		} else {
@@ -763,16 +840,21 @@ func (s *SCP) sendGetSubOperations(ctx context.Context, assoc *Association, ctxI
 			// The association is gone; further sub-operations cannot succeed.
 			log.Printf("C-GET pending response failed, abandoning sub-operations: %v", err)
 			failed += remaining
-			return completed, failed, warning
+			return completed, failed, warning, 0
 		}
 	}
 
-	return completed, failed, warning
+	return completed, failed, warning, 0
 }
 
 // sendCStoreSubOperation issues one C-STORE-RQ and waits for its response.
+//
+// parentMessageID names the C-GET being served, and canceled records a C-CANCEL
+// for it seen while waiting. Both may be zero and nil for a caller with no
+// enclosing operation to cancel.
 func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ctxID byte,
-	messageID uint16, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) error {
+	messageID uint16, sopClassUID, sopInstanceUID string, ds *dataset.Dataset,
+	parentMessageID uint16, canceled *cancelFlag) error {
 
 	cmdDS := BuildCStoreRQ(messageID, sopClassUID, sopInstanceUID, PriorityMedium)
 	cmdBytes, err := EncodeCommandDataset(cmdDS)
@@ -791,18 +873,37 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 		return fmt.Errorf("send instance: %w", err)
 	}
 
-	_, respData, isCmd, err := assoc.ReceivePData(ctx)
-	if err != nil {
-		return fmt.Errorf("receive C-STORE-RSP: %w", err)
-	}
-	if !isCmd {
-		return fmt.Errorf("expected C-STORE-RSP command, got a data set")
+	// The requestor may send a C-CANCEL for the enclosing C-GET at any point,
+	// and it arrives here because sub-operations share the association. Absorb
+	// it and keep reading for the response this sub-operation is owed: the
+	// C-STORE-RQ has already gone out, so the peer will answer it regardless.
+	//
+	// Without this the cancel was consumed as though it were the response.
+	// A C-CANCEL carries no Status element, so it parsed as status 0x0000 and
+	// the sub-operation was recorded as a success, after which every later read
+	// was one message out of step with its request.
+	var respDS *dataset.Dataset
+	for {
+		_, respData, isCmd, err := assoc.ReceivePData(ctx)
+		if err != nil {
+			return fmt.Errorf("receive C-STORE-RSP: %w", err)
+		}
+		if !isCmd {
+			return fmt.Errorf("expected C-STORE-RSP command, got a data set")
+		}
+
+		decoded, err := DecodeCommandDataset(respData)
+		if err != nil {
+			return fmt.Errorf("decode C-STORE-RSP: %w", err)
+		}
+		if canceled != nil && isCancelFor(decoded, parentMessageID) {
+			canceled.set()
+			continue
+		}
+		respDS = decoded
+		break
 	}
 
-	respDS, err := DecodeCommandDataset(respData)
-	if err != nil {
-		return fmt.Errorf("decode C-STORE-RSP: %w", err)
-	}
 	_, _, status, err := ParseCommandDataset(respDS)
 	if err != nil {
 		return fmt.Errorf("parse C-STORE-RSP: %w", err)

@@ -340,6 +340,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 |------|--------|
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
+| **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
 | **Transcoding of pixel data** | The data set itself is always encoded in the syntax its presentation context negotiated, in either byte order, deflated or not. Pixel data is not re-encoded, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR transfers the compressed bytes rather than decompressing them. |
 | **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
 
