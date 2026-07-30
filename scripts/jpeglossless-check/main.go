@@ -1,15 +1,23 @@
 // Command jpeglossless-check decodes dcmtk-encoded lossless JPEG fixtures and
-// compares them with the uncompressed original they were made from.
+// compares them with the uncompressed pixels they were made from.
 //
 // It exists because the lossless JPEG decoder was written from ITU-T T.81, and a
 // test built on frames this project encoded would only show the two halves
-// agreeing. Here dcmtk is the encoder and the uncompressed file is the answer,
-// so neither side of the comparison came from the code under test.
+// agreeing. Here dcmtk is the encoder and pydicom supplies the answer, so
+// neither side of the comparison came from the code under test.
 //
-// Usage: jpeglossless-check <directory containing orig.dcm and the encoded files>
+// The ground truth is pydicom's reading of the *uncompressed* original, dumped
+// to a flat file. That matters: bare pydicom cannot decode lossless JPEG at all
+// without a pylibjpeg or gdcm plugin, so asking it to decode the compressed
+// fixtures would test whichever plugin happened to be installed — or fail on a
+// machine with none, saying the pixels disagree when nothing had been compared.
+// Reading uncompressed pixel data needs no plugin and no numpy.
+//
+// Usage: jpeglossless-check <dir of encoded fixtures> <uncompressed pixels>
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,15 +29,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: jpeglossless-check <dir>")
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: jpeglossless-check <dir> <ground-truth-pixels>")
 		os.Exit(2)
 	}
-	dir := os.Args[1]
+	dir, truthPath := os.Args[1], os.Args[2]
 
-	want, err := samplesOf(filepath.Join(dir, "orig.dcm"))
+	want, err := os.ReadFile(truthPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "reading the uncompressed original: %v\n", err)
+		fmt.Fprintf(os.Stderr, "reading the ground truth pixels: %v\n", err)
+		os.Exit(1)
+	}
+	if len(want) == 0 {
+		fmt.Fprintln(os.Stderr, "the ground truth file is empty")
 		os.Exit(1)
 	}
 
@@ -48,29 +60,38 @@ func main() {
 		}
 		checked++
 
-		got, err := samplesOf(path)
+		samples, err := samplesOf(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
 			failures++
 			continue
 		}
-		if len(got) != len(want) {
-			fmt.Fprintf(os.Stderr, "%s: decoded %d samples, the original has %d\n",
-				name, len(got), len(want))
+		if len(samples) == 0 {
+			fmt.Fprintf(os.Stderr, "%s: decoded no samples\n", name)
 			failures++
 			continue
 		}
+		if len(want)%len(samples) != 0 {
+			fmt.Fprintf(os.Stderr, "%s: decoded %d samples, which does not divide %d bytes of original pixels\n",
+				name, len(samples), len(want))
+			failures++
+			continue
+		}
+
+		// Compare bit patterns rather than numbers, so the comparison does not
+		// have to agree with pydicom about signedness.
+		got := pack(samples, len(want)/len(samples))
 		if i, ok := firstDifference(got, want); !ok {
-			fmt.Fprintf(os.Stderr, "%s: sample %d is %d, the original has %d\n",
+			fmt.Fprintf(os.Stderr, "%s: byte %d is 0x%02X, the original has 0x%02X\n",
 				name, i, got[i], want[i])
 			failures++
 			continue
 		}
-		fmt.Printf("%s: %d samples identical to the original\n", name, len(got))
+		fmt.Printf("%s: %d samples identical to the uncompressed original\n", name, len(samples))
 	}
 
 	if checked == 0 {
-		fmt.Fprintln(os.Stderr, "no encoded fixtures were found next to orig.dcm")
+		fmt.Fprintln(os.Stderr, "no encoded fixtures were found")
 		os.Exit(1)
 	}
 	if failures > 0 {
@@ -79,8 +100,8 @@ func main() {
 	}
 }
 
-// samplesOf reads a file and flattens its pixel data to signed values.
-func samplesOf(path string) ([]int64, error) {
+// samplesOf reads a file and flattens its decoded pixel data.
+func samplesOf(path string) ([]uint64, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -96,7 +117,7 @@ func samplesOf(path string) ([]int64, error) {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
 
-	var out []int64
+	var out []uint64
 	var walk func(reflect.Value)
 	walk = func(v reflect.Value) {
 		if v.Kind() == reflect.Slice {
@@ -107,22 +128,48 @@ func samplesOf(path string) ([]int64, error) {
 		}
 		switch v.Kind() {
 		case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Int:
-			out = append(out, v.Int())
+			out = append(out, uint64(v.Int()))
 		default:
-			out = append(out, int64(v.Uint()))
+			out = append(out, v.Uint())
 		}
 	}
 	walk(reflect.ValueOf(arr))
 	return out, nil
 }
 
-// firstDifference returns the index of the first differing sample, and whether
-// the two are equal.
-func firstDifference(a, b []int64) (int, bool) {
-	for i := range a {
+// pack serializes samples little endian at the given width, which is how
+// uncompressed pixel data sits in a DICOM file.
+func pack(samples []uint64, bytesPerSample int) []byte {
+	out := make([]byte, len(samples)*bytesPerSample)
+	for i, s := range samples {
+		switch bytesPerSample {
+		case 1:
+			out[i] = byte(s)
+		case 2:
+			binary.LittleEndian.PutUint16(out[i*2:], uint16(s))
+		case 4:
+			binary.LittleEndian.PutUint32(out[i*4:], uint32(s))
+		default:
+			binary.LittleEndian.PutUint64(out[i*8:], s)
+		}
+	}
+	return out
+}
+
+// firstDifference returns the index of the first differing byte, and whether the
+// two are equal.
+func firstDifference(a, b []byte) (int, bool) {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
 		if a[i] != b[i] {
 			return i, false
 		}
+	}
+	if len(a) != len(b) {
+		return n, false
 	}
 	return 0, true
 }
