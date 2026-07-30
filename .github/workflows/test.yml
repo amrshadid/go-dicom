@@ -207,6 +207,10 @@ jobs:
           fi
           echo "corpus: $GODICOM_PYDICOM_DATA"
           go test ./dataset/ -run TestAgainstPydicomCorpus -v
+          # The transcoding checks need a genuinely compressed instance, which
+          # the corpus supplies; they skip without it, so this is the one job
+          # where they run.
+          go test ./network/ -run 'TestCompressedInstanceIsDecodedBeforeSending|TestTranscodingDoesNotMutateTheCaller' -v
 
       # Services the shell script above cannot reach, because they have no CLI
       # command to drive them: MPPS, print management, and cancelling a
