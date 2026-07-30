@@ -353,6 +353,57 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# The CLI's own retrieve commands, against go-dicom's own qrscp.
+#
+# This is not third-party interoperability, but it belongs here because it is
+# the only place the CLI binary is exercised rather than the library. getscu
+# called Move with an empty destination for its whole existence — a C-MOVE
+# naming nowhere to send to, answered with 0xA801 — so the command had never
+# performed a C-GET. Every library-level C-GET test passed throughout, because
+# the defect was in the wiring between the command and the SCU.
+note "go-dicom CLI: storescu, findscu, getscu against qrscp"
+
+cli_port=11902
+cli_out="$WORKDIR/cli-getscu"
+mkdir -p "$cli_out"
+
+"$GODICOM" qrscp -port "$cli_port" > "$WORKDIR/cli-qrscp.log" 2>&1 &
+cli_qrscp_pid=$!
+
+if wait_for_port "$cli_port"; then
+  if "$GODICOM" storescu -aec QRSCP "127.0.0.1:$cli_port" "$FIXTURE" \
+      > "$WORKDIR/cli-storescu.log" 2>&1; then
+    pass "storescu sent an instance to qrscp"
+    RAN_ANY=1
+  else
+    fail "storescu could not send to qrscp"
+  fi
+
+  if "$GODICOM" findscu -aec QRSCP -level STUDY "127.0.0.1:$cli_port" \
+      > "$WORKDIR/cli-findscu.log" 2>&1; then
+    pass "findscu queried qrscp"
+  else
+    fail "findscu could not query qrscp"
+  fi
+
+  if "$GODICOM" getscu -aec QRSCP -level STUDY -output "$cli_out" \
+      "127.0.0.1:$cli_port" > "$WORKDIR/cli-getscu.log" 2>&1; then
+    retrieved=$(find "$cli_out" -name '*.dcm' | wc -l | tr -d ' ')
+    if [ "$retrieved" -ge 1 ]; then
+      pass "getscu retrieved $retrieved instance(s) and wrote them to disk"
+    else
+      fail "getscu reported success but wrote no files"
+    fi
+  else
+    fail "getscu failed"
+    sed -n '1,5p' "$WORKDIR/cli-getscu.log" >&2
+  fi
+else
+  fail "go-dicom qrscp did not start listening"
+fi
+stop_server "$cli_qrscp_pid"
+
+# ---------------------------------------------------------------------------
 # Storage Commitment: go-dicom SCU -> pynetdicom SCP.
 #
 # This exchange is what exposed go-dicom naming its N-ACTION target with

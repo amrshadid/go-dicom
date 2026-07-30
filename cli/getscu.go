@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -20,6 +22,7 @@ type GetSCUCommand struct {
 	studyUID  string
 	seriesUID string
 	level     string
+	outputDir string
 }
 
 func (c *GetSCUCommand) Name() string        { return "getscu" }
@@ -32,6 +35,7 @@ func (c *GetSCUCommand) AddFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.studyUID, "study", "", "Study Instance UID")
 	fs.StringVar(&c.seriesUID, "series", "", "Series Instance UID")
 	fs.StringVar(&c.level, "level", "STUDY", "Query retrieve level")
+	fs.StringVar(&c.outputDir, "output", ".", "Directory to write retrieved instances to")
 }
 
 func (c *GetSCUCommand) Execute(args []string) error {
@@ -47,12 +51,31 @@ func (c *GetSCUCommand) Execute(args []string) error {
 
 	address := fs.Arg(0)
 
+	if err := os.MkdirAll(c.outputDir, 0o755); err != nil {
+		return fmt.Errorf("cannot create the output directory: %w", err)
+	}
+
+	received := 0
 	scu := network.NewSCU(network.SCUConfig{
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,
 		Network: network.NetworkConfig{
 			NetworkTimeout: time.Duration(c.timeout) * time.Second,
+		},
+		// C-GET sends the instances back on this same association as C-STORE
+		// sub-operations. Without a handler for them the retrieval succeeds and
+		// every instance is discarded — the command would report success having
+		// saved nothing.
+		OnCStore: func(_ context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {
+			received++
+			filename := filepath.Join(c.outputDir, sopInstanceUID+".dcm")
+			if err := writeDICOMFile(filename, sopClassUID, sopInstanceUID, ds); err != nil {
+				fmt.Printf("Error writing %s: %v\n", filename, err)
+				return network.StatusUnableToProcess
+			}
+			fmt.Printf("Received: %s -> %s\n", sopInstanceUID, filename)
+			return network.StatusSuccess
 		},
 	})
 
@@ -76,11 +99,15 @@ func (c *GetSCUCommand) Execute(args []string) error {
 
 	fmt.Printf("C-GET from %s (level: %s)\n", address, c.level)
 
-	// C-GET uses same association for data transfer (unlike C-MOVE)
-	if err := scu.Move(ctx, queryDS, ""); err != nil {
+	// C-GET, not C-MOVE. This called Move with an empty destination, which is a
+	// C-MOVE naming nowhere to send to — the SCP answered 0xA801, Move
+	// Destination Unknown, and the command had never performed a C-GET at all.
+	// The comment that used to sit here said C-GET uses the same association,
+	// which is exactly right and exactly what the call did not do.
+	if err := scu.Get(ctx, queryDS); err != nil {
 		return fmt.Errorf("C-GET failed: %w", err)
 	}
 
-	fmt.Println("C-GET completed successfully")
+	fmt.Printf("C-GET completed: %d instance(s) retrieved to %s\n", received, c.outputDir)
 	return nil
 }
