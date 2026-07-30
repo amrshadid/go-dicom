@@ -278,9 +278,16 @@ than none.
 ### 8.1 Pixel data
 
 - **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
-  path. Instances parse, store, and transfer with their pixel data intact as
-  opaque bytes; supply a decoder with
-  `compress.GetExternalRegistry().RegisterExternalDecoder`.
+  path: wavelet transforms plus EBCOT arithmetic coding is thousands of lines to
+  implement correctly, and binding openjpeg would cost this library a property it
+  advertises. Instances parse, store, and transfer with their pixel data intact
+  as opaque bytes.
+
+  Supply a decoder with
+  `compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, …)`.
+  `examples/jpeg2000` is a working one to copy — it shells out to openjpeg's
+  `opj_decompress` — and it is verified sample-for-sample against pydicom, along
+  with the registry actually consulting it.
 
 - **JPEG Extended (`.51`) decodes at 8 bits but not at 12.** The transfer syntax
   permits both, and the limitation is precision alone. A 12-bit frame is refused
