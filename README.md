@@ -164,6 +164,23 @@ func main() {
 }
 ```
 
+### Read a file and write it back
+
+```go
+df, _ := filereader.ReadDICOMFile(filebase.NewFileReader(in))
+
+w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
+w.SetFileMetaInfo(&filewriter.FileMetaInfo{ /* ... */ })
+for _, e := range filewriter.ElementsFromDataset(df.GetDataset()) {
+    _ = w.AddDataElement(e)
+}
+_ = w.Write()
+```
+
+`ElementsFromDataset` descends into sequences. Copying `Value` and ignoring
+`Items` writes a file that looks complete with every nested item missing — the
+element is present, its length is zero, and nothing reports it.
+
 ### Work with Sequences
 
 Nested sequences (SQ) are parsed recursively into child `Dataset` values:
