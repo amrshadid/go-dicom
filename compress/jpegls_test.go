@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -136,27 +135,46 @@ func TestJPEGLSNearLosslessStaysWithinBound(t *testing.T) {
 	}
 }
 
-// TestJPEGLSRefusesColor checks that a multi-component frame is refused rather
-// than decoded wrongly.
+// TestJPEGLSColorInterleaveModes decodes the same image in both interleave
+// modes and compares every sample with the uncompressed original.
 //
-// The interleaved paths decoded small frames correctly and diverged on larger
-// ones. A decoder that is right until row 11 is worse than one that declines:
-// the output looks like an image either way, and only a comparison against the
-// original tells them apart.
-func TestJPEGLSRefusesColor(t *testing.T) {
-	stream := readJPEGLSFixture(t, "rgb_line_interleaved.jls")
+// Color was refused for a while because the interleaved paths decoded a 3x3
+// frame correctly and diverged around the ninth row of a 256x256 one. The cause
+// was a single inverted comparison in the run-interruption sign test: the two
+// forms differ only when k is zero at a run interruption, which a grayscale
+// frame with few runs almost never reaches and a three-component frame reaches
+// constantly.
+//
+// It was found by measuring where a real image first *diverges* rather than
+// where it crashes. Crash position is a poor signal — a configuration that
+// diverges at row 1 can run further before the stream desynchronizes enough to
+// fail — and choosing by it kept the wrong arrangement in place for a while.
+func TestJPEGLSColorInterleaveModes(t *testing.T) {
+	want := readJPEGLSFixture(t, "rgb_expected.raw")
 
-	decoder := compress.NewJPEGLSDecompressor()
-	if !decoder.CanDecompress(stream) {
-		t.Error("CanDecompress rejected a color JPEG-LS stream; it is still JPEG-LS")
-	}
-
-	got, err := decoder.Decompress(stream)
-	if err == nil {
-		t.Fatalf("a color frame decoded to %d bytes; it should have been refused", len(got))
-	}
-	if !strings.Contains(err.Error(), "color") && !strings.Contains(err.Error(), "component") {
-		t.Errorf("the error does not say why color was refused: %v", err)
+	for _, tc := range []struct {
+		name string
+		file string
+	}{
+		{"line interleaved", "rgb_line_interleaved.jls"},
+		{"sample interleaved", "rgb_sample_interleaved.jls"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := compress.NewJPEGLSDecompressor().Decompress(readJPEGLSFixture(t, tc.file))
+			if err != nil {
+				t.Fatalf("Decompress: %v", err)
+			}
+			if len(got) != len(want) {
+				t.Fatalf("decoded %d bytes, want %d", len(got), len(want))
+			}
+			for i := range got {
+				if got[i] != want[i] {
+					px := i / 3
+					t.Fatalf("sample %d differs: got %d, want %d (row %d, column %d, component %d)",
+						i, got[i], want[i], px/256, px%256, i%3)
+				}
+			}
+		})
 	}
 }
 

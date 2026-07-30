@@ -14,6 +14,27 @@ import (
 // more cover the EOI marker the scan runs up against.
 const maxJPEGLSTrailingSlack = 10
 
+// maxJPEGLSExpansion bounds how many samples a frame of the given compressed
+// size may declare.
+//
+// A flat region costs a few bits per run rather than per sample, so the ratio
+// has to be generous — 4096 samples per byte is far past what any encoder
+// achieves on real data. The floor keeps small legitimate frames from being
+// refused because their headers are a large fraction of their size.
+func maxJPEGLSExpansion(compressed int) int {
+	const (
+		ratio = 4096
+		floor = 1 << 20
+	)
+	if compressed > maxJPEGLSSamples/ratio {
+		return maxJPEGLSSamples
+	}
+	if n := compressed * ratio; n > floor {
+		return n
+	}
+	return floor
+}
+
 // jpeglsScan describes one scan's coding options, from its SOS header.
 type jpeglsScan struct {
 	components []int // indices into the frame's component list
@@ -70,7 +91,7 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 		switch marker {
 		case markerSOF55:
 			var err error
-			if img, compIDs, err = parseJPEGLSFrameHeader(body); err != nil {
+			if img, compIDs, err = parseJPEGLSFrameHeader(body, data); err != nil {
 				return nil, err
 			}
 			params.maxVal = (1 << img.precision) - 1
@@ -122,7 +143,7 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 }
 
 // parseJPEGLSFrameHeader reads SOF55, which has the same shape as any SOF.
-func parseJPEGLSFrameHeader(body []byte) (*jpeglsImage, []byte, error) {
+func parseJPEGLSFrameHeader(body, stream []byte) (*jpeglsImage, []byte, error) {
 	if len(body) < 6 {
 		return nil, nil, fmt.Errorf("jpegls: SOF55 header is %d bytes, want at least 6", len(body))
 	}
@@ -144,6 +165,15 @@ func parseJPEGLSFrameHeader(body []byte) (*jpeglsImage, []byte, error) {
 	if width*height > maxJPEGLSSamples/numComponents {
 		return nil, nil, fmt.Errorf("jpegls: frame of %dx%d with %d components is too large to decode",
 			width, height, numComponents)
+	}
+	// A frame also has to be plausible for the data behind it. JPEG-LS run mode
+	// compresses a flat image very hard, but not without limit, and a header is
+	// attacker-controlled: without this a handful of bytes can claim millions of
+	// samples, which are allocated and walked before the missing entropy data is
+	// noticed. The same reasoning bounds inflation in the deflate path.
+	if samples := width * height * numComponents; samples > maxJPEGLSExpansion(len(stream)) {
+		return nil, nil, fmt.Errorf("jpegls: frame of %dx%d with %d components declares %d samples, "+
+			"more than %d bytes of data could hold", width, height, numComponents, samples, len(stream))
 	}
 	if len(body) < 6+numComponents*3 {
 		return nil, nil, fmt.Errorf("jpegls: SOF55 declares %d components but carries %d bytes",
@@ -236,20 +266,6 @@ func parseJPEGLSScanHeader(body []byte, compIDs []byte) (*jpeglsScan, error) {
 	if scan.interleave == 0 && ns != 1 {
 		return nil, fmt.Errorf("jpegls: a non-interleaved scan must name one component, not %d", ns)
 	}
-	if ns != 1 {
-		// Refused rather than decoded. The interleaved paths decode small frames
-		// correctly and diverge on larger ones, somewhere in how the context and
-		// run state are shared between components — and a decoder that is right
-		// until row 11 is worse than one that says it cannot do this, because the
-		// output looks like an image either way.
-		//
-		// Single-component frames, which is what CT, MR, CR and most other
-		// modalities produce, are decoded and verified. Register your own decoder
-		// with compress.GetExternalRegistry().RegisterExternalDecoder to handle
-		// color, or transfer the instance without decoding it.
-		return nil, fmt.Errorf("jpegls: %d-component (color) JPEG-LS is not decoded; "+
-			"only single-component frames are supported", ns)
-	}
 
 	for i := 0; i < ns; i++ {
 		id := body[1+i*2]
@@ -286,6 +302,13 @@ type jpeglsDecoder struct {
 	// index, because there a run is one run across all components at once.
 	runIndex int
 
+	// runIndexes holds one run index per component of a line-interleaved scan.
+	// The components are coded as independent lines that happen to share a
+	// scan, so a flat green channel must not lend its run length to a busy red
+	// one. A sample-interleaved scan has a single index, because there a run
+	// covers every component at once.
+	runIndexes []int
+
 	// One previous and current line per component in the scan, each with a
 	// guard element at either end so the edge rules in T.87 A.2 fall out of the
 	// indexing instead of needing a branch per sample.
@@ -312,7 +335,16 @@ func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
 		d.cur[i] = make([]int32, img.width+2)
 	}
 
-	if err := d.decodePlane(scan.components[0]); err != nil {
+	var err error
+	switch scan.interleave {
+	case 0:
+		err = d.decodePlane(scan.components[0])
+	case 1:
+		err = d.decodeLineInterleaved(scan)
+	case 2:
+		err = d.decodeSampleInterleaved(scan)
+	}
+	if err != nil {
 		return 0, err
 	}
 
@@ -341,23 +373,163 @@ func (d *jpeglsDecoder) decodePlane(comp int) error {
 
 	for y := 0; y < height; y++ {
 		d.startLine(0)
-		if err := d.decodeRow(0, y, 0, 1); err != nil {
+		if err := d.decodeRow(0, y); err != nil {
 			return err
 		}
 
-		// Checked per row rather than once at the end. A header can claim a
-		// frame of any size, and without this a few bytes of entropy data would
-		// be decoded into millions of samples out of fabricated zero bits before
-		// anything noticed — slow enough to be worth doing to a server.
-		if d.reader.overrun > maxJPEGLSTrailingSlack {
-			return fmt.Errorf("entropy-coded data ran out at row %d of %d; the frame is "+
-				"truncated and the samples past that point would be invented", y, height)
+		if err := d.checkNotExhausted(y, height); err != nil {
+			return err
 		}
 
 		copy(plane[y*width:(y+1)*width], d.cur[0][1:width+1])
 		d.prev[0], d.cur[0] = d.cur[0], d.prev[0]
 	}
 	return nil
+}
+
+// decodeLineInterleaved decodes a scan whose components take turns by line.
+//
+// Every context is shared across the components — the 365 regular ones and both
+// run-interruption ones. The run index is not: the components are coded as
+// independent lines that happen to share a scan, so a flat green channel must
+// not lend its run length to a busy red one.
+//
+// Both were settled by measuring where a real image first diverges rather than
+// where it crashes. Crash position is a poor signal: a configuration that
+// diverges at row 1 can run further before the stream desynchronizes enough to
+// fail, and picking by that had me keep the wrong arrangement for a while.
+func (d *jpeglsDecoder) decodeLineInterleaved(scan *jpeglsScan) error {
+	width, height := d.img.width, d.img.height
+	d.runIndexes = make([]int, len(scan.components))
+
+	for y := 0; y < height; y++ {
+		for i, comp := range scan.components {
+			d.runIndex = d.runIndexes[i]
+			d.startLine(i)
+			if err := d.decodeRow(i, y); err != nil {
+				return err
+			}
+			d.runIndexes[i] = d.runIndex
+			copy(d.img.planes[comp][y*width:(y+1)*width], d.cur[i][1:width+1])
+			d.prev[i], d.cur[i] = d.cur[i], d.prev[i]
+		}
+		if err := d.checkNotExhausted(y, height); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeSampleInterleaved decodes a scan whose components take turns by sample.
+//
+// The components share one context model and one run, so a run only continues
+// while every component stays flat — which is what makes the mode worth using
+// on correlated color planes.
+func (d *jpeglsDecoder) decodeSampleInterleaved(scan *jpeglsScan) error {
+	width, height := d.img.width, d.img.height
+	n := len(scan.components)
+
+	for y := 0; y < height; y++ {
+		for i := range scan.components {
+			d.startLine(i)
+		}
+		if err := d.decodeInterleavedRow(y, n); err != nil {
+			return err
+		}
+		for i, comp := range scan.components {
+			copy(d.img.planes[comp][y*width:(y+1)*width], d.cur[i][1:width+1])
+			d.prev[i], d.cur[i] = d.cur[i], d.prev[i]
+		}
+		if err := d.checkNotExhausted(y, height); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// decodeInterleavedRow decodes one row with the components interleaved by
+// sample.
+func (d *jpeglsDecoder) decodeInterleavedRow(y, n int) error {
+	width := d.img.width
+
+	x := 1
+	for x <= width {
+		// A run needs every component flat at this position.
+		flat := true
+		for i := 0; i < n; i++ {
+			prev, cur := d.prev[i], d.cur[i]
+			ra, rb, rc, rd := cur[x-1], prev[x], prev[x-1], prev[x+1]
+			if !d.isFlat(rd-rb, rb-rc, rc-ra) {
+				flat = false
+				break
+			}
+		}
+
+		if flat {
+			consumed, err := d.decodeInterleavedRun(x, width, n)
+			if err != nil {
+				return fmt.Errorf("at row %d column %d: %w", y, x-1, err)
+			}
+			x += consumed
+			continue
+		}
+
+		for i := 0; i < n; i++ {
+			prev, cur := d.prev[i], d.cur[i]
+			ra, rb, rc, rd := cur[x-1], prev[x], prev[x-1], prev[x+1]
+			value, err := d.decodeRegular(ra, rb, rc, rd-rb, rb-rc, rc-ra)
+			if err != nil {
+				return fmt.Errorf("at row %d column %d component %d: %w", y, x-1, i, err)
+			}
+			cur[x] = value
+		}
+		x++
+	}
+	return nil
+}
+
+// decodeInterleavedRun decodes a run covering every component at once.
+func (d *jpeglsDecoder) decodeInterleavedRun(x, width, n int) (int, error) {
+	remaining := width - x + 1
+
+	count, hitEndOfLine, err := d.decodeRunLength(remaining)
+	if err != nil {
+		return 0, err
+	}
+
+	for i := 0; i < n; i++ {
+		ra := d.cur[i][x-1]
+		for j := 0; j < count && x+j <= width; j++ {
+			d.cur[i][x+j] = ra
+		}
+	}
+	if hitEndOfLine || x+count > width {
+		return maxInt(count, 1), nil
+	}
+
+	for i := 0; i < n; i++ {
+		value, err := d.decodeRunInterruption(d.cur[i][x-1], d.prev[i][x+count], true)
+		if err != nil {
+			return 0, err
+		}
+		d.cur[i][x+count] = value
+	}
+	d.decrementRunIndex()
+	return count + 1, nil
+}
+
+// checkNotExhausted stops a scan whose entropy-coded data has run out.
+//
+// Checked per row rather than once at the end. A header can claim a frame of any
+// size, and without this a few bytes of data are decoded into a whole image out
+// of fabricated zero bits before anything notices — slow enough to be worth
+// doing to a server, and wrong in a way that still looks like a picture.
+func (d *jpeglsDecoder) checkNotExhausted(y, height int) error {
+	if d.reader.overrun <= maxJPEGLSTrailingSlack {
+		return nil
+	}
+	return fmt.Errorf("entropy-coded data ran out at row %d of %d; the frame is "+
+		"truncated and the samples past that point would be invented", y, height)
 }
 
 func (d *jpeglsDecoder) startLine(i int) {
@@ -367,7 +539,7 @@ func (d *jpeglsDecoder) startLine(i int) {
 }
 
 // decodeRow decodes one row of one component.
-func (d *jpeglsDecoder) decodeRow(buf, y, _ int, _ int) error {
+func (d *jpeglsDecoder) decodeRow(buf, y int) error {
 	width := d.img.width
 	prev, cur := d.prev[buf], d.cur[buf]
 
@@ -653,11 +825,14 @@ func (d *jpeglsDecoder) decodeRunInterruption(ra, rb int32, joint bool) (int32, 
 	absErr := (e + mapBit) >> 1
 
 	// Which convention was in force depends on the same test the encoder made.
-	// Note the shape of it: the negative case is "k is non-zero OR negatives are
-	// still in the minority", not the negation of a single condition. Reading it
-	// as one decodes most of an image correctly and then diverges, because the
-	// two only disagree once the statistics have moved.
-	negative := k != 0 || 2*ctx.nn < ctx.n
+	//
+	// The encoder uses the alternative mapping when k is zero and negatives are
+	// still in the minority; this is its negation, so both halves invert. Writing
+	// the second half as 2*nn < nn's count instead of >= decodes grayscale
+	// perfectly and diverges on color at the ninth row: the two differ only when
+	// k is zero at a run interruption, which a frame with few runs almost never
+	// reaches, and a frame with three components reaches constantly.
+	negative := k != 0 || 2*ctx.nn >= ctx.n
 	var errval int32
 	if negative == (mapBit == 1) {
 		errval = -absErr
