@@ -288,16 +288,20 @@ than none.
 
 ### 8.2 Network
 
-- **Compressed and big endian transfer syntaxes are not negotiated by default.**
-  See [§3.1](#31-transfer-syntaxes-negotiated-by-default).
+- **Compressed transfer syntaxes are not negotiated by default**, though all
+  four uncompressed ones are. Pass `AllTransferSyntaxes()` to accept compressed
+  pixel data; see [§3.1](#31-transfer-syntaxes-negotiated-by-default).
 - **A C-FIND handler that returns a complete result set cannot observe a
   cancellation.** Implement `CFindStreamer` to be interruptible. C-GET and C-MOVE
   stream their sub-operations but do not expose an equivalent hook for the
   matching phase.
-- **No transcoding.** A data set is sent in the syntax negotiated for its
-  presentation context; pixel data is not re-encoded to match. Sending a
+- **Pixel data is not transcoded.** The data set itself *is* — it is always
+  encoded in the syntax the presentation context negotiated, in either byte
+  order, deflated or not, so a value reaches the peer intact whichever was
+  agreed. What is not re-encoded is compressed pixel data: sending a
   JPEG-compressed instance over a context that negotiated uncompressed explicit
-  VR will not decompress it.
+  VR transfers the compressed bytes rather than decompressing them, since that
+  would need a codec this library does not bundle.
 
 ### 8.3 Truncated files
 
@@ -318,12 +322,27 @@ bytes directly.
 
 ### 8.4 Service classes
 
-The dictionary defines UID constants for far more SOP classes than are
-implemented. Verification, Storage, Query/Retrieve and Storage Commitment have
-services behind them. MPPS, Unified Procedure Step, Print Management, Media
-Creation, Display System, Application Event Logging and Relevant Patient
-Information Query have UIDs and, in some cases, presentation-context helpers, but
-no protocol flow.
+The dictionary defines UID constants for far more SOP classes than have a
+service behind them, in three tiers.
+
+**Dedicated handlers.** Verification, Storage, Query/Retrieve, Storage Commitment
+and Modality Worklist each have a handler interface that models the service:
+`StorageHandler`, `FindHandler`, `WorklistHandler` and so on.
+
+**Reachable through the N-DIMSE primitives.** MPPS and Basic Grayscale Print
+Management have no dedicated abstraction, but they are built entirely from
+N-CREATE, N-SET, N-ACTION and N-DELETE, all of which are implemented in both
+directions. A caller adds the SOP class with `SetSupportedAbstractSyntaxes` and
+implements `HandleNCreate`/`HandleNSet`; this is also how pynetdicom serves them.
+Both workflows are exercised against pynetdicom in
+`network/interop_ndimse_test.go` — MPPS in both directions, print management as
+film session, film box, image box and print action.
+
+**UIDs only.** Unified Procedure Step, Media Creation, Display System,
+Application Event Logging and Relevant Patient Information Query have constants
+and, in some cases, presentation-context helpers. Nothing verifies them. UPS in
+particular has a state machine and required attributes that this library does not
+model, so treat the constants as a starting point rather than as support.
 
 ---
 
