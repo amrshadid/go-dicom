@@ -16,7 +16,12 @@ import (
 func FuzzJPEGLSDecompress(f *testing.F) {
 	for _, name := range []string{
 		"mr_small_lossless.jls", "flat_lossless.jls",
-		"ct_nearlossless.jls", "rgb_line_interleaved.jls",
+		"ct_nearlossless.jls",
+		// A 3x3 color frame rather than the 256x256 one: mutations of a large
+		// seed decode hundreds of thousands of samples each, which drops the
+		// fuzzer from hundreds of thousands of executions a minute to single
+		// figures. The interleaved paths are exercised either way.
+		"rgb_small.jls",
 	} {
 		if data, err := os.ReadFile("testdata/jpegls/" + name); err == nil {
 			f.Add(data)
