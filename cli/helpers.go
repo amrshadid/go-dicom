@@ -309,36 +309,6 @@ func convertToCSV(elements []DicomElement) ([]byte, error) {
 	return buf.Bytes(), writer.Error()
 }
 
-// convertToNifti is a placeholder for NIfTI conversion.
-func convertToNifti(elements []DicomElement) ([]byte, error) {
-	// Basic NIfTI header structure
-	// This is a minimal implementation - full NIfTI is complex
-
-	// Find pixel data
-	var pixelDataElem *DicomElement
-
-	for i := range elements {
-		if elements[i].Tag == "7FE0,0010" { // PixelData
-			pixelDataElem = &elements[i]
-			break
-		}
-	}
-
-	if pixelDataElem == nil {
-		return nil, fmt.Errorf("no pixel data found")
-	}
-
-	// Create a minimal NIfTI-like header (348 bytes fixed + image data)
-	header := make([]byte, 348)
-
-	// NIfTI magic string
-	copy(header[344:348], []byte("n+1\x00"))
-
-	// Combine header + pixel data
-	result := append(header, pixelDataElem.Value...)
-	return result, nil
-}
-
 // GetDICOMTagInfo retrieves dictionary metadata for a specific tag.
 func GetDICOMTagInfo(tagStr string) (map[string]string, error) {
 	// Parse tag string (format: "XXXX,XXXX")

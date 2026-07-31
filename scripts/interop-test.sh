@@ -763,6 +763,61 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# NIfTI export: go-dicom converts, nibabel reads.
+#
+# This existed and produced a file nibabel refused outright — the header was
+# 348 zero bytes with the magic string at the end, so sizeof_hdr was 0. Checking
+# the header fields from Go would not have caught that, because the fields were
+# all there and all wrong in the same way; only another implementation opening
+# the file does.
+# ---------------------------------------------------------------------------
+if python3 -c "import nibabel, pydicom" >/dev/null 2>&1; then
+  note "NIfTI export: go-dicom converter, nibabel reader"
+  RAN_ANY=1
+
+  nifti_out="$WORKDIR/out.nii"
+  nifti_src=$(python3 -c "from pydicom.data import get_testdata_file; print(get_testdata_file('CT_small.dcm'))" 2>/dev/null || true)
+
+  if [ -z "$nifti_src" ] || [ ! -f "$nifti_src" ]; then
+    skip "CT_small.dcm is not in the corpus"
+  elif ! "$GODICOM" convert -format nifti "$nifti_src" "$nifti_out" >/dev/null 2>&1; then
+    fail "the converter did not produce a NIfTI file"
+  elif python3 - "$nifti_out" "$nifti_src" <<'PYEOF'
+import sys
+import warnings
+
+warnings.filterwarnings("ignore")
+import nibabel
+import numpy
+import pydicom
+
+img = nibabel.load(sys.argv[1])
+ds = pydicom.dcmread(sys.argv[2])
+
+# nibabel indexes [x, y] where x is the fastest-varying axis, which for
+# row-major DICOM pixel data is the column. pydicom indexes [row, column]. So
+# the two arrays are transposes of one another, which is what dcm2niix produces
+# as well; comparing them the other way round would report a difference that is
+# only a convention.
+raw = img.dataobj.get_unscaled().squeeze()
+if not numpy.array_equal(raw.T, ds.pixel_array):
+    print("   the pixels differ from pydicom's reading of the source", file=sys.stderr)
+    raise SystemExit(1)
+
+# And the rescale has to survive, or a CT arrives without its Hounsfield units.
+want = ds.pixel_array * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+if not numpy.allclose(img.get_fdata().squeeze().T, want):
+    print("   the rescale did not survive the conversion", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+  then
+    pass "NIfTI export — nibabel reads it and the pixels match pydicom"
+  else
+    fail "nibabel cannot read the converted file, or its pixels differ"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2
