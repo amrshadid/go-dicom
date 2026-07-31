@@ -5,10 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/filereader"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // FileRecord represents a single DICOM file in the file-set.
@@ -55,11 +59,11 @@ func (fs *FileSet) AddFile(filePath string) error {
 		return fmt.Errorf("failed to stat file %s: %w", filePath, err)
 	}
 
-	record := &FileRecord{
-		FilePath:     filePath,
-		Dataset:      nil,
-		ModifiedTime: fileInfo.ModTime(),
-		FileSize:     fileInfo.Size(),
+	// Parsed, not merely listed. A record with no data set is invisible to
+	// every search and every statistic, and cannot be placed in a DICOMDIR.
+	record, err := readFileRecord(filePath, fileInfo)
+	if err != nil {
+		return fmt.Errorf("failed to add %s to the file-set: %w", filePath, err)
 	}
 
 	fs.FileRecords = append(fs.FileRecords, record)
@@ -93,81 +97,45 @@ func (fs *FileSet) ListFiles() []*FileRecord {
 
 // FindByModality filters file records by DICOM modality.
 func (fs *FileSet) FindByModality(modality string) []*FileRecord {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	var results []*FileRecord
-
-	for _, record := range fs.FileRecords {
-		if record.Dataset == nil {
-			continue
-		}
-		results = append(results, record)
-	}
-
-	return results
+	return fs.matchingRecords(tag.New(0x0008, 0x0060), modality)
 }
 
 // FindByPatient filters file records by patient ID.
 func (fs *FileSet) FindByPatient(patientID string) []*FileRecord {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	var results []*FileRecord
-
-	for _, record := range fs.FileRecords {
-		if record.Dataset == nil {
-			continue
-		}
-		results = append(results, record)
-	}
-
-	return results
+	return fs.matchingRecords(tag.New(0x0010, 0x0020), patientID)
 }
 
 // FindByStudyInstanceUID filters file records by study UID.
 func (fs *FileSet) FindByStudyInstanceUID(studyUID string) []*FileRecord {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	var results []*FileRecord
-
-	for _, record := range fs.FileRecords {
-		if record.Dataset == nil {
-			continue
-		}
-		results = append(results, record)
-	}
-
-	return results
+	return fs.matchingRecords(tag.New(0x0020, 0x000D), studyUID)
 }
 
 // FindBySeriesInstanceUID filters file records by series UID.
 func (fs *FileSet) FindBySeriesInstanceUID(seriesUID string) []*FileRecord {
-	fs.mu.RLock()
-	defer fs.mu.RUnlock()
-
-	var results []*FileRecord
-
-	for _, record := range fs.FileRecords {
-		if record.Dataset == nil {
-			continue
-		}
-		results = append(results, record)
-	}
-
-	return results
+	return fs.matchingRecords(tag.New(0x0020, 0x000E), seriesUID)
 }
 
-// GenerateDICOMDIR creates a DICOMDIR file from the current file-set.
-func (fs *FileSet) GenerateDICOMDIR() (*dataset.Dataset, error) {
+// matchingRecords returns the records whose data set has value at tag t.
+//
+// The four Find methods below used to ignore their argument and return every
+// record with a data set, which made them look like they worked on a file-set
+// whose files were all wanted anyway. Searching for a modality that is not
+// present returned everything.
+func (fs *FileSet) matchingRecords(t tag.Tag, want string) []*FileRecord {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 
-	dicomdir := dataset.NewDataset()
-	fs.DicomDirFile = dicomdir
-
-	return dicomdir, nil
+	want = strings.TrimRight(want, " \x00")
+	var results []*FileRecord
+	for _, record := range fs.FileRecords {
+		if record == nil || record.Dataset == nil {
+			continue
+		}
+		if recordString(record.Dataset, t) == want {
+			results = append(results, record)
+		}
+	}
+	return results
 }
 
 // Validate checks the integrity and completeness of the file-set.
@@ -206,25 +174,42 @@ func (fs *FileSet) GetStatistics() FileSetStatistics {
 	defer fs.mu.RUnlock()
 
 	stats := FileSetStatistics{
-		TotalFiles:   int64(len(fs.FileRecords)),
-		TotalSize:    0,
-		Modalities:   make(map[string]int64),
-		PatientCount: 0,
-		StudyCount:   0,
-		SeriesCount:  0,
+		TotalFiles: int64(len(fs.FileRecords)),
+		Modalities: make(map[string]int64),
 	}
+
+	// Counted by distinct identifier, not by file. Every count used to be the
+	// file count, so a file-set of forty slices from one series reported forty
+	// patients, forty studies and forty series.
+	patients := map[string]struct{}{}
+	studies := map[string]struct{}{}
+	series := map[string]struct{}{}
 
 	for _, record := range fs.FileRecords {
 		if record == nil {
 			continue
 		}
 		stats.TotalSize += record.FileSize
+		if record.Dataset == nil {
+			continue
+		}
+		if v := recordString(record.Dataset, tag.New(0x0008, 0x0060)); v != "" {
+			stats.Modalities[v]++
+		}
+		if v := recordString(record.Dataset, tag.New(0x0010, 0x0020)); v != "" {
+			patients[v] = struct{}{}
+		}
+		if v := recordString(record.Dataset, tag.New(0x0020, 0x000D)); v != "" {
+			studies[v] = struct{}{}
+		}
+		if v := recordString(record.Dataset, tag.New(0x0020, 0x000E)); v != "" {
+			series[v] = struct{}{}
+		}
 	}
 
-	stats.PatientCount = stats.TotalFiles
-	stats.StudyCount = stats.TotalFiles
-	stats.SeriesCount = stats.TotalFiles
-
+	stats.PatientCount = int64(len(patients))
+	stats.StudyCount = int64(len(studies))
+	stats.SeriesCount = int64(len(series))
 	return stats
 }
 
@@ -264,11 +249,12 @@ func (fs *FileSet) ScanDirectory(recursive bool) (int, error) {
 			}
 
 			if !alreadyExists {
-				record := &FileRecord{
-					FilePath:     path,
-					Dataset:      nil,
-					ModifiedTime: info.ModTime(),
-					FileSize:     info.Size(),
+				record, err := readFileRecord(path, info)
+				if err != nil {
+					// A directory may hold anything. A file that is not DICOM is
+					// not part of the file-set, and recording it as one would put
+					// a README in the index.
+					return nil
 				}
 				fs.FileRecords = append(fs.FileRecords, record)
 				addedCount++
@@ -306,11 +292,9 @@ func (fs *FileSet) ScanDirectory(recursive bool) (int, error) {
 			}
 
 			if !alreadyExists {
-				record := &FileRecord{
-					FilePath:     path,
-					Dataset:      nil,
-					ModifiedTime: info.ModTime(),
-					FileSize:     info.Size(),
+				record, err := readFileRecord(path, info)
+				if err != nil {
+					continue
 				}
 				fs.FileRecords = append(fs.FileRecords, record)
 				addedCount++
@@ -445,4 +429,54 @@ func ConvertRawFormatToFileSet(rawData map[string]interface{}, fs *FileSet) erro
 		}
 	}
 	return nil
+}
+
+// readFileRecord parses one file into a record.
+//
+// Scanning used to record the path and a nil data set, which left every search
+// and every statistic with nothing to work from — and added README files and
+// thumbnails to the file-set alongside the images.
+//
+// Pixel data is dropped from the retained data set. A file-set index needs the
+// identifiers and the descriptive attributes; keeping the pixels would mean
+// holding every image in the directory in memory at once, which is the
+// difference between indexing a study and indexing a hospital.
+func readFileRecord(path string, info os.FileInfo) (*FileRecord, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+
+	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
+	if err != nil {
+		return nil, err
+	}
+	ds := df.GetDataset()
+	if ds == nil {
+		return nil, fmt.Errorf("fileset: %s parsed to no data set", path)
+	}
+
+	// Parsing succeeding is not evidence that the file is DICOM. A stream with
+	// no meta header is read as a raw data set, and arbitrary bytes can be read
+	// that way without producing an error — a README in the directory would
+	// otherwise be indexed as an instance.
+	//
+	// The proof is a preamble, or the two UIDs that identify an instance. A
+	// directory record cannot reference a file without them in any case.
+	if !df.HasPreamble {
+		if recordString(ds, tag.New(0x0008, 0x0016)) == "" ||
+			recordString(ds, tag.New(0x0008, 0x0018)) == "" {
+			return nil, fmt.Errorf("fileset: %s has neither a DICM preamble nor a SOP "+
+				"Class and Instance UID, so it is not a DICOM instance", path)
+		}
+	}
+	_ = ds.Remove(tag.New(0x7FE0, 0x0010))
+
+	return &FileRecord{
+		FilePath:     path,
+		Dataset:      ds,
+		ModifiedTime: info.ModTime(),
+		FileSize:     info.Size(),
+	}, nil
 }

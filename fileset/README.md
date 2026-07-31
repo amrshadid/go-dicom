@@ -1,6 +1,8 @@
 # FileSet
 
-DICOM file collection management with directory scanning, hierarchical organization (Patient/Study/Series), multi-criteria search, statistics, and DICOMDIR generation.
+DICOM file-set management: directory scanning, the Patient/Study/Series hierarchy, search, statistics, and DICOMDIR reading and generation.
+
+A DICOMDIR stores its records in one flat sequence and describes a tree. The links are byte offsets into the file, not sequence order, so `ReadDICOMDIR` builds the tree from the offsets and falls back to order only for a file that has none. `WriteDICOMDIR` computes those offsets by writing the file twice — once to learn the layout, once with the real values — and re-reads its own output before returning it, because a file with wrong offsets is worse than no file: a reader accepts it and follows it into a tree that is not there.
 
 ## Quick Start
 

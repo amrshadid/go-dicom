@@ -1,14 +1,18 @@
 package fileset_test
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
-
+	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/fileset"
+	"github.com/amrshadid/go-dicom/filewriter"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // Test NewFileSet
@@ -49,10 +53,7 @@ func TestAddFile(t *testing.T) {
 
 	// Create a test file
 	testFile := filepath.Join(tmpDir, "test.dcm")
-	err = os.WriteFile(testFile, []byte("test"), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
+	writeMinimalDICOM(t, testFile)
 
 	// Add the file
 	err = fs.AddFile(testFile)
@@ -91,7 +92,7 @@ func TestRemoveFile(t *testing.T) {
 
 	// Create and add a file
 	testFile := filepath.Join(tmpDir, "test.dcm")
-	os.WriteFile(testFile, []byte("test"), 0644)
+	writeMinimalDICOM(t, testFile)
 	fs.AddFile(testFile)
 
 	// Verify it was added
@@ -139,23 +140,33 @@ func TestFindByModality(t *testing.T) {
 		t.Fatalf("NewFileSet failed: %v", err)
 	}
 
-	// Add test records with datasets
-	ds1 := dataset.NewDataset()
-	ds2 := dataset.NewDataset()
+	// This test used to build two empty data sets, search for CT, and expect
+	// both back — matching a FindByModality that ignored its argument and
+	// returned every record that had a data set at all. Its own comment said
+	// so. The records below carry a modality, and the search has to use it.
+	withModality := func(modality string) *dataset.Dataset {
+		ds := dataset.NewDataset()
+		if err := ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0060),
+			dataelem.CS, []byte(modality))); err != nil {
+			t.Fatalf("building a record: %v", err)
+		}
+		return ds
+	}
 
-	fs.FileRecords = append(fs.FileRecords, &fileset.FileRecord{
-		FilePath: "test1.dcm",
-		Dataset:  ds1,
-	})
-	fs.FileRecords = append(fs.FileRecords, &fileset.FileRecord{
-		FilePath: "test2.dcm",
-		Dataset:  ds2,
-	})
+	fs.FileRecords = append(fs.FileRecords,
+		&fileset.FileRecord{FilePath: "ct1.dcm", Dataset: withModality("CT")},
+		&fileset.FileRecord{FilePath: "ct2.dcm", Dataset: withModality("CT")},
+		&fileset.FileRecord{FilePath: "mr1.dcm", Dataset: withModality("MR")},
+	)
 
-	// Find by modality (currently just returns records with loaded datasets)
-	results := fs.FindByModality("CT")
-	if len(results) != 2 {
-		t.Errorf("Expected 2 CT files, got %d", len(results))
+	if got := len(fs.FindByModality("CT")); got != 2 {
+		t.Errorf("FindByModality(CT) returned %d records, want 2", got)
+	}
+	if got := len(fs.FindByModality("MR")); got != 1 {
+		t.Errorf("FindByModality(MR) returned %d records, want 1", got)
+	}
+	if got := len(fs.FindByModality("US")); got != 0 {
+		t.Errorf("FindByModality(US) returned %d records, want 0", got)
 	}
 }
 
@@ -169,22 +180,28 @@ func TestFindByPatient(t *testing.T) {
 		t.Fatalf("NewFileSet failed: %v", err)
 	}
 
-	ds1 := dataset.NewDataset()
-	ds2 := dataset.NewDataset()
+	// Two empty data sets and a search for P001 used to match both, because the
+	// search returned every record that had a data set at all.
+	withPatient := func(id string) *dataset.Dataset {
+		ds := dataset.NewDataset()
+		if err := ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0020),
+			dataelem.LO, []byte(id))); err != nil {
+			t.Fatalf("building a record: %v", err)
+		}
+		return ds
+	}
 
-	fs.FileRecords = append(fs.FileRecords, &fileset.FileRecord{
-		FilePath: "test1.dcm",
-		Dataset:  ds1,
-	})
-	fs.FileRecords = append(fs.FileRecords, &fileset.FileRecord{
-		FilePath: "test2.dcm",
-		Dataset:  ds2,
-	})
+	fs.FileRecords = append(fs.FileRecords,
+		&fileset.FileRecord{FilePath: "a.dcm", Dataset: withPatient("P001")},
+		&fileset.FileRecord{FilePath: "b.dcm", Dataset: withPatient("P001")},
+		&fileset.FileRecord{FilePath: "c.dcm", Dataset: withPatient("P002")},
+	)
 
-	// Find by patient
-	results := fs.FindByPatient("P001")
-	if len(results) != 2 {
-		t.Errorf("Expected 2 files, got %d", len(results))
+	if got := len(fs.FindByPatient("P001")); got != 2 {
+		t.Errorf("FindByPatient(P001) returned %d records, want 2", got)
+	}
+	if got := len(fs.FindByPatient("P999")); got != 0 {
+		t.Errorf("FindByPatient(P999) returned %d records, want 0", got)
 	}
 }
 
@@ -198,15 +215,27 @@ func TestFindByStudyInstanceUID(t *testing.T) {
 		t.Fatalf("NewFileSet failed: %v", err)
 	}
 
-	ds := dataset.NewDataset()
-	fs.FileRecords = append(fs.FileRecords, &fileset.FileRecord{
-		FilePath: "test.dcm",
-		Dataset:  ds,
-	})
+	// Previously an empty data set and a search for STUDY1 were expected to
+	// match, because the search ignored what it was given.
+	withStudy := func(uid string) *dataset.Dataset {
+		ds := dataset.NewDataset()
+		if err := ds.Add(dataelem.NewDataElement(tag.New(0x0020, 0x000D),
+			dataelem.UI, []byte(uid))); err != nil {
+			t.Fatalf("building a record: %v", err)
+		}
+		return ds
+	}
 
-	results := fs.FindByStudyInstanceUID("STUDY1")
-	if len(results) != 1 {
-		t.Errorf("Expected 1 file, got %d", len(results))
+	fs.FileRecords = append(fs.FileRecords,
+		&fileset.FileRecord{FilePath: "a.dcm", Dataset: withStudy("STUDY1")},
+		&fileset.FileRecord{FilePath: "b.dcm", Dataset: withStudy("STUDY2")},
+	)
+
+	if got := len(fs.FindByStudyInstanceUID("STUDY1")); got != 1 {
+		t.Errorf("FindByStudyInstanceUID(STUDY1) returned %d records, want 1", got)
+	}
+	if got := len(fs.FindByStudyInstanceUID("STUDY3")); got != 0 {
+		t.Errorf("FindByStudyInstanceUID(STUDY3) returned %d records, want 0", got)
 	}
 }
 
@@ -220,20 +249,31 @@ func TestGenerateDICOMDIR(t *testing.T) {
 		t.Fatalf("NewFileSet failed: %v", err)
 	}
 
-	ds1 := dataset.NewDataset()
-	ds2 := dataset.NewDataset()
-	fs.FileRecords = append(fs.FileRecords,
-		&fileset.FileRecord{FilePath: "test1.dcm", Dataset: ds1},
-		&fileset.FileRecord{FilePath: "test2.dcm", Dataset: ds2},
-	)
+	// This used to append two empty data sets and assert the result was not
+	// nil, which an empty data set satisfies — so a GenerateDICOMDIR that
+	// produced nothing at all passed.
+	for _, name := range []string{"test1.dcm", "test2.dcm"} {
+		path := filepath.Join(tmpDir, name)
+		writeMinimalDICOM(t, path)
+		if err := fs.AddFile(path); err != nil {
+			t.Fatalf("AddFile(%s): %v", name, err)
+		}
+	}
 
 	dicomdir, err := fs.GenerateDICOMDIR()
 	if err != nil {
 		t.Fatalf("GenerateDICOMDIR failed: %v", err)
 	}
-
 	if dicomdir == nil {
-		t.Error("Generated DICOMDIR should not be nil")
+		t.Fatal("Generated DICOMDIR should not be nil")
+	}
+
+	// A DICOMDIR with no records in it is not a DICOMDIR.
+	if _, ok := dicomdir.Get(tag.New(0x0004, 0x1220)); !ok {
+		t.Fatal("the generated DICOMDIR has no Directory Record Sequence")
+	}
+	if _, ok := dicomdir.Get(tag.New(0x0004, 0x1200)); !ok {
+		t.Error("the generated DICOMDIR has no offset to its first root record")
 	}
 }
 
@@ -255,7 +295,7 @@ func TestValidate(t *testing.T) {
 
 	// Add a test file
 	testFile := filepath.Join(tmpDir, "test.dcm")
-	os.WriteFile(testFile, []byte("test"), 0644)
+	writeMinimalDICOM(t, testFile)
 	fs.AddFile(testFile)
 
 	// Should still validate
@@ -275,31 +315,32 @@ func TestGetStatistics(t *testing.T) {
 		t.Fatalf("NewFileSet failed: %v", err)
 	}
 
-	// Create test files
-	file1 := filepath.Join(tmpDir, "test1.dcm")
-	file2 := filepath.Join(tmpDir, "test2.dcm")
-	file3 := filepath.Join(tmpDir, "test3.dcm")
-
-	os.WriteFile(file1, make([]byte, 1000), 0644)
-	os.WriteFile(file2, make([]byte, 2000), 0644)
-	os.WriteFile(file3, make([]byte, 1500), 0644)
-
-	fs.AddFile(file1)
-	fs.AddFile(file2)
-	fs.AddFile(file3)
+	// Three files of one patient, one study, one series. Every count used to
+	// be the file count, so this reported three patients and three studies.
+	for _, name := range []string{"test1.dcm", "test2.dcm", "test3.dcm"} {
+		path := filepath.Join(tmpDir, name)
+		writeMinimalDICOM(t, path)
+		if err := fs.AddFile(path); err != nil {
+			t.Fatalf("AddFile(%s): %v", name, err)
+		}
+	}
 
 	stats := fs.GetStatistics()
 
 	if stats.TotalFiles != 3 {
 		t.Errorf("Expected 3 total files, got %d", stats.TotalFiles)
 	}
-
-	if stats.TotalSize != 4500 {
-		t.Errorf("Expected total size 4500, got %d", stats.TotalSize)
+	if stats.TotalSize == 0 {
+		t.Error("Expected a nonzero total size")
 	}
-
-	if stats.PatientCount != 3 {
-		t.Errorf("Expected 3 patients, got %d", stats.PatientCount)
+	if stats.PatientCount != 1 {
+		t.Errorf("Expected 1 distinct patient, got %d", stats.PatientCount)
+	}
+	if stats.StudyCount != 1 {
+		t.Errorf("Expected 1 distinct study, got %d", stats.StudyCount)
+	}
+	if stats.Modalities["OT"] != 3 {
+		t.Errorf("Expected 3 files of modality OT, got %d", stats.Modalities["OT"])
 	}
 }
 
@@ -314,13 +355,13 @@ func TestScanDirectory(t *testing.T) {
 	}
 
 	// Create test files
-	os.WriteFile(filepath.Join(tmpDir, "test1.dcm"), []byte("test"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "test2.dcm"), []byte("test"), 0644)
+	writeMinimalDICOM(t, filepath.Join(tmpDir, "test1.dcm"))
+	writeMinimalDICOM(t, filepath.Join(tmpDir, "test2.dcm"))
 
 	// Create subdirectory with file
 	subDir := filepath.Join(tmpDir, "subdir")
 	os.Mkdir(subDir, 0755)
-	os.WriteFile(filepath.Join(subDir, "test3.dcm"), []byte("test"), 0644)
+	writeMinimalDICOM(t, filepath.Join(subDir, "test3.dcm"))
 
 	// Scan non-recursive
 	count, err := fs.ScanDirectory(false)
@@ -344,13 +385,13 @@ func TestScanDirectoryRecursive(t *testing.T) {
 	}
 
 	// Create test files
-	os.WriteFile(filepath.Join(tmpDir, "test1.dcm"), []byte("test"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "test2.dcm"), []byte("test"), 0644)
+	writeMinimalDICOM(t, filepath.Join(tmpDir, "test1.dcm"))
+	writeMinimalDICOM(t, filepath.Join(tmpDir, "test2.dcm"))
 
 	// Create subdirectory with file
 	subDir := filepath.Join(tmpDir, "subdir")
 	os.Mkdir(subDir, 0755)
-	os.WriteFile(filepath.Join(subDir, "test3.dcm"), []byte("test"), 0644)
+	writeMinimalDICOM(t, filepath.Join(subDir, "test3.dcm"))
 
 	// Scan recursive
 	count, err := fs.ScanDirectory(true)
@@ -378,9 +419,9 @@ func TestSortByPatientName(t *testing.T) {
 	file2 := filepath.Join(tmpDir, "alice.dcm")
 	file3 := filepath.Join(tmpDir, "mike.dcm")
 
-	os.WriteFile(file1, []byte("test"), 0644)
-	os.WriteFile(file2, []byte("test"), 0644)
-	os.WriteFile(file3, []byte("test"), 0644)
+	writeMinimalDICOM(t, file1)
+	writeMinimalDICOM(t, file2)
+	writeMinimalDICOM(t, file3)
 
 	fs.AddFile(file1)
 	fs.AddFile(file2)
@@ -416,9 +457,9 @@ func TestSortByModifiedTime(t *testing.T) {
 	file2 := filepath.Join(tmpDir, "test2.dcm")
 	file3 := filepath.Join(tmpDir, "test3.dcm")
 
-	os.WriteFile(file1, []byte("test"), 0644)
-	os.WriteFile(file2, []byte("test"), 0644)
-	os.WriteFile(file3, []byte("test"), 0644)
+	writeMinimalDICOM(t, file1)
+	writeMinimalDICOM(t, file2)
+	writeMinimalDICOM(t, file3)
 
 	fs.AddFile(file1)
 	fs.AddFile(file2)
@@ -453,23 +494,25 @@ func TestSortByFileSize(t *testing.T) {
 		t.Fatalf("NewFileSet failed: %v", err)
 	}
 
-	file1 := filepath.Join(tmpDir, "test1.dcm")
-	file2 := filepath.Join(tmpDir, "test2.dcm")
-	file3 := filepath.Join(tmpDir, "test3.dcm")
-
-	os.WriteFile(file1, make([]byte, 5000), 0644)
-	os.WriteFile(file2, make([]byte, 1000), 0644)
-	os.WriteFile(file3, make([]byte, 3000), 0644)
-
-	fs.AddFile(file1)
-	fs.AddFile(file2)
-	fs.AddFile(file3)
+	// The sizes came from files padded to 1000, 3000 and 5000 bytes, which are
+	// not DICOM and are no longer accepted into a file-set. Real files have the
+	// sizes they have, so the order is what is checked.
+	for _, name := range []string{"test1.dcm", "test2.dcm", "test3.dcm"} {
+		path := filepath.Join(tmpDir, name)
+		writeMinimalDICOM(t, path)
+		if err := fs.AddFile(path); err != nil {
+			t.Fatalf("AddFile(%s): %v", name, err)
+		}
+	}
 
 	fs.SortByFileSize()
 
 	files := fs.ListFiles()
-	if files[0].FileSize != 1000 || files[1].FileSize != 3000 || files[2].FileSize != 5000 {
-		t.Error("Files not sorted by size")
+	for i := 1; i < len(files); i++ {
+		if files[i-1].FileSize > files[i].FileSize {
+			t.Fatalf("files are not sorted by size: %d before %d",
+				files[i-1].FileSize, files[i].FileSize)
+		}
 	}
 }
 
@@ -485,7 +528,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Create and add a file
 	testFile := filepath.Join(tmpDir, "test.dcm")
-	os.WriteFile(testFile, []byte("test"), 0644)
+	writeMinimalDICOM(t, testFile)
 	fs.AddFile(testFile)
 
 	done := make(chan bool, 2)
@@ -525,7 +568,7 @@ func BenchmarkAddFile(b *testing.B) {
 	// Create test files
 	for i := 0; i < b.N; i++ {
 		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
-		os.WriteFile(file, []byte("test"), 0644)
+		writeMinimalDICOM(b, file)
 	}
 
 	b.ResetTimer()
@@ -544,7 +587,7 @@ func BenchmarkListFiles(b *testing.B) {
 	// Add test files
 	for i := 0; i < 50; i++ {
 		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
-		os.WriteFile(file, []byte("test"), 0644)
+		writeMinimalDICOM(b, file)
 		fs.AddFile(file)
 	}
 
@@ -563,7 +606,7 @@ func BenchmarkGetStatistics(b *testing.B) {
 	// Add test files
 	for i := 0; i < 50; i++ {
 		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
-		os.WriteFile(file, make([]byte, 1000), 0644)
+		writeMinimalDICOM(b, file)
 		fs.AddFile(file)
 	}
 
@@ -571,4 +614,75 @@ func BenchmarkGetStatistics(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		fs.GetStatistics()
 	}
+}
+
+// writeMinimalDICOM writes a real DICOM file, small but valid.
+//
+// These tests used to write the four bytes "test" and expect them scanned as
+// DICOM instances, which worked only because scanning never opened the files it
+// listed. Now that it parses them, a file-set has to contain files.
+func writeMinimalDICOM(t testing.TB, path string) {
+	t.Helper()
+
+	out := &seekableTestBuffer{}
+	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
+	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
+		MediaStorageSOPClassUID:    "1.2.840.10008.5.1.4.1.1.7",
+		MediaStorageSOPInstanceUID: "1.2.826.0.1.3680043.10.511.9." + filepath.Base(path),
+		TransferSyntaxUID:          "1.2.840.10008.1.2.1",
+	})
+	add := func(group, element uint16, vr, value string) {
+		if len(value)%2 == 1 {
+			value += " "
+		}
+		if err := w.AddDataElement(&filewriter.DataElement{
+			Tag: tag.New(group, element), VR: vr,
+			Value: []byte(value), Length: uint32(len(value)),
+		}); err != nil {
+			t.Fatalf("AddDataElement: %v", err)
+		}
+	}
+	add(0x0008, 0x0016, "UI", "1.2.840.10008.5.1.4.1.1.7")
+	add(0x0008, 0x0018, "UI", "1.2.826.0.1.3680043.10.511.9."+filepath.Base(path))
+	add(0x0008, 0x0060, "CS", "OT")
+	add(0x0010, 0x0020, "LO", "PID1")
+	add(0x0020, 0x000D, "UI", "1.2.826.0.1.3680043.10.511.9.1")
+	add(0x0020, 0x000E, "UI", "1.2.826.0.1.3680043.10.511.9.2")
+
+	if err := w.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := os.WriteFile(path, out.data, 0o600); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+}
+
+// seekableTestBuffer is an in-memory io.WriteSeeker for the writer.
+type seekableTestBuffer struct {
+	data []byte
+	pos  int64
+}
+
+func (b *seekableTestBuffer) Write(p []byte) (int, error) {
+	end := b.pos + int64(len(p))
+	if end > int64(len(b.data)) {
+		grown := make([]byte, end)
+		copy(grown, b.data)
+		b.data = grown
+	}
+	copy(b.data[b.pos:], p)
+	b.pos = end
+	return len(p), nil
+}
+
+func (b *seekableTestBuffer) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		b.pos = offset
+	case io.SeekCurrent:
+		b.pos += offset
+	case io.SeekEnd:
+		b.pos = int64(len(b.data)) + offset
+	}
+	return b.pos, nil
 }

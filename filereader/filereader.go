@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -317,6 +318,14 @@ type DataElementValue struct {
 // holding the data elements nested inside that item.
 type SequenceItemValue struct {
 	Elements []*DataElementValue
+
+	// Offset is where the item's tag begins, counted from the first byte of the
+	// file. It is not a parsing detail: a DICOMDIR's directory records form a
+	// tree, and the only thing linking a record to its children is a byte
+	// offset stored in the parent (PS3.3 F.2.2). Discarding it makes the
+	// hierarchy unrecoverable — the flat sequence order is not the tree, which
+	// is what pydicom's DICOMDIR-reordered fixture exists to demonstrate.
+	Offset int64
 }
 
 // MaxSequenceDepth bounds how deeply nested sequences may be parsed. Real
@@ -502,6 +511,12 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 // but a 200-byte file declaring a 15 MiB element still allocated 15 MiB before
 // discovering the stream was short — cheap once, ruinous in a loop. The stream
 // size is measured once and cached, so the check costs nothing per element.
+// errTruncatedValue marks a length that runs past the end of the stream, so a
+// caller can tell a file that was cut short from one whose bytes did not mean
+// what they claimed. The two call for different handling: the first loses what
+// is missing, the second invalidates what was already read.
+var errTruncatedValue = errors.New("value runs past the end of the stream")
+
 func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 	size, err := dfr.streamSizeOnce()
 	if err != nil {
@@ -515,9 +530,15 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 		remaining = 0
 	}
 	if int64(length) > remaining {
-		return fmt.Errorf("declared length %d exceeds %d bytes remaining in stream", length, remaining)
+		return fmt.Errorf("%w: declared length %d exceeds %d bytes remaining",
+			errTruncatedValue, length, remaining)
 	}
 	return nil
+}
+
+// warn records a non-fatal problem found while reading the data set.
+func (dfr *DCMFileReader) warn(format string, args ...any) {
+	dfr.metaWarnings = append(dfr.metaWarnings, fmt.Sprintf(format, args...))
 }
 
 // streamSizeOnce returns the total size of the underlying stream, measuring it
@@ -583,10 +604,30 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 			// End of an undefined-length sequence.
 			return items, nil
 		case tag.ItemTag:
+			// Where the item tag started, which is 8 bytes back: 4 for the tag
+			// and 4 for the length that readItemHeader has already consumed.
+			itemStart := dfr.position - 8
 			item, err := dfr.readSequenceItem(explicitVR, depth, marker.length)
 			if err != nil {
+				// A file cut short loses its last item, not the sequence. The
+				// items already read are complete and were parsed from bytes
+				// that are all there; discarding them because the next one is
+				// short throws away good data to punish a defect it had no part
+				// in. pydicom's DICOMDIR-nooffset ends 24 bytes into its last
+				// directory record, and dropping the sequence loses the other
+				// 51 records with it.
+				//
+				// Only for truncation. Any other error means the bytes did not
+				// mean what they claimed, and continuing past that would build
+				// a data set out of a misreading.
+				if errors.Is(err, errTruncatedValue) && len(items) > 0 {
+					dfr.warn("sequence is truncated; keeping the %d complete items before it: %v",
+						len(items), err)
+					return items, nil
+				}
 				return nil, err
 			}
+			item.Offset = itemStart
 			items = append(items, item)
 		default:
 			return nil, fmt.Errorf("unexpected tag %s inside sequence (expected item or delimiter)",

@@ -249,7 +249,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [filereader](./filereader/) | DICOM file reading (preamble, meta info, dataset) |
 | [filewriter](./filewriter/) | DICOM file writing with validation |
 | [fileutil](./fileutil/) | Byte order detection, padding, caching, codec integration |
-| [fileset](./fileset/) | DICOM file collection management |
+| [fileset](./fileset/) | File-set management and DICOMDIR: reads the record tree from its byte offsets, and generates a conformant index |
 
 #### Data Model
 | Package | Description |
@@ -374,7 +374,7 @@ The network module works with any DICOM data regardless of source format:
 |--------|-----------|---------|
 | Standard DICOM | `.dcm` | Full |
 | Siemens IMA | `.ima` | Full |
-| DICOMDIR | `DICOMDIR` | Full |
+| DICOMDIR | `DICOMDIR` | Read and write. The record tree is built from the byte offsets, so a file whose records are stored out of tree order reads correctly; generated files are verified against pydicom and dcmtk |
 | Raw DICOM | (none) | Full |
 | DICOM Part 10 | `.dicom` | Full |
 
