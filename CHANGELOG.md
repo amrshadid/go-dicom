@@ -67,6 +67,59 @@ throughout.
   `govulncheck` was installed from `@latest`, which broke the build when the
   tool raised its own Go requirement.
 
+- **Text was returned as stored bytes, so most of the world's names came back as
+  mojibake.** Decoding was reachable only through `DecodePersonName` and
+  `DecodeTextValue`, so a caller who did not know to ask got Greek, Hebrew,
+  Japanese or plain accented Latin as raw bytes. Two of pydicom's seventeen
+  charset fixtures matched its reading; all seventeen do now. Values are decoded
+  to UTF-8 on read and Specific Character Set is rewritten to `ISO_IR 192` so the
+  data set stays self-consistent, item-scoped character sets included.
+
+- **A data set with no file meta header read as empty, with no error.** PS3.5
+  §10.1 makes Implicit VR Little Endian the default, and that was assumed. An
+  explicit VR stream read that way takes the VR characters as part of the length
+  — `(0008,0005) CS 10` becomes a length of 676675 — which runs past the end of
+  the file, so the element is dropped and every one after it with it. pydicom
+  reads 24 elements from each of its two headerless fixtures; this read none. The
+  encoding is now taken from the first element.
+
+- **A truncated sequence item discarded the whole sequence.** The complete items
+  before it were thrown away to punish a defect they had no part in;
+  `DICOMDIR-nooffset` lost 51 good records because its 52nd is cut short.
+
+- **De-identification covered 38 of the 655 attributes PS3.15 names.** Measured
+  across pydicom's corpus, 60 identifying attributes kept their original values
+  in files reported as de-identified — Patient's Sex in 49 of 69 files, Age in
+  25, Weight in 14. Sequences were never descended into, attributes named by a
+  range of groups (curve and overlay data) could not be looked up at all, and the
+  UID action silently did nothing when it met a sequence, leaving every
+  Referenced SOP Instance UID intact in 18 files — each one a link from the
+  de-identified object back to its original. Zero remain.
+
+- **`fileset` searched nothing and counted wrongly.** `FindByModality`,
+  `FindByPatient`, `FindByStudyInstanceUID` and `FindBySeriesInstanceUID` ignored
+  their argument and returned every record; `GetStatistics` reported the file
+  count as the patient, study and series counts; `ScanDirectory` and `AddFile`
+  never parsed the files they listed, so nothing above them had anything to work
+  with; and `GenerateDICOMDIR` returned an empty data set.
+
+- **The Huffman table builder dropped a bit at every empty code length.**
+  Canonical codes lengthen at each length, including one no code has. Skipping
+  that shift left every longer code a bit short, so the table decoded a different
+  symbol than the encoder wrote. It needs an interior gap to show and no lossless
+  fixture had one; JPEG Lossless was wrong on any stream whose tables skip a
+  length.
+
+- **Byte order was not swapped for the 64-bit value representations**, so a big
+  endian file carrying an SV, UV or OV kept its values in the wrong order and
+  said nothing about it.
+
+- **NIfTI export produced a file no reader could open.** The header was 348 zero
+  bytes with the magic string at the end, so `sizeof_hdr` was 0 and nibabel
+  answered "Cannot work out file type" while the command reported success. The
+  pixel data was the stored value rather than the decoded one, so a compressed
+  instance contributed a codestream described as an array of samples.
+
 ### Added
 
 - **A DICOM Conformance Statement** ([CONFORMANCE.md](./CONFORMANCE.md)), in the
@@ -164,6 +217,60 @@ throughout.
   implementation shared by the reader and the writer, so they cannot drift apart.
 - `compress.InflateLimitFor`, `MaxInflateRatio`, `MinInflateAllowance`.
 
+- **RLE Lossless compression on send.** Sending over a context that negotiated a
+  compressed syntax previously failed outright. Pixel data is now transcoded in
+  both directions as the negotiated context requires — from native pixels, or by
+  decoding a compressed source and re-encoding. RLE remains the only syntax this
+  library compresses to; every other compressed target still fails rather than
+  putting bytes on the wire described as something they are not.
+
+- **12-bit JPEG Extended decoding**, in pure Go. The standard library handles
+  SOF1 frames and rejects only the precision, which is the depth the transfer
+  syntax exists to carry.
+
+- **UPS Watch** — subscriptions and N-EVENT-REPORT. All three targets of PS3.4
+  CC.2.3 are supported, including the Global and Filtered Global instances, whose
+  subscribers are resolved when an event happens rather than expanded when the
+  subscription is made, so they cover steps created afterwards.
+  `Server.ReportUPSEvent` delivers events over an association the SCP opens back
+  to the subscriber. A subscriber that cannot be reached does not fail the
+  N-ACTION: the transition is already stored, and refusing it would leave the SCP
+  and the performer disagreeing about who owns the step.
+
+- **The DICOM JSON Model of PS3.18 Annex F** — `ToDICOMJSON`, `FromDICOMJSON`
+  and their string forms, with bulk data URIs. The README claimed this and the
+  `jsonrep` package's documentation claimed to implement it; `jsonrep` is a
+  struct of twenty-five named fields and cannot represent an arbitrary data set,
+  and `Dataset.ToJSON` produces a readable rendering nothing outside this library
+  can consume. Both now say what they are. Verified against pydicom's `to_json`
+  across its corpus.
+
+- **DICOMDIR reading and writing.** Directory records are stored in one flat
+  sequence and describe a tree linked by byte offsets, so the tree is built from
+  the offsets rather than from record order — a conforming file may store them in
+  any order, which is what `DICOMDIR-reordered` exists to demonstrate. Writing
+  computes those offsets by laying the file out twice and re-reads its own output
+  before returning it, because a file with wrong offsets is worse than no file: a
+  reader accepts it and follows it into a tree that is not there.
+
+- **The SR content tree of PS3.3 C.17** — `ReadContentTree` and
+  `WriteContentTree`, including by-reference relationships, whose Referenced
+  Content Item Identifier is UL rather than the text most multi-valued attributes
+  use. The package could not read a content item: pydicom sees 28 in
+  `test-SR.dcm` and this saw none.
+
+- **SV, UV and OV**, the 64-bit value representations DICOM added in 2018. An
+  unrecognized VR is not a small problem in explicit encoding, because the VR
+  decides the shape of the header.
+
+- **Private attributes take their VR from the shipped vendor dictionary.** The
+  6883-attribute private dictionary was never consulted. A lookup requires the
+  file's own private creator, since PS3.5 7.8.1 lets a vendor claim any block
+  from 0x10 to 0xFF and the same attribute is at a different tag in every file.
+
+- **nibabel joins the interoperability suite**, alongside pynetdicom, dcmtk and
+  pydicom.
+
 ### Security
 
 - **A deflated file could force an allocation 50,000x its own size.** The 256 MiB
@@ -197,16 +304,29 @@ throughout.
 
 ### Known limitations
 
-- Only RLE and baseline JPEG decode. JPEG-LS, JPEG 2000, and JPEG Lossless have
-  no bundled decoder — their entry points describe a C library that is not
-  present — so those instances parse, store, and transfer with pixel data intact
-  but need a decoder supplied through
-  `compress.GetExternalRegistry().RegisterExternalDecoder`.
+Six, all documented in CONFORMANCE section 8. Two are gaps; four are deliberate,
+and removing them would make the library worse or wrong.
+
+- **JPEG 2000 has no bundled decoder.** No implementation ships one in pure
+  language — pydicom needs pylibjpeg or GDCM, dcmtk needs extra modules. Supply
+  one through `compress.GetExternalRegistry().RegisterExternalDecoder`;
+  `examples/jpeg2000` is a working decoder verified sample-for-sample against
+  pydicom.
+- **RLE Lossless is the only syntax this library compresses to.** Decoders exist
+  for JPEG Lossless, JPEG-LS and 12-bit JPEG Extended; the encoders do not.
 - `PixelArray` flattens color samples into the column dimension, so a 100x100
-  RGB frame is reported as 100x300 rather than 100x100x3. The values and their
-  order are correct; the shape is not.
-- Handlers still cannot observe a C-CANCEL and stop early; that needs streaming
-  handler signatures.
+  RGB frame is reported as 100x300. The values and their order are correct.
+  `PixelArrayBySample` returns the four-dimensional shape.
+- Samples are returned in the color space the Photometric Interpretation names,
+  so a `YBR_FULL` instance yields YBR rather than RGB — the same as pydicom.
+  Converting while the attribute still says YBR would have the next reader
+  convert again.
+- Compressed transfer syntaxes are not negotiated by default, as in pynetdicom.
+  Pass `AllTransferSyntaxes()` to accept them.
+- A C-FIND, C-GET or C-MOVE handler that returns a complete result set cannot
+  observe a cancellation, having finished before the first result was sent. The
+  streaming interfaces — `CFindStreamer`, `CGetStreamer`, `CMoveStreamer` —
+  receive a context that is canceled when a C-CANCEL naming the message arrives.
 
 ## [1.3.0] - 2026-07-27
 
