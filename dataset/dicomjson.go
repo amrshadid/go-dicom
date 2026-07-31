@@ -212,10 +212,12 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement) dataelem
 	}
 
 	switch vr {
-	case "":
-		return dataelem.UN
-
-	case dataelem.UN:
+	// An absent value representation and an explicit UN mean the same thing to
+	// a reader: nobody said what this is. They were handled differently, so a
+	// private creator stored without a VR — which is how an implicit VR file
+	// stores everything — came out as UN where the same element with an
+	// explicit UN came out as LO.
+	case "", dataelem.UN:
 		// PS3.5 6.2.2 lets a sender write UN when it does not know the value
 		// representation, and lets a receiver look the tag up instead. Carrying
 		// UN into JSON would base64 a date or a patient name, which is a valid
@@ -227,11 +229,8 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement) dataelem
 		// reading them as the dictionary VR needs no reinterpretation. A UN that
 		// the dictionary calls SQ holds an encoded sequence, and claiming SQ
 		// without parsing it would produce a Value that is not there.
-		// A private creator says which vendor owns a block of private tags, and
-		// PS3.5 7.8.1 fixes it as LO — an odd group, element 0x10 to 0xFF. No
-		// dictionary is needed or possible: the value is the vendor's own name.
-		if t.Group()%2 == 1 && t.Element() >= 0x0010 && t.Element() <= 0x00FF {
-			return dataelem.LO
+		if private := ds.privateVR(t); private != "" {
+			return private
 		}
 		if known := dataelem.VR(t.GetVR()); known != "" && known != dataelem.UN {
 			if !jsonBinaryVRs[known] && known != dataelem.SQ &&
@@ -258,6 +257,59 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement) dataelem
 		return dataelem.OB
 	}
 	return vr
+}
+
+// privateVR resolves a private tag through the private dictionary.
+//
+// Private tags cannot be looked up by their stored tag, because the block they
+// sit in is assigned per file. PS3.5 7.8.1 gives a vendor a group and lets it
+// claim any block from 0x10 to 0xFF within it; the block is named by a private
+// creator at (gggg,00xx), and the vendor's attributes then live at (gggg,xxee).
+// The same attribute is (0019,1002) in one file and (0019,4302) in the next.
+//
+// So the creator is read to learn the vendor, and the tag is normalized to the
+// block the dictionary stores it under before the lookup. Without that step a
+// dictionary of 6883 private attributes answers nothing except for files that
+// happen to have chosen block 0x10.
+func (ds *Dataset) privateVR(t tag.Tag) dataelem.VR {
+	if t.Group()%2 == 0 {
+		return ""
+	}
+
+	element := t.Element()
+
+	// A private creator is LO by definition — its value is the vendor's own
+	// name, so no dictionary is needed or possible.
+	if element >= 0x0010 && element <= 0x00FF {
+		return dataelem.LO
+	}
+
+	block := element >> 8
+	if block < 0x10 {
+		return "" // not a private data element of any block
+	}
+	creator, ok := ds.Get(tag.New(t.Group(), block))
+	if !ok {
+		return "" // the block was never claimed, so nothing can say what this is
+	}
+	raw, ok := creator.GetValue().([]byte)
+	if !ok {
+		return ""
+	}
+	vendor := strings.TrimRight(string(raw), " \x00")
+	if vendor == "" {
+		return ""
+	}
+
+	canonical := tag.New(t.Group(), 0x1000|(element&0x00FF))
+	if info := canonical.GetPrivateTagInfo(vendor); info != nil {
+		if known := dataelem.VR(info.VR); known != "" && known != dataelem.UN &&
+			known != dataelem.SQ && !jsonBinaryVRs[known] &&
+			!strings.Contains(string(known), " or ") {
+			return known
+		}
+	}
+	return ""
 }
 
 // unsignedPixelValues reports what Pixel Representation says. Absent, it is 0 —
