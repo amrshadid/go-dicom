@@ -851,7 +851,7 @@ func (dfr *DCMFileReader) ProcessElementThroughHooks(elem *DataElementValue) (*d
 // Long format VRs (OB, OD, OF, OL, OW, SQ, UC, UN, UR, UT) have 2-byte reserved and 4-byte length.
 func isShortVR(vr string) bool {
 	switch vr {
-	case "OB", "OD", "OF", "OL", "OW", "SQ", "UC", "UN", "UR", "UT":
+	case "OB", "OD", "OF", "OL", "OV", "OW", "SQ", "SV", "UC", "UN", "UR", "UT", "UV":
 		return false
 	default:
 		return true

@@ -9,7 +9,7 @@ package dataelem
 var byteOrderSensitiveVRs = map[VR]int{
 	US: 2, SS: 2, OW: 2, AT: 2,
 	UL: 4, SL: 4, FL: 4, OL: 4, OF: 4,
-	FD: 8, OD: 8,
+	FD: 8, OD: 8, SV: 8, UV: 8, OV: 8,
 }
 
 // IsByteOrderSensitive reports whether a VR's value is affected by byte order.

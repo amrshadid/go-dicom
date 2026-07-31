@@ -605,7 +605,7 @@ func ConvertDataElementToRaw(elem *DataElement) (*hooks.RawDataElement, error) {
 
 func isShortVR(vr string) bool {
 	switch vr {
-	case "OB", "OD", "OF", "OL", "OW", "SQ", "UC", "UN", "UR", "UT":
+	case "OB", "OD", "OF", "OL", "OV", "OW", "SQ", "SV", "UC", "UN", "UR", "UT", "UV":
 		return false
 	default:
 		return true

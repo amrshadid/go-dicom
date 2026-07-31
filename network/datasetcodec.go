@@ -527,8 +527,9 @@ func padToEvenLength(vr dataelem.VR, data []byte) []byte {
 // (2-byte reserved + 4-byte length) rather than the 8-byte short form.
 func isLongFormVR(vr dataelem.VR) bool {
 	switch vr {
-	case dataelem.OB, dataelem.OD, dataelem.OF, dataelem.OL, dataelem.OW,
-		dataelem.SQ, dataelem.UC, dataelem.UN, dataelem.UR, dataelem.UT:
+	case dataelem.OB, dataelem.OD, dataelem.OF, dataelem.OL, dataelem.OV,
+		dataelem.OW, dataelem.SQ, dataelem.SV, dataelem.UC, dataelem.UN,
+		dataelem.UR, dataelem.UT, dataelem.UV:
 		return true
 	default:
 		return false
