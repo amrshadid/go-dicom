@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.4.0] - 2026-07-31
+
 Correctness release. Everything below was found by running this library against
 pydicom's test corpus or a live peer — not by its own tests, which passed
 throughout.
