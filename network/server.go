@@ -221,6 +221,12 @@ func (s *Server) ReportStorageCommitment(ctx context.Context, requestorAE string
 	return s.scp.ReportStorageCommitment(ctx, requestorAE, result)
 }
 
+// ReportUPSEvent delivers a UPS N-EVENT-REPORT to a subscriber, over an
+// association this server opens to it. See SCP.ReportUPSEvent.
+func (s *Server) ReportUPSEvent(ctx context.Context, receivingAE string, event *UPSEvent) error {
+	return s.scp.ReportUPSEvent(ctx, receivingAE, event)
+}
+
 // SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server accepts.
 func (s *Server) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedTransferSyntaxes(syntaxes)

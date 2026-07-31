@@ -25,9 +25,10 @@ import (
 // one, and when a Transaction UID is required lives here.
 //
 // Implemented: the Push SOP class — N-CREATE, N-SET, N-GET, and N-ACTION for
-// changing state and requesting cancellation. Subscription and event reporting
-// (the Watch SOP class) are not, and are answered as unsupported rather than
-// silently accepted.
+// changing state and requesting cancellation — and the Watch SOP class, whose
+// subscriptions and N-EVENT-REPORT fan-out are in upswatch.go. Watch is enabled
+// by giving the handler a UPSSubscriptionStore; without one, subscription
+// actions are answered as unsupported rather than silently accepted.
 
 // tagProcedureStepState is (0074,1000). The Transaction UID tag is shared with
 // storage commitment, which uses the same attribute for the same purpose.
@@ -107,6 +108,26 @@ type UPSHandler struct {
 	// and says so with its own state change. Return a status to answer with, or
 	// 0 to accept the request.
 	OnCancelRequested func(ctx context.Context, step *UPSStep) uint16
+
+	// Subscriptions, if set, enables UPS Watch: N-ACTION types 3, 4 and 5 are
+	// honored and recorded here. Left nil, those actions are refused, since a
+	// subscription the SCP does not keep leaves the subscriber waiting for
+	// events that cannot arrive.
+	Subscriptions UPSSubscriptionStore
+
+	// Notifier, if set, delivers N-EVENT-REPORT to subscribers when a step
+	// changes state or is asked to cancel. *Server and *SCP implement it.
+	//
+	// Separate from Subscriptions because the two can fail independently: an SCP
+	// may record subscriptions and let the application deliver events itself. A
+	// nil Notifier means subscriptions are kept and nothing is sent.
+	Notifier UPSEventNotifier
+
+	// OnEventReportError, if set, is called when reporting an event to one
+	// subscriber fails. The N-ACTION that triggered it still succeeds — the
+	// state change happened, and undoing it because a watcher was unreachable
+	// would be worse — so without this hook the failure is invisible.
+	OnEventReportError func(ctx context.Context, sub *UPSSubscription, event *UPSEvent, err error)
 }
 
 // HandleNCreate creates a procedure step.
@@ -236,9 +257,12 @@ func (h *UPSHandler) HandleNAction(ctx context.Context, req *NActionRequest) (*N
 	case UPSActionRequestCancel:
 		return h.requestCancel(ctx, req)
 	case UPSActionSubscribe, UPSActionUnsubscribe, UPSActionSuspendGlobal:
-		// Answered rather than accepted: a subscription this SCP never honors
-		// would leave the requestor waiting for reports that cannot arrive.
-		return &NActionResponse{Status: StatusUPSEventReportsNotSupported}, nil
+		if h.Subscriptions == nil {
+			// Answered rather than accepted: a subscription this SCP never keeps
+			// would leave the requestor waiting for reports that cannot arrive.
+			return &NActionResponse{Status: StatusUPSEventReportsNotSupported}, nil
+		}
+		return h.handleSubscription(ctx, req)
 	default:
 		return &NActionResponse{Status: StatusUPSActionNotAppropriate}, nil
 	}
@@ -283,6 +307,7 @@ func (h *UPSHandler) changeState(ctx context.Context, req *NActionRequest) (*NAc
 	if h.OnStateChange != nil {
 		h.OnStateChange(ctx, step, from, requested)
 	}
+	h.notifySubscribers(ctx, step, upsStateReportEvent(step))
 	return &NActionResponse{Status: status}, nil
 }
 
@@ -312,6 +337,10 @@ func (h *UPSHandler) requestCancel(ctx context.Context, req *NActionRequest) (*N
 			return &NActionResponse{Status: status}, nil
 		}
 	}
+	// The performer is the one that has to act on this, and it learns about it
+	// only by subscribing — there is no other channel from the SCP to whoever
+	// holds the step.
+	h.notifySubscribers(ctx, step, upsCancelRequestedEvent(step, req.DataSet))
 	return &NActionResponse{Status: StatusSuccess}, nil
 }
 

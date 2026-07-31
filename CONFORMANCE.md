@@ -393,14 +393,35 @@ Modality Worklist and Unified Procedure Step each have a handler interface that
 models the service: `StorageHandler`, `FindHandler`, `WorklistHandler`,
 `UPSHandler` and so on.
 
-Unified Procedure Step is the Push SOP class — N-CREATE, N-SET, N-GET, and
-N-ACTION for changing state and requesting cancellation. `UPSHandler` enforces
-the transition table in PS3.4 CC.1.1 and the Transaction UID that stops two
-performers claiming one step, over a `UPSStore` the caller supplies. Subscription
-and event reporting, the Watch SOP class, are **answered as unsupported rather
-than accepted**: a subscription this SCP never honors would leave the requestor
-waiting for reports that cannot arrive. The workflow is exercised against
-pynetdicom in `network/interop_ndimse_test.go`, including the refusals.
+Unified Procedure Step covers the **Push** and **Watch** SOP classes.
+
+Push is N-CREATE, N-SET, N-GET, and N-ACTION for changing state and requesting
+cancellation. `UPSHandler` enforces the transition table in PS3.4 CC.1.1 and the
+Transaction UID that stops two performers claiming one step, over a `UPSStore`
+the caller supplies.
+
+Watch is subscription and event reporting. Give `UPSHandler` a
+`UPSSubscriptionStore` — `NewUPSMemorySubscriptions()` is one — and N-ACTION
+types 3, 4 and 5 are honored. All three targets in PS3.4 CC.2.3 are supported:
+a step's own SOP Instance UID, the well-known Global Subscription instance, and
+the Filtered Global instance with matching keys. A global subscription is
+consulted when an event happens rather than expanded when it is made, so it
+covers steps created after it.
+
+Events are delivered by `Server.ReportUPSEvent`, over an association the SCP
+opens back to the subscriber — the same shape as a deferred storage commitment
+result, and using the same address map. Set `UPSHandler.Notifier` and a state
+change or cancellation request reports itself to every subscriber. A subscriber
+that cannot be reached does **not** fail the N-ACTION: the transition is already
+stored, and refusing it would leave the SCP and the performer disagreeing about
+the step. `OnEventReportError` is how that failure is surfaced.
+
+Without a `UPSSubscriptionStore` the subscription actions are still **answered
+as unsupported rather than accepted**, since a subscription the SCP does not
+keep leaves the requestor waiting for reports that cannot arrive.
+
+The workflow is exercised against pynetdicom in `network/interop_ndimse_test.go`,
+and the event path end to end in `network/upswatch_test.go`.
 
 **Reachable through the N-DIMSE primitives.** MPPS and Basic Grayscale Print
 Management have no dedicated abstraction, but they are built entirely from
