@@ -343,16 +343,22 @@ their leading values. What follows is what does not decode.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Pixel data is decompressed to be sent uncompressed, but never compressed.**
-  A data set stored under a compressed syntax and sent over a context that
-  negotiated an uncompressed one has its pixel data decoded first. If it cannot
-  be decoded — JPEG 2000, 12-bit JPEG Extended, color JPEG-LS — the send fails
-  rather than putting encapsulated fragments on the wire described as native
-  pixels, which the receiver could not detect.
+- **RLE Lossless is the only syntax this library compresses to.** Pixel data is
+  transcoded in both directions as the negotiated context requires.
 
-  The reverse is not available: this library compresses no pixel data, so a
-  native instance cannot be sent over a context that negotiated a compressed
-  syntax. Negotiate an uncompressed syntax for those, which the defaults do.
+  Sending over a context that negotiated an uncompressed syntax decodes the
+  pixel data first. Sending over one that negotiated **RLE Lossless** encodes
+  it — from native pixels, or by decoding a compressed source and re-encoding.
+
+  Every other compressed target fails, naming the syntax asked for. There is no
+  JPEG, JPEG-LS or JPEG 2000 encoder here, and a send that cannot be satisfied
+  fails rather than putting bytes on the wire described as something they are
+  not, which the receiver could not detect.
+
+  Decoding has one gap of its own: **12-bit JPEG Extended** (`1.2.840.10008.1.2.4.51`)
+  is not decoded, so an instance stored under it cannot be sent over a context
+  that negotiated anything else. JPEG 2000 needs a registered external decoder;
+  without one it is in the same position.
 
 ### 8.3 Writing
 

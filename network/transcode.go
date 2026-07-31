@@ -1,13 +1,127 @@
 package network
 
 import (
+	"encoding/binary"
 	"fmt"
 
-	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataelem"
+
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
+
+// compressToRLE re-encodes a data set's pixel data as RLE Lossless.
+//
+// This is the one direction that can be encoded here. It covers both starting
+// points: native pixel data is compressed directly, and pixel data already in
+// another compressed syntax is decoded first — which only works for a syntax
+// there is a decoder for, and says so plainly when there is not.
+func compressToRLE(ds *dataset.Dataset, source, targetSyntax string) (*dataset.Dataset, error) {
+	if _, ok := ds.Get(pixelDataTag); !ok {
+		// Nothing to encode, so the syntaxes differ only in how the data set is
+		// written, which the codec handles.
+		return ds, nil
+	}
+
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, fmt.Errorf("cannot encode pixel data as %s: %w", targetSyntax, err)
+	}
+	if info.NumberOfFrames < 1 || info.Rows < 1 || info.Columns < 1 {
+		return nil, fmt.Errorf("cannot encode pixel data as %s: the image is %dx%d in %d frames",
+			targetSyntax, info.Columns, info.Rows, info.NumberOfFrames)
+	}
+
+	pixels, err := ds.DecodedPixelData()
+	if err != nil {
+		return nil, fmt.Errorf("cannot encode a %s instance as %s: its pixel data has to be "+
+			"decoded first and %w", source, targetSyntax, err)
+	}
+
+	// Encode exactly what the image describes, not what the element happens to
+	// hold. Stored pixel data may carry padding past the last sample — DICOM
+	// pads values to an even length, and writers have been known to leave more —
+	// and compressing it produces a frame that decodes longer than the image.
+	// Our own decoder tolerates the extra byte; pydicom's does not, and neither
+	// should it.
+	frameLen := info.Rows * info.Columns * info.SamplesPerPixel * info.BitsAllocated / 8
+	if frameLen <= 0 {
+		return nil, fmt.Errorf("cannot encode pixel data as %s: a frame of %dx%d with %d samples "+
+			"at %d bits has no size", targetSyntax, info.Columns, info.Rows,
+			info.SamplesPerPixel, info.BitsAllocated)
+	}
+	if need := frameLen * info.NumberOfFrames; len(pixels) < need {
+		return nil, fmt.Errorf("cannot encode pixel data as %s: %d bytes for %d frames of %d",
+			targetSyntax, len(pixels), info.NumberOfFrames, frameLen)
+	}
+
+	encoder := compress.NewRLECompressor()
+	frames := make([][]byte, 0, info.NumberOfFrames)
+	for i := 0; i < info.NumberOfFrames; i++ {
+		frame, err := encoder.CompressFrame(
+			pixels[i*frameLen:(i+1)*frameLen], info.SamplesPerPixel, info.BitsAllocated)
+		if err != nil {
+			return nil, fmt.Errorf("encoding frame %d as %s: %w", i, targetSyntax, err)
+		}
+		frames = append(frames, frame)
+	}
+
+	// A copy, so sending a data set does not rewrite the caller's.
+	out := ds.Clone()
+	// Encapsulated pixel data is OB whatever the sample width — PS3.5 A.4, and
+	// dcmtk says so plainly when it is not.
+	if err := replacePixelData(out, dataelem.OB, encapsulate(frames)); err != nil {
+		return nil, fmt.Errorf("replacing pixel data with its encoded form: %w", err)
+	}
+	out.SetTransferSyntaxUID(targetSyntax)
+	return out, nil
+}
+
+// replacePixelData swaps the value and VR of (7FE0,0010) without moving it.
+//
+// Removing the element and adding it back would be simpler and is what this did
+// first, but it appends: the element lands at the end of the data set, after
+// anything that already followed it. Data Set Trailing Padding (FFFC,FFFC) is
+// the case that shows it — pixel data written after that leaves the tags
+// descending, which dcmtk reports and a strict reader may refuse.
+func replacePixelData(ds *dataset.Dataset, vr dataelem.VR, value []byte) error {
+	elem, ok := ds.Get(pixelDataTag)
+	if !ok {
+		return fmt.Errorf("the data set has no pixel data to replace")
+	}
+	elem.SetVR(vr)
+	return ds.SetValue(pixelDataTag, value)
+}
+
+// encapsulate wraps compressed frames in the fragment structure PS3.5 A.4
+// requires: an offset table item, then one item per frame.
+//
+// The offset table is written empty. It is optional, and a reader that wants
+// random access to frames can build one; getting it wrong is worse than omitting
+// it, because a reader that trusts it seeks to the wrong place.
+func encapsulate(frames [][]byte) []byte {
+	var out []byte
+
+	item := func(payload []byte) {
+		header := make([]byte, 8)
+		binary.LittleEndian.PutUint16(header[0:], 0xFFFE)
+		binary.LittleEndian.PutUint16(header[2:], 0xE000)
+		binary.LittleEndian.PutUint32(header[4:], uint32(len(payload)))
+		out = append(out, header...)
+		out = append(out, payload...)
+	}
+
+	item(nil)
+	for _, frame := range frames {
+		// Fragments are of even length, like every other DICOM value.
+		if len(frame)%2 == 1 {
+			frame = append(append([]byte(nil), frame...), 0x00)
+		}
+		item(frame)
+	}
+	return out
+}
 
 // pixelDataTag is (7FE0,0010).
 var pixelDataTag = tag.New(0x7FE0, 0x0010)
@@ -41,22 +155,20 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 	sourceCompressed := compress.IsCompressed(source)
 	targetCompressed := compress.IsCompressed(targetSyntax)
 
-	if !sourceCompressed {
-		if !targetCompressed {
-			// Both uncompressed: the codec handles byte order and deflating on
-			// its own, so the data set travels as it is.
-			return ds, nil
-		}
-		return nil, fmt.Errorf("cannot send a data set stored as %s over a context that "+
-			"negotiated %s: this library compresses no pixel data, so the instance would "+
-			"arrive described as compressed while holding native pixels",
-			source, targetSyntax)
+	if !sourceCompressed && !targetCompressed {
+		// Both uncompressed: the codec handles byte order and deflating on its
+		// own, so the data set travels as it is.
+		return ds, nil
 	}
 
 	if targetCompressed {
-		// Compressed to a different compressed syntax would mean decoding and
-		// re-encoding, and there is no encoder for these.
-		return nil, fmt.Errorf("cannot re-encode pixel data from %s to %s", source, targetSyntax)
+		if targetSyntax != RLELosslessUID {
+			// RLE is the only syntax this library encodes. Decoding and
+			// re-encoding to JPEG or JPEG 2000 would need an encoder for those.
+			return nil, fmt.Errorf("cannot encode pixel data as %s: RLE Lossless is the only "+
+				"compressed syntax this library writes", targetSyntax)
+		}
+		return compressToRLE(ds, source, targetSyntax)
 	}
 
 	// Compressed to uncompressed: decode.
@@ -81,8 +193,13 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 	if len(pixels)%2 == 1 {
 		pixels = append(pixels, 0x00)
 	}
-	out.Remove(pixelDataTag)
-	if err := out.Add(dataelem.NewDataElement(pixelDataTag, dataelem.OB, pixels)); err != nil {
+	// Native pixel data is OW when a sample is wider than a byte and OB when it
+	// is not.
+	vr := dataelem.OB
+	if info, err := ds.GetPixelDataInfo(); err == nil && info.BitsAllocated > 8 {
+		vr = dataelem.OW
+	}
+	if err := replacePixelData(out, vr, pixels); err != nil {
 		return nil, fmt.Errorf("replacing pixel data with its decoded form: %w", err)
 	}
 	out.SetTransferSyntaxUID(targetSyntax)

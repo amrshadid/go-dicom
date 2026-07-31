@@ -624,6 +624,145 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# RLE encoding: go-dicom compresses, dcmtk decompresses, pydicom compares.
+#
+# RLE is the only compressed syntax this library writes, and an encoder is worth
+# only what another implementation makes of it. Encoding and decoding with our
+# own codec proves nothing — that is how a frame that decodes one byte longer
+# than its image went unnoticed, tolerated here and rejected by pydicom.
+#
+# dcmtk decompresses the result rather than pydicom, because the interoperability
+# venv has no numpy and pydicom cannot produce a pixel array without it. The raw
+# pixel data compares just as well and needs neither.
+if [ -x "$DCMTK_BIN/dcmdrle" ] && command -v python3 >/dev/null 2>&1; then
+  note "RLE encoding: go-dicom encoder, dcmtk decoder"
+
+  rle_src="$WORKDIR/rle-src"
+  rle_out="$WORKDIR/rle-out"
+  rle_back="$WORKDIR/rle-back"
+  mkdir -p "$rle_src" "$rle_out" "$rle_back"
+
+  if python3 - "$rle_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom, pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+# Native little-endian sources only, so the comparison at the end is between
+# like and like: the source's stored pixel data is exactly what dcmtk should
+# hand back after decompressing ours.
+#
+# The exclusions are all cases where the bytes legitimately differ rather than
+# cases the encoder gets wrong. Big-endian files are normalized to little endian
+# on read; a compressed source stores a codestream, not pixels, so comparing it
+# against decompressed output is meaningless; and YBR_FULL_422 is expanded from
+# its subsampled form.
+native = {"1.2.840.10008.1.2", "1.2.840.10008.1.2.1"}
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    try:
+        ds = pydicom.dcmread(os.path.join(corpus, name), stop_before_pixels=True)
+        if str(ds.file_meta.TransferSyntaxUID) not in native:
+            continue
+        if str(ds.get("PhotometricInterpretation", "")) == "YBR_FULL_422":
+            continue
+        if int(ds.get("BitsAllocated", 0)) not in (8, 16, 32):
+            continue
+    except Exception:
+        continue
+    shutil.copy(os.path.join(corpus, name), os.path.join(sys.argv[1], name))
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check -rle "$rle_src" "$rle_out" > "$WORKDIR/rle.log" 2>&1; then
+      rle_total=0
+      rle_bad=0
+      for written in "$rle_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        rle_total=$((rle_total + 1))
+        name="$(basename "$written")"
+
+        # dcmtk has to read it, and to read it without complaining: an ordering
+        # or structural fault is reported on stderr while the file still parses.
+        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>"$WORKDIR/rle-dump.err"; then
+          rle_bad=$((rle_bad + 1))
+          echo "   dcmtk rejects $name" >&2
+          continue
+        fi
+        # A warning only counts when the source did not already produce it.
+        # Several of pydicom's own RLE fixtures carry OW where the standard
+        # wants OB for encapsulated pixel data, and passing that through
+        # faithfully is not a fault of this encoder.
+        if [ -s "$WORKDIR/rle-dump.err" ]; then
+          "$DCMTK_BIN/dcmdump" "$rle_src/$name" >/dev/null 2>"$WORKDIR/rle-src.err" || true
+          if ! diff -q "$WORKDIR/rle-dump.err" "$WORKDIR/rle-src.err" >/dev/null 2>&1; then
+            rle_bad=$((rle_bad + 1))
+            echo "   dcmtk warns on $name but not on its source: $(head -1 "$WORKDIR/rle-dump.err")" >&2
+            continue
+          fi
+        fi
+
+        # And decompressing it has to give back the pixels that went in.
+        if ! "$DCMTK_BIN/dcmdrle" "$written" "$rle_back/$name" >/dev/null 2>&1; then
+          rle_bad=$((rle_bad + 1))
+          echo "   dcmtk cannot decompress $name" >&2
+        fi
+      done
+
+      if [ "$rle_bad" -eq 0 ] && python3 - "$rle_src" "$rle_back" <<'PYEOF'
+import os, sys
+import pydicom
+
+src, back = sys.argv[1], sys.argv[2]
+bad = []
+for name in sorted(os.listdir(back)):
+    if not name.endswith(".dcm"):
+        continue
+    try:
+        got = pydicom.dcmread(os.path.join(back, name), force=True)
+        want = pydicom.dcmread(os.path.join(src, name), force=True)
+    except Exception:
+        continue
+    if "PixelData" not in got or "PixelData" not in want:
+        continue
+    # Compare the image bytes, not the stored bytes. A file may store more than
+    # the image needs — MR_small_padded carries 128 bytes past the last pixel —
+    # and this encoder compresses the image and nothing else, so the padding is
+    # absent afterward by design. Comparing stored lengths would report that as
+    # a mismatch.
+    try:
+        n = (int(want.Rows) * int(want.Columns) * int(want.SamplesPerPixel)
+             * int(want.BitsAllocated) // 8 * int(getattr(want, "NumberOfFrames", 1) or 1))
+    except Exception:
+        continue  # geometry this malformed says nothing about the encoder
+    if n <= 0 or len(want.PixelData) < n or len(got.PixelData) < n:
+        bad.append(name)
+        continue
+    # RLE is lossless and the source is uncompressed, so these are identical.
+    if bytes(want.PixelData)[:n] != bytes(got.PixelData)[:n]:
+        bad.append(name)
+for name in bad:
+    print("   pixels differ after an RLE round trip:", name, file=sys.stderr)
+raise SystemExit(1 if bad else 0)
+PYEOF
+      then
+        pass "RLE encoding — dcmtk reads $rle_total files and decompresses them to the original pixels"
+        RAN_ANY=1
+      else
+        fail "this encoder's output does not survive a round trip through dcmtk"
+      fi
+    else
+      fail "the RLE encoding harness failed"
+      sed -n '1,20p' "$WORKDIR/rle.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2
