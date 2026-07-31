@@ -1020,6 +1020,8 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	dicomFile := &DICOMFile{
 		DataElements: make([]*DataElementValue, 0),
 	}
+	// Whether the encoding has to be worked out from the data set itself.
+	sniffed := false
 
 	// A DICOM Part 10 file opens with a 128-byte preamble and the characters
 	// DICM. A raw DICOM stream — as produced by some modalities, and what
@@ -1042,15 +1044,26 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
 	} else {
 		// Without a meta header there is no stated transfer syntax. Implicit VR
-		// Little Endian is the DICOM default (PS3.5 Section 10.1).
+		// Little Endian is the DICOM default (PS3.5 Section 10.1), but the first
+		// element usually says otherwise plainly enough to read, so look before
+		// falling back to it.
 		metaInfo = &FileMetaInfo{}
 		dicomFile.FileMetaInfo = metaInfo
-		dicomFile.Warnings = append(dicomFile.Warnings,
-			"no file meta header; parsing as a raw data set in implicit VR little endian")
+		sniffed = true
 	}
 
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
+
+	if sniffed {
+		explicit, little, ok := dfr.sniffDataSetHead()
+		if ok {
+			dicomFile.ExplicitVR, dicomFile.IsLittleEndian = explicit, little
+		}
+		dicomFile.Warnings = append(dicomFile.Warnings,
+			fmt.Sprintf("no file meta header; parsing as a raw data set in %s",
+				describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)))
+	}
 
 	// Under the Deflated syntax the meta header is uncompressed but everything
 	// after it is raw DEFLATE. Inflate the remainder and continue from that,
@@ -1396,4 +1409,71 @@ func (dfr *DCMFileReader) tryReadMetaGroupLength() (uint32, bool, error) {
 		return 0, false, err
 	}
 	return length, true, nil
+}
+
+// sniffDataSetEncoding reports how a data set with no file meta header is
+// encoded, by looking at its first element.
+//
+// PS3.5 Section 10.1 makes Implicit VR Little Endian the default, and assuming
+// it is what this used to do. But the default applies to a stream that carries
+// no other information, and the first element carries plenty: an explicit VR
+// data set puts two ASCII letters where an implicit one puts the low half of a
+// length. The two are distinguishable, and the cost of not distinguishing them
+// is total — reading an explicit VR stream as implicit takes the VR characters
+// as part of the length, which then runs past the end of the file, and every
+// element is dropped. pydicom's corpus has two such files, and both produced an
+// empty data set and no error.
+//
+// Endianness follows from the group number. A data set begins at group 0x0002
+// or 0x0008, so of the two readings the correct one is the smaller: 0x0008 one
+// way is 0x0800 the other. Implicit VR is always little endian — the standard
+// defines no implicit big-endian syntax — so only the explicit case has a
+// choice to make.
+//
+// Returns false if the head is too short to tell, leaving the default in place.
+func sniffDataSetEncoding(head []byte) (explicitVR, littleEndian, ok bool) {
+	if len(head) < 8 {
+		return false, true, false
+	}
+
+	if !dataelem.IsValidVR(dataelem.VR(head[4:6])) {
+		// No VR where an explicit data set would put one, so implicit — which
+		// exists only in little endian.
+		return false, true, true
+	}
+
+	groupLE := uint16(head[0]) | uint16(head[1])<<8
+	groupBE := uint16(head[0])<<8 | uint16(head[1])
+	return true, groupLE <= groupBE, true
+}
+
+// sniffDataSetHead peeks at the first element and reports how it is encoded,
+// leaving the stream where it found it.
+func (dfr *DCMFileReader) sniffDataSetHead() (explicitVR, littleEndian, ok bool) {
+	start, err := dfr.reader.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return false, true, false // not seekable: cannot look without consuming
+	}
+	head := make([]byte, 8)
+	readErr := dfr.reader.ReadBytes(head)
+	if _, seekErr := dfr.reader.Seek(start, io.SeekStart); seekErr != nil {
+		return false, true, false
+	}
+	dfr.position = start
+	if readErr != nil {
+		return false, true, false
+	}
+	return sniffDataSetEncoding(head)
+}
+
+// describeEncoding names an encoding for a warning message.
+func describeEncoding(explicitVR, littleEndian bool) string {
+	vr, order := "implicit VR", "little endian"
+	if explicitVR {
+		vr = "explicit VR"
+	}
+	if !littleEndian {
+		order = "big endian"
+	}
+	return vr + " " + order
 }
