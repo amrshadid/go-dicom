@@ -93,7 +93,7 @@ func (cc *ConvertCommand) Execute(args []string) error {
 	case "csv":
 		data, err = convertToCSV(elements)
 	case "nifti":
-		data, err = convertToNifti(elements)
+		data, err = convertToNifti(cc.inputFile)
 	}
 
 	if err != nil {

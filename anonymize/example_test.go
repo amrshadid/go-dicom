@@ -29,16 +29,19 @@ func Example() {
 		fmt.Printf("modality: %s\n", elem.GetValue())
 	}
 
-	// Patient name is replaced with a dummy value rather than deleted. Most
-	// PS3.15 actions replace rather than remove, so that the attribute stays
-	// present for readers that require it.
+	// Patient's Name is emptied rather than deleted. PS3.15 Table E.1-1 gives
+	// it action Z — a zero-length value — so the attribute stays present for
+	// readers that require it while carrying nothing. This example used to
+	// print ANONYMOUS, from a hand-written table that replaced it with a dummy
+	// instead; a site that prefers a dummy can ask for one with
+	// SetCustomAction.
 	if elem, ok := ds.Get(tag.New(0x0010, 0x0010)); ok {
-		fmt.Printf("patient name: %s\n", elem.GetValue())
+		fmt.Printf("patient name: %q\n", elem.GetValue())
 	}
 
 	// Output:
 	// modality: CT
-	// patient name: ANONYMOUS
+	// patient name: ""
 }
 
 // The action for any individual tag can be overridden, which is how site

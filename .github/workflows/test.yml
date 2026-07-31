@@ -1,13 +1,11 @@
 name: Tests and Quality Checks
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 permissions:
   contents: read
@@ -19,13 +17,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.24']
+        go-version: ['1.25', '1.26']
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -39,10 +37,13 @@ jobs:
         run: go test -v -race -timeout 5m -coverprofile coverage.out -covermode atomic ./...
 
       - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.24'
-        uses: codecov/codecov-action@v5
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
+        uses: codecov/codecov-action@v7
         with:
-          file: ./coverage.out
+          # The input is `files`, plural. `file` was silently ignored, leaving
+          # codecov to discover the report by scanning instead of being told
+          # where it is.
+          files: ./coverage.out
           flags: unittests
           name: codecov-umbrella
 
@@ -52,13 +53,13 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.24']
+        go-version: ['1.25', '1.26']
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -76,17 +77,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       # The seed corpora run as ordinary tests on every push, so a seed that
       # starts failing is caught immediately and cheaply.
       - name: Run fuzz seed corpora
-        run: go test -run=Fuzz ./network/... ./filereader/...
+        run: go test -run=Fuzz ./network/... ./filereader/... ./compress/...
 
       # A short fuzzing run per target explores beyond the seeds. Kept brief so
       # it fits in a normal CI budget; findings are surfaced as failures with
@@ -95,7 +96,18 @@ jobs:
       # -parallel bounds the worker count. The default is one worker per core,
       # and each holds its own allocations; on a shared runner that was enough
       # to get the job terminated.
+      # GOMEMLIMIT makes Go collect aggressively instead of growing the heap
+      # toward the runner's ceiling. This job has been killed with SIGTERM
+      # (exit 143) intermittently on the same commit that passes on a re-run,
+      # which is the signature of the runner reclaiming memory rather than a
+      # defect in the code under test: a 60s local run of the same target
+      # completes 2.2M executions at a 120 MiB peak.
+      #
+      # The limit is a soft one, so a target that genuinely needs more still
+      # gets it; it only changes when the collector runs.
       - name: Fuzz each target briefly
+        env:
+          GOMEMLIMIT: 1GiB
         run: |
           set -e
           for target in FuzzDecodePDU FuzzDecodeDataset FuzzDecodeCommandDataset; do
@@ -106,12 +118,24 @@ jobs:
           echo "::group::FuzzReadDICOMFile"
           go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=30s -parallel=2
           echo "::endgroup::"
+          # The lossless JPEG parser reads offsets and lengths out of the same
+          # attacker-controlled bytes it then indexes with; fuzzing it found two
+          # panics within a minute.
+          echo "::group::FuzzJPEGLosslessDecompress"
+          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLosslessDecompress$' -fuzztime=30s -parallel=2
+          echo "::endgroup::"
+          # JPEG-LS has more attacker-reachable arithmetic than the others: the
+          # coding parameters come from the frame header and an optional preset
+          # segment, and they feed shift counts and loop bounds.
+          echo "::group::FuzzJPEGLSDecompress"
+          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLSDecompress$' -fuzztime=30s -parallel=2
+          echo "::endgroup::"
 
       # A crash writes its input to testdata/fuzz; keep it so the failure can be
       # reproduced from the artifact rather than by re-fuzzing.
       - name: Upload failing inputs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-failures
           path: '**/testdata/fuzz/**'
@@ -122,15 +146,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -167,9 +191,56 @@ jobs:
           export PATH="$HOME/dicomvenv/bin:$PATH"
           ./scripts/interop-test.sh
 
+      # Decoding is checked against pydicom's own reading of the same files,
+      # not against this library's writer. Unit tests build their fixtures with
+      # this library's encoder, so they cannot catch the two halves agreeing on
+      # a format no other implementation uses — which is how every serious
+      # defect in this project has hidden.
+      - name: Verify pixel decoding against the pydicom corpus
+        env:
+          GODICOM_PYDICOM_DATA: /home/runner/dicomvenv/lib/python3.11/site-packages/pydicom/data/test_files
+        run: |
+          if [ ! -d "$GODICOM_PYDICOM_DATA" ]; then
+            GODICOM_PYDICOM_DATA=$("$HOME/dicomvenv/bin/python" -c \
+              "import pydicom.data, os; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+            export GODICOM_PYDICOM_DATA
+          fi
+          echo "corpus: $GODICOM_PYDICOM_DATA"
+          go test ./dataset/ -run TestAgainstPydicomCorpus -v
+          # Every sample of every corpus file, not the first eight of a curated
+          # list — which is what three pixel layout defects lived through.
+          go test ./dataset/ -run TestPixelsAgainstWholePydicomCorpus -v
+          # pydicom's charset fixtures sit beside the corpus and are the only
+          # multi-byte text this project has to check against.
+          go test ./charset/ -run 'TestPersonNamesAgainstPydicomCharsetFiles|TestTextIsDecodedWithoutAskingForIt|TestDecodedDataSetDeclaresUTF8|TestSequenceItemCharacterSet' -v
+          # The transcoding checks need a genuinely compressed instance, which
+          # the corpus supplies; they skip without it, so this is the one job
+          # where they run.
+          go test ./network/ -run 'TestCompressedInstanceIsDecodedBeforeSending|TestTranscodingDoesNotMutateTheCaller' -v
+          # The reference JPEG 2000 decoder, and the registry consulting it. The
+          # library bundles no codec, so this is what verifies the documented
+          # escape hatch actually works.
+          sudo apt-get install -y -qq libopenjp2-tools
+          go test ./examples/... -v
+
+      # Services the shell script above cannot reach, because they have no CLI
+      # command to drive them: MPPS, print management, and cancelling a
+      # retrieval. They are driven from Go instead.
+      #
+      # These tests skip wherever pynetdicom is absent, which is every other job
+      # — so this is the one place they run, and GODICOM_REQUIRE_INTEROP makes a
+      # skip here a failure rather than a silent pass.
+      - name: Verify N-DIMSE services and cancellation against pynetdicom
+        env:
+          GODICOM_REQUIRE_INTEROP: "1"
+        run: |
+          export PATH="$HOME/dicomvenv/bin:$PATH"
+          go test ./network/ -race -v \
+            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom|TestUPSAgainstPynetdicom'
+
       - name: Upload server logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: interop-logs
           path: /tmp/tmp.*/
@@ -180,12 +251,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Check formatting
         run: |
@@ -197,9 +268,9 @@ jobs:
           fi
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
+          version: v2.12.2
           args: --timeout=5m
 
   build:
@@ -207,12 +278,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Download dependencies
         run: go mod download
@@ -239,12 +310,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Verify module
         run: go mod verify
@@ -252,17 +323,51 @@ jobs:
       - name: List dependencies
         run: go list -m all
 
+      # The version is pinned. With @latest, govulncheck v1.5.0 raised its own
+      # Go requirement to 1.25 and broke this job on a commit that changed
+      # nothing related to it — setup-go pins GOTOOLCHAIN=local, so the install
+      # could not fetch the newer toolchain it wanted. Pinning does not stale
+      # the results: the vulnerability database is fetched at run time.
+      #
+      # Only the install is allowed to pick its own toolchain. The scan itself
+      # must run under the project's Go version, because govulncheck's standard
+      # library findings are relative to the toolchain doing the analysis —
+      # scanning with a newer Go would report vulnerabilities that do not match
+      # what this project actually ships against.
       - name: Check for security vulnerabilities
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./... || echo "::warning::govulncheck found vulnerabilities (may be stdlib-only, review output above)"
+          GOTOOLCHAIN=auto go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
+          set +e
+          govulncheck ./... > govulncheck.txt 2>&1
+          status=$?
+          set -e
+          cat govulncheck.txt
+
+          if [ "$status" -eq 0 ]; then
+            echo "No vulnerabilities are reachable from this code."
+            exit 0
+          fi
+
+          # A finding in this module's own dependencies is ours to fix. A
+          # finding in the standard library means the toolchain building it is
+          # behind on patches, which is a different problem with a different
+          # owner — reporting both as one generic warning, as this step used
+          # to, made neither actionable.
+          if grep -q "^  Module: " govulncheck.txt; then
+            echo "::error::govulncheck found reachable vulnerabilities in a required module."
+            exit 1
+          fi
+
+          echo "::warning::govulncheck found only standard library vulnerabilities. \
+          The Go release used here is missing security patches; bump the version in this workflow."
 
   docs:
     name: Documentation Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Check README exists
         run: test -f README.md
@@ -272,6 +377,26 @@ jobs:
 
       - name: Check CHANGELOG exists
         run: test -f CHANGELOG.md
+
+      # A conformance statement is what a hospital's integration team asks for,
+      # and it is only useful if it stays in step with the code. Checking that
+      # it exists does not verify that, but it does stop it being deleted
+      # silently — and it names the sections whose absence would make it
+      # incomplete rather than merely out of date.
+      - name: Check the conformance statement is present and structured
+        run: |
+          test -f CONFORMANCE.md
+          for section in \
+            "AE specifications" \
+            "Presentation contexts and transfer syntaxes" \
+            "Communication profiles" \
+            "Support of character sets" \
+            "Security and enforced limits" \
+            "Limitations"; do
+            grep -q "$section" CONFORMANCE.md || {
+              echo "CONFORMANCE.md is missing the \"$section\" section"; exit 1; }
+          done
+          echo "conformance statement present with all required sections"
 
       - name: Verify module documentation
         run: |
@@ -294,3 +419,40 @@ jobs:
             exit 1
           fi
           echo "Root package documented ($lines lines)."
+
+  # A single required status check.
+  #
+  # Requiring the individual jobs instead would mean naming every matrix leg
+  # ("Test - Go 1.24 (ubuntu-latest, 1.24)") in the branch protection rule, and
+  # any change to the matrix silently stops enforcing the legs that were
+  # renamed — the rule keeps waiting for a check that no longer runs, or worse,
+  # passes because nothing reported. One gate that depends on everything else
+  # moves that list into this file, where it is reviewed with the code.
+  ci-passed:
+    name: CI Passed
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - test
+      - network-integration
+      - fuzz
+      - interop
+      - lint
+      - build
+      - module-check
+      - docs
+    steps:
+      # `needs` alone does not fail this job when a dependency fails, because
+      # `if: always()` runs it regardless — that is deliberate, so a skipped or
+      # cancelled dependency is reported here rather than leaving the required
+      # check pending forever. The results are inspected explicitly instead.
+      - name: Verify every job succeeded
+        run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results"
+          failed=$(echo "$results" | grep -c '"result": "\(failure\|cancelled\|skipped\)"' || true)
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::$failed required job(s) did not succeed."
+            exit 1
+          fi
+          echo "All required jobs succeeded."

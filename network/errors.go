@@ -1,6 +1,9 @@
 package network
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // NetworkError is the base interface for all network-specific errors.
 type NetworkError interface {
@@ -121,4 +124,26 @@ func (e *DIMSEError) Details() string   { return e.Detail }
 // NewDIMSEError creates a new DIMSE error.
 func NewDIMSEError(code, message string, status uint16) *DIMSEError {
 	return &DIMSEError{Code: code, Message: message, Status: status}
+}
+
+// IsCanceled reports whether err is an operation that ended because a C-CANCEL
+// was sent for it.
+//
+// A canceled query or retrieval still comes back as an error, because it did
+// not deliver what was asked for and callers that ignore the error should not
+// carry on as though it had. But it is the one failure the caller asked for, so
+// it is usually worth telling apart from a peer that refused or broke:
+//
+//	if err := scu.Get(ctx, query); err != nil && !network.IsCanceled(err) {
+//	    return err
+//	}
+//
+// Matching is on the status rather than the error code, since C-FIND, C-GET and
+// C-MOVE each report cancellation under a code of their own.
+func IsCanceled(err error) bool {
+	var dimse *DIMSEError
+	if !errors.As(err, &dimse) {
+		return false
+	}
+	return dimse.Status == StatusQRCancelMatchingTerminated
 }

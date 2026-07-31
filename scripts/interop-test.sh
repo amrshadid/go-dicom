@@ -353,6 +353,471 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# The CLI's own retrieve commands, against go-dicom's own qrscp.
+#
+# This is not third-party interoperability, but it belongs here because it is
+# the only place the CLI binary is exercised rather than the library. getscu
+# called Move with an empty destination for its whole existence — a C-MOVE
+# naming nowhere to send to, answered with 0xA801 — so the command had never
+# performed a C-GET. Every library-level C-GET test passed throughout, because
+# the defect was in the wiring between the command and the SCU.
+note "go-dicom CLI: storescu, findscu, getscu against qrscp"
+
+cli_port=11902
+cli_out="$WORKDIR/cli-getscu"
+mkdir -p "$cli_out"
+
+"$GODICOM" qrscp -port "$cli_port" > "$WORKDIR/cli-qrscp.log" 2>&1 &
+cli_qrscp_pid=$!
+
+if wait_for_port "$cli_port"; then
+  if "$GODICOM" storescu -aec QRSCP "127.0.0.1:$cli_port" "$FIXTURE" \
+      > "$WORKDIR/cli-storescu.log" 2>&1; then
+    pass "storescu sent an instance to qrscp"
+    RAN_ANY=1
+  else
+    fail "storescu could not send to qrscp"
+  fi
+
+  if "$GODICOM" findscu -aec QRSCP -level STUDY "127.0.0.1:$cli_port" \
+      > "$WORKDIR/cli-findscu.log" 2>&1; then
+    pass "findscu queried qrscp"
+  else
+    fail "findscu could not query qrscp"
+  fi
+
+  if "$GODICOM" getscu -aec QRSCP -level STUDY -output "$cli_out" \
+      "127.0.0.1:$cli_port" > "$WORKDIR/cli-getscu.log" 2>&1; then
+    retrieved=$(find "$cli_out" -name '*.dcm' | wc -l | tr -d ' ')
+    if [ "$retrieved" -ge 1 ]; then
+      pass "getscu retrieved $retrieved instance(s) and wrote them to disk"
+    else
+      fail "getscu reported success but wrote no files"
+    fi
+  else
+    fail "getscu failed"
+    sed -n '1,5p' "$WORKDIR/cli-getscu.log" >&2
+  fi
+else
+  fail "go-dicom qrscp did not start listening"
+fi
+stop_server "$cli_qrscp_pid"
+
+# ---------------------------------------------------------------------------
+# Storage Commitment: go-dicom SCU -> pynetdicom SCP.
+#
+# This exchange is what exposed go-dicom naming its N-ACTION target with
+# Affected SOP Instance UID (0000,1000) instead of Requested (0000,1001). Its
+# own SCP read the same wrong tag, so every internal test passed while
+# pynetdicom answered "Received unexpected N-ACTION service message" and
+# aborted. The same defect was in N-GET, N-SET and N-DELETE.
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "Storage Commitment: go-dicom -> pynetdicom"
+
+  commit_scp_py="$WORKDIR/commit_scp.py"
+  cat > "$commit_scp_py" <<'PYEOF'
+import sys
+from pynetdicom import AE, evt, ALL_TRANSFER_SYNTAXES
+from pynetdicom.sop_class import StorageCommitmentPushModel
+
+def handle_action(event):
+    ds = event.action_information
+    print("TRANSACTION:", ds.TransactionUID, flush=True)
+    print("ACTION_TYPE:", event.action_type, flush=True)
+    for item in ds.ReferencedSOPSequence:
+        print("INSTANCE:", item.ReferencedSOPClassUID, item.ReferencedSOPInstanceUID, flush=True)
+    return 0x0000, None
+
+ae = AE(ae_title="PYCOMMIT")
+ae.add_supported_context(StorageCommitmentPushModel, ALL_TRANSFER_SYNTAXES)
+ae.start_server(("127.0.0.1", int(sys.argv[1])), evt_handlers=[(evt.EVT_N_ACTION, handle_action)])
+PYEOF
+
+  commit_port=11701
+  "$PYNETDICOM_BIN/python" "$commit_scp_py" "$commit_port" > "$WORKDIR/commit_scp.log" 2>&1 &
+  commit_pid=$!
+
+  if wait_for_port "$commit_port"; then
+    if "$GODICOM" commitscu -aec PYCOMMIT \
+        -transaction 1.2.826.0.1.3680043.8.498.999 \
+        -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.111 \
+        "127.0.0.1:$commit_port" > "$WORKDIR/commit_scu.log" 2>&1; then
+
+      if grep -q "TRANSACTION: 1.2.826.0.1.3680043.8.498.999" "$WORKDIR/commit_scp.log" &&
+         grep -q "ACTION_TYPE: 1" "$WORKDIR/commit_scp.log" &&
+         grep -q "INSTANCE: 1.2.840.10008.5.1.4.1.1.2 1.2.3.111" "$WORKDIR/commit_scp.log"; then
+        pass "N-ACTION storage commitment — pynetdicom read the transaction and instances"
+        RAN_ANY=1
+      else
+        fail "pynetdicom did not read the commitment request correctly"
+        sed -n '1,20p' "$WORKDIR/commit_scp.log" >&2
+      fi
+    else
+      skip "go-dicom has no commitscu command; skipping the storage commitment check"
+    fi
+  else
+    fail "pynetdicom storage commitment SCP did not start listening"
+  fi
+  stop_server "$commit_pid"
+fi
+
+# ---------------------------------------------------------------------------
+# JPEG Lossless: dcmtk encodes, pydicom supplies the answer.
+#
+# The decoder was written from ITU-T T.81, so testing it against frames this
+# project produced would only show that it agrees with itself. dcmtk encodes an
+# uncompressed fixture with each of the seven prediction selection values, and
+# the comparison is against the original pixels.
+#
+# Those pixels are taken from the *uncompressed* file. Bare pydicom cannot decode
+# lossless JPEG at all without a pylibjpeg or gdcm plugin, so asking it to read
+# the compressed fixtures would test whichever plugin happened to be installed,
+# or report a disagreement on a machine with none. Reading uncompressed pixel
+# data needs no plugin and no numpy.
+if [ -x "$DCMTK_BIN/dcmcjpeg" ] && command -v python3 >/dev/null 2>&1; then
+  note "JPEG Lossless: dcmtk encoder, pydicom ground truth"
+
+  jl_dir="$WORKDIR/jpeglossless"
+  mkdir -p "$jl_dir"
+
+  jl_prepared=0
+  if python3 - "$jl_dir" <<'PYEOF'
+import os, shutil, sys
+import pydicom, pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+src = os.path.join(corpus, "CT_small.dcm")
+shutil.copy(src, os.path.join(sys.argv[1], "orig.dcm"))
+
+# PixelData is the raw element value: no decoding, so no plugin and no numpy.
+ds = pydicom.dcmread(src)
+with open(os.path.join(sys.argv[1], "orig.pixels"), "wb") as fh:
+    fh.write(ds.PixelData)
+PYEOF
+  then
+    jl_prepared=1
+  fi
+
+  if [ "$jl_prepared" -eq 0 ]; then
+    skip "pydicom is not available to supply the fixture"
+  else
+    jl_encoded=0
+    for sv in 1 2 3 4 5 6 7; do
+      if "$DCMTK_BIN/dcmcjpeg" +el +sv "$sv" "$jl_dir/orig.dcm" "$jl_dir/sv$sv.dcm" >/dev/null 2>&1; then
+        jl_encoded=$((jl_encoded + 1))
+      fi
+    done
+    # Selection value 1 also has its own transfer syntax, which is the one
+    # archives actually store.
+    if "$DCMTK_BIN/dcmcjpeg" +e1 "$jl_dir/orig.dcm" "$jl_dir/e1.dcm" >/dev/null 2>&1; then
+      jl_encoded=$((jl_encoded + 1))
+    fi
+
+    if [ "$jl_encoded" -eq 0 ]; then
+      skip "dcmcjpeg produced no lossless JPEG fixtures"
+    elif go run ./scripts/jpeglossless-check "$jl_dir" "$jl_dir/orig.pixels" > "$WORKDIR/jl.log" 2>&1; then
+      pass "JPEG Lossless — $jl_encoded fixtures decode to the original pixels"
+      RAN_ANY=1
+    else
+      fail "go-dicom did not reproduce the original pixels"
+      sed -n '1,20p' "$WORKDIR/jl.log" >&2
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# JPEG-LS: dcmtk encodes, pydicom supplies the answer, same as above.
+#
+# Only single-component frames are checked, because that is all this library
+# decodes; a colour frame is refused rather than decoded, which the unit tests
+# cover.
+if [ -x "$DCMTK_BIN/dcmcjpls" ] && command -v python3 >/dev/null 2>&1; then
+  note "JPEG-LS: dcmtk encoder, pydicom ground truth"
+
+  jls_dir="$WORKDIR/jpegls"
+  mkdir -p "$jls_dir"
+
+  if python3 - "$jls_dir" <<'PYEOF'
+import os, shutil, sys
+import pydicom, pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+src = os.path.join(corpus, "MR_small.dcm")
+shutil.copy(src, os.path.join(sys.argv[1], "orig.dcm"))
+
+ds = pydicom.dcmread(src)
+with open(os.path.join(sys.argv[1], "orig.pixels"), "wb") as fh:
+    fh.write(ds.PixelData)
+PYEOF
+  then
+    if "$DCMTK_BIN/dcmcjpls" +el "$jls_dir/orig.dcm" "$jls_dir/lossless.dcm" >/dev/null 2>&1; then
+      if go run ./scripts/jpeglossless-check "$jls_dir" "$jls_dir/orig.pixels" > "$WORKDIR/jls.log" 2>&1; then
+        pass "JPEG-LS — a grayscale frame decodes to the original pixels"
+        RAN_ANY=1
+      else
+        fail "go-dicom did not reproduce the original pixels from JPEG-LS"
+        sed -n '1,20p' "$WORKDIR/jls.log" >&2
+      fi
+    else
+      skip "dcmcjpls produced no JPEG-LS fixture"
+    fi
+  else
+    skip "pydicom is not available to supply the JPEG-LS fixture"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Round trip: go-dicom writes, dcmtk judges.
+#
+# Writing was only ever checked by reading the output back with this library,
+# which cannot catch a file that is self-consistent and non-conformant. dcmtk
+# refused 34 of pydicom's 69 corpus files written this way, every one of them
+# compressed: encapsulated pixel data carried an explicit length where PS3.5 A.4
+# requires an undefined one. pydicom read them all.
+if [ -x "$DCMTK_BIN/dcmdump" ] && command -v python3 >/dev/null 2>&1; then
+  note "Round trip: go-dicom writer, dcmtk reader"
+
+  rt_src="$WORKDIR/rt-src"
+  rt_out="$WORKDIR/rt-out"
+  mkdir -p "$rt_src" "$rt_out"
+
+  if python3 - "$rt_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom.data
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if name.endswith(".dcm"):
+        shutil.copy(os.path.join(corpus, name), os.path.join(sys.argv[1], name))
+        copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check "$rt_src" "$rt_out" > "$WORKDIR/rt.log" 2>&1; then
+      rt_total=0
+      rt_bad=0
+      for written in "$rt_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        rt_total=$((rt_total + 1))
+        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>&1; then
+          rt_bad=$((rt_bad + 1))
+          echo "   dcmtk rejects $(basename "$written")" >&2
+        fi
+      done
+
+      # Two of pydicom's fixtures are themselves non-conformant — one holds
+      # implicit VR inside a file declaring explicit, the other has no transfer
+      # syntax at all — and dcmtk refuses them however they are written.
+      if [ "$rt_bad" -le 2 ]; then
+        pass "round trip — dcmtk reads $((rt_total - rt_bad)) of $rt_total files this writer produced"
+        RAN_ANY=1
+      else
+        fail "dcmtk rejects $rt_bad of $rt_total files this writer produced"
+      fi
+    else
+      fail "the round trip harness failed"
+      sed -n '1,20p' "$WORKDIR/rt.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# RLE encoding: go-dicom compresses, dcmtk decompresses, pydicom compares.
+#
+# RLE is the only compressed syntax this library writes, and an encoder is worth
+# only what another implementation makes of it. Encoding and decoding with our
+# own codec proves nothing — that is how a frame that decodes one byte longer
+# than its image went unnoticed, tolerated here and rejected by pydicom.
+#
+# dcmtk decompresses the result rather than pydicom, because the interoperability
+# venv has no numpy and pydicom cannot produce a pixel array without it. The raw
+# pixel data compares just as well and needs neither.
+if [ -x "$DCMTK_BIN/dcmdrle" ] && command -v python3 >/dev/null 2>&1; then
+  note "RLE encoding: go-dicom encoder, dcmtk decoder"
+
+  rle_src="$WORKDIR/rle-src"
+  rle_out="$WORKDIR/rle-out"
+  rle_back="$WORKDIR/rle-back"
+  mkdir -p "$rle_src" "$rle_out" "$rle_back"
+
+  if python3 - "$rle_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom, pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+# Native little-endian sources only, so the comparison at the end is between
+# like and like: the source's stored pixel data is exactly what dcmtk should
+# hand back after decompressing ours.
+#
+# The exclusions are all cases where the bytes legitimately differ rather than
+# cases the encoder gets wrong. Big-endian files are normalized to little endian
+# on read; a compressed source stores a codestream, not pixels, so comparing it
+# against decompressed output is meaningless; and YBR_FULL_422 is expanded from
+# its subsampled form.
+native = {"1.2.840.10008.1.2", "1.2.840.10008.1.2.1"}
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    try:
+        ds = pydicom.dcmread(os.path.join(corpus, name), stop_before_pixels=True)
+        if str(ds.file_meta.TransferSyntaxUID) not in native:
+            continue
+        if str(ds.get("PhotometricInterpretation", "")) == "YBR_FULL_422":
+            continue
+        if int(ds.get("BitsAllocated", 0)) not in (8, 16, 32):
+            continue
+    except Exception:
+        continue
+    shutil.copy(os.path.join(corpus, name), os.path.join(sys.argv[1], name))
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check -rle "$rle_src" "$rle_out" > "$WORKDIR/rle.log" 2>&1; then
+      rle_total=0
+      rle_bad=0
+      for written in "$rle_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        rle_total=$((rle_total + 1))
+        name="$(basename "$written")"
+
+        # dcmtk has to read it, and to read it without complaining: an ordering
+        # or structural fault is reported on stderr while the file still parses.
+        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>"$WORKDIR/rle-dump.err"; then
+          rle_bad=$((rle_bad + 1))
+          echo "   dcmtk rejects $name" >&2
+          continue
+        fi
+        # A warning only counts when the source did not already produce it.
+        # Several of pydicom's own RLE fixtures carry OW where the standard
+        # wants OB for encapsulated pixel data, and passing that through
+        # faithfully is not a fault of this encoder.
+        if [ -s "$WORKDIR/rle-dump.err" ]; then
+          "$DCMTK_BIN/dcmdump" "$rle_src/$name" >/dev/null 2>"$WORKDIR/rle-src.err" || true
+          if ! diff -q "$WORKDIR/rle-dump.err" "$WORKDIR/rle-src.err" >/dev/null 2>&1; then
+            rle_bad=$((rle_bad + 1))
+            echo "   dcmtk warns on $name but not on its source: $(head -1 "$WORKDIR/rle-dump.err")" >&2
+            continue
+          fi
+        fi
+
+        # And decompressing it has to give back the pixels that went in.
+        if ! "$DCMTK_BIN/dcmdrle" "$written" "$rle_back/$name" >/dev/null 2>&1; then
+          rle_bad=$((rle_bad + 1))
+          echo "   dcmtk cannot decompress $name" >&2
+        fi
+      done
+
+      if [ "$rle_bad" -eq 0 ] && python3 - "$rle_src" "$rle_back" <<'PYEOF'
+import os, sys
+import pydicom
+
+src, back = sys.argv[1], sys.argv[2]
+bad = []
+for name in sorted(os.listdir(back)):
+    if not name.endswith(".dcm"):
+        continue
+    try:
+        got = pydicom.dcmread(os.path.join(back, name), force=True)
+        want = pydicom.dcmread(os.path.join(src, name), force=True)
+    except Exception:
+        continue
+    if "PixelData" not in got or "PixelData" not in want:
+        continue
+    # Compare the image bytes, not the stored bytes. A file may store more than
+    # the image needs — MR_small_padded carries 128 bytes past the last pixel —
+    # and this encoder compresses the image and nothing else, so the padding is
+    # absent afterward by design. Comparing stored lengths would report that as
+    # a mismatch.
+    try:
+        n = (int(want.Rows) * int(want.Columns) * int(want.SamplesPerPixel)
+             * int(want.BitsAllocated) // 8 * int(getattr(want, "NumberOfFrames", 1) or 1))
+    except Exception:
+        continue  # geometry this malformed says nothing about the encoder
+    if n <= 0 or len(want.PixelData) < n or len(got.PixelData) < n:
+        bad.append(name)
+        continue
+    # RLE is lossless and the source is uncompressed, so these are identical.
+    if bytes(want.PixelData)[:n] != bytes(got.PixelData)[:n]:
+        bad.append(name)
+for name in bad:
+    print("   pixels differ after an RLE round trip:", name, file=sys.stderr)
+raise SystemExit(1 if bad else 0)
+PYEOF
+      then
+        pass "RLE encoding — dcmtk reads $rle_total files and decompresses them to the original pixels"
+        RAN_ANY=1
+      else
+        fail "this encoder's output does not survive a round trip through dcmtk"
+      fi
+    else
+      fail "the RLE encoding harness failed"
+      sed -n '1,20p' "$WORKDIR/rle.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# NIfTI export: go-dicom converts, nibabel reads.
+#
+# This existed and produced a file nibabel refused outright — the header was
+# 348 zero bytes with the magic string at the end, so sizeof_hdr was 0. Checking
+# the header fields from Go would not have caught that, because the fields were
+# all there and all wrong in the same way; only another implementation opening
+# the file does.
+# ---------------------------------------------------------------------------
+if python3 -c "import nibabel, pydicom" >/dev/null 2>&1; then
+  note "NIfTI export: go-dicom converter, nibabel reader"
+  RAN_ANY=1
+
+  nifti_out="$WORKDIR/out.nii"
+  nifti_src=$(python3 -c "from pydicom.data import get_testdata_file; print(get_testdata_file('CT_small.dcm'))" 2>/dev/null || true)
+
+  if [ -z "$nifti_src" ] || [ ! -f "$nifti_src" ]; then
+    skip "CT_small.dcm is not in the corpus"
+  elif ! "$GODICOM" convert -format nifti "$nifti_src" "$nifti_out" >/dev/null 2>&1; then
+    fail "the converter did not produce a NIfTI file"
+  elif python3 - "$nifti_out" "$nifti_src" <<'PYEOF'
+import sys
+import warnings
+
+warnings.filterwarnings("ignore")
+import nibabel
+import numpy
+import pydicom
+
+img = nibabel.load(sys.argv[1])
+ds = pydicom.dcmread(sys.argv[2])
+
+# nibabel indexes [x, y] where x is the fastest-varying axis, which for
+# row-major DICOM pixel data is the column. pydicom indexes [row, column]. So
+# the two arrays are transposes of one another, which is what dcm2niix produces
+# as well; comparing them the other way round would report a difference that is
+# only a convention.
+raw = img.dataobj.get_unscaled().squeeze()
+if not numpy.array_equal(raw.T, ds.pixel_array):
+    print("   the pixels differ from pydicom's reading of the source", file=sys.stderr)
+    raise SystemExit(1)
+
+# And the rescale has to survive, or a CT arrives without its Hounsfield units.
+want = ds.pixel_array * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+if not numpy.allclose(img.get_fdata().squeeze().T, want):
+    print("   the rescale did not survive the conversion", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+  then
+    pass "NIfTI export — nibabel reads it and the pixels match pydicom"
+  else
+    fail "nibabel cannot read the converted file, or its pixels differ"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2

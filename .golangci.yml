@@ -1,39 +1,44 @@
-# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.v1.jsonschema.json
-run:
-  timeout: 5m
-
+version: "2"
 linters:
   enable:
-    - govet
-    - errcheck
-    - staticcheck
-    - unused
-    - gosimple
-    - ineffassign
-    - typecheck
     - misspell
     - revive
-
-linters-settings:
-  revive:
+  settings:
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      - name: exported
-        arguments:
-          - disableStutteringCheck
-  misspell:
-    locale: US
-
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - errcheck
-        - revive
-    - path: gen_.*\.go
-      linters:
-        - revive
-        - misspell
-    - path: examples/
-      linters:
-        - errcheck
-        - revive
+      - linters:
+          - errcheck
+          - revive
+        path: _test\.go
+      - linters:
+          - misspell
+          - revive
+        path: gen_.*\.go
+      - linters:
+          - errcheck
+          - revive
+        path: examples/
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

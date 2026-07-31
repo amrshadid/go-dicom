@@ -164,6 +164,23 @@ func main() {
 }
 ```
 
+### Read a file and write it back
+
+```go
+df, _ := filereader.ReadDICOMFile(filebase.NewFileReader(in))
+
+w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
+w.SetFileMetaInfo(&filewriter.FileMetaInfo{ /* ... */ })
+for _, e := range filewriter.ElementsFromDataset(df.GetDataset()) {
+    _ = w.AddDataElement(e)
+}
+_ = w.Write()
+```
+
+`ElementsFromDataset` descends into sequences. Copying `Value` and ignoring
+`Items` writes a file that looks complete with every nested item missing — the
+element is present, its length is zero, and nothing reports it.
+
 ### Work with Sequences
 
 Nested sequences (SQ) are parsed recursively into child `Dataset` values:
@@ -212,6 +229,9 @@ go build -o dicom .
 # Retrieve studies to a destination
 ./dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 
+# Ask an archive to take responsibility for instances you have sent
+./dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
+
 # Get help
 ./dicom -h
 ```
@@ -229,7 +249,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [filereader](./filereader/) | DICOM file reading (preamble, meta info, dataset) |
 | [filewriter](./filewriter/) | DICOM file writing with validation |
 | [fileutil](./fileutil/) | Byte order detection, padding, caching, codec integration |
-| [fileset](./fileset/) | DICOM file collection management |
+| [fileset](./fileset/) | File-set management and DICOMDIR: reads the record tree from its byte offsets, and generates a conformant index |
 
 #### Data Model
 | Package | Description |
@@ -252,7 +272,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 #### Encoding and Compression
 | Package | Description |
 |---------|-------------|
-| [charset](./charset/) | 30+ character set encodings (ISO 2022, Unicode, CJK) |
+| [charset](./charset/) | 30+ encodings (ISO 2022, Unicode, CJK), applied automatically on read |
 | [compress](./compress/) | Compression/decompression (DEFLATE, RLE, JPEG) |
 | [encaps](./encaps/) | Encapsulated pixel data parsing and frame extraction |
 
@@ -262,13 +282,13 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [pixels](./pixels/) | Pixel data access and statistical analysis |
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
-| [sr](./sr/) | Structured reports with coded concepts (SNOMED-CT, LOINC) |
-| [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E |
+| [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. `StructuredReport` alongside it is a simpler bespoke model, not the DICOM tree |
+| [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities
 | Package | Description |
 |---------|-------------|
-| [jsonrep](./jsonrep/) | DICOM JSON Model (Part 18) with bulk data support |
+| [jsonrep](./jsonrep/) | A flat summary struct of common attributes, for feeding a web API. Not the DICOM JSON Model — see `dataset.ToDICOMJSON` for that |
 | [config](./config/) | Thread-safe global configuration |
 | [errors](./errors/) | DICOM-specific error types |
 | [hooks](./hooks/) | Extensible callback/plugin system |
@@ -300,14 +320,17 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Association Negotiation | Yes | Yes | Full A-ASSOCIATE-RQ/AC/RJ state machine |
 | Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
 | Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |
-| Storage SOP Classes | 100+ | 80+ | CT, MR, US, PET, RT, XR, SR, waveforms, encapsulated docs |
-| Transfer Syntax Support | 15+ | 15 | All standard + compressed syntaxes |
-| Query/Retrieve Models | Patient/Study Root | Yes | Find, Move, Get for both models |
+| Storage SOP Classes | 165 | 169 | Every one pynetdicom lists, plus 4 recent standard additions |
+| SOP Class UIDs named | 256 | 256 | Full parity, checked against pynetdicom's own table |
+| Transfer Syntax Support | 37 | 37 | 4 negotiated by default, all via `AllTransferSyntaxes()` |
+| Storage Commitment | Yes | Yes | N-ACTION request, N-EVENT-REPORT result |
+| Query/Retrieve Models | 2 | 4 | Patient Root, Study Root, Patient/Study Only, Modality Worklist |
 | Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |
-| MPPS | Yes | Yes | Via N-CREATE/N-SET |
-| Print Management | Yes | Yes | SOP Class UIDs defined |
+| MPPS | Yes | Yes | N-CREATE/N-SET both directions, verified against pynetdicom |
+| Print Management | Yes | Yes | Film session, film box, image box, print action |
+| Unified Procedure Step | Yes | Yes | Push and Watch: state machine and Transaction UID enforced by `UPSHandler`, subscriptions and N-EVENT-REPORT fan-out by `UPSSubscriptionStore` |
 | Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
-| CLI Tools | 7 tools | 5 tools | echoscu, storescu, storescp, findscu, movescu |
+| CLI Tools | 8 | 9 | All 8 of pynetdicom's, plus `commitscu` |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
 | Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
 
@@ -319,15 +342,21 @@ Known gaps, stated plainly so you can judge fit before adopting:
 |------|--------|
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
-| **Transcoding between transfer syntaxes** | A data set is sent using the syntax negotiated for its presentation context. The library does not re-encode pixel data, so sending a JPEG-compressed data set over a context that negotiated uncompressed explicit VR will not decompress it for you. |
+| **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
+| **Compressing pixel data** | Pixel data is transcoded in both directions as the negotiated context requires, but **RLE Lossless is the only syntax this library compresses to**. Every other compressed target fails rather than sending bytes described as something they are not. There is no JPEG, JPEG-LS or JPEG 2000 encoder here. |
 | **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
 
 ### Interoperability
 
 Every release is tested against [pynetdicom](https://github.com/pydicom/pynetdicom) and
-[dcmtk](https://dcmtk.org/) in CI — C-ECHO and C-STORE in both directions, plus C-GET
-and C-MOVE sub-operations — with the transferred data verified by pydicom rather than by
-this library's own reader:
+[dcmtk](https://dcmtk.org/) in CI — C-ECHO and C-STORE in both directions, C-GET and
+C-MOVE sub-operations, storage commitment, MPPS and print management — with the
+transferred data verified by pydicom rather than by this library's own reader.
+
+This matters more than the unit suite: every serious defect this project has had was
+code agreeing with itself. Reintroducing one of them, the N-SET that named its target
+with Affected instead of Requested SOP Instance UID, leaves the unit tests green and
+fails the interoperability tests.
 
 ```bash
 go build -o dicom .
@@ -345,7 +374,7 @@ The network module works with any DICOM data regardless of source format:
 |--------|-----------|---------|
 | Standard DICOM | `.dcm` | Full |
 | Siemens IMA | `.ima` | Full |
-| DICOMDIR | `DICOMDIR` | Full |
+| DICOMDIR | `DICOMDIR` | Read and write. The record tree is built from the byte offsets, so a file whose records are stored out of tree order reads correctly; generated files are verified against pydicom and dcmtk |
 | Raw DICOM | (none) | Full |
 | DICOM Part 10 | `.dicom` | Full |
 
@@ -458,26 +487,105 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.7 - Message Exchange (DIMSE) | Supported |
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
-| DICOM PS3.15 - Security (TLS, de-identification) | Supported |
-| DICOM JSON Model (Part 18) | Supported |
+| DICOM PS3.15 - Security (TLS, de-identification) | Supported — the Basic Profile covers every attribute in Table E.1-1, verified to leave none of them unchanged across pydicom's corpus |
+| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. Private attributes take their VR from the shipped vendor dictionary, resolved through the file's own private creator |
 | ISO 2022 - Character set escape sequences | Supported |
+
+### Performance
+
+Measured against pydicom on its own test corpus, same machine, 300 iterations:
+
+| File | go-dicom | pydicom | |
+|---|---|---|---|
+| `CT_small.dcm` (39 KB, 258 elements) | 110 µs | 499 µs | **4.5x** |
+| `MR_small.dcm` (10 KB, 73 elements) | 23 µs | 219 µs | **9.5x** |
+| `rtplan.dcm` (2.7 KB, 36 elements) | 31 µs | 138 µs | **4.5x** |
+
+Reproduce with `go test ./filereader/ -bench=Parse` and the corpus path in
+`GODICOM_PYDICOM_DATA`.
+
+### Conformance
+
+[CONFORMANCE.md](./CONFORMANCE.md) is a DICOM Conformance Statement in the
+structure of PS3.2: the SOP classes negotiated in each role, the transfer
+syntaxes, the enforced limits, and a plainly stated list of what the library does
+not do. It is the document to hand to someone evaluating go-dicom for a clinical
+deployment, and every claim in it was checked against the code rather than
+described from memory.
 
 ### Transfer Syntax Support
 
-| Transfer Syntax | File I/O | Network |
-|----------------|----------|---------|
-| Implicit VR Little Endian | Read/Write | Yes |
-| Explicit VR Little Endian | Read/Write | Yes |
-| Explicit VR Big Endian | Read/Write | Yes |
-| Deflated Explicit VR LE | Read | Yes |
-| RLE Lossless | Read | Yes |
-| JPEG Baseline | Read | Yes |
-| JPEG Extended | Read | Yes |
-| JPEG Lossless | Read | Yes |
-| JPEG-LS Lossless | Read | Yes |
-| JPEG-LS Near-Lossless | Read | Yes |
-| JPEG 2000 Lossless | Read | Yes |
-| JPEG 2000 | Read | Yes |
+Two capabilities are distinct and worth separating: whether the **data set**
+parses, and whether **pixel data** can be decoded. A compressed instance
+transfers and stores correctly even when its pixels cannot be decompressed —
+which is enough for an archive or a router, and not enough for a viewer.
+
+| Transfer Syntax | Data set | Pixel data | Network |
+|-----------------|----------|------------|---------|
+| Implicit VR Little Endian | Read/Write | Yes | Yes |
+| Explicit VR Little Endian | Read/Write | Yes | Yes |
+| Explicit VR Big Endian | Read/Write | Yes | Yes |
+| Deflated Explicit VR LE | Read/Write | Yes | Yes |
+| RLE Lossless | Read/Write | **Yes** | Yes |
+| JPEG Baseline (`.50`) | Read/Write | **Yes** | Yes |
+| JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
+| JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
+| JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
+| JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Supply a decoder** | Yes |
+
+Pixel data is returned in the color space the Photometric Interpretation names, so a
+`YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
+configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
+
+JPEG 2000 needs a decoder you supply — `examples/jpeg2000` is a working one that
+shells out to openjpeg, verified sample-for-sample against pydicom.
+JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
+JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
+in both line- and sample-interleaved modes.
+
+Values in an Explicit VR Big Endian file are normalised to little endian while
+parsing and converted back on write, so byte order never reaches code above
+`filereader`.
+
+**RLE Lossless decodes.** `Dataset.PixelArray()` decompresses RLE pixel data,
+single- and multi-frame, grayscale and color. Verified against pydicom on its
+own test corpus, and checked in CI on every push.
+
+**No other compressed syntax decodes.** JPEG, JPEG-LS, and JPEG 2000 instances
+parse, store, and transfer with their pixel data intact as opaque bytes, but
+have no bundled decoder. Baseline JPEG goes through the standard library and
+works for ordinary 8-bit images; the rest need a decoder you supply.
+
+**Compressed frames can be extracted**, which is the step before decoding. For a
+compressed instance, `PixelData` holds the encapsulation exactly as it appears in
+the file — the Basic Offset Table and each fragment with its `(FFFE,E000)`
+header, the same bytes pydicom exposes — so frames can be separated and handed to
+a decoder of your choosing:
+
+```go
+frames, err := ds.ExtractEncapsulatedFrames() // fragments and offset table
+frame, err := ds.GetEncapsulatedFrame(0)      // one frame, still compressed
+```
+
+Multi-frame compressed images split correctly; verified against pydicom on
+`SC_rgb_rle_2frame.dcm`.
+
+To decode a syntax with no bundled decoder, register one:
+
+```go
+compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
+```
+
+These three codecs are not implemented in this module, and there is no hidden
+CGO path that enables them — the error messages used to name a C library and
+tell you to rebuild with `CGO_ENABLED=1`, which changed nothing because there
+was no CGO implementation to enable. They now say plainly that a decoder must be
+supplied.
+
+Any type with `Decompress([]byte) ([]byte, error)` and `CanDecompress([]byte) bool`
+will do; `Dataset.PixelArray()` routes frames through it automatically once
+registered. `compress.GetExternalCompressionStatus()` reports which codecs
+currently have a decoder.
 
 ### Thread Safety
 

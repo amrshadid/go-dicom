@@ -7,8 +7,15 @@ import (
 	"time"
 )
 
-// JSONRepresentation provides DICOM JSON model support
-// Implements DICOM Part 18 Web Services JSON format
+// JSONRepresentation renders a flat summary of the attributes a web API most
+// often wants — patient, study, series and instance identifiers, and a few
+// descriptive fields.
+//
+// It is NOT the DICOM JSON Model of PS3.18 Annex F, whatever its name suggests
+// and whatever this comment used to say. It is a fixed struct of named fields
+// and cannot represent an arbitrary data set: an attribute without a field here
+// has nowhere to go. Use dataset.ToDICOMJSON and dataset.FromDICOMJSON for the
+// interchange format that DICOMweb, pydicom and dcm4che exchange.
 type JSONRepresentation struct {
 	mu sync.RWMutex
 }

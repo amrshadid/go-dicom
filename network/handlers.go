@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/amrshadid/go-dicom/dataset"
 )
@@ -319,4 +320,87 @@ func (h *CompositeHandler) HandleCGet(ctx context.Context, req *CGetRequest) (*C
 		return h.getHandler.HandleCGet(ctx, req)
 	}
 	return h.BaseHandler.HandleCGet(ctx, req)
+}
+
+// StorageCommitmentProvider is implemented by handlers that can take
+// responsibility for stored instances (PS3.4 Annex J).
+//
+// It is a separate interface rather than a method on Handler because storage
+// commitment is a promise about durability that most SCPs have no business
+// making. A handler that does not implement it causes commitment requests to be
+// refused, which is the honest answer — silently accepting them would tell the
+// requestor it may delete its only copy.
+type StorageCommitmentProvider interface {
+	// HandleStorageCommitment decides which of the requested instances this
+	// SCP will take responsibility for.
+	//
+	// Returning an instance in Successful is a statement that it is stored
+	// durably and can be retrieved later. Anything not committed belongs in
+	// Failed with a reason, rather than being omitted: an instance absent from
+	// both lists leaves the requestor with no answer about it.
+	//
+	// The Transaction UID is set from the request, so it does not need to be
+	// filled in.
+	HandleStorageCommitment(ctx context.Context, req *StorageCommitmentRequest) (*StorageCommitmentResult, error)
+}
+
+// StorageCommitmentHandler answers storage commitment requests through a
+// function, in the style of the other handlers here.
+type StorageCommitmentHandler struct {
+	BaseHandler
+
+	// OnCommit decides the outcome. If nil, every request is refused.
+	OnCommit func(ctx context.Context, req *StorageCommitmentRequest) (*StorageCommitmentResult, error)
+}
+
+// HandleStorageCommitment implements StorageCommitmentProvider.
+func (h *StorageCommitmentHandler) HandleStorageCommitment(ctx context.Context,
+	req *StorageCommitmentRequest) (*StorageCommitmentResult, error) {
+
+	if h.OnCommit == nil {
+		return nil, fmt.Errorf("no storage commitment handler is configured")
+	}
+	return h.OnCommit(ctx, req)
+}
+
+// StorageCommitmentResultReceiver is implemented by an AE that sent a storage
+// commitment request and wants the result delivered as a parsed value.
+//
+// The result arrives as an N-EVENT-REPORT, and PS3.4 §J.3 allows it long after
+// the request — on a new association the archive opens back. An AE that defers
+// to that flow therefore has to run a server, and this is what that server's
+// handler implements.
+//
+// Without it, the report reaches HandleNEventReport as a generic event whose
+// data set the receiver must decode itself, including the two instance
+// sequences and their failure reasons.
+type StorageCommitmentResultReceiver interface {
+	// HandleStorageCommitmentResult receives the outcome of a commitment
+	// request this AE made earlier.
+	//
+	// Match it to the request by Transaction UID: nothing else connects them,
+	// and several requests may be outstanding at once. Returning an error makes
+	// the SCP report a failure status to the archive, which will treat the
+	// result as undelivered.
+	HandleStorageCommitmentResult(ctx context.Context, result *StorageCommitmentResult) error
+}
+
+// StorageCommitmentResultHandler receives commitment results through a
+// function, in the style of the other handlers here.
+type StorageCommitmentResultHandler struct {
+	BaseHandler
+
+	// OnResult receives each result. If nil, results are accepted and discarded,
+	// which is rarely what anyone wants.
+	OnResult func(ctx context.Context, result *StorageCommitmentResult) error
+}
+
+// HandleStorageCommitmentResult implements StorageCommitmentResultReceiver.
+func (h *StorageCommitmentResultHandler) HandleStorageCommitmentResult(ctx context.Context,
+	result *StorageCommitmentResult) error {
+
+	if h.OnResult == nil {
+		return nil
+	}
+	return h.OnResult(ctx, result)
 }

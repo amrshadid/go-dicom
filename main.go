@@ -12,7 +12,7 @@ import (
 // Declared as a var, not a const, so release builds can stamp the real tag in
 // with -ldflags "-X main.Version=...". The linker cannot rewrite a const, so
 // making this a const silently turns that injection into a no-op.
-var Version = "1.3.0"
+var Version = "1.4.0"
 
 func main() {
 	// Create CLI instance
@@ -35,6 +35,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.EchoSCPCommand{})
 	dicomCLI.RegisterCommand(&cli.StoreSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.StoreSCPCommand{})
+	dicomCLI.RegisterCommand(&cli.CommitSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.FindSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.MoveSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.GetSCUCommand{})

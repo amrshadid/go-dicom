@@ -209,6 +209,24 @@ func (s *Server) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedAbstractSyntaxes(syntaxes)
 }
 
+// ReportStorageCommitment sends a deferred commitment result on a new
+// association it opens to the requestor.
+//
+// The counterpart to returning a result marked Deferred from a
+// StorageCommitmentProvider: the request is acknowledged, the archive verifies
+// durability on its own schedule, and this delivers the answer once there is
+// one. See SCP.ReportStorageCommitment.
+func (s *Server) ReportStorageCommitment(ctx context.Context, requestorAE string,
+	result *StorageCommitmentResult) error {
+	return s.scp.ReportStorageCommitment(ctx, requestorAE, result)
+}
+
+// ReportUPSEvent delivers a UPS N-EVENT-REPORT to a subscriber, over an
+// association this server opens to it. See SCP.ReportUPSEvent.
+func (s *Server) ReportUPSEvent(ctx context.Context, receivingAE string, event *UPSEvent) error {
+	return s.scp.ReportUPSEvent(ctx, receivingAE, event)
+}
+
 // SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server accepts.
 func (s *Server) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedTransferSyntaxes(syntaxes)

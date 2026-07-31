@@ -23,8 +23,11 @@ Thank you for your interest in contributing to go-dicom! This document provides 
 
 ### Prerequisites
 
-- **Go 1.22+** - [Download Go](https://go.dev/dl/)
-- **golangci-lint** - [Install](https://golangci-lint.run/usage/install/)
+- **Go 1.25+** - [Download Go](https://go.dev/dl/). Go releases older than the
+  two most recent majors receive no security patches, so building this library
+  with one leaves known standard library vulnerabilities in the binary — which
+  matters for a library that parses untrusted files and listens on a port.
+- **golangci-lint v2** - [Install](https://golangci-lint.run/usage/install/). `.golangci.yml` uses the v2 configuration format, so a v1 binary will refuse to read it. CI pins v2.12.2.
 - **Make** (optional)
 
 ### Setup

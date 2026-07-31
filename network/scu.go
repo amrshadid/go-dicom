@@ -30,6 +30,22 @@ func (s *SCU) nextMessageID() uint16 {
 	return uint16(s.messageID.Add(1))
 }
 
+// PeekNextMessageID returns the ID the next operation will use, without
+// consuming it.
+//
+// C-CANCEL names the message it cancels, so a caller that wants to cancel an
+// operation needs its ID — and the operations here allocate one internally. The
+// alternative is to have each return its ID, which changes every signature for
+// the sake of the rare caller that cancels.
+//
+// Peeking races with a concurrent operation on the same SCU, which would take
+// the ID first. Cancellation is only meaningful against an operation the caller
+// started and is still waiting on, so the sequence to use is: peek, start, then
+// cancel that ID.
+func (s *SCU) PeekNextMessageID() uint16 {
+	return uint16(s.messageID.Load() + 1)
+}
+
 // Associate establishes an association with the SCP, proposing the given presentation contexts.
 // If contexts is nil, default verification + storage + query/retrieve contexts are proposed.
 func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem) error {
@@ -66,6 +82,11 @@ func (s *SCU) defaultContexts() []PresentationContextItem {
 	storageCtx := DefaultStorageContexts()
 	qrCtx := DefaultQueryRetrieveContexts()
 
+	// Storage Commitment travels with storage: a requestor asks for commitment
+	// on instances it has just stored, and proposing it here saves the caller
+	// from hand-building contexts for the common case.
+	commitCtx := StorageCommitmentPresentationContexts()
+
 	// Re-number IDs to be unique odd numbers
 	id := byte(1)
 	for i := range contexts {
@@ -81,8 +102,14 @@ func (s *SCU) defaultContexts() []PresentationContextItem {
 		id += 2
 	}
 
+	for i := range commitCtx {
+		commitCtx[i].ID = id
+		id += 2
+	}
+
 	contexts = append(contexts, storageCtx...)
 	contexts = append(contexts, qrCtx...)
+	contexts = append(contexts, commitCtx...)
 	return contexts
 }
 
@@ -218,6 +245,13 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 }
 
 // Find performs a C-FIND query and returns results on a channel.
+//
+// The information model is chosen from what the peer accepted, trying Patient
+// Root, then Study Root, then the retired Patient/Study Only, then Modality
+// Worklist. Use FindWithSOPClass to name one, which is the right call whenever
+// more than one was negotiated: these models answer different questions, and
+// picking by availability is a convenience for the common case rather than a
+// substitute for saying what you meant.
 func (s *SCU) Find(ctx context.Context, queryDS *dataset.Dataset) (<-chan *CFindResult, error) {
 	s.mu.Lock()
 	assoc := s.association
@@ -227,19 +261,54 @@ func (s *SCU) Find(ctx context.Context, queryDS *dataset.Dataset) (<-chan *CFind
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
 	}
 
-	// Default to Patient Root Q/R Find
-	sopClassUID := PatientRootQueryRetrieveFind
+	// Modality Worklist is last because it answers a different question from
+	// the three Q/R models. It is in the chain at all because an association
+	// that accepted only the worklist context leaves no ambiguity about what a
+	// query on it can mean — and refusing would make the worklist service
+	// unreachable through this method, which is how it came to be unusable:
+	// the handler, the SOP class and the presentation contexts all existed,
+	// and no caller could get a query to them.
+	for _, candidate := range []string{
+		PatientRootQueryRetrieveFind,
+		StudyRootQueryRetrieveFind,
+		PatientStudyOnlyQueryRetrieveFind,
+		ModalityWorklistInformationModelFindUID,
+	} {
+		if pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), candidate); ok {
+			return s.findOnContext(ctx, assoc, queryDS, candidate, pcID)
+		}
+	}
+	return nil, NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-FIND")
+}
+
+// FindWithSOPClass performs a C-FIND against a named information model.
+//
+// Use this rather than Find when the peer accepted more than one model, since
+// the models answer different questions: a Patient Root query and a Modality
+// Worklist query are not interchangeable, and letting availability decide makes
+// the result depend on what the peer happened to offer.
+func (s *SCU) FindWithSOPClass(ctx context.Context, sopClassUID string,
+	queryDS *dataset.Dataset) (<-chan *CFindResult, error) {
+
+	s.mu.Lock()
+	assoc := s.association
+	s.mu.Unlock()
+
+	if assoc == nil || assoc.State() != StateAssociated {
+		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
+	}
 
 	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 	if !ok {
-		// Try Study Root
-		sopClassUID = StudyRootQueryRetrieveFind
-		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
-		if !ok {
-			return nil, NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-FIND")
-		}
+		return nil, NewAssociationError("NO_CONTEXT",
+			fmt.Sprintf("the peer did not accept a context for %s", sopClassUID))
 	}
+	return s.findOnContext(ctx, assoc, queryDS, sopClassUID, pcID)
+}
 
+// findOnContext issues the C-FIND once a model and context have been chosen.
+func (s *SCU) findOnContext(ctx context.Context, assoc *Association, queryDS *dataset.Dataset,
+	sopClassUID string, pcID byte) (<-chan *CFindResult, error) {
 	// Build and send C-FIND-RQ
 	cmdDS := BuildCFindRQ(s.nextMessageID(), sopClassUID, PriorityMedium)
 	cmdBytes, err := EncodeCommandDataset(cmdDS)
@@ -353,6 +422,11 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 		sopClassUID = StudyRootQueryRetrieveMove
 		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 		if !ok {
+			// Patient/Study Only is retired but still served by some archives.
+			sopClassUID = PatientStudyOnlyQueryRetrieveMove
+			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		}
+		if !ok {
 			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-MOVE")
 		}
 	}
@@ -421,6 +495,11 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 	if !ok {
 		sopClassUID = StudyRootQueryRetrieveGet
 		pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		if !ok {
+			// Patient/Study Only is retired but still served by some archives.
+			sopClassUID = PatientStudyOnlyQueryRetrieveGet
+			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+		}
 		if !ok {
 			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-GET")
 		}

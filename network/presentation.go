@@ -22,6 +22,12 @@ const (
 	StudyRootQueryRetrieveFind   = "1.2.840.10008.5.1.4.1.2.2.1"
 	StudyRootQueryRetrieveMove   = "1.2.840.10008.5.1.4.1.2.2.2"
 	StudyRootQueryRetrieveGet    = "1.2.840.10008.5.1.4.1.2.2.3"
+
+	// Patient/Study Only Root is retired in the current standard but still
+	// offered by some archives, so it is proposed after the two current models.
+	PatientStudyOnlyQueryRetrieveFind = "1.2.840.10008.5.1.4.1.2.3.1"
+	PatientStudyOnlyQueryRetrieveMove = "1.2.840.10008.5.1.4.1.2.3.2"
+	PatientStudyOnlyQueryRetrieveGet  = "1.2.840.10008.5.1.4.1.2.3.3"
 )
 
 // DICOM Transfer Syntax UIDs — complete set matching pynetdicom.
@@ -33,10 +39,18 @@ const (
 	ExplicitVRBigEndianUID            = "1.2.840.10008.1.2.2"
 
 	// JPEG
-	JPEGBaselineUID    = "1.2.840.10008.1.2.4.50"
-	JPEGExtendedUID    = "1.2.840.10008.1.2.4.51"
-	JPEGLosslessSV1UID = "1.2.840.10008.1.2.4.57"
-	JPEGLosslessUID    = "1.2.840.10008.1.2.4.70"
+	JPEGBaselineUID = "1.2.840.10008.1.2.4.50"
+	JPEGExtendedUID = "1.2.840.10008.1.2.4.51"
+	// The two lossless syntaxes were named the wrong way round: .57 is Process
+	// 14 with any selection value, and .70 is the one fixed to selection value
+	// 1. A caller reaching for JPEGLosslessSV1UID got the syntax that is not
+	// SV1, which is the sort of mistake a name is supposed to prevent.
+	JPEGLosslessProcess14UID = "1.2.840.10008.1.2.4.57"
+	JPEGLosslessSV1UID       = "1.2.840.10008.1.2.4.70"
+
+	// Deprecated: use JPEGLosslessSV1UID, which names the same syntax
+	// accurately. Retained so existing callers keep compiling.
+	JPEGLosslessUID = JPEGLosslessSV1UID
 
 	// JPEG-LS
 	JPEGLSLosslessUID     = "1.2.840.10008.1.2.4.80"
@@ -110,10 +124,24 @@ func (pc *PresentationContext) IsAccepted() bool {
 }
 
 // DefaultTransferSyntaxes returns the default set of transfer syntaxes to propose.
+// DefaultTransferSyntaxes returns the uncompressed transfer syntaxes proposed
+// and accepted unless the caller asks for more.
+//
+// All four are fully supported: the data set codec encodes and decodes each of
+// them, including the byte swap for big endian and the deflate stream. Only two
+// were listed, so a peer offering deflated or big endian data had no context to
+// send it on even though this library reads both.
+//
+// Compressed syntaxes are not here, matching pynetdicom, whose default is these
+// same four with the rest behind ALL_TRANSFER_SYNTAXES. Use AllTransferSyntaxes
+// to accept compressed pixel data, which an archive or router wants: it stores
+// and forwards the bytes without needing to decode them.
 func DefaultTransferSyntaxes() []string {
 	return []string{
 		ExplicitVRLittleEndianUID,
 		ImplicitVRLittleEndianUID,
+		DeflatedExplicitVRLittleEndianUID,
+		ExplicitVRBigEndianUID,
 	}
 }
 
@@ -163,6 +191,9 @@ func DefaultQueryRetrieveContexts() []PresentationContextItem {
 		StudyRootQueryRetrieveFind,
 		StudyRootQueryRetrieveMove,
 		StudyRootQueryRetrieveGet,
+		PatientStudyOnlyQueryRetrieveFind,
+		PatientStudyOnlyQueryRetrieveMove,
+		PatientStudyOnlyQueryRetrieveGet,
 	}
 
 	ts := DefaultTransferSyntaxes()

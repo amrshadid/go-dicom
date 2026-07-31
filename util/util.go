@@ -74,13 +74,13 @@ func HexDumpReader(r io.Reader, startAddress int, stopAddress int, showAddress b
 
 		// Print offset if requested
 		if showAddress {
-			line.WriteString(fmt.Sprintf("%08X  ", offset))
+			fmt.Fprintf(&line, "%08X  ", offset)
 		}
 
 		// Print hex bytes
 		for i := 0; i < 16; i++ {
 			if i < n {
-				line.WriteString(fmt.Sprintf("%02X ", data[i]))
+				fmt.Fprintf(&line, "%02X ", data[i])
 			} else {
 				line.WriteString("   ")
 			}
@@ -393,7 +393,7 @@ func DumpDataset(ds *dataset.Dataset) string {
 			if info := t.GetInfo(); info != nil {
 				vr = info.VR
 			}
-			sb.WriteString(fmt.Sprintf("%s [%s]: %v\n", t.String(), vr, extractString(elem.GetValue())))
+			fmt.Fprintf(&sb, "%s [%s]: %v\n", t.String(), vr, extractString(elem.GetValue()))
 		}
 	}
 

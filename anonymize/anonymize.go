@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -40,11 +41,11 @@ const (
 type Action int
 
 const (
-	// ActionRemove deletes the element entirely (D action in PS3.15).
+	// ActionRemove deletes the element entirely (X action in PS3.15).
 	ActionRemove Action = iota
 	// ActionEmpty replaces the value with a zero-length value (Z action in PS3.15).
 	ActionEmpty
-	// ActionReplace replaces the value with a dummy/substitute value (X action in PS3.15).
+	// ActionReplace replaces the value with a substitute value.
 	ActionReplace
 	// ActionKeep keeps the element unchanged (K action in PS3.15).
 	ActionKeep
@@ -127,39 +128,82 @@ func (a *Anonymizer) Anonymize(ds *dataset.Dataset) error {
 	if ds == nil {
 		return fmt.Errorf("dataset is nil")
 	}
+	return a.anonymizeDataset(ds, 0)
+}
 
-	// Collect tags to process from the basic profile actions table
-	for t := range basicProfileActions {
-		if ds.Contains(t) {
-			if err := a.AnonymizeElement(ds, t); err != nil {
-				return fmt.Errorf("anonymizing tag %s: %w", t.String(), err)
+// maxAnonymizeDepth bounds recursion into nested sequences, which a crafted
+// file could otherwise make unbounded.
+const maxAnonymizeDepth = 64
+
+// anonymizeDataset applies the profile to one data set and everything nested
+// inside it.
+//
+// This walks the data set's own tags rather than the profile's. Iterating the
+// profile finds only what it can name and only at the top level, which missed
+// two whole classes of attribute: the ones named by a range of groups — curve
+// and overlay data, where a burned-in name most often survives — and every
+// attribute inside a sequence. Patient identifiers appear inside Request
+// Attributes Sequence and Referenced Image Sequence in ordinary files, and were
+// left untouched.
+func (a *Anonymizer) anonymizeDataset(ds *dataset.Dataset, depth int) error {
+	if depth > maxAnonymizeDepth {
+		return fmt.Errorf("anonymize: sequences nest deeper than %d levels", maxAnonymizeDepth)
+	}
+
+	// Collected first: applying an action may remove an element, and mutating
+	// the data set while ranging over its tags is not safe.
+	tags := ds.Tags()
+
+	for _, t := range tags {
+		elem, ok := ds.Get(t)
+		if !ok {
+			continue
+		}
+		if seq, isSeq := elem.GetValue().(*sequence.Sequence); isSeq {
+			// A sequence holds data sets, not a value, so most actions cannot
+			// be applied to it directly — and one of them used to be applied by
+			// doing nothing at all. The profile marks Source Image Sequence
+			// X/Z/U*, whose asterisk means "replace the instance UIDs contained
+			// in it". The UID action reached a sequence, matched neither of the
+			// value types it knew, and returned. Every referenced UID inside
+			// survived, in 18 of pydicom's 69 files, each one linking the
+			// de-identified object straight back to the instance it came from.
+			switch a.getDefaultAction(t) {
+			case ActionRemove:
+				ds.Remove(t)
+			case ActionEmpty:
+				// Emptying a sequence means no items, not an empty value.
+				for seq.Length() > 0 {
+					if err := seq.Remove(0); err != nil {
+						break
+					}
+				}
+			default:
+				for i := 0; i < seq.Length(); i++ {
+					item, err := seq.Get(i)
+					if err != nil {
+						continue
+					}
+					inner, isDS := item.(*dataset.Dataset)
+					if !isDS {
+						continue
+					}
+					if err := a.anonymizeDataset(inner, depth+1); err != nil {
+						return err
+					}
+				}
 			}
+			continue
+		}
+		if err := a.AnonymizeElement(ds, t); err != nil {
+			return fmt.Errorf("anonymizing tag %s: %w", t.String(), err)
 		}
 	}
 
-	// Also process any custom action tags not already in the profile
-	a.mu.RLock()
-	customTags := make(map[tag.Tag]Action, len(a.customActions))
-	for t, act := range a.customActions {
-		customTags[t] = act
-	}
-	a.mu.RUnlock()
-
-	for t := range customTags {
-		if _, inProfile := basicProfileActions[t]; inProfile {
-			continue // already handled above
-		}
-		if ds.Contains(t) {
-			if err := a.AnonymizeElement(ds, t); err != nil {
-				return fmt.Errorf("anonymizing custom tag %s: %w", t.String(), err)
-			}
-		}
-	}
-
-	// Remove private tags unless RetainSafePrivateProfile is active
+	// Private tags carry whatever their vendor put there, which the profile
+	// cannot describe and cannot vouch for.
 	if a.profile != RetainSafePrivateProfile {
-		tags := ds.Tags()
-		for _, t := range tags {
+		for _, t := range ds.Tags() {
 			if t.IsPrivate() {
 				ds.Remove(t)
 			}
@@ -240,12 +284,28 @@ func (a *Anonymizer) getDefaultAction(t tag.Tag) Action {
 		return ActionKeep
 	}
 
-	// Fall back to basic profile table
+	// The standard first. The hand-written table this used to consult held
+	// thirty-eight attributes, and four of them said to keep Patient's Sex,
+	// Age, Size and Weight — which is what RetainPatientCharsProfile is for,
+	// and which the Basic Profile is precisely not. Consulted first, those four
+	// entries kept the attributes in every profile, including the one whose
+	// whole purpose is to remove them.
+	if action, ok := ps315BasicProfile[t]; ok {
+		return action
+	}
 	if action, ok := basicProfileActions[t]; ok {
 		return action
 	}
+	// Curve and overlay data are named by a range of groups rather than by one
+	// tag, so they cannot be looked up.
+	for _, rule := range ps315RepeatingGroups {
+		if rule.matches(t) {
+			return rule.action
+		}
+	}
 
-	// Default: keep unknown tags
+	// An attribute the profile does not name is left alone. The profile is a
+	// floor, and discarding data it did not ask about is its own kind of wrong.
 	return ActionKeep
 }
 

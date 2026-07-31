@@ -29,13 +29,14 @@ func (ds *Dataset) GetImage() (image.Image, error) {
 	}
 
 	// Handle based on samples per pixel
-	if info.SamplesPerPixel == 1 {
+	switch info.SamplesPerPixel {
+	case 1:
 		// Grayscale image
 		return createGrayscaleImage(pixelArray, info)
-	} else if info.SamplesPerPixel == 3 {
+	case 3:
 		// RGB or YCbCr color image
 		return createColorImage(pixelArray, info)
-	} else {
+	default:
 		return nil, fmt.Errorf("unsupported samples per pixel: %d", info.SamplesPerPixel)
 	}
 }

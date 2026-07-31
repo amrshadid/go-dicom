@@ -1,6 +1,9 @@
 package tag
 
-import "fmt"
+import (
+	"sort"
+	"sync"
+)
 
 // DicomDictionary provides access to DICOM tag metadata
 type DicomDictionary struct {
@@ -112,35 +115,88 @@ func (d *DicomDictionary) IsRetired(tag Tag) bool {
 
 // matchRepeater checks if tag matches a repeater pattern
 func (d *DicomDictionary) matchRepeater(tag Tag) string {
-	group := tag.Group()
-	element := tag.Element()
-	tagStr := fmt.Sprintf("%04X%04X", group, element)
-
-	for mask := range d.repeater {
-		if matchesMask(tagStr, mask) {
-			return mask
+	for _, r := range compiledRepeaters() {
+		if uint32(tag)&r.mask == r.value {
+			return r.pattern
 		}
 	}
-
 	return ""
 }
 
-// matchesMask checks if a tag string matches a mask pattern
-func matchesMask(tagStr, mask string) bool {
-	if len(tagStr) != len(mask) {
-		return false
+// compiledRepeater is a repeater pattern reduced to integer form.
+//
+// A pattern like "60xx0010" covers every overlay group. Matching it as text
+// meant formatting the tag with fmt.Sprintf and comparing up to 88 strings on
+// every dictionary miss — and a miss happens for each private or unrecognized
+// tag, of which a real file has many. It was half the parse time of
+// CT_small.dcm.
+type compiledRepeater struct {
+	value   uint32 // the fixed nibbles
+	mask    uint32 // 0xF where a nibble is fixed, 0 where it is 'x'
+	pattern string // the original, to look the entry back up
+}
+
+var (
+	compiledRepeatersOnce  sync.Once
+	compiledRepeatersCache []compiledRepeater
+)
+
+// compiledRepeaters returns the repeater patterns in integer form, compiling
+// them on first use.
+//
+// Compiled once rather than at package initialization so a program that never
+// looks up a tag does not pay for it, and so the cost is not charged to whichever
+// test happens to run first.
+func compiledRepeaters() []compiledRepeater {
+	compiledRepeatersOnce.Do(func() {
+		compiledRepeatersCache = make([]compiledRepeater, 0, len(RepeaterDictionary))
+		for pattern := range RepeaterDictionary {
+			if c, ok := compileRepeater(pattern); ok {
+				compiledRepeatersCache = append(compiledRepeatersCache, c)
+			}
+		}
+		// Deterministic order: map iteration is random, and two patterns can
+		// match the same tag, so an arbitrary order would make lookups
+		// nondeterministic between runs.
+		sort.Slice(compiledRepeatersCache, func(i, j int) bool {
+			return compiledRepeatersCache[i].pattern < compiledRepeatersCache[j].pattern
+		})
+	})
+	return compiledRepeatersCache
+}
+
+// compileRepeater converts an 8-character pattern into value and mask.
+//
+// Reports false for anything that is not 8 characters of hex digits and 'x', so
+// a malformed entry is skipped rather than matching everything.
+func compileRepeater(pattern string) (compiledRepeater, bool) {
+	if len(pattern) != 8 {
+		return compiledRepeater{}, false
 	}
 
-	for i := 0; i < len(mask); i++ {
-		if mask[i] == 'x' {
-			continue
-		}
-		if tagStr[i] != mask[i] {
-			return false
+	var value, mask uint32
+	for i := 0; i < 8; i++ {
+		value <<= 4
+		mask <<= 4
+
+		c := pattern[i]
+		switch {
+		case c == 'x' || c == 'X':
+			// Wildcard nibble: contributes nothing to either.
+		case c >= '0' && c <= '9':
+			value |= uint32(c - '0')
+			mask |= 0xF
+		case c >= 'A' && c <= 'F':
+			value |= uint32(c-'A') + 10
+			mask |= 0xF
+		case c >= 'a' && c <= 'f':
+			value |= uint32(c-'a') + 10
+			mask |= 0xF
+		default:
+			return compiledRepeater{}, false
 		}
 	}
-
-	return true
+	return compiledRepeater{value: value, mask: mask, pattern: pattern}, true
 }
 
 // GlobalDictionary returns the global DICOM dictionary

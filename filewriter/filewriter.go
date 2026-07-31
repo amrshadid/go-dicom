@@ -2,6 +2,7 @@ package filewriter
 
 import (
 	"bytes"
+	"compress/flate"
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/config"
@@ -26,6 +27,44 @@ type FileMetaInfo struct {
 	// FileMetaInformationVersion is (0002,0001). Defaults to {0x00, 0x01} when
 	// empty, which is the only value defined by PS3.10.
 	FileMetaInformationVersion []byte
+}
+
+// isEncapsulatedSyntax reports whether a transfer syntax carries pixel data as
+// fragments rather than as a contiguous value.
+//
+// Everything outside the four uncompressed syntaxes does. Listing those rather
+// than enumerating the compressed ones means a syntax added to the standard
+// later is treated as compressed, which is the safe direction: writing an
+// explicit length for encapsulated data produces a file strict parsers reject,
+// while undefined length for native data would be caught by any round trip.
+func isEncapsulatedSyntax(uid string) bool {
+	switch uid {
+	case "1.2.840.10008.1.2", // Implicit VR Little Endian
+		"1.2.840.10008.1.2.1",    // Explicit VR Little Endian
+		"1.2.840.10008.1.2.1.99", // Deflated Explicit VR Little Endian
+		"1.2.840.10008.1.2.2":    // Explicit VR Big Endian
+		return false
+	}
+	return uid != ""
+}
+
+// pixelDataTag is (7FE0,0010).
+var pixelDataTag = tag.New(0x7FE0, 0x0010)
+
+// writeSequenceDelimiter closes an undefined-length element with the
+// (FFFE,E0DD) item that PS3.5 requires.
+func (dfw *DCMFileWriter) writeSequenceDelimiter() error {
+	if err := dfw.writer.WriteUint16(0xFFFE); err != nil {
+		return fmt.Errorf("failed to write sequence delimiter group: %w", err)
+	}
+	if err := dfw.writer.WriteUint16(0xE0DD); err != nil {
+		return fmt.Errorf("failed to write sequence delimiter element: %w", err)
+	}
+	if err := dfw.writer.WriteUint32(0); err != nil {
+		return fmt.Errorf("failed to write sequence delimiter length: %w", err)
+	}
+	dfw.position += 8
+	return nil
 }
 
 // undefinedLength is the DICOM sentinel (0xFFFFFFFF) marking an element whose
@@ -86,6 +125,10 @@ type DCMFileWriter struct {
 	settings     *config.Settings // Configuration settings for writing behavior
 	hookChain    *hooks.HookChain // Hook chain for element processing
 	elementCount int              // Count of elements written
+
+	// encapsulated records that the target transfer syntax carries pixel data
+	// as fragments, which PS3.5 A.4 requires be written with undefined length.
+	encapsulated bool
 }
 
 // NewDCMFileWriter creates a new DICOM file writer.
@@ -104,6 +147,12 @@ func NewDCMFileWriter(writer filebase.Writer) *DCMFileWriter {
 // SetExplicitVR sets whether to use explicit VR.
 func (dfw *DCMFileWriter) SetExplicitVR(explicit bool) {
 	dfw.explicitVR = explicit
+}
+
+// SetEncapsulated records that the target transfer syntax carries pixel data as
+// encapsulated fragments, which changes how (7FE0,0010) is written.
+func (dfw *DCMFileWriter) SetEncapsulated(encapsulated bool) {
+	dfw.encapsulated = encapsulated
 }
 
 // SetLittleEndian sets the byte order (little-endian or big-endian).
@@ -258,7 +307,7 @@ func (dfw *DCMFileWriter) WriteTag(t tag.Tag) error {
 // using the VR's designated padding character. Padding is applied here rather
 // than left to callers because an odd-length value misaligns every element
 // after it, silently corrupting the file.
-func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bool) error {
+func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bool) (err error) {
 	if elem == nil {
 		return fmt.Errorf("data element is nil")
 	}
@@ -266,6 +315,43 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 	// A sequence is serialized from its items rather than from a byte value.
 	if elem.VR == "SQ" || elem.Items != nil {
 		return dfw.writeSequence(elem, forceExplicitVR)
+	}
+
+	// Values are held little endian in memory, so numeric ones must be
+	// converted when the target syntax is big endian. Swap a copy: the caller's
+	// value must not be mutated by writing.
+	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(elem.VR)) {
+		swapped := make([]byte, len(elem.Value))
+		copy(swapped, elem.Value)
+		dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
+		elem = &DataElement{
+			Tag: elem.Tag, VR: elem.VR, Value: swapped, Length: uint32(len(swapped)),
+		}
+	}
+
+	// Encapsulated pixel data is a sequence of fragments, not a value with a
+	// byte count. PS3.5 A.4 requires undefined length and a closing sequence
+	// delimiter, and dcmtk refuses a file without them:
+	//
+	//   Found explicit length Pixel Data in top level dataset with transfer
+	//   syntax RLE Lossless: Only undefined length permitted
+	//
+	// The fragments themselves were already correct, so every compressed file
+	// this wrote held the right bytes behind a length field that made it
+	// unreadable to a strict parser. pydicom accepted them, which is why it went
+	// unnoticed.
+	if dfw.encapsulated && elem.Tag == pixelDataTag && elem.Length != undefinedLength {
+		elem = &DataElement{
+			Tag:    elem.Tag,
+			VR:     elem.VR,
+			Value:  elem.Value,
+			Length: undefinedLength,
+		}
+		defer func() {
+			if err == nil {
+				err = dfw.writeSequenceDelimiter()
+			}
+		}()
 	}
 
 	// Undefined length (0xFFFFFFFF) marks a delimited element and must be
@@ -519,7 +605,7 @@ func ConvertDataElementToRaw(elem *DataElement) (*hooks.RawDataElement, error) {
 
 func isShortVR(vr string) bool {
 	switch vr {
-	case "OB", "OD", "OF", "OL", "OW", "SQ", "UC", "UN", "UR", "UT":
+	case "OB", "OD", "OF", "OL", "OV", "OW", "SQ", "SV", "UC", "UN", "UR", "UT", "UV":
 		return false
 	default:
 		return true
@@ -547,6 +633,7 @@ func (dfw *DICOMFileWriter) SetFileMetaInfo(metaInfo *FileMetaInfo) {
 
 	// Set transfer syntax properties
 	if metaInfo != nil && metaInfo.TransferSyntaxUID != "" {
+		dfw.writer.SetEncapsulated(isEncapsulatedSyntax(metaInfo.TransferSyntaxUID))
 		explicitVR, littleEndian := determineTransferSyntax(metaInfo.TransferSyntaxUID)
 		dfw.writer.SetExplicitVR(explicitVR)
 		dfw.writer.SetLittleEndian(littleEndian)
@@ -584,11 +671,32 @@ func (dfw *DICOMFileWriter) Write() error {
 		return fmt.Errorf("failed to write DICM prefix: %w", err)
 	}
 
-	// Write file meta information
+	// The file meta header is always Explicit VR Little Endian, whatever the
+	// transfer syntax it declares for the data set that follows (PS3.10
+	// Section 7.1). Writing it in the data set's byte order produced a header
+	// whose very first tag read back as (0200,0000).
 	if dfw.metaInfo != nil {
-		if err := dfw.writer.WriteFileMetaInfo(dfw.metaInfo); err != nil {
+		explicitVR, littleEndian := dfw.writer.explicitVR, dfw.writer.littleEndian
+		dfw.writer.SetExplicitVR(true)
+		dfw.writer.SetLittleEndian(true)
+
+		err := dfw.writer.WriteFileMetaInfo(dfw.metaInfo)
+
+		// Restore the data set's encoding before writing it.
+		dfw.writer.SetExplicitVR(explicitVR)
+		dfw.writer.SetLittleEndian(littleEndian)
+
+		if err != nil {
 			return fmt.Errorf("failed to write file meta information: %w", err)
 		}
+	}
+
+	// Under the Deflated syntax the data set that follows the meta header is
+	// raw DEFLATE. Without this the writer produced a file declaring
+	// 1.2.840.10008.1.2.1.99 whose body was uncompressed, so nothing —
+	// including this library's own reader — could read it back.
+	if dfw.metaInfo != nil && dfw.metaInfo.TransferSyntaxUID == DeflatedExplicitVRLittleEndianUID {
+		return dfw.writeDeflatedDataSet()
 	}
 
 	// Write dataset elements
@@ -596,6 +704,41 @@ func (dfw *DICOMFileWriter) Write() error {
 		return fmt.Errorf("failed to write data elements: %w", err)
 	}
 
+	return nil
+}
+
+// DeflatedExplicitVRLittleEndianUID is the transfer syntax whose data set is
+// DEFLATE-compressed after the file meta header (PS3.5 Annex A.5).
+const DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
+
+// writeDeflatedDataSet serializes the elements, compresses them, and writes the
+// result after the meta header.
+//
+// The elements are encoded to memory first because DEFLATE has to see the whole
+// data set: it is a single stream over the body, not a per-element encoding.
+func (dfw *DICOMFileWriter) writeDeflatedDataSet() error {
+	raw, err := dfw.writer.encodeElements(dfw.dataElements, false)
+	if err != nil {
+		return fmt.Errorf("failed to encode data set for deflating: %w", err)
+	}
+
+	var compressed bytes.Buffer
+	zw, err := flate.NewWriter(&compressed, flate.DefaultCompression)
+	if err != nil {
+		return fmt.Errorf("failed to start the deflate stream: %w", err)
+	}
+	if _, err := zw.Write(raw); err != nil {
+		_ = zw.Close()
+		return fmt.Errorf("failed to deflate the data set: %w", err)
+	}
+	// Close flushes the final block; a stream left unclosed decompresses short.
+	if err := zw.Close(); err != nil {
+		return fmt.Errorf("failed to finish the deflate stream: %w", err)
+	}
+
+	if err := dfw.writer.writer.WriteBytes(compressed.Bytes()); err != nil {
+		return fmt.Errorf("failed to write the deflated data set: %w", err)
+	}
 	return nil
 }
 

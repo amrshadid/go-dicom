@@ -28,7 +28,7 @@ func (ds *Dataset) formatDetailed(opts StringFormatOptions, depth int) string {
 
 	// Write header at root level
 	if depth == 0 {
-		sb.WriteString(fmt.Sprintf("Dataset with %d elements:\n", len(ds.elements)))
+		fmt.Fprintf(&sb, "Dataset with %d elements:\n", len(ds.elements))
 	}
 
 	// Iterate through elements in insertion order
@@ -56,7 +56,7 @@ func (ds *Dataset) formatDetailed(opts StringFormatOptions, depth int) string {
 				items := seq.Items()
 				for i, item := range items {
 					if childDS, ok := item.(*Dataset); ok {
-						sb.WriteString(fmt.Sprintf("%s  [Item #%d]\n", indent, i))
+						fmt.Fprintf(&sb, "%s  [Item #%d]\n", indent, i)
 						sb.WriteString(childDS.formatDetailed(opts, depth+2))
 					}
 				}
@@ -178,7 +178,7 @@ func (ds *Dataset) SummaryString() string {
 
 	var sb strings.Builder
 	sb.WriteString("Dataset Summary:\n")
-	sb.WriteString(fmt.Sprintf("  Elements: %d\n", len(ds.elements)))
+	fmt.Fprintf(&sb, "  Elements: %d\n", len(ds.elements))
 
 	// Count sequences
 	seqCount := 0
@@ -189,7 +189,7 @@ func (ds *Dataset) SummaryString() string {
 		}
 	}
 	if seqCount > 0 {
-		sb.WriteString(fmt.Sprintf("  Sequences: %d\n", seqCount))
+		fmt.Fprintf(&sb, "  Sequences: %d\n", seqCount)
 	}
 
 	// Count private tags
@@ -201,24 +201,24 @@ func (ds *Dataset) SummaryString() string {
 		}
 	}
 	if privateCount > 0 {
-		sb.WriteString(fmt.Sprintf("  Private Tags: %d\n", privateCount))
+		fmt.Fprintf(&sb, "  Private Tags: %d\n", privateCount)
 	}
 
 	// Hierarchy info
 	if !ds.IsRoot() {
-		sb.WriteString(fmt.Sprintf("  Depth: %d\n", ds.Depth()))
-		sb.WriteString(fmt.Sprintf("  Path: %s\n", ds.Path()))
+		fmt.Fprintf(&sb, "  Depth: %d\n", ds.Depth())
+		fmt.Fprintf(&sb, "  Path: %s\n", ds.Path())
 	}
 
 	// Key patient/study info if present
 	if ds.ContainsByKeyword("PatientName") {
-		sb.WriteString(fmt.Sprintf("  Patient: %s\n", ds.GetStringByKeyword("PatientName")))
+		fmt.Fprintf(&sb, "  Patient: %s\n", ds.GetStringByKeyword("PatientName"))
 	}
 	if ds.ContainsByKeyword("StudyDescription") {
-		sb.WriteString(fmt.Sprintf("  Study: %s\n", ds.GetStringByKeyword("StudyDescription")))
+		fmt.Fprintf(&sb, "  Study: %s\n", ds.GetStringByKeyword("StudyDescription"))
 	}
 	if ds.ContainsByKeyword("Modality") {
-		sb.WriteString(fmt.Sprintf("  Modality: %s\n", ds.GetStringByKeyword("Modality")))
+		fmt.Fprintf(&sb, "  Modality: %s\n", ds.GetStringByKeyword("Modality"))
 	}
 
 	return sb.String()
@@ -258,23 +258,23 @@ func (ds *Dataset) formatTree(depth int) string {
 			prefix = lastBranch
 		}
 
-		sb.WriteString(fmt.Sprintf("%s%s %s %s", indent, prefix, t.String(), t.GetKeyword()))
+		fmt.Fprintf(&sb, "%s%s %s %s", indent, prefix, t.String(), t.GetKeyword())
 
 		// Show sequence items
 		if elem.GetVR() == dataelem.SQ {
 			value := elem.GetValue()
 			if seq, ok := value.(*sequence.Sequence); ok {
-				sb.WriteString(fmt.Sprintf(" [%d items]\n", seq.Length()))
+				fmt.Fprintf(&sb, " [%d items]\n", seq.Length())
 
 				// Show first few items (max 3)
 				items := seq.Items()
 				for j, item := range items {
 					if j >= 3 {
-						sb.WriteString(fmt.Sprintf("%s    ... (%d more items)\n", indent, len(items)-3))
+						fmt.Fprintf(&sb, "%s    ... (%d more items)\n", indent, len(items)-3)
 						break
 					}
 					if childDS, ok := item.(*Dataset); ok {
-						sb.WriteString(fmt.Sprintf("%s    Item #%d:\n", indent, j))
+						fmt.Fprintf(&sb, "%s    Item #%d:\n", indent, j)
 						sb.WriteString(childDS.formatTree(depth + 2))
 					}
 				}
@@ -311,18 +311,18 @@ func (ds *Dataset) DebugString() string {
 
 	if !ds.IsRoot() {
 		sb.WriteString("\n=== Hierarchy Info ===\n")
-		sb.WriteString(fmt.Sprintf("Parent: %p\n", ds.Parent()))
-		sb.WriteString(fmt.Sprintf("Depth: %d\n", ds.Depth()))
-		sb.WriteString(fmt.Sprintf("Path: %s\n", ds.Path()))
+		fmt.Fprintf(&sb, "Parent: %p\n", ds.Parent())
+		fmt.Fprintf(&sb, "Depth: %d\n", ds.Depth())
+		fmt.Fprintf(&sb, "Path: %s\n", ds.Path())
 	}
 
 	// Statistics
 	stats := ds.GetStatistics()
 	sb.WriteString("\n=== Statistics ===\n")
-	sb.WriteString(fmt.Sprintf("Total Elements: %d\n", stats.TotalElements))
-	sb.WriteString(fmt.Sprintf("Total Bytes: %d\n", stats.TotalBytes))
-	sb.WriteString(fmt.Sprintf("VR Distribution: %v\n", stats.ByVR))
-	sb.WriteString(fmt.Sprintf("Group Distribution: %v\n", stats.ByGroup))
+	fmt.Fprintf(&sb, "Total Elements: %d\n", stats.TotalElements)
+	fmt.Fprintf(&sb, "Total Bytes: %d\n", stats.TotalBytes)
+	fmt.Fprintf(&sb, "VR Distribution: %v\n", stats.ByVR)
+	fmt.Fprintf(&sb, "Group Distribution: %v\n", stats.ByGroup)
 
 	return sb.String()
 }

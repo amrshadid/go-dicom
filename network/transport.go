@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -65,7 +66,11 @@ func (t *Transport) WritePDU(ctx context.Context, pdu PDU) error {
 
 	_, err = t.conn.Write(data)
 	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		// errors.As rather than a type assertion, for the same reason as in
+		// ReadPDU: a wrapped network error does not satisfy the assertion, so a
+		// write that timed out was reported as a generic write failure.
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			return NewTimeoutError("write", "write operation timed out")
 		}
 		return NewCommunicationError("WRITE", "failed to write PDU", err)
@@ -87,9 +92,39 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 		}
 	}
 
+	// A deadline alone does not make this cancellable: a context with no
+	// deadline never unblocks the read, and one canceled before its deadline
+	// is ignored. Pushing the deadline into the past on cancellation interrupts
+	// the read at once, which is what lets a caller stop waiting for a peer
+	// that has gone quiet.
+	//
+	// Interrupting rather than polling is the point. A short deadline used to
+	// poll for an incoming message can expire midway through a PDU body,
+	// leaving the stream positioned inside a message with no way to
+	// resynchronize — so a cancellation that never fires costs nothing, while a
+	// poll that fires at the wrong moment corrupts the association.
+	if ctx.Done() != nil {
+		stop := context.AfterFunc(ctx, func() {
+			_ = t.conn.SetReadDeadline(time.Now())
+		})
+		defer stop()
+	}
+
 	pdu, err := DecodePDU(t.conn)
 	if err != nil {
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		// errors.As, not a type assertion: DecodePDU wraps the network error in
+		// its own, so asserting on the returned value never matched and no read
+		// timeout was ever classified as one. It surfaced as a generic decode
+		// failure instead, which reads like a malformed message from the peer
+		// rather than silence from it.
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			// Cancellation is implemented as a deadline, so both arrive here as
+			// a timeout. Reporting them alike would tell a caller its peer was
+			// slow when in fact the caller itself stopped waiting.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 			return nil, NewTimeoutError("read", "read operation timed out")
 		}
 		return nil, err
