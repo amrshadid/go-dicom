@@ -539,8 +539,8 @@ configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
 
 JPEG 2000 needs a decoder you supply — `examples/jpeg2000` is a working one that
 shells out to openjpeg, verified sample-for-sample against pydicom.
-JPEG Extended decodes at 8 bits; 12-bit frames are refused, with precision named as
-the reason. JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
+JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
+JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
 in both line- and sample-interleaved modes.
 
 Values in an Explicit VR Big Endian file are normalised to little endian while

@@ -312,10 +312,6 @@ their leading values. What follows is what does not decode.
   `opj_decompress` — and it is verified sample-for-sample against pydicom, along
   with the registry actually consulting it.
 
-- **JPEG Extended (`.51`) decodes at 8 bits but not at 12.** The transfer syntax
-  permits both, and the limitation is precision alone. A 12-bit frame is refused
-  with an error naming precision as the reason.
-
 - **`PixelArray` flattens color samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
   order are correct. `PixelArrayBySample` returns the four-dimensional shape that
@@ -355,10 +351,9 @@ their leading values. What follows is what does not decode.
   fails rather than putting bytes on the wire described as something they are
   not, which the receiver could not detect.
 
-  Decoding has one gap of its own: **12-bit JPEG Extended** (`1.2.840.10008.1.2.4.51`)
-  is not decoded, so an instance stored under it cannot be sent over a context
-  that negotiated anything else. JPEG 2000 needs a registered external decoder;
-  without one it is in the same position.
+  Decoding has one gap of its own: **JPEG 2000** needs a registered external
+  decoder, and without one an instance stored under it cannot be sent over a
+  context that negotiated anything else.
 
 ### 8.3 Writing
 

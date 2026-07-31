@@ -1055,6 +1055,18 @@ func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("empty data for JPEG decompression")
 	}
 
+	// The standard library covers 8-bit frames, baseline and progressive alike,
+	// and is the better decoder for them. It rejects 12-bit precision, which
+	// JPEG Extended allows and which DICOM uses for the extra depth that made
+	// the syntax worth defining; those go to the decoder here.
+	if sequentialJPEGPrecision(data) == 12 {
+		img, err := decodeSequentialJPEG(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode 12-bit JPEG: %w", err)
+		}
+		return img.pack(), nil
+	}
+
 	reader := bytes.NewReader(data)
 	img, err := jpeg.Decode(reader)
 	if err != nil {
