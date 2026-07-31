@@ -288,7 +288,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 #### Serialization and Utilities
 | Package | Description |
 |---------|-------------|
-| [jsonrep](./jsonrep/) | DICOM JSON Model (Part 18) with bulk data support |
+| [jsonrep](./jsonrep/) | A flat summary struct of common attributes, for feeding a web API. Not the DICOM JSON Model — see `dataset.ToDICOMJSON` for that |
 | [config](./config/) | Thread-safe global configuration |
 | [errors](./errors/) | DICOM-specific error types |
 | [hooks](./hooks/) | Extensible callback/plugin system |
@@ -488,7 +488,7 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
 | DICOM PS3.15 - Security (TLS, de-identification) | Supported |
-| DICOM JSON Model (Part 18) | Supported |
+| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus |
 | ISO 2022 - Character set escape sequences | Supported |
 
 ### Performance
