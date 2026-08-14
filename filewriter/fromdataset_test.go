@@ -149,3 +149,100 @@ func TestElementsFromDatasetHandlesNilAndEmpty(t *testing.T) {
 		t.Errorf("empty data set gave %d elements", len(got))
 	}
 }
+
+// A Dataset built in code holds string values, since dataelem.NewDataElement
+// takes an interface{} and a string is the obvious thing to pass. ElementsFromDataset
+// used to discard the second return of a type assertion:
+//
+//	value, _ := elem.GetValue().([]byte)
+//
+// so every string value became nil and was written with length 0. The file came
+// back with every element present, correctly typed, and empty — the same silent
+// shape this function's own comment warns about for sequences.
+func TestElementsFromDatasetKeepsStringValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	values := map[tag.Tag]struct {
+		vr    dataelem.VR
+		value string
+	}{
+		tag.New(0x0008, 0x0018): {dataelem.UI, "1.2.3.4"},
+		tag.New(0x0010, 0x0010): {dataelem.PN, "SMITH^JOHN"},
+		tag.New(0x0008, 0x0060): {dataelem.CS, "CT"},
+		tag.New(0x0020, 0x0013): {dataelem.IS, "1"},
+	}
+	for t2, v := range values {
+		_ = ds.Add(dataelem.NewDataElement(t2, v.vr, v.value))
+	}
+
+	elements := filewriter.ElementsFromDataset(ds)
+	if len(elements) != len(values) {
+		t.Fatalf("got %d elements, want %d", len(elements), len(values))
+	}
+
+	for _, elem := range elements {
+		want, ok := values[elem.Tag]
+		if !ok {
+			t.Errorf("unexpected element %s", elem.Tag)
+			continue
+		}
+		if got := string(elem.Value); got != want.value {
+			t.Errorf("%s wrote %q, want %q", elem.Tag, got, want.value)
+		}
+		if elem.Length != uint32(len(want.value)) {
+			t.Errorf("%s wrote length %d for a %d byte value",
+				elem.Tag, elem.Length, len(want.value))
+		}
+	}
+}
+
+// []byte values must keep working, since that is what filereader produces and
+// what every read-modify-write path holds.
+func TestElementsFromDatasetKeepsByteValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, []byte("SMITH^JOHN")))
+
+	elements := filewriter.ElementsFromDataset(ds)
+	if len(elements) != 1 {
+		t.Fatalf("got %d elements, want 1", len(elements))
+	}
+	if got := string(elements[0].Value); got != "SMITH^JOHN" {
+		t.Errorf("wrote %q", got)
+	}
+}
+
+// An empty value is legitimate — a type 2 attribute is sent present and empty —
+// so it must be written rather than dropped as unrenderable.
+func TestElementsFromDatasetKeepsEmptyValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0030), dataelem.DA, ""))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0040), dataelem.CS, nil))
+
+	elements := filewriter.ElementsFromDataset(ds)
+	if len(elements) != 2 {
+		t.Fatalf("got %d elements, want 2 — an empty value is not the same as no element",
+			len(elements))
+	}
+	for _, elem := range elements {
+		if elem.Length != 0 {
+			t.Errorf("%s wrote length %d for an empty value", elem.Tag, elem.Length)
+		}
+	}
+}
+
+// A value of a type that cannot be rendered is dropped with a warning rather than
+// written as empty. Writing it empty is what the old code did, and it is the
+// outcome with no signal attached.
+func TestElementsFromDatasetDropsUnrenderableValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, 42))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0060), dataelem.CS, "CT"))
+
+	elements := filewriter.ElementsFromDataset(ds)
+	if len(elements) != 1 {
+		t.Fatalf("got %d elements, want 1: the int value should be dropped, not written empty",
+			len(elements))
+	}
+	if elements[0].Tag != tag.New(0x0008, 0x0060) {
+		t.Errorf("the surviving element is %s, want the CS one", elements[0].Tag)
+	}
+}
