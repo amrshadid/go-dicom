@@ -168,12 +168,32 @@
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
 // actually available. The parsers have fuzz targets that run in CI.
 //
+// # Logging
+//
+// Everything this package reports goes through [DefaultLogger], which writes to
+// config.Logger — so one call configures the whole library, and a program
+// embedding an SCP can redirect or silence it:
+//
+//	config.SetLogger(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+//
+// Messages carry a component=network attribute, so a shared logger can filter
+// this package in or out. To change the verbosity of the network layer alone,
+// without touching the rest of the library:
+//
+//	network.SetDefaultLogLevel(network.LogLevelSilent) // report nothing
+//	network.DebugLogger()                              // everything, to stderr
+//
+// The default is [LogLevelWarn], matching config.Logger's own default: failures
+// and refusals are reported, PDU and DIMSE detail is not.
+//
 // # Limitations
 //
 //   - The asynchronous operations window is negotiated but not enforced; an SCU
 //     issues one operation at a time and waits for the response.
-//   - Data sets are not transcoded between transfer syntaxes; pixel data is
-//     sent as it is held.
+//   - RLE Lossless is the only syntax pixel data is compressed *to*. It is
+//     transcoded in both directions as the negotiated context requires, but a
+//     context needing any other compressed target fails rather than sending
+//     bytes described as something they are not.
 //   - An [SCU] performs one operation at a time. Use one per goroutine rather
 //     than sharing a single instance.
 package network

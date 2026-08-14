@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"log"
 
 	"github.com/amrshadid/go-dicom/dataset"
 )
@@ -27,7 +26,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 
 	total, err := streamer.CountCGetMatches(ctx, req)
 	if err != nil {
-		log.Printf("streaming C-GET could not count matches: %v", err)
+		DefaultLogger.Error("streaming C-GET could not count matches: %v", err)
 		return StatusUnableToProcess
 	}
 
@@ -66,13 +65,13 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 		}
 		instClass, instUID, ok := instanceUIDs(inst)
 		if !ok {
-			log.Printf("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
+			DefaultLogger.Warn("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
 			failed++
 			continue
 		}
 		subCtxID, ok := FindPresentationContextID(assoc.AcceptedContexts(), instClass)
 		if !ok {
-			log.Printf("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
+			DefaultLogger.Warn("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
 			failed++
 			continue
 		}
@@ -80,7 +79,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 		subMessageID++
 		if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID,
 			instClass, instUID, inst, messageID, canceled); err != nil {
-			log.Printf("C-GET sub-operation for %s failed: %v", instUID, err)
+			DefaultLogger.Error("C-GET sub-operation for %s failed: %v", instUID, err)
 			failed++
 		} else {
 			completed++
@@ -93,7 +92,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 			continue
 		}
 		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
-			log.Printf("C-GET pending response failed, abandoning sub-operations: %v", err)
+			DefaultLogger.Error("C-GET pending response failed, abandoning sub-operations: %v", err)
 			stopHandler()
 			for range out { //nolint:revive // draining so the handler can return
 			}
@@ -113,7 +112,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 	case canceled.wasSet():
 		status = StatusQRCancelMatchingTerminated
 	case handlerErr != nil:
-		log.Printf("streaming C-GET handler failed: %v", handlerErr)
+		DefaultLogger.Error("streaming C-GET handler failed: %v", handlerErr)
 		status = StatusUnableToProcess
 	case failed > 0:
 		status = StatusGetWarningPartial
@@ -142,7 +141,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 
 	total, err := streamer.CountCMoveMatches(ctx, req)
 	if err != nil {
-		log.Printf("streaming C-MOVE could not count matches: %v", err)
+		DefaultLogger.Error("streaming C-MOVE could not count matches: %v", err)
 		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0)
 		return
 	}
@@ -189,7 +188,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 				Network:   s.config.Network,
 			})
 			if err := dest.Associate(ctx, storageContextsFor([]*dataset.Dataset{inst})); err != nil {
-				log.Printf("C-MOVE could not associate with destination %s at %s: %v",
+				DefaultLogger.Error("C-MOVE could not associate with destination %s at %s: %v",
 					req.MoveDestination, destAddress, err)
 				dest = nil
 				failed++
@@ -198,7 +197,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 		}
 
 		if err := dest.Store(ctx, inst); err != nil {
-			log.Printf("C-MOVE sub-operation failed: %v", err)
+			DefaultLogger.Error("C-MOVE sub-operation failed: %v", err)
 			failed++
 		} else {
 			completed++
@@ -215,7 +214,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 			continue
 		}
 		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
-			log.Printf("C-MOVE pending response failed, abandoning sub-operations: %v", err)
+			DefaultLogger.Error("C-MOVE pending response failed, abandoning sub-operations: %v", err)
 			stopHandler()
 			for range out { //nolint:revive // draining so the handler can return
 			}
@@ -236,7 +235,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 	case watcher != nil && watcher.wasCanceled():
 		status = StatusQRCancelMatchingTerminated
 	case handlerErr != nil:
-		log.Printf("streaming C-MOVE handler failed: %v", handlerErr)
+		DefaultLogger.Error("streaming C-MOVE handler failed: %v", handlerErr)
 		status = StatusUnableToProcess
 	case failed > 0:
 		status = StatusGetWarningPartial

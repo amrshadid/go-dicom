@@ -7,9 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Documentation release, with two defects found while checking the documentation
-against the code. The pattern in both is the same one 1.4.0 was about: prose and
-tests agreeing with each other while the code did something else.
+### Changed — the library no longer writes to your stderr uninvited
+
+**`network` reported through `log.Printf` at 49 call sites**, onto the standard
+logger, which a consumer cannot redirect or silence. `DefaultLogger` existed,
+was documented as "silent by default", and had 3 call sites against those 49 —
+so a program embedding an SCP got association errors, rejections and abandoned
+sub-operations on its own stderr, and `DefaultLogger.SetLevel` did nothing about
+it because nothing consulted it.
+
+All 49 now go through `DefaultLogger`, which writes to `config.Logger`. One
+`config.SetLogger` call therefore controls everything this library emits, and
+messages carry a `component=network` attribute so a shared logger can filter the
+network layer in or out.
+
+Three notes for existing callers:
+
+- **`DefaultLogger` now defaults to `LogLevelWarn`, not `LogLevelSilent`.** Every
+  one of the 49 messages was error- or warning-level and previously printed
+  unconditionally, so this preserves what you actually saw while making it
+  controllable. `network.SetDefaultLogLevel(network.LogLevelSilent)` reports
+  nothing; `config.SetLogger` redirects it.
+- **`NewLogger(level, nil)` now means config.Logger** rather than stderr
+  directly. config.Logger writes to stderr by default, so the observable
+  behaviour is unchanged unless you have replaced it.
+- **`Logger.SetOutput(nil)` restores** the default of writing through
+  config.Logger, which previously had no way to be expressed.
+
+`LogLevel` gained a `String` method, and `DebugLogger()` still writes to stderr
+directly — config.Logger's own level would otherwise discard the debug messages
+it is called to reveal.
+
+A test reads this package's source and fails on any direct import of `log`,
+since a behavioral test cannot catch one new `log.Printf` in a branch it does not
+reach. Another runs an SCP with `os.Stderr` swapped for a pipe and asserts the
+error paths report to `config.Logger` and write nothing to the process's stderr.
+
+### Fixed
+
+- **`network/doc.go` claimed data sets are not transcoded between transfer
+  syntaxes.** They are — `transcodePixelData` is wired into `datasetcodec.go` and
+  covered by `transcoding_test.go`. The real limitation, already stated correctly
+  in `CONFORMANCE.md` §8.2 and the README, is that RLE Lossless is the only syntax
+  pixel data is compressed *to*.
+
+## Documentation corrections
+
+Two defects were found while checking the documentation against the code. The
+pattern in both is the same one 1.4.0 was about: prose and tests agreeing with
+each other while the code did something else.
 
 ### Fixed
 
