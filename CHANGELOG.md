@@ -195,6 +195,33 @@ The corrections to what the documentation claimed:
   configuration and a v1 binary refuses it outright rather than degrading, so the
   target's `@latest` install instruction left a local run unable to lint at all.
 
+### Added
+
+- **The tier-2 SOP classes are verified against a peer.** `CONFORMANCE.md` §8.5
+  said of Relevant Patient Information Query, Display System and the non-patient
+  object information models: "Nothing verifies them against a peer." They had UID
+  constants, presentation-context helpers, and no proof — the same condition the
+  four N-DIMSE defects of 1.4.0 were found in.
+
+  All three are now driven end to end, and the two query services against
+  pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it
+  received so a request naming the wrong class shows up as a mismatch rather than
+  as agreement. Display System asserts the SCP is asked about the well-known
+  instance the requestor named, since naming the wrong instance is exactly the
+  1.4.0 defect in another service.
+
+- **`findscu -sop-class` and `-key`.** A model outside the patient hierarchy could
+  not be queried from the command line at all: `findscu` proposed only the default
+  query/retrieve models and always sent a QueryRetrieveLevel with the patient
+  keys. It now takes the information model to query and repeatable
+  `GGGG,EEEE[=value]` keys, and omits the level and patient keys for a model that
+  has no hierarchy — a non-patient object is not filed under a patient, so
+  PS3.4 GG.2 gives it a single level and no level element.
+
+- **`network.AllNonPatientSOPClassUIDs`**, and
+  `NonPatientObjectPresentationContexts` now returns the query models as well as
+  the storage classes.
+
 ### Security
 
 - **The pinned Go toolchain was missing two standard library security patches.**
@@ -242,6 +269,13 @@ The corrections to what the documentation claimed:
   reintroduced.
 
 ### Fixed
+
+- **`NonPatientObjectPresentationContexts` proposed no way to query.** It offered
+  the five non-patient *storage* classes and none of the information models, so
+  the documented way to reach these services could store a hanging protocol and
+  never find it again. Found by writing the first test that used the helper — a
+  test of the SOP class list alone would not have caught it, since every UID it
+  named was present and correct.
 
 - **`filewriter` wrote an empty value for every string-valued element.**
   `ElementsFromDataset` discarded the second return of a type assertion:
