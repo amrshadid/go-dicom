@@ -312,10 +312,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # Pinned to an exact patch release, not the '1.25' range the other jobs
+      # use. govulncheck's standard library findings are relative to the
+      # toolchain doing the analysis, so a job that resolves its own patch
+      # version reports a different set of vulnerabilities from one week to the
+      # next for reasons unconnected to this code. This job scanned under
+      # go1.25.12 and reported GO-2026-6090 and GO-2026-5972, both fixed in
+      # go1.25.13.
+      #
+      # Keep this in step with the toolchain directive in go.mod. Whichever of
+      # the two decides the version — it depends on whether GOTOOLCHAIN is local
+      # or auto in the runner — both naming a patched release means the scan is
+      # clean either way.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version: '1.25.13'
 
       - name: Verify module
         run: go mod verify
