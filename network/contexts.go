@@ -136,25 +136,67 @@ func SubstanceAdministrationPresentationContexts() []PresentationContextItem {
 	return contexts
 }
 
-// NonPatientObjectPresentationContexts returns contexts for Non-Patient Object Storage.
+// NonPatientObjectPresentationContexts returns contexts for every non-patient SOP
+// class — the storage classes and the information models used to query and
+// retrieve them.
+//
+// See AllNonPatientSOPClassUIDs for the list and why both halves are in it.
 func NonPatientObjectPresentationContexts() []PresentationContextItem {
-	ts := DefaultTransferSyntaxes()
-	uids := []string{
+	return contextsFor(AllNonPatientSOPClassUIDs()...)
+}
+
+// AllNonPatientSOPClassUIDs returns every non-patient SOP class: the storage
+// classes and the information models used to query and retrieve them.
+//
+// Both halves are here because both are needed to do anything useful. Storing a
+// hanging protocol and never being able to find it again is not a workflow, and
+// this helper used to propose only the five storage classes — so the documented
+// way to reach these services could store but not query, which a test of the SOP
+// class list alone would not have caught.
+//
+// An SCP passes this to SetSupportedAbstractSyntaxes; an SCU gets the same set as
+// presentation contexts from NonPatientObjectPresentationContexts.
+func AllNonPatientSOPClassUIDs() []string {
+	return []string{
+		// Storage.
 		HangingProtocolStorageUID,
 		ColorPaletteStorageUID,
 		GenericImplantTemplateUID,
 		ImplantAssemblyTemplateUID,
 		ImplantTemplateGroupUID,
+		ProtocolApprovalStorageUID,
+
+		// The information models. Query/retrieve against a single level, with no
+		// QueryRetrieveLevel: a non-patient object is not filed under a patient, so
+		// there is no hierarchy to descend (PS3.4 GG.2).
+		HangingProtocolInformationModelFindUID,
+		HangingProtocolInformationModelMoveUID,
+		HangingProtocolInformationModelGetUID,
+
+		ColorPaletteInformationModelFindUID,
+		ColorPaletteInformationModelMoveUID,
+		ColorPaletteInformationModelGetUID,
+
+		DefinedProcedureProtocolInformationModelFindUID,
+		DefinedProcedureProtocolInformationModelMoveUID,
+		DefinedProcedureProtocolInformationModelGetUID,
+
+		GenericImplantTemplateInformationModelFindUID,
+		GenericImplantTemplateInformationModelMoveUID,
+		GenericImplantTemplateInformationModelGetUID,
+
+		ImplantAssemblyTemplateInformationModelFindUID,
+		ImplantAssemblyTemplateInformationModelMoveUID,
+		ImplantAssemblyTemplateInformationModelGetUID,
+
+		ImplantTemplateGroupInformationModelFindUID,
+		ImplantTemplateGroupInformationModelMoveUID,
+		ImplantTemplateGroupInformationModelGetUID,
+
+		ProtocolApprovalInformationModelFindUID,
+		ProtocolApprovalInformationModelMoveUID,
+		ProtocolApprovalInformationModelGetUID,
 	}
-	contexts := make([]PresentationContextItem, len(uids))
-	for i, uid := range uids {
-		contexts[i] = PresentationContextItem{
-			ID:               byte(2*i + 1),
-			AbstractSyntax:   uid,
-			TransferSyntaxes: ts,
-		}
-	}
-	return contexts
 }
 
 // RelevantPatientInformationPresentationContexts returns contexts for the three

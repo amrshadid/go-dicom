@@ -466,13 +466,35 @@ management as film session, film box, image box and print action.
 Relevant Patient Information Query, Display System, Media Creation Management
 and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
-presentation-context helpers provided. Nothing verifies them against a peer.
+presentation-context helpers provided.
+
+Three of them are now exercised end to end:
+
+| SOP class | Verified by |
+|---|---|
+| Relevant Patient Information Query (all three) | A C-FIND over a real association, and against pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it received |
+| Display System | An N-GET for the well-known instance `1.2.840.10008.5.1.1.40.1`, asserting the SCP is asked about that instance and not another |
+| Non-patient object information models | A C-FIND for hanging protocol, color palette and generic implant template, and against pynetdicom, which confirms the identifier carries **no** QueryRetrieveLevel |
+
+Media Creation Management and the event logging classes still have no test
+against a peer.
+
+Writing those tests found a defect in the documented path.
+`NonPatientObjectPresentationContexts` proposed only the five *storage* classes
+and none of the information models, so the helper meant for these services could
+store a hanging protocol and never query for one. It now returns both halves —
+see `AllNonPatientSOPClassUIDs`.
 
 **UIDs only.** The remaining constants have no service behind them and nothing
-exercising them: the non-patient object information models (hanging protocols,
-color palettes, implant templates, procedure protocols), composite instance
-retrieval, inventory and repository query, RT machine verification, and the
-well-known instances the logging and print services are addressed through.
+exercising them: composite instance retrieval, inventory and repository query, RT
+machine verification, and the well-known instances the logging and print services
+are addressed through.
+
+The non-patient object information models were in this tier and have moved up:
+they are dispatched to the ordinary find and get handlers, and tested. What they
+still lack is a store that serves them — `dcmstore` indexes the patient hierarchy,
+so a hanging protocol has nowhere to live in it. The service reaches a handler;
+supplying that handler is the caller's.
 
 They are present so a caller can name them, and the set matches pynetdicom's
 exactly — 256 SOP class UIDs, each value checked against pynetdicom's own table
