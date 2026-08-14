@@ -131,15 +131,61 @@ func TestCompressedInstanceIsRecodedForAnRLEContext(t *testing.T) {
 func TestUnencodableCompressedTargetIsRefused(t *testing.T) {
 	ds := corpusFile(t, "CT_small.dcm")
 
+	// JPEG-LS Lossless is no longer here: there is an encoder for it now. What
+	// remains has none, and a send that cannot be satisfied has to fail rather
+	// than put bytes on the wire described as something they are not — which the
+	// receiver could not detect.
+	//
+	// JPEG-LS *Near*-Lossless stays refused although the same encoder could
+	// produce it: it is lossy, and how much error to accept is the caller's
+	// decision rather than one to make silently while transcoding.
 	for _, target := range []string{
 		network.JPEGBaselineUID,
 		network.JPEG2000LosslessUID,
-		network.JPEGLSLosslessUID,
+		network.JPEGLSNearLosslessUID,
 	} {
 		t.Run(target, func(t *testing.T) {
 			if _, err := network.EncodeDataset(ds, target); err == nil {
 				t.Errorf("a native instance encoded for %s; there is no encoder for it", target)
 			}
 		})
+	}
+}
+
+// The other half of that: a native instance now encodes for a JPEG-LS context, and
+// what comes out has to be JPEG-LS rather than merely labeled as it.
+func TestNativeInstanceIsCompressedForAJPEGLSContext(t *testing.T) {
+	ds := corpusFile(t, "CT_small.dcm")
+
+	encoded, err := network.EncodeDataset(ds, network.JPEGLSLosslessUID)
+	if err != nil {
+		t.Fatalf("encoding a native instance for a JPEG-LS context: %v", err)
+	}
+
+	decoded, err := network.DecodeDataset(encoded, network.JPEGLSLosslessUID)
+	if err != nil {
+		t.Fatalf("decoding what was just encoded: %v", err)
+	}
+
+	// The pixel data must be encapsulated fragments carrying a real codestream,
+	// and it must decode back to the samples the original held.
+	original, err := ds.DecodedPixelData()
+	if err != nil {
+		t.Fatalf("reading the original pixel data: %v", err)
+	}
+	decoded.SetTransferSyntaxUID(network.JPEGLSLosslessUID)
+	roundTripped, err := decoded.DecodedPixelData()
+	if err != nil {
+		t.Fatalf("decoding the encoded pixel data: %v", err)
+	}
+
+	if len(roundTripped) != len(original) {
+		t.Fatalf("decoded %d bytes of pixel data, want %d", len(roundTripped), len(original))
+	}
+	for i := range original {
+		if roundTripped[i] != original[i] {
+			t.Fatalf("pixel byte %d is 0x%02X after a JPEG-LS round trip, want 0x%02X",
+				i, roundTripped[i], original[i])
+		}
 	}
 }

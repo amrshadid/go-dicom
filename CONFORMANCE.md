@@ -371,17 +371,28 @@ that gap, and two differences in how decoded samples are shaped and coloured.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **RLE Lossless is the only syntax this library compresses to.** Pixel data is
-  transcoded in both directions as the negotiated context requires.
+- **Two syntaxes are compressed *to*: RLE Lossless and JPEG-LS Lossless.** Pixel
+  data is transcoded in both directions as the negotiated context requires.
 
-  Sending over a context that negotiated an uncompressed syntax decodes the
-  pixel data first. Sending over one that negotiated **RLE Lossless** encodes
-  it — from native pixels, or by decoding a compressed source and re-encoding.
+  Sending over a context that negotiated an uncompressed syntax decodes the pixel
+  data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
+  Lossless** encodes it — from native pixels, or by decoding a compressed source
+  and re-encoding.
+
+  The JPEG-LS encoder is lossless only, at 2 to 16 bits, one scan per component.
+  **JPEG-LS Near-Lossless is refused although the same encoder could produce it**:
+  it is lossy, and how much error to accept is the caller's decision rather than
+  one to make silently while transcoding.
 
   Every other compressed target fails, naming the syntax asked for. There is no
-  JPEG, JPEG-LS or JPEG 2000 encoder here, and a send that cannot be satisfied
-  fails rather than putting bytes on the wire described as something they are
-  not, which the receiver could not detect.
+  JPEG or JPEG 2000 encoder here, and a send that cannot be satisfied fails rather
+  than putting bytes on the wire described as something they are not, which the
+  receiver could not detect.
+
+  *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
+  shares no code with this library. A round trip through this package's own
+  decoder would only show the two agree — which is the failure mode the RLE
+  encoder shipped with in 1.3.0.
 
   Decoding has one gap of its own: **JPEG 2000** needs a registered external
   decoder, and without one an instance stored under it cannot be sent over a
