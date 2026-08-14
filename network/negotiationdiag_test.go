@@ -358,3 +358,70 @@ func TestOrdinaryNegotiationIsNotReportedAsAProblem(t *testing.T) {
 			len(got), got)
 	}
 }
+
+// A requestor that finishes its work and goes leaves the server reading an idle
+// connection until the network timeout fires, and a requestor that exits without
+// releasing gives the server an EOF. Both are how associations ordinarily end, and
+// both were logged at error level — so a completed query produced an error
+// describing healthy traffic, and an archive's logs filled with them.
+func TestAnAssociationEndingIsNotAnError(t *testing.T) {
+	cases := []struct {
+		name  string
+		close func(t *testing.T, scu *SCU, ctx context.Context)
+	}{
+		{
+			name: "the requestor releases",
+			close: func(t *testing.T, scu *SCU, ctx context.Context) {
+				if err := scu.Release(ctx); err != nil {
+					t.Errorf("Release: %v", err)
+				}
+			},
+		},
+		{
+			// No release: the peer simply goes. Plenty of tools exit rather than
+			// releasing, and there is nothing the server can do about it.
+			name: "the requestor vanishes without releasing",
+			close: func(t *testing.T, scu *SCU, _ context.Context) {
+				if assoc := scu.Association(); assoc != nil {
+					_ = assoc.transport.Close()
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := withConfigLogger(t, slog.LevelDebug)
+			withDefaultLoggerLevel(t, LogLevelWarn) // the default
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			scp := NewSCP(SCPConfig{AETitle: "QUIETSCP", BindAddress: "127.0.0.1"})
+			scp.SetHandler(&EchoHandler{})
+			scp.SetSupportedAbstractSyntaxes([]string{VerificationSOPClassUID})
+
+			addr := serveSCP(ctx, t, scp)
+
+			scu := NewSCU(SCUConfig{CallingAE: "SCU", CalledAE: "QUIETSCP", Address: addr})
+			if err := scu.Associate(ctx, VerificationPresentationContexts()); err != nil {
+				t.Fatalf("Associate: %v", err)
+			}
+			if err := scu.Echo(ctx); err != nil {
+				t.Fatalf("Echo: %v", err)
+			}
+
+			tc.close(t, scu, ctx)
+
+			// Give the server a moment to notice and report.
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) && logged.Len() == 0 {
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			if got := logged.String(); got != "" {
+				t.Errorf("a completed association reported at warning level or above:\n%s", got)
+			}
+		})
+	}
+}

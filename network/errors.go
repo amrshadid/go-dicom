@@ -3,6 +3,9 @@ package network
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"syscall"
 )
 
 // NetworkError is the base interface for all network-specific errors.
@@ -146,4 +149,43 @@ func IsCanceled(err error) bool {
 		return false
 	}
 	return dimse.Status == StatusQRCancelMatchingTerminated
+}
+
+// endedNormally reports whether a read error is how an association ordinarily
+// finishes rather than a fault worth reporting.
+//
+// A release and an abort are obvious. The other two are not, and both were logged
+// at error level:
+//
+//   - A read timeout. A requestor that has finished its work and gone leaves the
+//     server reading an idle connection until the network timeout fires. That is
+//     the association ending, not a failure — and every completed query produced
+//     one, so an archive's logs filled with errors describing healthy traffic.
+//   - EOF. The peer closed the connection without releasing. Impolite, and common:
+//     plenty of tools exit rather than releasing, and there is nothing the server
+//     can do about it or needs to.
+//
+// A read that fails for any other reason is still an error.
+func endedNormally(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if assocErr, ok := err.(*AssociationError); ok {
+		return assocErr.Code == "RELEASED" || assocErr.Code == "ABORTED"
+	}
+
+	if _, ok := err.(*TimeoutError); ok {
+		return true
+	}
+
+	// The PDU reader wraps the underlying failure, so an EOF arrives as a
+	// communication error with the original inside it.
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	// A connection reset or a closed socket is the peer having gone, which is the
+	// same situation as EOF from this side.
+	return errors.Is(err, net.ErrClosed) || errors.Is(err, syscall.ECONNRESET)
 }
