@@ -51,6 +51,16 @@ tests agreeing with each other while the code did something else.
   `Handler` implements the streaming interfaces as well as the slice-returning
   ones, so a retrieval reads one instance at a time and stops on C-CANCEL.
 
+  Sequence matching (C.2.2.2.6) is implemented for the sequences the standard
+  defines as matching keys: Scheduled Procedure Step Sequence, which every
+  Modality Worklist query filters on, and Request Attributes Sequence. Every
+  criterion in a query item must be satisfied by the *same* stored item — a
+  station from one scheduled step and a date from another is not a match, since
+  that would return a step nobody scheduled. Responses carry the item that
+  matched rather than whichever came first. Indexing every nested attribute of
+  every instance would put the whole data set back in memory, so any other
+  sequence remains an unsupported optional key.
+
 ### Changed
 
 - **`storescp` and `qrscp` now accept compressed pixel data.** Both offered only

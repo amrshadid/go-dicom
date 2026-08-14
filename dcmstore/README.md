@@ -74,12 +74,26 @@ Only the keys PS3.4 C.6.1.1 and C.6.2.1 define are indexed:
 | List of UID | C.2.2.2.2 | Backslash-separated, matches any member |
 | Wildcard | C.2.2.2.4 | `*` and `?`, for the string VRs only — a `*` in a UI is a `*`, not "everything" |
 | Range | C.2.2.2.5 | `lower-upper` for DA, TM, DT; either end optional, both inclusive; a partial bound covers the period it names, so `2024-2024` is the whole year |
+| Sequence | C.2.2.2.6 | A query item's attributes matched against the stored sequence's items; matches if any one item satisfies all of them |
 
 Wildcard matching is written directly rather than translated to a regular expression: the pattern comes from a peer, and a real patient name contains `.` and `(`. It is linear, with a test that a pattern of forty stars against a four-thousand character value returns immediately.
 
 An attribute the index does not hold is an **unsupported optional key**: returned with a zero-length value, as C.2.2.1.2 allows, rather than matched on. Matching would return nothing, and an empty result reads as an empty archive rather than as an unsupported query.
 
-Sequence matching (C.2.2.2.6) is not implemented; a sequence in a query is an unsupported optional key like any other.
+### Sequence matching
+
+Sequence matching needs the nested attributes in the index, and indexing every nested attribute of every instance would put the whole data set back in memory. So the indexed sequences are the ones the standard defines as matching keys:
+
+| Sequence | Indexed attributes |
+|---|---|
+| `(0040,0100)` Scheduled Procedure Step | Station AE title and name, start date and time, modality, performing physician, description, step ID, location — the Modality Worklist keys from PS3.4 K.6.1.2.2 |
+| `(0040,0275)` Request Attributes | Requested procedure ID and description, scheduled step ID and description |
+
+Every criterion in a query item must be satisfied by the **same** stored item. An instance with a step at `CT_ROOM_1` on one date and a step at `MR_ROOM_2` on another does not match a query for `CT_ROOM_1` on the second date — matching attributes across different items would return a step nobody scheduled.
+
+A response carries the item that matched rather than whichever came first, so it describes the step the query was about.
+
+Any other sequence is an unsupported optional key, as is an attribute inside an indexed sequence that is not itself indexed.
 
 ## Retrieval
 

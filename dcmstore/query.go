@@ -207,9 +207,25 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 	}
 	var criteria []criterion
 
+	// Sequence keys are matched separately: the criteria live inside an item
+	// rather than in a value, so they cannot be reduced to a string comparison.
+	var sequenceKeys []*dataelem.DataElement
+
 	for _, elem := range query.GetAll() {
 		t, ok := elem.Tag()
 		if !ok || t == tagQueryRetrieveLevel || computedKeys[t] {
+			continue
+		}
+
+		// PS3.4 C.2.2.2.6. Only the sequences this store indexes can be matched
+		// on; any other is an unsupported optional key like a flat one.
+		if elem.GetVR() == dataelem.SQ {
+			if isIndexedSequence(t) {
+				sequenceKeys = append(sequenceKeys, elem)
+			} else {
+				storeLogger.Debug("dcmstore: ignoring the sequence %s in a query; it is not indexed",
+					t.String())
+			}
 			continue
 		}
 
@@ -253,6 +269,18 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 			if !matchValue(c.vr, c.value, inst.value(c.tag)) {
 				keep = false
 				break
+			}
+		}
+		if keep {
+			for _, seqElem := range sequenceKeys {
+				seqTag, ok := seqElem.Tag()
+				if !ok {
+					continue
+				}
+				if !matchSequence(seqElem, inst, seqTag) {
+					keep = false
+					break
+				}
 			}
 		}
 		if keep {
@@ -358,6 +386,14 @@ func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Inst
 			if value := s.computed(t, group); value != "" {
 				_ = response.Add(dataelem.NewDataElement(t, computedVR(t), value))
 			}
+			continue
+		}
+
+		// An indexed sequence comes back carrying the item that matched, so the
+		// response describes the step the query was about rather than whichever
+		// item happened to be first.
+		if elem.GetVR() == dataelem.SQ && isIndexedSequence(t) {
+			_ = response.Add(buildSequenceResponse(elem, representative, t))
 			continue
 		}
 

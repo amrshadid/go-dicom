@@ -64,23 +64,50 @@
 //
 //   - Universal (C.2.2.2.3) — a zero-length query value matches everything, and
 //     the attribute is returned.
+//
 //   - Single value (C.2.2.2.1) — equality, with the padding PS3.5 6.2 permits
 //     ignored, and dates and times compared at whatever precision each was
 //     written to.
+//
 //   - List of UID (C.2.2.2.2) — a backslash-separated list of UIDs.
+//
 //   - Wildcard (C.2.2.2.4) — "*" and "?" for the string VRs, and literal
 //     characters everywhere else. A "*" in a UI is a "*", not "everything".
+//
 //   - Range (C.2.2.2.5) — "lower-upper" for DA, TM and DT, either end optional,
 //     both inclusive. A partial bound covers the period it names, so
 //     "2024-2024" is the whole year.
+//
+//   - Sequence (C.2.2.2.6) — a query sequence whose single item holds attributes
+//     to match against the items of the stored sequence. It matches if any one
+//     stored item satisfies every attribute in the query item; the criteria must
+//     be met by the same item, so a station from one scheduled step and a date
+//     from another is not a match.
 //
 // An attribute the index does not hold is treated as an unsupported optional key
 // and returned with a zero-length value, which C.2.2.1.2 allows. Matching on it
 // instead would return nothing at all, and an empty result reads to the requestor
 // as an empty archive rather than as an unsupported query.
 //
-// Sequence matching (C.2.2.2.6) is not implemented; a sequence in a query is an
-// unsupported optional key like any other.
+// # Which sequences are matched
+//
+// Sequence matching needs the nested attributes in the index, and an index holding
+// every nested attribute of every instance would put the whole data set back in
+// memory. So the indexed sequences are the ones the standard defines as matching
+// keys:
+//
+//   - (0040,0100) Scheduled Procedure Step Sequence, which every Modality Worklist
+//     query filters on (PS3.4 K.6.1.2.2) — scheduled station AE title and name,
+//     start date and time, modality, performing physician, description, step ID
+//     and location.
+//   - (0040,0275) Request Attributes Sequence — requested procedure ID, scheduled
+//     step ID and description, requested procedure description.
+//
+// Any other sequence is an unsupported optional key, as is an attribute inside an
+// indexed sequence that is not itself indexed.
+//
+// A response returns the stored item that matched rather than whichever came
+// first, so it describes the step the query was about.
 //
 // # Retrieval
 //
