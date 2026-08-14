@@ -352,7 +352,30 @@ func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
 		return 0, fmt.Errorf("jpegls: entropy-coded data ends %d bytes early; the frame is "+
 			"truncated and the samples past that point would be invented", d.reader.overrun)
 	}
-	return d.reader.pos, nil
+
+	// The reader's position is not where the scan ends: fill reads up to eight
+	// bytes ahead of the bits actually consumed, so pos overshoots. A
+	// single-scan frame does not notice, because nothing after the scan but EOI
+	// is read — which is why this went unseen. A frame with one scan per
+	// component does: the caller advances by what is returned, so an overshoot
+	// lands inside the next scan's header and the byte there is read as a marker.
+	//
+	// The end of an entropy segment is the first 0xFF followed by a byte with its
+	// top bit set. Stuffing guarantees a 0xFF inside the segment is followed by
+	// seven data bits with that bit clear, so the two cannot be confused — the
+	// bit reader relies on the same rule to stop.
+	return entropyLength(entropy), nil
+}
+
+// entropyLength returns the number of bytes of entropy-coded data before the next
+// marker, or all of them when there is no marker left.
+func entropyLength(entropy []byte) int {
+	for i := 0; i+1 < len(entropy); i++ {
+		if entropy[i] == 0xFF && entropy[i+1]&0x80 != 0 {
+			return i
+		}
+	}
+	return len(entropy)
 }
 
 // resetContexts sets the adaptive state T.87 A.8 starts each scan from.

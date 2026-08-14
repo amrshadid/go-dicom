@@ -343,7 +343,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Pixel data is transcoded in both directions as the negotiated context requires, but **RLE Lossless is the only syntax this library compresses to**. Every other compressed target fails rather than sending bytes described as something they are not. There is no JPEG, JPEG-LS or JPEG 2000 encoder here. |
+| **Compressing pixel data** | Two syntaxes are compressed *to*: **RLE Lossless** and **JPEG-LS Lossless**. Every other compressed target fails rather than sending bytes described as something they are not. JPEG-LS Near-Lossless is refused deliberately — it is lossy, and the error budget is the caller's decision. There is no JPEG or JPEG 2000 encoder here. |
 | **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
 
 ### Interoperability

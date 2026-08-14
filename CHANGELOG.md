@@ -13,6 +13,43 @@ tests agreeing with each other while the code did something else.
 
 ### Added
 
+- **A JPEG-LS encoder, so RLE is no longer the only syntax this library
+  compresses to.** `compress.EncodeJPEGLS` writes lossless JPEG-LS at 2 to 16
+  bits, single or multi component, one scan per component, and the transcoding
+  path uses it: a C-STORE over a context that negotiated JPEG-LS Lossless now
+  encodes rather than failing.
+
+  **JPEG-LS Near-Lossless is still refused**, although the same encoder could
+  produce it. It is lossy, and how much error to accept is the caller's decision
+  rather than one to make silently while transcoding.
+
+  The encoder and this package's decoder were written against each other, so a
+  round trip through both proves only that they agree — which is exactly the
+  failure shipped in the RLE encoder before 1.4.0, where it emitted frames with no
+  segment header and its own decompressor accepted them. So the output is also
+  handed to **CharLS**, through pylibjpeg, which shares no code with this library:
+  it decodes the frame to identical samples. A real instance from pydicom's corpus
+  compresses and round-trips to identical pixels through the network codec.
+
+  Three defects were found and fixed while getting the round trip to work, all of
+  them cases where reasoning from the standard's prose disagreed with the decoder:
+  the first row has no special case (the decoder relies on a zeroed line above, and
+  predicting from the left instead disagrees at the very first sample); the
+  run-interruption error must be reduced modulo the range, or a 16-bit sample
+  predicted from zero needs 17 bits and the escape path silently drops the top one;
+  and 16-bit samples are little endian, matching what the decoder writes back and
+  what DICOM native pixel data holds.
+
+### Fixed
+
+- **A multi-scan JPEG-LS frame did not decode.** `decodeJPEGLSScan` returned the
+  bit reader's position as the number of bytes consumed, and the reader fills up to
+  eight bytes ahead of what it has used — so the caller advanced past the end of
+  the scan. A frame with one scan per component, which is what ILV=0 means and what
+  the new encoder writes for colour, had its second scan header read as entropy
+  data. A single-scan frame never noticed, because nothing after the scan but EOI
+  is read, which is why this went unseen.
+
 - **`dcmstore`: an on-disk instance store with a queryable index.** A working
   archive is now a few lines:
 

@@ -17,7 +17,33 @@ import (
 // points: native pixel data is compressed directly, and pixel data already in
 // another compressed syntax is decoded first — which only works for a syntax
 // there is a decoder for, and says so plainly when there is not.
-func compressToRLE(ds *dataset.Dataset, source, targetSyntax string) (*dataset.Dataset, error) {
+// frameEncoder compresses one frame of native pixel data.
+//
+// The two encoders this library has differ only here: everything around them —
+// pulling the frames apart at the right length, encapsulating, copying the data
+// set, recording the new syntax — is the same work, and was written once for RLE.
+type frameEncoder func(frame []byte, info *dataset.PixelDataInfo) ([]byte, error)
+
+// encodeFramesRLE compresses a frame as RLE Lossless.
+func encodeFramesRLE(frame []byte, info *dataset.PixelDataInfo) ([]byte, error) {
+	return compress.NewRLECompressor().CompressFrame(frame, info.SamplesPerPixel, info.BitsAllocated)
+}
+
+// encodeFramesJPEGLS compresses a frame as JPEG-LS Lossless.
+//
+// BitsStored rather than BitsAllocated: the codestream declares the precision, and
+// declaring 16 for 12-bit data would have the decoder expect samples the image
+// does not contain.
+func encodeFramesJPEGLS(frame []byte, info *dataset.PixelDataInfo) ([]byte, error) {
+	bits := info.BitsStored
+	if bits <= 0 || bits > info.BitsAllocated {
+		bits = info.BitsAllocated
+	}
+	return compress.EncodeJPEGLS(frame, info.Columns, info.Rows, info.SamplesPerPixel, bits)
+}
+
+func compressPixelData(ds *dataset.Dataset, source, targetSyntax string,
+	encodeFrame frameEncoder) (*dataset.Dataset, error) {
 	if _, ok := ds.Get(pixelDataTag); !ok {
 		// Nothing to encode, so the syntaxes differ only in how the data set is
 		// written, which the codec handles.
@@ -56,11 +82,9 @@ func compressToRLE(ds *dataset.Dataset, source, targetSyntax string) (*dataset.D
 			targetSyntax, len(pixels), info.NumberOfFrames, frameLen)
 	}
 
-	encoder := compress.NewRLECompressor()
 	frames := make([][]byte, 0, info.NumberOfFrames)
 	for i := 0; i < info.NumberOfFrames; i++ {
-		frame, err := encoder.CompressFrame(
-			pixels[i*frameLen:(i+1)*frameLen], info.SamplesPerPixel, info.BitsAllocated)
+		frame, err := encodeFrame(pixels[i*frameLen:(i+1)*frameLen], info)
 		if err != nil {
 			return nil, fmt.Errorf("encoding frame %d as %s: %w", i, targetSyntax, err)
 		}
@@ -162,13 +186,23 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 	}
 
 	if targetCompressed {
-		if targetSyntax != RLELosslessUID {
-			// RLE is the only syntax this library encodes. Decoding and
-			// re-encoding to JPEG or JPEG 2000 would need an encoder for those.
-			return nil, fmt.Errorf("cannot encode pixel data as %s: RLE Lossless is the only "+
-				"compressed syntax this library writes", targetSyntax)
+		switch targetSyntax {
+		case RLELosslessUID:
+			return compressPixelData(ds, source, targetSyntax, encodeFramesRLE)
+		case JPEGLSLosslessUID:
+			return compressPixelData(ds, source, targetSyntax, encodeFramesJPEGLS)
+		default:
+			// A send that cannot be satisfied fails rather than putting bytes on
+			// the wire described as something they are not, which the receiver
+			// could not detect.
+			//
+			// JPEG-LS Near-Lossless is excluded deliberately: it is lossy, and how
+			// much error to accept is the caller's decision rather than one to make
+			// silently on their behalf while transcoding.
+			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
+				"RLE Lossless (%s) and JPEG-LS Lossless (%s)",
+				targetSyntax, RLELosslessUID, JPEGLSLosslessUID)
 		}
-		return compressToRLE(ds, source, targetSyntax)
 	}
 
 	// Compressed to uncompressed: decode.
