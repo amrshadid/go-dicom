@@ -11,7 +11,54 @@ Everything here came from reading the documentation against the code. Three
 defects turned up in the process, all of the shape 1.4.0 was about: prose and
 tests agreeing with each other while the code did something else.
 
+### Added
+
+- **`dcmstore`: an on-disk instance store with a queryable index.** A working
+  archive is now a few lines:
+
+  ```go
+  store, err := dcmstore.Open("./archive")
+  scp.SetHandler(dcmstore.NewHandler(store))
+  scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
+  ```
+
+  It accepts C-STORE, answers C-FIND at all four levels, and serves C-GET and
+  C-MOVE from what it has received, verified over a real association.
+
+  `QueryRetrieveHandler` takes callbacks and every adopter had to write the same
+  thing behind them first: file the instances, index the query attributes, then
+  implement the matching rules from PS3.4 C.2.2. Those rules are the fiddly part
+  and are now implemented once — universal, single value, list of UID, wildcard,
+  and DA/TM/DT ranges, with partial bounds covering the period they name so
+  `2024-2024` is the whole year. Wildcards apply only to the VRs C.2.2.2.4 allows
+  them in, so a `*` in a UI is a literal and not "everything".
+
+  Wildcard matching is written directly rather than translated to a regular
+  expression: the pattern comes from a peer, and a real patient name contains `.`
+  and `(`. It is linear, with a test that forty stars against four thousand
+  characters returns immediately.
+
+  An attribute the index does not hold is an unsupported optional key, returned
+  with a zero-length value as C.2.2.1.2 allows, rather than matched on — matching
+  would return nothing, which reads to the requestor as an empty archive.
+
+  Instances are files under a directory per study and series, with an atomically
+  written `index.json`. Losing the index costs a slow start, not the archive: it
+  is rebuilt by walking the tree, and a file that cannot be read is skipped with a
+  warning rather than failing the rebuild. Every UID that becomes a path component
+  goes through `fileutil.InstanceFilePath`.
+
+  `Handler` implements the streaming interfaces as well as the slice-returning
+  ones, so a retrieval reads one instance at a time and stops on C-CANCEL.
+
 ### Changed
+
+- **`qrscp` now stores and queries for real.** It held instances in memory and
+  never wrote them to disk at all — `-output` created a directory and nothing was
+  put in it. Its C-FIND returned one *empty* identifier per stored instance, and
+  its C-GET and C-MOVE ignored the query and returned **every instance in the
+  store**, so a request for one study retrieved the whole archive. It is now
+  backed by `dcmstore`, so all three do what they say.
 
 **A failed negotiation now says why, and what to change.**
 
@@ -159,6 +206,24 @@ The corrections to what the documentation claimed:
   reintroduced.
 
 ### Fixed
+
+- **`filewriter` wrote an empty value for every string-valued element.**
+  `ElementsFromDataset` discarded the second return of a type assertion:
+
+  ```go
+  value, _ := elem.GetValue().([]byte)
+  ```
+
+  so a `string` value became `nil` and the element was written with length 0. A
+  data set built in code — `NewDataElement(t, vr, "SMITH^JOHN")`, which is the
+  obvious way to write it — produced a file whose every element was present,
+  correctly typed, and empty. Data sets read by `filereader` hold `[]byte` and were
+  unaffected, which is why round-tripping a file worked and this went unnoticed.
+
+  `network.EncodeDataset` had the same job and got it right, so a data set that
+  sent correctly over the network wrote to disk empty. Strings are now converted,
+  and a value of a type that cannot be rendered is reported rather than silently
+  written as empty. Found by `dcmstore`'s round-trip test.
 
 - **`DeferredPixelDataReader.Get` always failed.** Its load path was a stub
   returning "file loading not implemented in this stub", so the exported reader
