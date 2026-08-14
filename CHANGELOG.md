@@ -130,6 +130,34 @@ The corrections to what the documentation claimed:
   configuration and a v1 binary refuses it outright rather than degrading, so the
   target's `@latest` install instruction left a local run unable to lint at all.
 
+### Security
+
+- **`storescp`, `getscu` and `qrscp` wrote files to a path chosen by the peer.**
+  All three named the file after the SOP Instance UID and joined it into the
+  output directory unchecked:
+
+  ```go
+  filename := filepath.Join(c.outputDir, sopInstanceUID+".dcm")
+  ```
+
+  `filepath.Join` cleans a path but does not confine it, so the `..` segments
+  survived and a UID of `../../etc/cron.d/pwn` escaped the output directory. For
+  `storescp` and `qrscp` the UID comes from any peer that can reach the port —
+  a DICOM SCP does not authenticate, as `CONFORMANCE.md` §7 states — so this was
+  an arbitrary-location file write as the user running the server.
+
+  New `fileutil.InstanceFilePath` validates before joining, and all three call
+  it. A UID is dotted decimal per PS3.5 9.1, so anything capable of traversal is
+  not a UID and is refused rather than sanitized into something resembling one;
+  the 64-character limit from the same section is enforced too. The result is
+  then checked to be within the output directory — redundant given the
+  validation, and deliberately so.
+
+  Tests cover nine traversal shapes, a UID at exactly the length limit, and a
+  source scan over the `cli` package that fails on any `filepath.Join` taking a
+  SOP Instance UID. The scan was verified to fail when the pattern is
+  reintroduced.
+
 ### Fixed
 
 - **`DeferredPixelDataReader.Get` always failed.** Its load path was a stub
