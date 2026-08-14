@@ -12,11 +12,39 @@ import (
 )
 
 // SCU (Service Class User) is a DICOM network client.
+// SCU is a DICOM Service Class User: the client that initiates an association
+// and issues operations over it.
+//
+// # Concurrency
+//
+// An SCU is safe for concurrent use. Operations on one are serialized, so several
+// goroutines may share it and each waits its turn rather than reading another's
+// response.
+//
+// That matters because the alternative was one association per goroutine, and
+// association setup is the expensive part of talking to a PACS — TCP, TLS
+// handshake, then negotiation. A caller sending a thousand instances across eight
+// workers paid for eight associations where one would do, and a PACS with an
+// association limit may refuse the rest.
+//
+// Serialized is not pipelined: one operation is in flight at a time, so sharing an
+// SCU bounds the number of associations rather than increasing throughput. See
+// [AsynchronousOperationsWindow] for what is negotiated about that.
+//
+// Two methods are deliberately outside the serialization. [SCU.Cancel] must reach
+// the peer while the operation it cancels is still running, and [SCU.Release] and
+// [SCU.Abort] must not wait behind a [SCU.Find] whose results have not been
+// drained.
 type SCU struct {
 	config      SCUConfig
 	association *Association
 	messageID   atomic.Uint32
 	mu          sync.Mutex
+
+	// opMu serializes DIMSE operations. Held for the whole of one — including,
+	// for Find, until the goroutine streaming its results has finished, since the
+	// operation is not over when Find returns.
+	opMu sync.Mutex
 }
 
 // NewSCU creates a new SCU with the given configuration.
@@ -115,6 +143,9 @@ func (s *SCU) defaultContexts() []PresentationContextItem {
 
 // Echo performs a C-ECHO verification.
 func (s *SCU) Echo(ctx context.Context) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	s.mu.Lock()
 	assoc := s.association
 	s.mu.Unlock()
@@ -170,6 +201,9 @@ func (s *SCU) Echo(ctx context.Context) error {
 
 // Store sends a DICOM dataset to the SCP using C-STORE.
 func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	s.mu.Lock()
 	assoc := s.association
 	s.mu.Unlock()
@@ -318,30 +352,46 @@ func (s *SCU) FindWithSOPClass(ctx context.Context, sopClassUID string,
 // findOnContext issues the C-FIND once a model and context have been chosen.
 func (s *SCU) findOnContext(ctx context.Context, assoc *Association, queryDS *dataset.Dataset,
 	sopClassUID string, pcID byte) (<-chan *CFindResult, error) {
+
+	// Held until the results have been streamed. Every early return below has to
+	// release it, which is why it is not a defer.
+	s.opMu.Lock()
+
 	// Build and send C-FIND-RQ
 	cmdDS := BuildCFindRQ(s.nextMessageID(), sopClassUID, PriorityMedium)
 	cmdBytes, err := EncodeCommandDataset(cmdDS)
 	if err != nil {
+		s.opMu.Unlock()
 		return nil, fmt.Errorf("failed to encode C-FIND-RQ: %w", err)
 	}
 
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+		s.opMu.Unlock()
 		return nil, fmt.Errorf("failed to send C-FIND-RQ command: %w", err)
 	}
 
 	// Send query dataset
 	dataBytes, err := EncodeDataset(queryDS, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
+		s.opMu.Unlock()
 		return nil, fmt.Errorf("failed to encode query dataset: %w", err)
 	}
 
 	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
+		s.opMu.Unlock()
 		return nil, fmt.Errorf("failed to send C-FIND query data: %w", err)
 	}
 
-	// Stream results on channel
+	// Stream results on channel.
+	//
+	// The operation lock is released by the streaming goroutine, not here: a
+	// C-FIND is not finished when this returns, and letting another operation
+	// start now would have it read this query's matches.
 	results := make(chan *CFindResult, 16)
-	go s.receiveFindResults(ctx, assoc, results)
+	go func() {
+		defer s.opMu.Unlock()
+		s.receiveFindResults(ctx, assoc, results)
+	}()
 	return results, nil
 }
 
@@ -417,6 +467,9 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, result
 
 // Move performs a C-MOVE request.
 func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestination string) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	s.mu.Lock()
 	assoc := s.association
 	s.mu.Unlock()
@@ -496,6 +549,9 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 
 // Get performs a C-GET request (retrieve objects on the same association).
 func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	s.mu.Lock()
 	assoc := s.association
 	s.mu.Unlock()
@@ -662,6 +718,9 @@ func (s *SCU) Cancel(ctx context.Context, messageID uint16) error {
 
 // NEventReport sends an N-EVENT-REPORT-RQ.
 func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID string, eventTypeID uint16, ds *dataset.Dataset) (*NEventReportResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	assoc := s.getAssociation()
 	if assoc == nil {
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
@@ -704,6 +763,9 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 
 // NGet sends an N-GET-RQ.
 func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NGetResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	assoc := s.getAssociation()
 	if assoc == nil {
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
@@ -746,6 +808,9 @@ func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NG
 
 // NSet sends an N-SET-RQ.
 func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) (*NSetResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	assoc := s.getAssociation()
 	if assoc == nil {
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
@@ -782,6 +847,9 @@ func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *
 
 // NAction sends an N-ACTION-RQ.
 func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, actionTypeID uint16, ds *dataset.Dataset) (*NActionResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	assoc := s.getAssociation()
 	if assoc == nil {
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
@@ -822,6 +890,9 @@ func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, a
 
 // NCreate sends an N-CREATE-RQ.
 func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) (*NCreateResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	assoc := s.getAssociation()
 	if assoc == nil {
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")
@@ -861,6 +932,9 @@ func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, d
 
 // NDelete sends an N-DELETE-RQ.
 func (s *SCU) NDelete(ctx context.Context, sopClassUID, sopInstanceUID string) (*NDeleteResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	assoc := s.getAssociation()
 	if assoc == nil {
 		return nil, NewAssociationError("NOT_ASSOCIATED", "not associated")

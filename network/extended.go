@@ -240,3 +240,45 @@ func (s *SOPClassExtendedNegotiation) Encode() []byte {
 	buf.Write(s.ServiceData)
 	return buf.Bytes()
 }
+
+// MaxOperationsThisImplementationInvokes is how many DIMSE operations this
+// library keeps in flight on one association.
+//
+// One. An SCU issues an operation and waits for its response before the next, and
+// operations on a shared SCU are serialized rather than pipelined.
+const MaxOperationsThisImplementationInvokes uint16 = 1
+
+// truthfulAsyncWindow reduces a proposed asynchronous operations window to what
+// this implementation actually does.
+//
+// The window was previously sent exactly as the caller asked for it, and nothing
+// enforced it: a caller requesting four had four negotiated and reported back,
+// while the SCU issued one operation at a time and waited. The peer was told
+// something about us that was not true, and may size its own buffers by it.
+//
+// Zero means unlimited in PS3.7 D.3.3.3, which is further from the truth than any
+// finite number, so it is clamped too.
+//
+// MaxOperationsPerformed — how many we will accept from the peer — is left as
+// asked. It bounds what the peer may send us, and an SCP that reads and dispatches
+// one message at a time per association is not made incorrect by a peer sending
+// fewer than it could.
+func truthfulAsyncWindow(proposed *AsynchronousOperationsWindow) *AsynchronousOperationsWindow {
+	if proposed == nil {
+		return nil
+	}
+
+	invoked := proposed.MaxOperationsInvoked
+	if invoked == 0 || invoked > MaxOperationsThisImplementationInvokes {
+		DefaultLogger.Warn("asynchronous operations: a window of %d operations invoked was "+
+			"requested and %d is negotiated, which is what this implementation performs — "+
+			"an SCU issues one operation at a time and waits for the response",
+			proposed.MaxOperationsInvoked, MaxOperationsThisImplementationInvokes)
+		invoked = MaxOperationsThisImplementationInvokes
+	}
+
+	return &AsynchronousOperationsWindow{
+		MaxOperationsInvoked:   invoked,
+		MaxOperationsPerformed: proposed.MaxOperationsPerformed,
+	}
+}

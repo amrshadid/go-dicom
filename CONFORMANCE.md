@@ -48,9 +48,19 @@ see [§2.4](#24-services-refused-when-unimplemented).
 ### 1.3 Sequencing
 
 The library imposes no ordering beyond what the standard requires. An
-association may carry any number of operations. Asynchronous operations are
-negotiated at a window of one unless the application asks for more, so
-operations are answered in the order received.
+association may carry any number of operations, answered in the order received.
+
+Asynchronous operations are negotiated at a window of one, and a larger window
+asked for by the application is reduced to one rather than proposed. This
+implementation issues one operation at a time and waits for the response, so
+proposing more would tell the peer something untrue — and a peer may size its own
+buffers by what it is told. `MaxOperationsPerformed`, which bounds what the peer
+may send us, is proposed as asked.
+
+An `SCU` is safe to share between goroutines: operations on one are serialized. It
+bounds the number of associations a concurrent caller needs, which matters because
+association setup is the expensive part and a peer may limit how many it accepts.
+It does not raise throughput.
 
 ---
 
