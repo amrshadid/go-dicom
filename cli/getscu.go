@@ -5,11 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/fileutil"
 	"github.com/amrshadid/go-dicom/network"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -69,7 +69,13 @@ func (c *GetSCUCommand) Execute(args []string) error {
 		// saved nothing.
 		OnCStore: func(_ context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {
 			received++
-			filename := filepath.Join(c.outputDir, sopInstanceUID+".dcm")
+			// The UID comes from the archive we queried, so it decides the
+			// filename. Validate it before it becomes a path.
+			filename, err := fileutil.InstanceFilePath(c.outputDir, sopInstanceUID)
+			if err != nil {
+				fmt.Printf("Refused an instance from the peer: %v\n", err)
+				return network.StatusUnableToProcess
+			}
 			if err := writeDICOMFile(filename, sopClassUID, sopInstanceUID, ds); err != nil {
 				fmt.Printf("Error writing %s: %v\n", filename, err)
 				return network.StatusUnableToProcess

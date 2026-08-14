@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/fileutil"
 	"github.com/amrshadid/go-dicom/network"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -180,10 +180,24 @@ type qrHandler struct {
 }
 
 func (h *qrHandler) HandleCStore(ctx context.Context, req *network.CStoreRequest) (*network.CStoreResponse, error) {
+	// The UID comes from the peer's C-STORE command set, so it decides the
+	// filename. Validate it before it becomes a path: joining it unchecked let a
+	// UID of "../../etc/cron.d/pwn" name a file outside the output directory.
+	filePath, err := fileutil.InstanceFilePath(h.store.outputDir, req.AffectedSOPInstance)
+	if err != nil {
+		fmt.Printf("  Refused: %v\n", err)
+		return &network.CStoreResponse{
+			MessageIDRespondedTo: req.MessageID,
+			AffectedSOPClass:     req.AffectedSOPClass,
+			AffectedSOPInstance:  req.AffectedSOPInstance,
+			Status:               network.StatusUnableToProcess,
+		}, nil
+	}
+
 	inst := &storedInstance{
 		SOPClassUID:    req.AffectedSOPClass,
 		SOPInstanceUID: req.AffectedSOPInstance,
-		FilePath:       filepath.Join(h.store.outputDir, req.AffectedSOPInstance+".dcm"),
+		FilePath:       filePath,
 	}
 
 	// Extract metadata from dataset if available

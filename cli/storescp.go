@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/fileutil"
 	"github.com/amrshadid/go-dicom/filewriter"
 	"github.com/amrshadid/go-dicom/network"
 )
@@ -52,7 +52,14 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 	handler := &network.StorageHandler{
 		OnStore: func(_ context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {
 			received++
-			filename := filepath.Join(c.outputDir, sopInstanceUID+".dcm")
+			// The UID comes from the peer, so it decides the filename. Validate it
+			// before it becomes a path: joining it unchecked let a UID of
+			// "../../etc/cron.d/pwn" write outside the output directory.
+			filename, err := fileutil.InstanceFilePath(c.outputDir, sopInstanceUID)
+			if err != nil {
+				fmt.Printf("Refused an instance from the peer: %v\n", err)
+				return network.StatusUnableToProcess
+			}
 			if err := writeDICOMFile(filename, sopClassUID, sopInstanceUID, ds); err != nil {
 				fmt.Printf("Error writing %s: %v\n", filename, err)
 				return network.StatusUnableToProcess
