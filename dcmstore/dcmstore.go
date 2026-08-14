@@ -45,6 +45,15 @@ type Instance struct {
 	// than looked up: a private or non-conformant element may not have the VR the
 	// dictionary expects, and matching it by the dictionary's would be wrong.
 	Keys map[string]IndexedValue `json:"keys"`
+
+	// Sequences holds the indexed sequences, by sequence tag, one map of
+	// attributes per item. Only the sequences in indexedSequences are here —
+	// indexing every nested attribute of every instance would put the whole data
+	// set back in memory, which is what writing the files was meant to avoid.
+	//
+	// Omitted from the index file when empty, which is the common case: most
+	// instances carry none of them.
+	Sequences map[string][]map[string]IndexedValue `json:"sequences,omitempty"`
 }
 
 // IndexedValue is one indexed attribute value.
@@ -160,6 +169,7 @@ func (s *Store) Store(ctx context.Context, ds *dataset.Dataset) (*Instance, erro
 		SOPInstanceUID: sopInstanceUID,
 		Path:           filepath.ToSlash(relative),
 		Keys:           indexKeys(ds),
+		Sequences:      indexSequences(ds),
 	}
 
 	s.mu.Lock()
@@ -361,6 +371,7 @@ func (s *Store) readInstance(path string) (*Instance, error) {
 		SOPInstanceUID: sopInstanceUID,
 		Path:           filepath.ToSlash(relative),
 		Keys:           indexKeys(ds),
+		Sequences:      indexSequences(ds),
 	}, nil
 }
 
