@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   association established and useless, stays an error. Found by running the CLI for
   a demonstration, where normal traffic looked like a fault.
 
+- **An association ending is no longer reported as an error.** A read timeout and
+  an EOF were both logged at error level, and both are how associations ordinarily
+  finish: a requestor that has done its work and gone leaves the server reading an
+  idle connection until the network timeout fires, and a requestor that exits
+  without releasing gives the server an EOF — which plenty of tools do. So every
+  completed query produced an error describing healthy traffic. A read that fails
+  for any other reason is still an error. Found the same way, in the same
+  demonstration.
+
 ## [1.5.0] - 2026-08-15
 
 This release started as a pass over the documentation, checking each claim against

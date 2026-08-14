@@ -251,11 +251,9 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 		// Receive a PDU (could be command data or release/abort)
 		ctxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
 		if err != nil {
-			// Check if it's a normal release
-			if assocErr, ok := err.(*AssociationError); ok {
-				if assocErr.Code == "RELEASED" || assocErr.Code == "ABORTED" {
-					return
-				}
+			if endedNormally(err) {
+				DefaultLogger.Debug("association with %s ended: %v", assoc.CallingAE(), err)
+				return
 			}
 			DefaultLogger.Error("error receiving data: %v", err)
 			return
