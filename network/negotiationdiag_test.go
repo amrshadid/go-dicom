@@ -110,7 +110,11 @@ func TestStoreExplainsAnAbstractSyntaxRefusal(t *testing.T) {
 // had no way to see why a modality kept failing.
 func TestAnSCPReportsRefusingEveryContext(t *testing.T) {
 	logged := withConfigLogger(t, slog.LevelDebug)
-	withDefaultLoggerLevel(t, LogLevelWarn)
+
+	// Debug, because an individual refusal is what ordinary negotiation looks
+	// like: a requestor proposes broadly and a server accepts what it supports.
+	// Only refusing every context is a warning, and this asserts both.
+	withDefaultLoggerLevel(t, LogLevelDebug)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -314,5 +318,43 @@ func TestTheAdviceInTheErrorActuallyWorks(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("the C-STORE reported success but the handler never ran")
+	}
+}
+
+// An ordinary association refuses several contexts — an SCU proposing the default
+// set has around twenty and any server supports a subset — so refusals must not be
+// warnings. Reporting each as one meant every association produced a handful,
+// burying the refusals that matter.
+func TestOrdinaryNegotiationIsNotReportedAsAProblem(t *testing.T) {
+	logged := withConfigLogger(t, slog.LevelDebug)
+	withDefaultLoggerLevel(t, LogLevelWarn) // the default: warnings and errors only
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// A server that supports verification and CT only, as a real one supports a
+	// subset of what a requestor offers.
+	scp := NewSCP(SCPConfig{AETitle: "SUBSET", BindAddress: "127.0.0.1"})
+	scp.SetHandler(&EchoHandler{})
+	scp.SetSupportedAbstractSyntaxes([]string{VerificationSOPClassUID, CTImageStorageUID})
+
+	addr := serveSCP(ctx, t, scp)
+
+	scu := NewSCU(SCUConfig{CallingAE: "SCU", CalledAE: "SUBSET", Address: addr})
+	if err := scu.Associate(ctx, nil); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+
+	// The association is usable — verification was accepted — so nothing about it
+	// is a problem worth a warning.
+	if err := scu.Echo(ctx); err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+	_ = scu.Release(ctx)
+
+	if got := logged.String(); got != "" {
+		t.Errorf("an ordinary association reported %d characters at warning level or above; "+
+			"refusing contexts a requestor speculatively proposed is not a problem:\n%s",
+			len(got), got)
 	}
 }

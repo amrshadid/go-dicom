@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Ordinary presentation context negotiation is no longer reported as a problem.**
+  Each refused context was logged at warning level, and a requestor proposing the
+  default set has around twenty while any server supports a subset — so every
+  association produced a handful of warnings, burying the refusals that matter.
+  An individual refusal is now debug; refusing *every* context, which leaves the
+  association established and useless, stays an error. Found by running the CLI for
+  a demonstration, where normal traffic looked like a fault.
 
 ## [1.5.0] - 2026-08-15
 
