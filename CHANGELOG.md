@@ -268,6 +268,39 @@ The corrections to what the documentation claimed:
 - **`network.AllNonPatientSOPClassUIDs`**, and
   `NonPatientObjectPresentationContexts` now returns the query models as well as
   the storage classes.
+### Changed — an SCU can be shared, and says what it does
+
+**An `SCU` is safe to use from several goroutines.** Operations on one are
+serialized, so each waits its turn rather than reading another's response. The
+documentation previously told callers to use one `SCU` per goroutine, which works
+and costs an association per goroutine — and association setup is the expensive
+part of talking to a PACS: TCP, TLS handshake, then negotiation. A caller sending
+instances across eight workers paid for eight associations where one would do, and
+a peer with an association limit may refuse the rest.
+
+Serialized is not pipelined: one operation is in flight at a time, so sharing
+bounds the number of associations rather than raising throughput. #96 tracks the
+demultiplexer that would change that.
+
+Two methods are deliberately outside the serialization. `Cancel` has to reach the
+peer while the operation it cancels is still running — a cancel that waited for
+that operation to finish would be useless — and `Release` and `Abort` must not
+wait behind a `Find` whose results have not been drained.
+
+Verified by driving eight goroutines at one `SCU` under `-race` and requiring
+every instance to arrive exactly once. Without the serialization the same test
+receives **4 of 32** instances and times out at sixty seconds, the goroutines
+having deadlocked reading each other's responses.
+
+**The asynchronous operations window now says what this implementation does.** It
+was sent exactly as the caller asked for and nothing enforced it: a caller
+requesting a window of four had four negotiated and reported back, while the SCU
+issued one operation at a time and waited. A proposed `MaxOperationsInvoked` above
+1 — or 0, which PS3.7 D.3.3.3 defines as unlimited and is furthest from the truth —
+is now reduced to 1 with a warning naming what was asked for and what was
+negotiated. `MaxOperationsPerformed`, which bounds what the peer may send us, is
+proposed as asked. The caller's struct is copied rather than rewritten, so an
+`SCUConfig` reused for a second association is unchanged.
 
 ### Security
 

@@ -188,12 +188,15 @@
 //
 // # Limitations
 //
-//   - The asynchronous operations window is negotiated but not enforced; an SCU
-//     issues one operation at a time and waits for the response.
+//   - Operations are not pipelined: one is in flight at a time. The negotiated
+//     window says so — a proposed MaxOperationsInvoked above 1 is reduced to 1
+//     rather than telling the peer something untrue.
 //   - RLE Lossless is the only syntax pixel data is compressed *to*. It is
 //     transcoded in both directions as the negotiated context requires, but a
 //     context needing any other compressed target fails rather than sending
 //     bytes described as something they are not.
-//   - An [SCU] performs one operation at a time. Use one per goroutine rather
-//     than sharing a single instance.
+//   - An [SCU] performs one operation at a time, and is safe to share: operations
+//     on one are serialized, so several goroutines may use it. That bounds the
+//     number of associations a concurrent caller needs rather than raising
+//     throughput.
 package network

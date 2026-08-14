@@ -341,10 +341,10 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | Area | Status |
 |------|--------|
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
-| **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
+| **Asynchronous operations** | Not pipelined: one operation is in flight at a time. The negotiated window now says so — a proposed `MaxOperationsInvoked` above 1 is reduced to 1 with a warning, rather than telling the peer something untrue. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
 | **Compressing pixel data** | Two syntaxes are compressed *to*: **RLE Lossless** and **JPEG-LS Lossless**. Every other compressed target fails rather than sending bytes described as something they are not. JPEG-LS Near-Lossless is refused deliberately — it is lossy, and the error budget is the caller's decision. There is no JPEG or JPEG 2000 encoder here. |
-| **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
+| **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
 

@@ -269,7 +269,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 		ImplementationVersion:  DefaultImplementationVersionName,
 	}
 	if ext != nil {
-		userInfo.AsyncOperations = ext.AsyncOperations
+		userInfo.AsyncOperations = truthfulAsyncWindow(ext.AsyncOperations)
 		userInfo.RoleSelections = ext.RoleSelections
 		userInfo.UserIdentity = ext.UserIdentity
 	}
