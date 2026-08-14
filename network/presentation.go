@@ -147,6 +147,16 @@ func (pc *PresentationContext) IsAccepted() bool {
 // same four with the rest behind ALL_TRANSFER_SYNTAXES. Use AllTransferSyntaxes
 // to accept compressed pixel data, which an archive or router wants: it stores
 // and forwards the bytes without needing to decode them.
+//
+// This default is deliberately conservative because it applies to every caller,
+// including an SCU that will try to decode what it asked for — and for that case a
+// compressed syntax with no decoder moves the failure from association time, where
+// the error names the cause, to pixel access, where it does not.
+//
+// A server whose purpose is to store is the other case, and there the answer is
+// the opposite: accept everything, since keeping an instance does not require
+// decoding it. Both servers in this distribution do — see the storescp and qrscp
+// commands, and dcmstore.SupportedTransferSyntaxes.
 func DefaultTransferSyntaxes() []string {
 	return []string{
 		ExplicitVRLittleEndianUID,

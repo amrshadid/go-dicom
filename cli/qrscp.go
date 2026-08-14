@@ -99,6 +99,10 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	abstractSyntaxes = append(abstractSyntaxes, network.AllWorklistSOPClassUIDs()...)
 	scp.SetSupportedAbstractSyntaxes(abstractSyntaxes)
 
+	// Compressed pixel data included: the store keeps an instance as it arrives and
+	// serves it back unchanged, so it does not need to decode one to hold it.
+	scp.SetSupportedTransferSyntaxes(dcmstore.SupportedTransferSyntaxes())
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
