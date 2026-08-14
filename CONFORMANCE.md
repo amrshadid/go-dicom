@@ -297,8 +297,10 @@ at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded.
 
 Every file in pydicom's corpus that pydicom can decode decodes here to the same
-samples, bar the two gaps below — 42 of its 49, compared whole rather than by
-their leading values. What follows is what does not decode.
+samples, bar JPEG 2000 — 43 of its 49, compared whole rather than by their
+leading values. The six it does not are all JPEG 2000, and
+`TestPixelsAgainstWholePydicomCorpus` names each one it skips. What follows is
+that gap, and two differences in how decoded samples are shaped and coloured.
 
 - **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
   path: wavelet transforms plus EBCOT arithmetic coding is thousands of lines to

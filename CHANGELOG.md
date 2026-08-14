@@ -7,7 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+Documentation release, with two defects found while checking the documentation
+against the code. The pattern in both is the same one 1.4.0 was about: prose and
+tests agreeing with each other while the code did something else.
+
+### Fixed
+
+- **`DeferredPixelDataReader.Get` always failed.** Its load path was a stub
+  returning "file loading not implemented in this stub", so the exported reader
+  could never read anything, while `fileutil/doc.go` documented it with a working
+  example. `Load` also never set `data` or `loaded` on that branch, and `Get`
+  read `loaded` without holding the mutex — a data race under concurrent use.
+
+  The test did not catch it because it called the constructor and `IsLoaded()`
+  and stopped there, never calling `Load` or `Get`.
+
+  `loadFromFile` now seeks, reads the extent with `io.ReadFull` and caches it,
+  bounded twice before allocating: against `MaxDeferredPixelDataLength` (1 GiB),
+  since the length reaches this code from an element header and is
+  attacker-controlled, and against the file's actual size — so a declared length
+  longer than the file is refused rather than yielding a short buffer the caller
+  cannot tell is short. Tests cover a non-zero offset, the cached second access,
+  and refusal of an over-long length, an offset past the end, a length past the
+  limit, a negative offset, a zero length, and a missing file.
+
+- **`make build` stamped version 1.1.0** into every locally built binary. The
+  Makefile held a `VERSION` literal that was not updated for 1.2, 1.3 or 1.4, and
+  `-ldflags "-X main.Version=$(VERSION)"` wrote it over the correct default in
+  `main.go`. Released binaries were never affected — `build-release.yml` stamps
+  the git tag — which is why it went unnoticed for three releases. The Makefile
+  now derives the version from `main.go`, so there is no third copy left to
+  drift.
+
+### Changed
+
+- **The README no longer contradicts itself about codec support.** It claimed
+  JPEG-LS and JPEG Lossless "have no bundled decoder" one paragraph after a table
+  correctly marking both as decoding. Both have had pure-Go decoders, registered
+  at init, since 1.3.0. JPEG 2000 is the only syntax that does not decode, and
+  the section now says so once.
+
+- **`doc.go` no longer advertises a limitation that was fixed.** It named
+  C-MOVE and C-GET not performing C-STORE sub-operations as the most significant
+  known gap; both have been implemented since 1.3.0, and `CONFORMANCE.md` §2.3
+  and the README parity table both already said so. This is the module's landing
+  text on pkg.go.dev.
+
+- **`compress` no longer describes its own decoders as placeholders.** The
+  JPEG-LS and JPEG Lossless implementation guides told the reader to install
+  libcharls or libjpeg-turbo, uncomment a CGO block and rebuild with
+  `CGO_ENABLED=1` — for codecs this package decodes in pure Go, and via a CGO
+  path that has never existed in this module. `TestGetImplementationGuide`
+  asserted the same wrong claim, requiring the JPEG-LS guide to name libcharls,
+  so the guides and the test agreed with each other and not with the code. The
+  guides now state what is bundled and how to substitute a decoder, and the test
+  is pinned to the registry rather than to a hardcoded library name, so bundling
+  a JPEG 2000 decoder will fail it until its guide is rewritten.
+
+  `JPEGLSDecoderSkeleton` and `JPEGLosslessDecoderSkeleton` are deprecated: they
+  have no fields, no methods, and never had an implementation behind them.
+
+- **`CONFORMANCE.md` §8.1 said 42 of pydicom's 49 decodable files matched.** It is
+  43, and the 6 that do not are all JPEG 2000 — verified by running
+  `TestPixelsAgainstWholePydicomCorpus` against the corpus rather than by
+  recounting the claim.
+
+- **`qrscp` now defaults `-output` to `./received`**, matching `storescp`. It
+  defaulted to `./dcmstore`, which created a directory named after a Go import
+  path and read as a package of this module that was missing.
+
+- **`make lint` names the linter version CI uses.** `.golangci.yml` is a v2
+  configuration and a v1 binary refuses it outright rather than degrading, so the
+  target's `@latest` install instruction left a local run unable to lint at all.
 
 ## [1.4.0] - 2026-08-01
 

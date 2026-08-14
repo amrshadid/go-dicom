@@ -3,14 +3,32 @@
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 BINARY      := dicom
-VERSION     := 1.1.0
 GO          := go
 GOFLAGS     := -race
 TIMEOUT     := 5m
 COVER_OUT   := coverage.out
 COVER_HTML  := coverage.html
 GOBIN       := $(shell go env GOPATH)/bin
-LINT        := $(shell which golangci-lint 2>/dev/null || echo $(GOBIN)/golangci-lint)
+
+# golangci-lint pinned to the version the lint job in .github/workflows/test.yml
+# uses. .golangci.yml is a v2 configuration, and a v1 binary refuses it outright
+# rather than degrading, so an unpinned "@latest" install is how a local run ends
+# up unable to lint at all.
+LINT_MODULE  := github.com/golangci/golangci-lint/v2/cmd/golangci-lint
+LINT_VERSION := v2.12.2
+LINT         := $(shell which golangci-lint 2>/dev/null || echo $(GOBIN)/golangci-lint)
+
+# Read the version out of main.go rather than repeating it here.
+#
+# This was a literal, and it said 1.1.0 for the whole of 1.2, 1.3 and 1.4: every
+# `make build` stamped -X main.Version=1.1.0 over the correct default in main.go,
+# so a locally built binary reported a version three releases old. Released
+# binaries were unaffected — build-release.yml stamps the git tag — which is
+# exactly why nobody noticed.
+#
+# version_test.go already guards main.go against network.DefaultImplementationVersionName.
+# Deriving from it here means there is no third copy left to drift.
+VERSION     := $(shell sed -n 's/^var Version = "\(.*\)"$$/\1/p' main.go)
 
 # Network defaults (overridable: make echoscu ADDR=pacs:11112)
 ADDR        ?= 127.0.0.1:11112
@@ -68,12 +86,12 @@ bench:  ## Run benchmarks
 
 # ─── Code Quality ────────────────────────────────────────────────────────────
 
-lint:  ## Run golangci-lint (optional, install: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest)
+lint:  ## Run golangci-lint (optional, install: make lint prints the command)
 	@if [ -x "$(LINT)" ]; then \
 		$(LINT) run ./...; \
 	else \
-		echo "golangci-lint not found — skipping. Install with:"; \
-		echo "  go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest"; \
+		echo "golangci-lint not found — skipping. Install the version CI uses:"; \
+		echo "  go install $(LINT_MODULE)@$(LINT_VERSION)"; \
 		echo "  Then ensure ~/go/bin is in your PATH"; \
 	fi
 
