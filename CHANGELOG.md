@@ -13,6 +13,40 @@ tests agreeing with each other while the code did something else.
 
 ### Changed
 
+**A failed negotiation now says why, and what to change.**
+
+`Associate` succeeds even when the peer refuses every presentation context — the
+association is established and useless — and the failure surfaced later as `no
+accepted presentation context for SOP Class 1.2.840.10008.5.1.4.1.1.2`. True, and
+unactionable: the peer either does not support that SOP class, or supports it and
+refused every transfer syntax proposed for it, and those call for opposite fixes.
+
+The A-ASSOCIATE-AC says which it is, in the result code of each refused context.
+That was being discarded by `BuildAcceptedContextMap`, which kept only the
+acceptances. Refusals are now retained, and the five `NO_CONTEXT` errors in `SCU`
+explain themselves:
+
+```
+no accepted presentation context for SOP Class 1.2.840.10008.5.1.4.1.1.2: the peer
+supports the SOP class but none of the transfer syntaxes proposed for it (proposed
+1.2.840.10008.1.2.1, 1.2.840.10008.1.2, …; to offer the compressed syntaxes as well,
+associate with contexts built from AllTransferSyntaxes(): …)
+```
+
+This is the commonest negotiation failure in the field, because the default
+proposal is the four uncompressed syntaxes and a modality storing JPEG-LS
+natively refuses all of them.
+
+An SCP now reports each context it refuses, naming the calling AE and the
+syntaxes it asked for, and reports separately when it has accepted an association
+with no usable context at all — previously invisible from that side, so an
+operator watching a modality fail repeatedly had nothing to go on.
+
+New API: `Association.RefusedContexts`, `ExplainNoContextFor`,
+`ExplainNoContextForAny`, `BuildContextMaps`, `PresentationContext.RefusalReason`,
+and `PresentationContext.Proposed`. `BuildAcceptedContextMap` is unchanged and now
+delegates to `BuildContextMaps`.
+
 **The library no longer writes to your stderr uninvited.**
 
 `network` reported through `log.Printf` at 49 call sites, onto the standard
