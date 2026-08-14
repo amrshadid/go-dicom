@@ -16,9 +16,9 @@ the library falls short of the standard, that appears in
 | | |
 |---|---|
 | Implementation Class UID | `1.2.826.0.1.3680043.10.511` |
-| Implementation Version Name | `GO-DICOM-1.4.0` |
-| Documented against | `v1.4.0` |
-| Last verified | 2026-07-31 |
+| Implementation Version Name | `GO-DICOM-1.5.0` |
+| Documented against | `v1.5.0` |
+| Last verified | 2026-08-15 |
 
 ---
 

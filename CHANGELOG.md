@@ -7,9 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Everything here came from reading the documentation against the code. Three
-defects turned up in the process, all of the shape 1.4.0 was about: prose and
-tests agreeing with each other while the code did something else.
+Nothing yet.
+
+## [1.5.0] - 2026-08-15
+
+This release started as a pass over the documentation, checking each claim against
+the code. Ten defects came out of it, and the pattern in almost every one is the
+one 1.4.0 was about: prose and tests agreeing with each other while the code did
+something else. A data set that sent correctly over the network wrote to disk
+empty. `qrscp` answered a query for one study with the whole archive and never
+wrote a file. `make build` stamped a version three releases old. A multi-scan
+JPEG-LS frame from any encoder could not be decoded.
+
+One was a security defect: `storescp`, `getscu` and `qrscp` each wrote received
+instances to a path taken from a peer-supplied SOP Instance UID without validating
+it, so an unauthenticated peer could write a file anywhere the server process
+could.
+
+The features are the ones that let the library be used as an archive rather than
+as a client: an on-disk instance store with a queryable index, a JPEG-LS encoder
+so RLE is no longer the only syntax it can compress to, DIMSE operations that
+pipeline on one association, and the tier-2 SOP classes verified against a peer
+instead of only against themselves.
+
+Where something is not done, it says so and says why — the SCP side of
+asynchronous operations, JPEG 2000 encoding and decoding, sequence matching outside
+the standard's own matching keys.
 
 ### Added
 
@@ -1047,9 +1070,11 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/amrshadid/go-dicom/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...v1.1.0
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...HEAD
 [1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0
