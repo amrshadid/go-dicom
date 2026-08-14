@@ -9,6 +9,452 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [1.5.0] - 2026-08-15
+
+This release started as a pass over the documentation, checking each claim against
+the code. Ten defects came out of it, and the pattern in almost every one is the
+one 1.4.0 was about: prose and tests agreeing with each other while the code did
+something else. A data set that sent correctly over the network wrote to disk
+empty. `qrscp` answered a query for one study with the whole archive and never
+wrote a file. `make build` stamped a version three releases old. A multi-scan
+JPEG-LS frame from any encoder could not be decoded.
+
+One was a security defect: `storescp`, `getscu` and `qrscp` each wrote received
+instances to a path taken from a peer-supplied SOP Instance UID without validating
+it, so an unauthenticated peer could write a file anywhere the server process
+could.
+
+The features are the ones that let the library be used as an archive rather than
+as a client: an on-disk instance store with a queryable index, a JPEG-LS encoder
+so RLE is no longer the only syntax it can compress to, DIMSE operations that
+pipeline on one association, and the tier-2 SOP classes verified against a peer
+instead of only against themselves.
+
+Where something is not done, it says so and says why — the SCP side of
+asynchronous operations, JPEG 2000 encoding and decoding, sequence matching outside
+the standard's own matching keys.
+
+### Added
+
+- **DIMSE operations pipeline on one association, bounded by the negotiated
+  window.** The read side used to assume the next message belonged to the request
+  just sent, which is true only when one operation runs at a time — so operations
+  were serialized and the asynchronous operations window was reduced to one before
+  being proposed, because anything larger would have told the peer something
+  untrue.
+
+  Messages are now routed to the operation waiting for them by Message ID, and the
+  window is proposed as asked and enforced: C-ECHO, C-STORE, C-FIND and all six
+  N-services may overlap up to it.
+
+  **C-MOVE and C-GET take the association exclusively.** Both interleave traffic
+  that is not their own response — a C-GET receives C-STORE sub-operation requests
+  between its responses, and a C-MOVE has a cancel watcher reading the association
+  while nothing else does. Two readers with different ideas of what belongs to them
+  is how a retrieval loses a sub-operation.
+
+  The demultiplexing is cooperative rather than a goroutine owning the connection:
+  whichever caller needs a message does the reading and queues what belongs to
+  others. A dedicated owner would have had to take the read side from four
+  mechanisms that already depend on it — `Association.pending`, the cancel watcher,
+  a C-GET's unsolicited requests, and the SCP, which has no message IDs of its own
+  to wait on.
+
+  **As an SCP, dispatch is still one message at a time per association**, so
+  `MaxOperationsPerformed` is proposed as asked but does not bound concurrent
+  dispatch — a server answers in the order received however many the requestor has
+  outstanding. That is the remaining half of asynchronous operations, and
+  `CONFORMANCE.md` §1.3 says so rather than leaving it to be inferred from a
+  passing test.
+
+- **A JPEG-LS encoder, so RLE is no longer the only syntax this library
+  compresses to.** `compress.EncodeJPEGLS` writes lossless JPEG-LS at 2 to 16
+  bits, single or multi component, one scan per component, and the transcoding
+  path uses it: a C-STORE over a context that negotiated JPEG-LS Lossless now
+  encodes rather than failing.
+
+  **JPEG-LS Near-Lossless is still refused**, although the same encoder could
+  produce it. It is lossy, and how much error to accept is the caller's decision
+  rather than one to make silently while transcoding.
+
+  The encoder and this package's decoder were written against each other, so a
+  round trip through both proves only that they agree — which is exactly the
+  failure shipped in the RLE encoder before 1.4.0, where it emitted frames with no
+  segment header and its own decompressor accepted them. So the output is also
+  handed to **CharLS**, through pylibjpeg, which shares no code with this library:
+  it decodes the frame to identical samples. A real instance from pydicom's corpus
+  compresses and round-trips to identical pixels through the network codec.
+
+  Three defects were found and fixed while getting the round trip to work, all of
+  them cases where reasoning from the standard's prose disagreed with the decoder:
+  the first row has no special case (the decoder relies on a zeroed line above, and
+  predicting from the left instead disagrees at the very first sample); the
+  run-interruption error must be reduced modulo the range, or a 16-bit sample
+  predicted from zero needs 17 bits and the escape path silently drops the top one;
+  and 16-bit samples are little endian, matching what the decoder writes back and
+  what DICOM native pixel data holds.
+
+### Fixed
+
+- **A multi-scan JPEG-LS frame did not decode.** `decodeJPEGLSScan` returned the
+  bit reader's position as the number of bytes consumed, and the reader fills up to
+  eight bytes ahead of what it has used — so the caller advanced past the end of
+  the scan. A frame with one scan per component, which is what ILV=0 means and what
+  the new encoder writes for colour, had its second scan header read as entropy
+  data. A single-scan frame never noticed, because nothing after the scan but EOI
+  is read, which is why this went unseen.
+
+- **`dcmstore`: an on-disk instance store with a queryable index.** A working
+  archive is now a few lines:
+
+  ```go
+  store, err := dcmstore.Open("./archive")
+  scp.SetHandler(dcmstore.NewHandler(store))
+  scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
+  ```
+
+  It accepts C-STORE, answers C-FIND at all four levels, and serves C-GET and
+  C-MOVE from what it has received, verified over a real association.
+
+  `QueryRetrieveHandler` takes callbacks and every adopter had to write the same
+  thing behind them first: file the instances, index the query attributes, then
+  implement the matching rules from PS3.4 C.2.2. Those rules are the fiddly part
+  and are now implemented once — universal, single value, list of UID, wildcard,
+  and DA/TM/DT ranges, with partial bounds covering the period they name so
+  `2024-2024` is the whole year. Wildcards apply only to the VRs C.2.2.2.4 allows
+  them in, so a `*` in a UI is a literal and not "everything".
+
+  Wildcard matching is written directly rather than translated to a regular
+  expression: the pattern comes from a peer, and a real patient name contains `.`
+  and `(`. It is linear, with a test that forty stars against four thousand
+  characters returns immediately.
+
+  An attribute the index does not hold is an unsupported optional key, returned
+  with a zero-length value as C.2.2.1.2 allows, rather than matched on — matching
+  would return nothing, which reads to the requestor as an empty archive.
+
+  Instances are files under a directory per study and series, with an atomically
+  written `index.json`. Losing the index costs a slow start, not the archive: it
+  is rebuilt by walking the tree, and a file that cannot be read is skipped with a
+  warning rather than failing the rebuild. Every UID that becomes a path component
+  goes through `fileutil.InstanceFilePath`.
+
+  `Handler` implements the streaming interfaces as well as the slice-returning
+  ones, so a retrieval reads one instance at a time and stops on C-CANCEL.
+
+  Sequence matching (C.2.2.2.6) is implemented for the sequences the standard
+  defines as matching keys: Scheduled Procedure Step Sequence, which every
+  Modality Worklist query filters on, and Request Attributes Sequence. Every
+  criterion in a query item must be satisfied by the *same* stored item — a
+  station from one scheduled step and a date from another is not a match, since
+  that would return a step nobody scheduled. Responses carry the item that
+  matched rather than whichever came first. Indexing every nested attribute of
+  every instance would put the whole data set back in memory, so any other
+  sequence remains an unsupported optional key.
+
+### Changed
+
+- **`storescp` and `qrscp` now accept compressed pixel data.** Both offered only
+  the four uncompressed transfer syntaxes — the library default, which matches
+  pynetdicom — so a modality that stores JPEG-LS or JPEG 2000 natively, which is
+  most modern equipment, could not store to either. Every compressed context was
+  refused, the association was established with nothing usable on it, and the
+  failure surfaced only on the first C-STORE.
+
+  A storage SCP does not have to decode an instance to keep it, which is what
+  `CONFORMANCE.md` §8.2 already said about archives and routers. Both servers now
+  accept all 37, and `dcmstore.SupportedTransferSyntaxes()` pairs with
+  `SupportedSOPClasses()` for anyone building their own.
+
+  **The library default is unchanged.** It applies to every caller, including an
+  SCU that will try to decode what it asked for, and for that case a compressed
+  syntax with no decoder moves the failure from association time — where #84 now
+  names the cause — to pixel access, where it does not. §3.1 records the decision
+  and why the two cases differ.
+
+- **`qrscp` now stores and queries for real.** It held instances in memory and
+  never wrote them to disk at all — `-output` created a directory and nothing was
+  put in it. Its C-FIND returned one *empty* identifier per stored instance, and
+  its C-GET and C-MOVE ignored the query and returned **every instance in the
+  store**, so a request for one study retrieved the whole archive. It is now
+  backed by `dcmstore`, so all three do what they say.
+
+**A failed negotiation now says why, and what to change.**
+
+`Associate` succeeds even when the peer refuses every presentation context — the
+association is established and useless — and the failure surfaced later as `no
+accepted presentation context for SOP Class 1.2.840.10008.5.1.4.1.1.2`. True, and
+unactionable: the peer either does not support that SOP class, or supports it and
+refused every transfer syntax proposed for it, and those call for opposite fixes.
+
+The A-ASSOCIATE-AC says which it is, in the result code of each refused context.
+That was being discarded by `BuildAcceptedContextMap`, which kept only the
+acceptances. Refusals are now retained, and the five `NO_CONTEXT` errors in `SCU`
+explain themselves:
+
+```
+no accepted presentation context for SOP Class 1.2.840.10008.5.1.4.1.1.2: the peer
+supports the SOP class but none of the transfer syntaxes proposed for it (proposed
+1.2.840.10008.1.2.1, 1.2.840.10008.1.2, …; to offer the compressed syntaxes as well,
+associate with contexts built from AllTransferSyntaxes(): …)
+```
+
+This is the commonest negotiation failure in the field, because the default
+proposal is the four uncompressed syntaxes and a modality storing JPEG-LS
+natively refuses all of them.
+
+An SCP now reports each context it refuses, naming the calling AE and the
+syntaxes it asked for, and reports separately when it has accepted an association
+with no usable context at all — previously invisible from that side, so an
+operator watching a modality fail repeatedly had nothing to go on.
+
+New API: `Association.RefusedContexts`, `ExplainNoContextFor`,
+`ExplainNoContextForAny`, `BuildContextMaps`, `PresentationContext.RefusalReason`,
+and `PresentationContext.Proposed`. `BuildAcceptedContextMap` is unchanged and now
+delegates to `BuildContextMaps`.
+
+**The library no longer writes to your stderr uninvited.**
+
+`network` reported through `log.Printf` at 49 call sites, onto the standard
+logger, which a consumer cannot redirect or silence. `DefaultLogger` existed,
+was documented as "silent by default", and had 3 call sites against those 49 —
+so a program embedding an SCP got association errors, rejections and abandoned
+sub-operations on its own stderr, and `DefaultLogger.SetLevel` did nothing about
+it because nothing consulted it.
+
+All 49 now go through `DefaultLogger`, which writes to `config.Logger`. One
+`config.SetLogger` call therefore controls everything this library emits, and
+messages carry a `component=network` attribute so a shared logger can filter the
+network layer in or out.
+
+Three notes for existing callers:
+
+- **`DefaultLogger` now defaults to `LogLevelWarn`, not `LogLevelSilent`.** Every
+  one of the 49 messages was error- or warning-level and previously printed
+  unconditionally, so this preserves what you actually saw while making it
+  controllable. `network.SetDefaultLogLevel(network.LogLevelSilent)` reports
+  nothing; `config.SetLogger` redirects it.
+- **`NewLogger(level, nil)` now means config.Logger** rather than stderr
+  directly. config.Logger writes to stderr by default, so the observable
+  behaviour is unchanged unless you have replaced it.
+- **`Logger.SetOutput(nil)` restores** the default of writing through
+  config.Logger, which previously had no way to be expressed.
+
+`LogLevel` gained a `String` method, and `DebugLogger()` still writes to stderr
+directly — config.Logger's own level would otherwise discard the debug messages
+it is called to reveal.
+
+A test reads this package's source and fails on any direct import of `log`,
+since a behavioral test cannot catch one new `log.Printf` in a branch it does not
+reach. Another runs an SCP with `os.Stderr` swapped for a pipe and asserts the
+error paths report to `config.Logger` and write nothing to the process's stderr.
+
+The corrections to what the documentation claimed:
+
+- **The README no longer contradicts itself about codec support.** It claimed
+  JPEG-LS and JPEG Lossless "have no bundled decoder" one paragraph after a table
+  correctly marking both as decoding. Both have had pure-Go decoders, registered
+  at init, since 1.3.0. JPEG 2000 is the only syntax that does not decode, and
+  the section now says so once.
+
+- **`doc.go` no longer advertises a limitation that was fixed.** It named
+  C-MOVE and C-GET not performing C-STORE sub-operations as the most significant
+  known gap; both have been implemented since 1.3.0, and `CONFORMANCE.md` §2.3
+  and the README parity table both already said so. This is the module's landing
+  text on pkg.go.dev.
+
+- **`network/doc.go` claimed data sets are not transcoded between transfer
+  syntaxes.** They are — `transcodePixelData` is wired into `datasetcodec.go` and
+  covered by `transcoding_test.go`. The real limitation, already stated correctly
+  in `CONFORMANCE.md` §8.2 and the README, is that RLE Lossless is the only syntax
+  pixel data is compressed *to*.
+
+- **`compress` no longer describes its own decoders as placeholders.** The
+  JPEG-LS and JPEG Lossless implementation guides told the reader to install
+  libcharls or libjpeg-turbo, uncomment a CGO block and rebuild with
+  `CGO_ENABLED=1` — for codecs this package decodes in pure Go, and via a CGO
+  path that has never existed in this module. `TestGetImplementationGuide`
+  asserted the same wrong claim, requiring the JPEG-LS guide to name libcharls,
+  so the guides and the test agreed with each other and not with the code. The
+  guides now state what is bundled and how to substitute a decoder, and the test
+  is pinned to the registry rather than to a hardcoded library name, so bundling
+  a JPEG 2000 decoder will fail it until its guide is rewritten.
+
+  `JPEGLSDecoderSkeleton` and `JPEGLosslessDecoderSkeleton` are deprecated: they
+  have no fields, no methods, and never had an implementation behind them.
+
+- **`CONFORMANCE.md` §8.1 said 42 of pydicom's 49 decodable files matched.** It is
+  43, and the 6 that do not are all JPEG 2000 — verified by running
+  `TestPixelsAgainstWholePydicomCorpus` against the corpus rather than by
+  recounting the claim.
+
+- **`qrscp` now defaults `-output` to `./received`**, matching `storescp`. It
+  defaulted to `./dcmstore`, which created a directory named after a Go import
+  path and read as a package of this module that was missing.
+
+- **`make lint` names the linter version CI uses.** `.golangci.yml` is a v2
+  configuration and a v1 binary refuses it outright rather than degrading, so the
+  target's `@latest` install instruction left a local run unable to lint at all.
+
+### Added
+
+- **The tier-2 SOP classes are verified against a peer.** `CONFORMANCE.md` §8.5
+  said of Relevant Patient Information Query, Display System and the non-patient
+  object information models: "Nothing verifies them against a peer." They had UID
+  constants, presentation-context helpers, and no proof — the same condition the
+  four N-DIMSE defects of 1.4.0 were found in.
+
+  All three are now driven end to end, and the two query services against
+  pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it
+  received so a request naming the wrong class shows up as a mismatch rather than
+  as agreement. Display System asserts the SCP is asked about the well-known
+  instance the requestor named, since naming the wrong instance is exactly the
+  1.4.0 defect in another service.
+
+- **`findscu -sop-class` and `-key`.** A model outside the patient hierarchy could
+  not be queried from the command line at all: `findscu` proposed only the default
+  query/retrieve models and always sent a QueryRetrieveLevel with the patient
+  keys. It now takes the information model to query and repeatable
+  `GGGG,EEEE[=value]` keys, and omits the level and patient keys for a model that
+  has no hierarchy — a non-patient object is not filed under a patient, so
+  PS3.4 GG.2 gives it a single level and no level element.
+
+- **`network.AllNonPatientSOPClassUIDs`**, and
+  `NonPatientObjectPresentationContexts` now returns the query models as well as
+  the storage classes.
+### Changed — an SCU can be shared, and says what it does
+
+**An `SCU` is safe to use from several goroutines.** Operations on one are
+serialized, so each waits its turn rather than reading another's response. The
+documentation previously told callers to use one `SCU` per goroutine, which works
+and costs an association per goroutine — and association setup is the expensive
+part of talking to a PACS: TCP, TLS handshake, then negotiation. A caller sending
+instances across eight workers paid for eight associations where one would do, and
+a peer with an association limit may refuse the rest.
+
+Serialized is not pipelined: one operation is in flight at a time, so sharing
+bounds the number of associations rather than raising throughput. #96 tracks the
+demultiplexer that would change that.
+
+Two methods are deliberately outside the serialization. `Cancel` has to reach the
+peer while the operation it cancels is still running — a cancel that waited for
+that operation to finish would be useless — and `Release` and `Abort` must not
+wait behind a `Find` whose results have not been drained.
+
+Verified by driving eight goroutines at one `SCU` under `-race` and requiring
+every instance to arrive exactly once. Without the serialization the same test
+receives **4 of 32** instances and times out at sixty seconds, the goroutines
+having deadlocked reading each other's responses.
+
+**The asynchronous operations window now says what this implementation does.** It
+was sent exactly as the caller asked for and nothing enforced it: a caller
+requesting a window of four had four negotiated and reported back, while the SCU
+issued one operation at a time and waited. A proposed `MaxOperationsInvoked` above
+1 — or 0, which PS3.7 D.3.3.3 defines as unlimited and is furthest from the truth —
+is now reduced to 1 with a warning naming what was asked for and what was
+negotiated. `MaxOperationsPerformed`, which bounds what the peer may send us, is
+proposed as asked. The caller's struct is copied rather than rewritten, so an
+`SCUConfig` reused for a second association is unchanged.
+
+### Security
+
+- **The pinned Go toolchain was missing two standard library security patches.**
+  `go.mod` named `toolchain go1.25.12`, and govulncheck reported `GO-2026-6090`
+  (crypto/tls) and `GO-2026-5972` (encoding/asn1) as reachable from this code —
+  through `DialTLS`, `Transport.WritePDU`, `DecodePDU` and
+  `TLSConfig.buildTLSConfig`, so on the TLS paths a HIPAA deployment relies on.
+
+  Both are fixed in `go1.25.13`, which the toolchain directive now names.
+  Anyone building with `GOTOOLCHAIN=auto` therefore gets the patched standard
+  library. The `go 1.25.0` directive is unchanged, so the minimum supported
+  version has not moved.
+
+  The Module Validation job also pinned an exact patch release rather than the
+  `1.25` range. govulncheck's standard library findings are relative to the
+  toolchain doing the analysis, so a job resolving its own patch version reports a
+  different set of vulnerabilities week to week for reasons unconnected to this
+  code — which is how a scan under `go1.25.12` produced these findings while the
+  workflow was asking for `1.25`.
+
+- **`storescp`, `getscu` and `qrscp` wrote files to a path chosen by the peer.**
+  All three named the file after the SOP Instance UID and joined it into the
+  output directory unchecked:
+
+  ```go
+  filename := filepath.Join(c.outputDir, sopInstanceUID+".dcm")
+  ```
+
+  `filepath.Join` cleans a path but does not confine it, so the `..` segments
+  survived and a UID of `../../etc/cron.d/pwn` escaped the output directory. For
+  `storescp` and `qrscp` the UID comes from any peer that can reach the port —
+  a DICOM SCP does not authenticate, as `CONFORMANCE.md` §7 states — so this was
+  an arbitrary-location file write as the user running the server.
+
+  New `fileutil.InstanceFilePath` validates before joining, and all three call
+  it. A UID is dotted decimal per PS3.5 9.1, so anything capable of traversal is
+  not a UID and is refused rather than sanitized into something resembling one;
+  the 64-character limit from the same section is enforced too. The result is
+  then checked to be within the output directory — redundant given the
+  validation, and deliberately so.
+
+  Tests cover nine traversal shapes, a UID at exactly the length limit, and a
+  source scan over the `cli` package that fails on any `filepath.Join` taking a
+  SOP Instance UID. The scan was verified to fail when the pattern is
+  reintroduced.
+
+### Fixed
+
+- **`NonPatientObjectPresentationContexts` proposed no way to query.** It offered
+  the five non-patient *storage* classes and none of the information models, so
+  the documented way to reach these services could store a hanging protocol and
+  never find it again. Found by writing the first test that used the helper — a
+  test of the SOP class list alone would not have caught it, since every UID it
+  named was present and correct.
+
+- **`filewriter` wrote an empty value for every string-valued element.**
+  `ElementsFromDataset` discarded the second return of a type assertion:
+
+  ```go
+  value, _ := elem.GetValue().([]byte)
+  ```
+
+  so a `string` value became `nil` and the element was written with length 0. A
+  data set built in code — `NewDataElement(t, vr, "SMITH^JOHN")`, which is the
+  obvious way to write it — produced a file whose every element was present,
+  correctly typed, and empty. Data sets read by `filereader` hold `[]byte` and were
+  unaffected, which is why round-tripping a file worked and this went unnoticed.
+
+  `network.EncodeDataset` had the same job and got it right, so a data set that
+  sent correctly over the network wrote to disk empty. Strings are now converted,
+  and a value of a type that cannot be rendered is reported rather than silently
+  written as empty. Found by `dcmstore`'s round-trip test.
+
+- **`DeferredPixelDataReader.Get` always failed.** Its load path was a stub
+  returning "file loading not implemented in this stub", so the exported reader
+  could never read anything, while `fileutil/doc.go` documented it with a working
+  example. `Load` also never set `data` or `loaded` on that branch, and `Get`
+  read `loaded` without holding the mutex — a data race under concurrent use.
+
+  The test did not catch it because it called the constructor and `IsLoaded()`
+  and stopped there, never calling `Load` or `Get`.
+
+  `loadFromFile` now seeks, reads the extent with `io.ReadFull` and caches it,
+  bounded twice before allocating: against `MaxDeferredPixelDataLength` (1 GiB),
+  since the length reaches this code from an element header and is
+  attacker-controlled, and against the file's actual size — so a declared length
+  longer than the file is refused rather than yielding a short buffer the caller
+  cannot tell is short. Tests cover a non-zero offset, the cached second access,
+  and refusal of an over-long length, an offset past the end, a length past the
+  limit, a negative offset, a zero length, and a missing file.
+
+- **`make build` stamped version 1.1.0** into every locally built binary. The
+  Makefile held a `VERSION` literal that was not updated for 1.2, 1.3 or 1.4, and
+  `-ldflags "-X main.Version=$(VERSION)"` wrote it over the correct default in
+  `main.go`. Released binaries were never affected — `build-release.yml` stamps
+  the git tag — which is why it went unnoticed for three releases. The Makefile
+  now derives the version from `main.go`, so there is no third copy left to
+  drift.
+
 ## [1.4.0] - 2026-08-01
 
 Correctness release. Everything below was found by running this library against
@@ -624,9 +1070,11 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/amrshadid/go-dicom/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/amrshadid/go-dicom/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/amrshadid/go-dicom/compare/v1.0.0...v1.1.0
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...HEAD
 [1.0.0]: https://github.com/amrshadid/go-dicom/releases/tag/v1.0.0

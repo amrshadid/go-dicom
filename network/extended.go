@@ -240,3 +240,39 @@ func (s *SOPClassExtendedNegotiation) Encode() []byte {
 	buf.Write(s.ServiceData)
 	return buf.Bytes()
 }
+
+// truthfulAsyncWindow reports the asynchronous operations window to propose.
+//
+// It used to reduce anything above one to one, because the SCU issued a single
+// operation and waited: proposing more told the peer something untrue, and a peer
+// may size its own buffers by what it is told.
+//
+// The window is now enforced rather than clamped. Echo, Store, Find and the
+// N-services each wait for their own response by message ID, so the number
+// outstanding is bounded by what was negotiated — see SCU.beginOperation. C-MOVE
+// and C-GET still take the association exclusively, because both interleave
+// traffic that is not their own response on it.
+//
+// So the caller's window is passed through, with one thing still checked: a
+// proposal is a claim about behavior, and zero means unlimited in PS3.7 D.3.3.3.
+// Unlimited is not something this implementation can honor — every outstanding
+// operation holds a goroutine waiting on a response — so it is reported rather
+// than accepted silently.
+func truthfulAsyncWindow(proposed *AsynchronousOperationsWindow) *AsynchronousOperationsWindow {
+	if proposed == nil {
+		return nil
+	}
+
+	invoked := proposed.MaxOperationsInvoked
+	if invoked == 0 {
+		DefaultLogger.Warn("asynchronous operations: an unlimited window of operations " +
+			"invoked was requested; proposing 1 instead, because unlimited is not a " +
+			"bound this implementation can hold to")
+		invoked = 1
+	}
+
+	return &AsynchronousOperationsWindow{
+		MaxOperationsInvoked:   invoked,
+		MaxOperationsPerformed: proposed.MaxOperationsPerformed,
+	}
+}

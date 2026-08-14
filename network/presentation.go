@@ -1,5 +1,10 @@
 package network
 
+import (
+	"fmt"
+	"strings"
+)
+
 // Common DICOM SOP Class UIDs used in networking.
 const (
 	VerificationSOPClassUID = "1.2.840.10008.1.1"
@@ -116,6 +121,12 @@ type PresentationContext struct {
 	AbstractSyntax string
 	TransferSyntax string
 	Result         byte
+
+	// Proposed records the transfer syntaxes offered for this context, which the
+	// A-ASSOCIATE-AC does not echo back. Without it a refusal can say the peer
+	// supported none of them but not which were tried, and that is the half the
+	// caller needs to widen the proposal.
+	Proposed []string
 }
 
 // IsAccepted returns true if this presentation context was accepted.
@@ -136,6 +147,16 @@ func (pc *PresentationContext) IsAccepted() bool {
 // same four with the rest behind ALL_TRANSFER_SYNTAXES. Use AllTransferSyntaxes
 // to accept compressed pixel data, which an archive or router wants: it stores
 // and forwards the bytes without needing to decode them.
+//
+// This default is deliberately conservative because it applies to every caller,
+// including an SCU that will try to decode what it asked for — and for that case a
+// compressed syntax with no decoder moves the failure from association time, where
+// the error names the cause, to pixel access, where it does not.
+//
+// A server whose purpose is to store is the other case, and there the answer is
+// the opposite: accept everything, since keeping an instance does not require
+// decoding it. Both servers in this distribution do — see the storescp and qrscp
+// commands, and dcmstore.SupportedTransferSyntaxes.
 func DefaultTransferSyntaxes() []string {
 	return []string{
 		ExplicitVRLittleEndianUID,
@@ -261,31 +282,126 @@ func NegotiatePresentationContexts(
 	return results
 }
 
+// reportRefusedContexts logs each presentation context an SCP is about to refuse,
+// naming what the peer asked for.
+//
+// An association whose contexts are all refused still succeeds at the protocol
+// level, and the requestor then fails on its first operation. From this side that
+// looked like nothing at all had happened, so an operator had no way to see that
+// a modality was proposing JPEG-LS to a server offering only the uncompressed
+// syntaxes — the commonest cause, and one fixed by passing AllTransferSyntaxes to
+// SetSupportedTransferSyntaxes.
+func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultItem) {
+	proposedByID := make(map[byte]PresentationContextItem, len(rq.PresentationContexts))
+	for _, pc := range rq.PresentationContexts {
+		proposedByID[pc.ID] = pc
+	}
+
+	accepted := 0
+	for _, res := range results {
+		if res.Result == PCResultAcceptance {
+			accepted++
+			continue
+		}
+
+		proposed := proposedByID[res.ID]
+		switch res.Result {
+		case PCResultTransferSyntaxNotSupported:
+			DefaultLogger.Warn("refused presentation context %d for %s from %s: "+
+				"none of the transfer syntaxes it proposed (%s) is supported; "+
+				"pass AllTransferSyntaxes() to SetSupportedTransferSyntaxes to accept "+
+				"compressed pixel data",
+				res.ID, proposed.AbstractSyntax, rq.CallingAE,
+				strings.Join(proposed.TransferSyntaxes, ", "))
+		case PCResultAbstractSyntaxNotSupported:
+			DefaultLogger.Warn("refused presentation context %d from %s: "+
+				"SOP class %s is not supported; add it with SetSupportedAbstractSyntaxes",
+				res.ID, rq.CallingAE, proposed.AbstractSyntax)
+		default:
+			DefaultLogger.Warn("refused presentation context %d for %s from %s with result %d",
+				res.ID, proposed.AbstractSyntax, rq.CallingAE, res.Result)
+		}
+	}
+
+	// Every context refused is the case worth stating plainly: the association is
+	// established and useless, and the requestor will not learn why until it tries
+	// something.
+	if accepted == 0 && len(results) > 0 {
+		DefaultLogger.Error("accepted the association from %s with no usable presentation "+
+			"context: all %d were refused, so every operation on it will fail",
+			rq.CallingAE, len(results))
+	}
+}
+
 // BuildAcceptedContextMap creates a map from presentation context ID to accepted context
 // from the A-ASSOCIATE-AC response.
 func BuildAcceptedContextMap(
 	requested []PresentationContextItem,
 	results []PresentationContextResultItem,
 ) map[byte]*PresentationContext {
-	// Build abstract syntax lookup from request
+	accepted, _ := BuildContextMaps(requested, results)
+	return accepted
+}
+
+// BuildContextMaps splits the A-ASSOCIATE-AC results into what the peer accepted
+// and what it refused, both keyed by presentation context ID.
+//
+// The refusals matter as much as the acceptances. A peer answers each proposed
+// context with a reason — abstract syntax not supported, transfer syntax not
+// supported, user rejection — and discarding them leaves an operation able to
+// report only that no context was accepted, not why. Which of those it is
+// decides what the caller should do: propose a different SOP class, or propose
+// more transfer syntaxes.
+func BuildContextMaps(
+	requested []PresentationContextItem,
+	results []PresentationContextResultItem,
+) (accepted, refused map[byte]*PresentationContext) {
+	// Build abstract syntax lookup from request. The A-ASSOCIATE-AC identifies a
+	// context by ID alone, so the SOP class it refers to is only knowable from
+	// what was proposed.
 	abstractSyntaxByID := make(map[byte]string)
+	proposedTransferSyntaxes := make(map[byte][]string)
 	for _, req := range requested {
 		abstractSyntaxByID[req.ID] = req.AbstractSyntax
+		proposedTransferSyntaxes[req.ID] = req.TransferSyntaxes
 	}
 
-	accepted := make(map[byte]*PresentationContext)
+	accepted = make(map[byte]*PresentationContext)
+	refused = make(map[byte]*PresentationContext)
 	for _, res := range results {
 		pc := &PresentationContext{
 			ID:             res.ID,
 			AbstractSyntax: abstractSyntaxByID[res.ID],
 			TransferSyntax: res.TransferSyntax,
 			Result:         res.Result,
+			Proposed:       proposedTransferSyntaxes[res.ID],
 		}
 		if pc.IsAccepted() {
 			accepted[res.ID] = pc
+		} else {
+			refused[res.ID] = pc
 		}
 	}
-	return accepted
+	return accepted, refused
+}
+
+// RefusalReason describes why a peer refused a presentation context, in terms of
+// what the caller can do about it.
+func (pc *PresentationContext) RefusalReason() string {
+	switch pc.Result {
+	case PCResultAcceptance:
+		return "accepted"
+	case PCResultUserRejection:
+		return "the peer rejected it"
+	case PCResultNoReason:
+		return "the peer gave no reason"
+	case PCResultAbstractSyntaxNotSupported:
+		return "the peer does not support that SOP class"
+	case PCResultTransferSyntaxNotSupported:
+		return "the peer supports the SOP class but none of the transfer syntaxes proposed for it"
+	default:
+		return fmt.Sprintf("the peer answered with result %d", pc.Result)
+	}
 }
 
 // FindPresentationContextID returns the presentation context ID for a given

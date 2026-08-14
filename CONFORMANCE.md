@@ -16,9 +16,9 @@ the library falls short of the standard, that appears in
 | | |
 |---|---|
 | Implementation Class UID | `1.2.826.0.1.3680043.10.511` |
-| Implementation Version Name | `GO-DICOM-1.4.0` |
-| Documented against | `v1.4.0` |
-| Last verified | 2026-07-31 |
+| Implementation Version Name | `GO-DICOM-1.5.0` |
+| Documented against | `v1.5.0` |
+| Last verified | 2026-08-15 |
 
 ---
 
@@ -48,9 +48,38 @@ see [§2.4](#24-services-refused-when-unimplemented).
 ### 1.3 Sequencing
 
 The library imposes no ordering beyond what the standard requires. An
-association may carry any number of operations. Asynchronous operations are
-negotiated at a window of one unless the application asks for more, so
-operations are answered in the order received.
+association may carry any number of operations, answered in the order received.
+
+**Asynchronous operations are negotiated and enforced as an SCU.** A window asked
+for by the application is proposed as asked and bounds how many operations may be
+outstanding: each waits for its own response by Message ID, so a response cannot
+reach the wrong caller. A window of zero — unlimited, per PS3.7 D.3.3.3 — is
+proposed as one instead, since every outstanding operation holds a goroutine and
+unlimited is not a bound this implementation can keep.
+
+Which operations may overlap:
+
+| Operation | |
+|---|---|
+| C-ECHO, C-STORE, C-FIND, and all six N-services | Overlap, up to the negotiated window |
+| C-MOVE, C-GET | Take the association exclusively |
+
+C-MOVE and C-GET are exclusive because both interleave traffic that is not their
+own response: a C-GET receives C-STORE sub-operation requests between its
+responses, and a C-MOVE has a cancel watcher reading the association while nothing
+else does. Two readers with different ideas of what belongs to them is how a
+retrieval loses a sub-operation.
+
+**As an SCP, dispatch is still one message at a time per association.**
+`MaxOperationsPerformed` is proposed as asked but does not yet bound concurrent
+dispatch, because nothing is dispatched concurrently — a server answers a
+requestor's operations in the order received however many it has outstanding. That
+is the remaining half of asynchronous operations and it is not implemented.
+
+An `SCU` is safe to share between goroutines whatever the window. With the default
+window of one, operations serialize and sharing bounds the number of associations a
+concurrent caller needs, which matters because association setup is the expensive
+part and a peer may limit how many it accepts.
 
 ---
 
@@ -184,6 +213,30 @@ An archive or router receives an instance, stores it, and forwards it later; the
 pixel data travels as opaque bytes. [§8.1](#81-pixel-data) lists which of them
 this library can actually decode.
 
+**A server whose purpose is to store should accept all of them.** The library
+default is deliberately conservative, because it applies to every caller
+including an SCU that will try to decode what it asked for — and for that case,
+a compressed syntax it cannot decode moves the failure from association time,
+where the error names the cause, to pixel access, where it does not.
+
+That reasoning does not apply to a storage SCP, so the servers in this
+distribution accept everything:
+
+| Server | Transfer syntaxes |
+|---|---|
+| `dicom storescp` | all 37 |
+| `dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
+| `dicom echoscp` | the default four; verification carries no data set |
+
+Before this, a modality that stores JPEG-LS or JPEG 2000 natively — most modern
+equipment — could not store to either server: every compressed context was
+refused, the association was established with nothing usable on it, and the
+failure surfaced only on the first C-STORE.
+
+For your own SCP, pass `AllTransferSyntaxes()` to
+`SetSupportedTransferSyntaxes`, or `dcmstore.SupportedTransferSyntaxes()` if you
+are using that package.
+
 ### 3.2 Transfer syntaxes supported for files
 
 | Transfer Syntax | Data set | Pixel data |
@@ -229,6 +282,12 @@ selection, and user identity negotiation. The window defaults to one.
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
+| Logging destination and format | `config.SetLogger`, for the whole library |
+| Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
+
+Everything the library reports goes through `config.Logger`, so one call
+redirects or silences all of it. Network messages carry a `component=network`
+attribute for filtering, and default to warnings and errors only.
 
 ---
 
@@ -297,8 +356,10 @@ at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded.
 
 Every file in pydicom's corpus that pydicom can decode decodes here to the same
-samples, bar the two gaps below — 42 of its 49, compared whole rather than by
-their leading values. What follows is what does not decode.
+samples, bar JPEG 2000 — 43 of its 49, compared whole rather than by their
+leading values. The six it does not are all JPEG 2000, and
+`TestPixelsAgainstWholePydicomCorpus` names each one it skips. What follows is
+that gap, and two differences in how decoded samples are shaped and coloured.
 
 - **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
   path: wavelet transforms plus EBCOT arithmetic coding is thousands of lines to
@@ -339,17 +400,28 @@ their leading values. What follows is what does not decode.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **RLE Lossless is the only syntax this library compresses to.** Pixel data is
-  transcoded in both directions as the negotiated context requires.
+- **Two syntaxes are compressed *to*: RLE Lossless and JPEG-LS Lossless.** Pixel
+  data is transcoded in both directions as the negotiated context requires.
 
-  Sending over a context that negotiated an uncompressed syntax decodes the
-  pixel data first. Sending over one that negotiated **RLE Lossless** encodes
-  it — from native pixels, or by decoding a compressed source and re-encoding.
+  Sending over a context that negotiated an uncompressed syntax decodes the pixel
+  data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
+  Lossless** encodes it — from native pixels, or by decoding a compressed source
+  and re-encoding.
+
+  The JPEG-LS encoder is lossless only, at 2 to 16 bits, one scan per component.
+  **JPEG-LS Near-Lossless is refused although the same encoder could produce it**:
+  it is lossy, and how much error to accept is the caller's decision rather than
+  one to make silently while transcoding.
 
   Every other compressed target fails, naming the syntax asked for. There is no
-  JPEG, JPEG-LS or JPEG 2000 encoder here, and a send that cannot be satisfied
-  fails rather than putting bytes on the wire described as something they are
-  not, which the receiver could not detect.
+  JPEG or JPEG 2000 encoder here, and a send that cannot be satisfied fails rather
+  than putting bytes on the wire described as something they are not, which the
+  receiver could not detect.
+
+  *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
+  shares no code with this library. A round trip through this package's own
+  decoder would only show the two agree — which is the failure mode the RLE
+  encoder shipped with in 1.3.0.
 
   Decoding has one gap of its own: **JPEG 2000** needs a registered external
   decoder, and without one an instance stored under it cannot be sent over a
@@ -434,13 +506,35 @@ management as film session, film box, image box and print action.
 Relevant Patient Information Query, Display System, Media Creation Management
 and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
-presentation-context helpers provided. Nothing verifies them against a peer.
+presentation-context helpers provided.
+
+Three of them are now exercised end to end:
+
+| SOP class | Verified by |
+|---|---|
+| Relevant Patient Information Query (all three) | A C-FIND over a real association, and against pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it received |
+| Display System | An N-GET for the well-known instance `1.2.840.10008.5.1.1.40.1`, asserting the SCP is asked about that instance and not another |
+| Non-patient object information models | A C-FIND for hanging protocol, color palette and generic implant template, and against pynetdicom, which confirms the identifier carries **no** QueryRetrieveLevel |
+
+Media Creation Management and the event logging classes still have no test
+against a peer.
+
+Writing those tests found a defect in the documented path.
+`NonPatientObjectPresentationContexts` proposed only the five *storage* classes
+and none of the information models, so the helper meant for these services could
+store a hanging protocol and never query for one. It now returns both halves —
+see `AllNonPatientSOPClassUIDs`.
 
 **UIDs only.** The remaining constants have no service behind them and nothing
-exercising them: the non-patient object information models (hanging protocols,
-color palettes, implant templates, procedure protocols), composite instance
-retrieval, inventory and repository query, RT machine verification, and the
-well-known instances the logging and print services are addressed through.
+exercising them: composite instance retrieval, inventory and repository query, RT
+machine verification, and the well-known instances the logging and print services
+are addressed through.
+
+The non-patient object information models were in this tier and have moved up:
+they are dispatched to the ordinary find and get handlers, and tested. What they
+still lack is a store that serves them — `dcmstore` indexes the patient hierarchy,
+so a hanging protocol has nowhere to live in it. The service reaches a handler;
+supplying that handler is the caller's.
 
 They are present so a caller can name them, and the set matches pynetdicom's
 exactly — 256 SOP class UIDs, each value checked against pynetdicom's own table

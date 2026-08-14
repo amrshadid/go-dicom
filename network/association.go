@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -48,11 +49,27 @@ type Association struct {
 	maxPDUSize       uint32
 	acceptedContexts map[byte]*PresentationContext
 
+	// refusedContexts records what the peer would not accept, and why. Kept so
+	// that an operation finding no context for its SOP class can say which of the
+	// two reasons applied — the peer not supporting the SOP class at all, or
+	// supporting it but none of the transfer syntaxes proposed for it. Those call
+	// for different fixes from the caller.
+	refusedContexts map[byte]*PresentationContext
+
 	// Request parameters (stored for reference)
 	requestedContexts []PresentationContextItem
 
 	// Extended negotiation as agreed with the peer.
 	peerUserInfo UserInformationItem
+
+	// messages routes complete DIMSE messages to whichever operation is waiting
+	// for them, so more than one can be in flight. Created on first use, because
+	// an association that carries one operation at a time never needs it.
+	//
+	// Distinct from pending below: that queues raw PDV groups read ahead by a
+	// cancel watcher, one message at a time and in order. This routes whole
+	// messages by ID.
+	messages *messageRouter
 
 	// pending holds messages read ahead of the caller that asked for them.
 	//
@@ -137,6 +154,85 @@ func (a *Association) AcceptedContexts() map[byte]*PresentationContext {
 	return a.acceptedContexts
 }
 
+// RefusedContexts returns the presentation contexts the peer would not accept,
+// each carrying the result code it answered with.
+func (a *Association) RefusedContexts() map[byte]*PresentationContext {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.refusedContexts
+}
+
+// ExplainNoContextFor says why no presentation context is available for a SOP
+// class, in terms of what the caller can change.
+//
+// "No accepted presentation context for SOP Class 1.2.840.10008.5.1.4.1.1.2" is
+// true but unactionable: the peer either does not support that SOP class, or
+// supports it and refused every transfer syntax proposed for it. It says which,
+// and for the transfer syntax case names the syntaxes tried and points at
+// AllTransferSyntaxes — the fix people otherwise have to be told about, since the
+// default proposal is the four uncompressed syntaxes and a modality storing
+// JPEG-LS natively will refuse all of them.
+//
+// The returned string is a clause to append to an error, or empty when the peer
+// said nothing about this SOP class at all.
+func (a *Association) ExplainNoContextFor(sopClassUID string) string {
+	a.mu.RLock()
+	refused := a.refusedContexts
+	a.mu.RUnlock()
+
+	for _, pc := range refused {
+		if pc.AbstractSyntax != sopClassUID {
+			continue
+		}
+
+		if pc.Result == PCResultTransferSyntaxNotSupported && len(pc.Proposed) > 0 {
+			// Name the call that fixes it. Associate takes the contexts, so the fix
+			// is to build them with AllTransferSyntaxes rather than to set a field.
+			return fmt.Sprintf("%s (proposed %s; to offer the compressed syntaxes as "+
+				"well, associate with contexts built from AllTransferSyntaxes(): "+
+				"Associate(ctx, []PresentationContextItem{{ID: 1, AbstractSyntax: %q, "+
+				"TransferSyntaxes: AllTransferSyntaxes()}}))",
+				pc.RefusalReason(), strings.Join(pc.Proposed, ", "), sopClassUID)
+		}
+		return pc.RefusalReason()
+	}
+
+	// Not refused and not accepted means it was never proposed. Worth saying,
+	// because the default context set covers common storage and query classes and
+	// nothing else.
+	return "it was not among the presentation contexts proposed for this association"
+}
+
+// ExplainNoContextForAny says why none of several candidate SOP classes has an
+// accepted presentation context.
+//
+// C-FIND, C-MOVE and C-GET each try a list of information models — patient root,
+// study root, then the retired patient/study only — so the useful explanation
+// covers whichever of them the peer actually answered about, rather than naming
+// one arbitrarily.
+func (a *Association) ExplainNoContextForAny(sopClassUIDs ...string) string {
+	a.mu.RLock()
+	refused := a.refusedContexts
+	a.mu.RUnlock()
+
+	var reasons []string
+	seen := make(map[string]bool)
+	for _, uid := range sopClassUIDs {
+		for _, pc := range refused {
+			if pc.AbstractSyntax != uid || seen[uid] {
+				continue
+			}
+			seen[uid] = true
+			reasons = append(reasons, fmt.Sprintf("%s: %s", uid, a.ExplainNoContextFor(uid)))
+		}
+	}
+
+	if len(reasons) == 0 {
+		return "none of them was among the presentation contexts proposed for this association"
+	}
+	return strings.Join(reasons, "; ")
+}
+
 // TransferSyntaxFor returns the transfer syntax negotiated for a presentation
 // context ID. It returns the empty string when the context was not accepted,
 // which callers treat as DICOM's implicit VR little endian default.
@@ -182,7 +278,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 		ImplementationVersion:  DefaultImplementationVersionName,
 	}
 	if ext != nil {
-		userInfo.AsyncOperations = ext.AsyncOperations
+		userInfo.AsyncOperations = truthfulAsyncWindow(ext.AsyncOperations)
 		userInfo.RoleSelections = ext.RoleSelections
 		userInfo.UserIdentity = ext.UserIdentity
 	}
@@ -228,7 +324,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 		a.transport.SetMaxPDUSize(a.maxPDUSize)
 
 		// Build accepted contexts map
-		a.acceptedContexts = BuildAcceptedContextMap(contexts, resp.PresentationContexts)
+		a.acceptedContexts, a.refusedContexts = BuildContextMaps(contexts, resp.PresentationContexts)
 		a.peerUserInfo = resp.UserInformation
 		a.mu.Unlock()
 		return nil
@@ -266,6 +362,7 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 
 	// Negotiate presentation contexts
 	results := NegotiatePresentationContexts(rq.PresentationContexts, supportedAbstractSyntaxes, supportedTransferSyntaxes)
+	reportRefusedContexts(rq, results)
 
 	// Determine negotiated PDU size
 	peerMaxPDU := rq.UserInformation.MaxPDULength

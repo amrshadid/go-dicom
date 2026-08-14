@@ -341,10 +341,10 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | Area | Status |
 |------|--------|
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
-| **Asynchronous operations** | Negotiated on the wire and reported to the peer, but not enforced — the SCU issues one operation at a time and waits for the response. |
+| **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Pixel data is transcoded in both directions as the negotiated context requires, but **RLE Lossless is the only syntax this library compresses to**. Every other compressed target fails rather than sending bytes described as something they are not. There is no JPEG, JPEG-LS or JPEG 2000 encoder here. |
-| **Concurrent use of one SCU** | An `SCU` issues one DIMSE operation at a time. Use one `SCU` per goroutine rather than sharing one across goroutines. |
+| **Compressing pixel data** | Two syntaxes are compressed *to*: **RLE Lossless** and **JPEG-LS Lossless**. Every other compressed target fails rather than sending bytes described as something they are not. JPEG-LS Near-Lossless is refused deliberately — it is lossy, and the error budget is the caller's decision. There is no JPEG or JPEG 2000 encoder here. |
+| **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
 
@@ -547,14 +547,18 @@ Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above
 `filereader`.
 
-**RLE Lossless decodes.** `Dataset.PixelArray()` decompresses RLE pixel data,
-single- and multi-frame, grayscale and color. Verified against pydicom on its
-own test corpus, and checked in CI on every push.
+**RLE Lossless decodes**, single- and multi-frame, grayscale and color, as does
+every JPEG syntax in the table above except JPEG 2000 — all in pure Go, with no
+codec to install and nothing to register. `Dataset.PixelArray()` decompresses
+them without being asked. Verified against pydicom on its own test corpus, and
+checked in CI on every push: of the 49 files in that corpus pydicom can decode,
+43 decode here to the same samples, compared whole rather than by their leading
+values. The six remaining are all JPEG 2000.
 
-**No other compressed syntax decodes.** JPEG, JPEG-LS, and JPEG 2000 instances
+**JPEG 2000 is the one syntax that does not decode.** `.90` and `.91` instances
 parse, store, and transfer with their pixel data intact as opaque bytes, but
-have no bundled decoder. Baseline JPEG goes through the standard library and
-works for ordinary 8-bit images; the rest need a decoder you supply.
+need a decoder you supply. See [CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data)
+for why, and `examples/jpeg2000` for a working one to copy.
 
 **Compressed frames can be extracted**, which is the step before decoding. For a
 compressed instance, `PixelData` holds the encapsulation exactly as it appears in
@@ -570,17 +574,16 @@ frame, err := ds.GetEncapsulatedFrame(0)      // one frame, still compressed
 Multi-frame compressed images split correctly; verified against pydicom on
 `SC_rgb_rle_2frame.dcm`.
 
-To decode a syntax with no bundled decoder, register one:
+To decode JPEG 2000, register a decoder:
 
 ```go
 compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
 ```
 
-These three codecs are not implemented in this module, and there is no hidden
-CGO path that enables them — the error messages used to name a C library and
-tell you to rebuild with `CGO_ENABLED=1`, which changed nothing because there
-was no CGO implementation to enable. They now say plainly that a decoder must be
-supplied.
+JPEG 2000 is not implemented in this module, and there is no hidden CGO path
+that enables it — the error messages used to name a C library and tell you to
+rebuild with `CGO_ENABLED=1`, which changed nothing because there was no CGO
+implementation to enable. They now say plainly that a decoder must be supplied.
 
 Any type with `Decompress([]byte) ([]byte, error)` and `CanDecompress([]byte) bool`
 will do; `Dataset.PixelArray()` routes frames through it automatically once

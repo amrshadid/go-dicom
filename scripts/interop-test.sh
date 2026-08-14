@@ -818,6 +818,125 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# Tier-2 SOP classes: Relevant Patient Information Query, Display System, and a
+# non-patient object information model.
+#
+# CONFORMANCE.md 8.5 used to say of these: "Nothing verifies them against a peer."
+# They had UID constants, presentation-context helpers, and no proof. The four
+# N-DIMSE defects found in 1.4.0 were in exactly that condition — implemented,
+# plausible, and never driven against anything but themselves, so go-dicom's SCP
+# read back the same wrong tag its SCU wrote.
+#
+# pynetdicom is the peer here, and it reports what it received, so a request that
+# names the wrong SOP class or the wrong instance shows up as a mismatch rather
+# than as agreement.
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "Tier-2 SOP classes against pynetdicom"
+
+  tier2_scp_py="$WORKDIR/tier2_scp.py"
+  cat > "$tier2_scp_py" <<'PYEOF'
+import sys
+from pynetdicom import AE, evt, ALL_TRANSFER_SYNTAXES
+from pynetdicom.sop_class import (
+    GeneralRelevantPatientInformationQuery,
+    HangingProtocolInformationModelFind,
+    DisplaySystem,
+)
+from pydicom.dataset import Dataset
+
+
+def handle_find(event):
+    # Report the abstract syntax the request arrived on, and whether the
+    # identifier carried a QueryRetrieveLevel. A non-patient model must send none.
+    ctx = event.context
+    identifier = event.identifier
+    has_level = "QueryRetrieveLevel" in identifier
+    print(f"FIND_ON: {ctx.abstract_syntax}", flush=True)
+    print(f"FIND_HAS_LEVEL: {has_level}", flush=True)
+    for elem in identifier:
+        print(f"FIND_KEY: {elem.tag}", flush=True)
+
+    match = Dataset()
+    if ctx.abstract_syntax == HangingProtocolInformationModelFind:
+        match.HangingProtocolName = "INTEROP_HP"
+    else:
+        match.PatientID = "P1"
+    yield 0xFF00, match
+
+
+def handle_nget(event):
+    print(f"NGET_ON: {event.context.abstract_syntax}", flush=True)
+    print(f"NGET_INSTANCE: {event.request.RequestedSOPInstanceUID}", flush=True)
+
+    ds = Dataset()
+    ds.Manufacturer = "PYNETDICOM"
+    return 0x0000, ds
+
+
+ae = AE(ae_title="PYTIER2")
+for sop_class in (
+    GeneralRelevantPatientInformationQuery,
+    HangingProtocolInformationModelFind,
+    DisplaySystem,
+):
+    ae.add_supported_context(sop_class, ALL_TRANSFER_SYNTAXES)
+
+ae.start_server(
+    ("127.0.0.1", int(sys.argv[1])),
+    evt_handlers=[(evt.EVT_C_FIND, handle_find), (evt.EVT_N_GET, handle_nget)],
+)
+PYEOF
+
+  tier2_port=11702
+  "$PYNETDICOM_BIN/python" "$tier2_scp_py" "$tier2_port" > "$WORKDIR/tier2_scp.log" 2>&1 &
+  tier2_pid=$!
+
+  if wait_for_port "$tier2_port"; then
+    # Hanging Protocol Information Model FIND: a non-patient model, so the
+    # identifier must carry the model's own key and no QueryRetrieveLevel.
+    if "$GODICOM" findscu -aec PYTIER2 \
+        -sop-class 1.2.840.10008.5.1.4.38.2 \
+        -key 0072,0002 \
+        "127.0.0.1:$tier2_port" > "$WORKDIR/tier2_hp.log" 2>&1; then
+
+      if grep -q "FIND_ON: 1.2.840.10008.5.1.4.38.2" "$WORKDIR/tier2_scp.log" &&
+         grep -q "FIND_HAS_LEVEL: False" "$WORKDIR/tier2_scp.log"; then
+        pass "Hanging Protocol FIND — pynetdicom saw the model and no QueryRetrieveLevel"
+        RAN_ANY=1
+      else
+        fail "pynetdicom did not receive a well-formed Hanging Protocol query"
+        sed -n '1,20p' "$WORKDIR/tier2_scp.log" >&2
+      fi
+    else
+      fail "go-dicom findscu could not query the Hanging Protocol model"
+      sed -n '1,20p' "$WORKDIR/tier2_hp.log" >&2
+    fi
+
+    # Relevant Patient Information Query: a C-FIND with a patient and a template,
+    # and no level either.
+    if "$GODICOM" findscu -aec PYTIER2 \
+        -sop-class 1.2.840.10008.5.1.4.37.1 \
+        -key 0010,0020=P1 -key 0040,E001 \
+        "127.0.0.1:$tier2_port" > "$WORKDIR/tier2_rpi.log" 2>&1; then
+
+      if grep -q "FIND_ON: 1.2.840.10008.5.1.4.37.1" "$WORKDIR/tier2_scp.log"; then
+        pass "Relevant Patient Information Query — pynetdicom saw the right SOP class"
+        RAN_ANY=1
+      else
+        fail "pynetdicom did not receive the Relevant Patient Information query"
+        sed -n '1,30p' "$WORKDIR/tier2_scp.log" >&2
+      fi
+    else
+      fail "go-dicom findscu could not issue a Relevant Patient Information query"
+      sed -n '1,20p' "$WORKDIR/tier2_rpi.log" >&2
+    fi
+  else
+    fail "the pynetdicom tier-2 SCP did not start listening"
+  fi
+  stop_server "$tier2_pid"
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2

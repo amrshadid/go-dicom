@@ -893,9 +893,10 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 			Decompress(fragment)
 	}
 
-	// Everything else — JPEG-LS, JPEG 2000, JPEG Lossless — needs a decoder the
-	// caller supplies. The built-in entry points for those are placeholders
-	// that only describe the C library they would need.
+	// Everything else goes through the registry. JPEG-LS and JPEG Lossless are
+	// registered there at init by this module's own pure-Go decoders, so they
+	// resolve without the caller doing anything; JPEG 2000 has no bundled
+	// decoder and resolves only if the caller registered one.
 	decoder, err := compress.GetExternalRegistry().GetExternalDecoder(compression)
 	if err != nil {
 		return nil, fmt.Errorf("no decoder available for %s; supply one with "+

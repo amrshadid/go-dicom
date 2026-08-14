@@ -2,6 +2,8 @@ package fileutil
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sync"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -63,19 +65,33 @@ func (dpdr *DeferredPixelDataReader) Load() error {
 	// Try to get from cache first
 	cacheKey := fmt.Sprintf("%s:%d:%d", dpdr.filePath, dpdr.offset, dpdr.length)
 	if cached, exists := dpdr.integration.cache.Get(cacheKey); exists {
-		dpdr.data = cached.([]byte)
-		dpdr.loaded = true
-		return nil
+		if data, ok := cached.([]byte); ok {
+			dpdr.data = data
+			dpdr.loaded = true
+			return nil
+		}
+		// A cache entry of another type means the key collided with something
+		// else. Fall through and read the file rather than panicking on the
+		// assertion.
 	}
 
-	// Load from file
-	return dpdr.integration.loadFromFile(dpdr.filePath, dpdr.offset, dpdr.length, cacheKey)
+	data, err := dpdr.integration.loadFromFile(dpdr.filePath, dpdr.offset, dpdr.length, cacheKey)
+	if err != nil {
+		return err
+	}
+
+	dpdr.data = data
+	dpdr.loaded = true
+	return nil
 }
 
-// Get returns the decompressed pixel data
+// Get returns the decompressed pixel data, reading it on first access.
 func (dpdr *DeferredPixelDataReader) Get() ([]byte, error) {
-	// Load if not already loaded
-	if !dpdr.loaded {
+	// Read dpdr.loaded through IsLoaded rather than directly: Load writes it
+	// under the write lock, so an unsynchronised read here races with a
+	// concurrent Get. Load re-checks the flag under the lock, so the worst a
+	// stale answer costs is one extra call into it.
+	if !dpdr.IsLoaded() {
 		if err := dpdr.Load(); err != nil {
 			return nil, err
 		}
@@ -247,11 +263,64 @@ func (ci *CodecIntegration) ValidatePixelData(data []byte, compressionType compr
 	return nil
 }
 
-// loadFromFile is a helper function for loading file data (stub for future implementation)
-func (ci *CodecIntegration) loadFromFile(filePath string, offset int64, length int64, cacheKey string) error {
-	// This would be implemented with actual file I/O
-	// For now, this is a placeholder that would be integrated with filereader
-	return fmt.Errorf("file loading not implemented in this stub")
+// MaxDeferredPixelDataLength bounds a single deferred read.
+//
+// The length comes from an element header, which is attacker-controlled: a file
+// declaring 4 GiB of pixel data would otherwise have that allocated up front,
+// before any of it is read. 1 GiB is above any legitimate single instance —
+// PS3.5 caps a value length at 2^32-2 bytes, and the largest real pixel data is
+// orders of magnitude below this — while keeping a hostile file cheap to reject.
+const MaxDeferredPixelDataLength int64 = 1 << 30
+
+// loadFromFile reads length bytes at offset from filePath and caches them.
+//
+// The read is bounded twice: against MaxDeferredPixelDataLength before
+// allocating, and against the file's actual size, so a declared length longer
+// than the file is refused rather than returning a short buffer the caller
+// cannot tell is short. io.ReadFull enforces that the whole extent was present.
+func (ci *CodecIntegration) loadFromFile(filePath string, offset int64, length int64,
+	cacheKey string) ([]byte, error) {
+
+	if offset < 0 {
+		return nil, fmt.Errorf("offset %d is negative", offset)
+	}
+	if length <= 0 {
+		return nil, fmt.Errorf("length %d is not positive", length)
+	}
+	if length > MaxDeferredPixelDataLength {
+		return nil, fmt.Errorf("declared length %d exceeds the %d byte limit on a deferred read",
+			length, MaxDeferredPixelDataLength)
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", filePath, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	// Check the extent against the file before allocating for it. Without this a
+	// file declaring a gigabyte and holding a kilobyte still costs a gigabyte.
+	info, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", filePath, err)
+	}
+	if end := offset + length; end > info.Size() {
+		return nil, fmt.Errorf("%s is %d bytes; pixel data at offset %d for %d bytes ends at %d",
+			filePath, info.Size(), offset, length, end)
+	}
+
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("seeking to %d in %s: %w", offset, filePath, err)
+	}
+
+	data := make([]byte, length)
+	if _, err := io.ReadFull(file, data); err != nil {
+		return nil, fmt.Errorf("reading %d bytes at offset %d from %s: %w",
+			length, offset, filePath, err)
+	}
+
+	ci.cache.Set(cacheKey, data)
+	return data, nil
 }
 
 // CompressionStatistics calculates compression statistics

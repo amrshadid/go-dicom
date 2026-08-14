@@ -145,22 +145,35 @@
 //
 // ## Built-in Formats (Pure Go)
 //
-// These formats are always available without external dependencies:
+// These formats decode with no external dependency, CGO or otherwise:
 //
 //   - UNCOMPRESSED: Raw pixel data, no compression
 //   - DEFLATE: DEFLATE/zlib (lossless, good compression ratio)
 //   - RLE: Run-Length Encoding (lossless, suitable for simple patterns)
-//   - JPEG: JPEG baseline (lossy, for photographic images)
+//   - JPEG: JPEG baseline and extended (lossy, for photographic images)
+//   - JPEG_LOSSLESS: JPEG Lossless, .57 and .70, every predictor
+//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless
 //
-// ## External Formats (Requires CGO + C Libraries)
+// ## Formats needing a decoder you supply
 //
-// These require compiling with CGO and having the libraries installed:
+//   - JPEG_2000: JPEG 2000, .90 and .91
 //
-//   - JPEG_LOSSLESS: JPEG Lossless, requires libjpeg-turbo
-//   - JPEG_LS: JPEG-LS lossless, requires libcharls
-//   - JPEG_2000: JPEG 2000, requires OpenJPEG
+// JPEG 2000 is the only codec here without a bundled decoder. Register one with
+// ExternalDecoderRegistry.RegisterExternalDecoder; examples/jpeg2000 is a working
+// decoder to copy, and CONFORMANCE.md section 8.1 explains why none is bundled.
 //
-// Setup guide available via GetImplementationGuide(compressionType).
+// GetImplementationGuide(compressionType) reports the current state of any of
+// them, and GetExternalCompressionStatus reports which have a decoder.
+//
+// # Compression
+//
+// Two syntaxes can be compressed *to*: RLE Lossless, and JPEG-LS Lossless through
+// EncodeJPEGLS — lossless, 2 to 16 bits, one scan per component. Decoding is
+// broader than encoding, and a request to compress to any other syntax fails
+// rather than producing bytes described as something they are not.
+//
+// JPEG-LS Near-Lossless is refused although the same encoder could produce it: it
+// is lossy, so how much error to accept belongs to the caller.
 //
 // # Type Definitions
 //
@@ -258,7 +271,9 @@
 //
 // ## External Decoder Registry
 //
-// Special registry for external decoders (requires CGO):
+// Holds the substitutable decoder for each of JPEG-LS, lossless JPEG and JPEG
+// 2000. "External" is historical and does not mean CGO: the first two are seeded
+// with this package's pure-Go decoders, and only JPEG 2000 starts empty.
 //
 //	// Get singleton external registry
 //	extRegistry := compress.GetExternalRegistry()

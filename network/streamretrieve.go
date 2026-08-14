@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"log"
 
 	"github.com/amrshadid/go-dicom/dataset"
 )
@@ -27,7 +26,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 
 	total, err := streamer.CountCGetMatches(ctx, req)
 	if err != nil {
-		log.Printf("streaming C-GET could not count matches: %v", err)
+		DefaultLogger.Error("streaming C-GET could not count matches: %v", err)
 		return StatusUnableToProcess
 	}
 
@@ -42,7 +41,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 	}()
 
 	canceled := &cancelFlag{}
-	var completed, failed, warning uint16
+	var counts subOperationCounts
 	var subMessageID uint16
 	sent := 0
 
@@ -55,45 +54,11 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 		}
 		sent++
 
-		remaining := uint16(0)
-		if total > sent {
-			remaining = uint16(total - sent)
-		}
-
-		if inst == nil {
-			failed++
-			continue
-		}
-		instClass, instUID, ok := instanceUIDs(inst)
-		if !ok {
-			log.Printf("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
-			failed++
-			continue
-		}
-		subCtxID, ok := FindPresentationContextID(assoc.AcceptedContexts(), instClass)
-		if !ok {
-			log.Printf("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
-			failed++
-			continue
-		}
-
 		subMessageID++
-		if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID,
-			instClass, instUID, inst, messageID, canceled); err != nil {
-			log.Printf("C-GET sub-operation for %s failed: %v", instUID, err)
-			failed++
-		} else {
-			completed++
-		}
+		s.sendOneGetSubOperation(ctx, assoc, inst, subMessageID, messageID, canceled, &counts)
 
-		pendingDS := BuildCGetRSP(messageID, sopClassUID, StatusPending,
-			remaining, completed, failed, warning)
-		pendingBytes, encErr := EncodeCommandDataset(pendingDS)
-		if encErr != nil {
-			continue
-		}
-		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
-			log.Printf("C-GET pending response failed, abandoning sub-operations: %v", err)
+		if !s.sendPendingRetrieveRSP(ctx, assoc, ctxID, BuildCGetRSP,
+			messageID, sopClassUID, remainingAfter(total, sent), counts) {
 			stopHandler()
 			for range out { //nolint:revive // draining so the handler can return
 			}
@@ -104,25 +69,23 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 
 	handlerErr := <-handlerDone
 
-	remaining := uint16(0)
-	if total > sent {
-		remaining = uint16(total - sent)
-	}
+	remaining := remainingAfter(total, sent)
 
 	switch {
 	case canceled.wasSet():
 		status = StatusQRCancelMatchingTerminated
 	case handlerErr != nil:
-		log.Printf("streaming C-GET handler failed: %v", handlerErr)
+		DefaultLogger.Error("streaming C-GET handler failed: %v", handlerErr)
 		status = StatusUnableToProcess
-	case failed > 0:
+	case counts.failed > 0:
 		status = StatusGetWarningPartial
 	default:
 		status = StatusSuccess
 		remaining = 0
 	}
 
-	rspDS := BuildCGetRSP(messageID, sopClassUID, status, remaining, completed, failed, warning)
+	rspDS := BuildCGetRSP(messageID, sopClassUID, status, remaining,
+		counts.completed, counts.failed, counts.warning)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
 		return status
@@ -142,7 +105,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 
 	total, err := streamer.CountCMoveMatches(ctx, req)
 	if err != nil {
-		log.Printf("streaming C-MOVE could not count matches: %v", err)
+		DefaultLogger.Error("streaming C-MOVE could not count matches: %v", err)
 		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0)
 		return
 	}
@@ -166,7 +129,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 		}
 	}()
 
-	var completed, failed, warning uint16
+	var counts subOperationCounts
 	sent := 0
 
 	for inst := range out {
@@ -177,45 +140,23 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 		sent++
 
 		if inst == nil {
-			failed++
+			counts.failed++
 			continue
 		}
 
 		if dest == nil {
-			dest = NewSCU(SCUConfig{
-				CallingAE: s.config.AETitle,
-				CalledAE:  req.MoveDestination,
-				Address:   destAddress,
-				Network:   s.config.Network,
-			})
-			if err := dest.Associate(ctx, storageContextsFor([]*dataset.Dataset{inst})); err != nil {
-				log.Printf("C-MOVE could not associate with destination %s at %s: %v",
-					req.MoveDestination, destAddress, err)
-				dest = nil
-				failed++
+			dest = s.associateWithMoveDestination(ctx, req.MoveDestination, destAddress,
+				storageContextsFor([]*dataset.Dataset{inst}))
+			if dest == nil {
+				counts.failed++
 				continue
 			}
 		}
 
-		if err := dest.Store(ctx, inst); err != nil {
-			log.Printf("C-MOVE sub-operation failed: %v", err)
-			failed++
-		} else {
-			completed++
-		}
+		s.sendOneMoveSubOperation(ctx, dest, inst, &counts)
 
-		remaining := uint16(0)
-		if total > sent {
-			remaining = uint16(total - sent)
-		}
-		pendingDS := BuildCMoveRSP(messageID, sopClassUID, StatusPending,
-			remaining, completed, failed, warning)
-		pendingBytes, encErr := EncodeCommandDataset(pendingDS)
-		if encErr != nil {
-			continue
-		}
-		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
-			log.Printf("C-MOVE pending response failed, abandoning sub-operations: %v", err)
+		if !s.sendPendingRetrieveRSP(ctx, assoc, ctxID, BuildCMoveRSP,
+			messageID, sopClassUID, remainingAfter(total, sent), counts) {
 			stopHandler()
 			for range out { //nolint:revive // draining so the handler can return
 			}
@@ -226,24 +167,21 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 
 	handlerErr := <-handlerDone
 
-	remaining := uint16(0)
-	if total > sent {
-		remaining = uint16(total - sent)
-	}
+	remaining := remainingAfter(total, sent)
 
 	status := StatusSuccess
 	switch {
 	case watcher != nil && watcher.wasCanceled():
 		status = StatusQRCancelMatchingTerminated
 	case handlerErr != nil:
-		log.Printf("streaming C-MOVE handler failed: %v", handlerErr)
+		DefaultLogger.Error("streaming C-MOVE handler failed: %v", handlerErr)
 		status = StatusUnableToProcess
-	case failed > 0:
+	case counts.failed > 0:
 		status = StatusGetWarningPartial
 	default:
 		remaining = 0
 	}
 
 	s.sendMoveFinalRemaining(ctx, assoc, ctxID, messageID, sopClassUID, status,
-		remaining, completed, failed, warning)
+		remaining, counts.completed, counts.failed, counts.warning)
 }
