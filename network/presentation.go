@@ -282,8 +282,8 @@ func NegotiatePresentationContexts(
 	return results
 }
 
-// reportRefusedContexts logs each presentation context an SCP is about to refuse,
-// naming what the peer asked for.
+// reportRefusedContexts records each presentation context an SCP is about to
+// refuse, naming what the peer asked for.
 //
 // An association whose contexts are all refused still succeeds at the protocol
 // level, and the requestor then fails on its first operation. From this side that
@@ -291,6 +291,19 @@ func NegotiatePresentationContexts(
 // a modality was proposing JPEG-LS to a server offering only the uncompressed
 // syntaxes — the commonest cause, and one fixed by passing AllTransferSyntaxes to
 // SetSupportedTransferSyntaxes.
+//
+// # Levels
+//
+// An individual refusal is debug, not a warning. A requestor proposes broadly and
+// a server accepts what it supports, so refusals are what ordinary negotiation
+// looks like: an SCU proposing the default contexts has around twenty, and any
+// server refuses several. Reporting each as a warning meant every association
+// produced a handful, which buries the refusals that do matter — this was warning
+// at first, and a demonstration of the CLI made it obvious that normal traffic was
+// being reported as though something were wrong.
+//
+// Refusing *every* context stays an error. That association is established and
+// useless, and nothing else will say so.
 func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultItem) {
 	proposedByID := make(map[byte]PresentationContextItem, len(rq.PresentationContexts))
 	for _, pc := range rq.PresentationContexts {
@@ -307,18 +320,18 @@ func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultI
 		proposed := proposedByID[res.ID]
 		switch res.Result {
 		case PCResultTransferSyntaxNotSupported:
-			DefaultLogger.Warn("refused presentation context %d for %s from %s: "+
+			DefaultLogger.Debug("refused presentation context %d for %s from %s: "+
 				"none of the transfer syntaxes it proposed (%s) is supported; "+
 				"pass AllTransferSyntaxes() to SetSupportedTransferSyntaxes to accept "+
 				"compressed pixel data",
 				res.ID, proposed.AbstractSyntax, rq.CallingAE,
 				strings.Join(proposed.TransferSyntaxes, ", "))
 		case PCResultAbstractSyntaxNotSupported:
-			DefaultLogger.Warn("refused presentation context %d from %s: "+
+			DefaultLogger.Debug("refused presentation context %d from %s: "+
 				"SOP class %s is not supported; add it with SetSupportedAbstractSyntaxes",
 				res.ID, rq.CallingAE, proposed.AbstractSyntax)
 		default:
-			DefaultLogger.Warn("refused presentation context %d for %s from %s with result %d",
+			DefaultLogger.Debug("refused presentation context %d for %s from %s with result %d",
 				res.ID, proposed.AbstractSyntax, rq.CallingAE, res.Result)
 		}
 	}
