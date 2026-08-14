@@ -133,7 +133,7 @@ func TestNewDeferredPixelDataReader(t *testing.T) {
 //
 // So these exercise the load path itself.
 func TestDeferredPixelDataReaderReadsTheExtentItWasGiven(t *testing.T) {
-	// Pixel data preceded by a header, so a correct read has to honour the offset
+	// Pixel data preceded by a header, so a correct read has to respect the offset
 	// rather than returning the start of the file.
 	const header = "not pixel data"
 	pixels := []byte{0x01, 0x02, 0xFE, 0xFF, 0x10, 0x20}
