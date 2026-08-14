@@ -2,7 +2,6 @@ package network
 
 import (
 	"context"
-	"log"
 	"sync/atomic"
 
 	"github.com/amrshadid/go-dicom/dataset"
@@ -205,13 +204,13 @@ func (s *SCP) streamCFindResponses(ctx context.Context, assoc *Association, stre
 			continue
 		}
 		if err := s.sendCFindPending(ctx, assoc, ctxID, messageID, sopClassUID, resp); err != nil {
-			log.Printf("failed to send C-FIND match: %v", err)
+			DefaultLogger.Error("failed to send C-FIND match: %v", err)
 			break
 		}
 	}
 
 	if err := <-handlerDone; err != nil && !watcher.wasCanceled() {
-		log.Printf("streaming C-FIND handler failed: %v", err)
+		DefaultLogger.Error("streaming C-FIND handler failed: %v", err)
 		return StatusUnableToProcess
 	}
 

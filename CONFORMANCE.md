@@ -229,6 +229,12 @@ selection, and user identity negotiation. The window defaults to one.
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
+| Logging destination and format | `config.SetLogger`, for the whole library |
+| Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
+
+Everything the library reports goes through `config.Logger`, so one call
+redirects or silences all of it. Network messages carry a `component=network`
+attribute for filtering, and default to warnings and errors only.
 
 ---
 
