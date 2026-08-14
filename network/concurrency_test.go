@@ -192,22 +192,27 @@ func (h *blockingFindHandler) StreamCFind(ctx context.Context, _ *CFindRequest,
 	return ctx.Err()
 }
 
-// The asynchronous operations window used to be sent exactly as asked for, with
-// nothing enforcing it: a caller requesting four had four negotiated and reported
-// back while the SCU issued one operation at a time. The peer was told something
-// about us that was not true.
-func TestTheAsyncWindowIsReducedToWhatIsPerformed(t *testing.T) {
+// The asynchronous operations window was once sent exactly as asked for with
+// nothing enforcing it, and then clamped to one because nothing enforced it. It is
+// now enforced, so the caller's number is proposed — with one exception.
+func TestTheAsyncWindowIsProposedAsAsked(t *testing.T) {
 	cases := []struct {
 		name        string
 		proposed    *AsynchronousOperationsWindow
 		wantInvoked uint16
 	}{
-		{"a window of four is reduced to one",
-			&AsynchronousOperationsWindow{MaxOperationsInvoked: 4, MaxOperationsPerformed: 4}, 1},
-		{"unlimited is reduced too, being furthest from the truth",
-			&AsynchronousOperationsWindow{MaxOperationsInvoked: 0, MaxOperationsPerformed: 2}, 1},
-		{"one is left alone",
+		{"a window of four is proposed, because it is now honored",
+			&AsynchronousOperationsWindow{MaxOperationsInvoked: 4, MaxOperationsPerformed: 4}, 4},
+		{"one stays one",
 			&AsynchronousOperationsWindow{MaxOperationsInvoked: 1, MaxOperationsPerformed: 1}, 1},
+		{
+			// Zero means unlimited in PS3.7 D.3.3.3, and every outstanding operation
+			// holds a goroutine waiting on a response, so unlimited is not a bound
+			// this implementation can hold to.
+			name:        "unlimited is refused, since it is not a bound we can keep",
+			proposed:    &AsynchronousOperationsWindow{MaxOperationsInvoked: 0, MaxOperationsPerformed: 2},
+			wantInvoked: 1,
+		},
 	}
 
 	for _, tc := range cases {
@@ -220,10 +225,6 @@ func TestTheAsyncWindowIsReducedToWhatIsPerformed(t *testing.T) {
 				t.Errorf("MaxOperationsInvoked = %d, want %d",
 					got.MaxOperationsInvoked, tc.wantInvoked)
 			}
-
-			// What we will accept from the peer is left as asked: it bounds what the
-			// peer sends us, and reading one message at a time is not made
-			// incorrect by the peer sending fewer than it could.
 			if got.MaxOperationsPerformed != tc.proposed.MaxOperationsPerformed {
 				t.Errorf("MaxOperationsPerformed = %d, want it unchanged at %d",
 					got.MaxOperationsPerformed, tc.proposed.MaxOperationsPerformed)
@@ -232,7 +233,142 @@ func TestTheAsyncWindowIsReducedToWhatIsPerformed(t *testing.T) {
 	}
 
 	if truthfulAsyncWindow(nil) != nil {
-		t.Error("no window proposed should stay no window, not become a clamped one")
+		t.Error("no window proposed should stay no window, not become one")
+	}
+}
+
+// Proposing a window is a claim about behavior, so it has to bound something.
+// This is the bound itself: N operations may hold a slot, and the next waits.
+func TestTheWindowBoundsOutstandingOperations(t *testing.T) {
+	const window = 2
+	slots := newOperationSlots(window)
+	ctx := context.Background()
+
+	for i := 0; i < window; i++ {
+		if err := slots.acquire(ctx); err != nil {
+			t.Fatalf("acquiring slot %d of %d: %v", i+1, window, err)
+		}
+	}
+
+	// The next one has to wait. A context that is already done proves it without
+	// the test hanging if the bound is missing.
+	expired, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := slots.acquire(expired); err == nil {
+		t.Errorf("a %drd operation acquired a slot with a window of %d", window+1, window)
+	}
+
+	// Releasing one lets the next in.
+	slots.release()
+	if err := slots.acquire(ctx); err != nil {
+		t.Errorf("after releasing a slot, acquiring failed: %v", err)
+	}
+}
+
+// A window of zero is unlimited in PS3.7 D.3.3.3, and newOperationSlots expresses
+// that as no bound rather than a bound of zero — which would block every operation
+// forever.
+func TestAnUnlimitedWindowDoesNotBlock(t *testing.T) {
+	slots := newOperationSlots(0)
+	ctx := context.Background()
+
+	for i := 0; i < 100; i++ {
+		if err := slots.acquire(ctx); err != nil {
+			t.Fatalf("acquire %d with an unlimited window: %v", i, err)
+		}
+	}
+	slots.release()
+}
+
+// The end-to-end counterpart: several operations issued concurrently on one SCU
+// with a negotiated window all complete, and each gets its own response.
+//
+// This does not demonstrate throughput, and it is worth saying why rather than
+// leaving a reader to assume it does. The SCP in this library dispatches one
+// message at a time per association, so it answers serially however many the
+// requestor has outstanding — the peak in flight at the handler is one. What this
+// establishes is that the requestor's side is correct: eight operations sent from
+// eight goroutines are matched to eight responses by message ID, with none
+// delivered to the wrong caller.
+//
+// Concurrent dispatch on the SCP side, bounded by MaxOperationsPerformed, is the
+// other half and is not implemented — see the follow-up noted in CONFORMANCE.md.
+func TestConcurrentOperationsEachGetTheirOwnResponse(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var mu sync.Mutex
+	stored := make(map[string]int)
+
+	server, err := StartServer(ctx, SCPConfig{
+		AETitle: "WINDOWSCP", Port: 0, BindAddress: "127.0.0.1",
+	}, &StorageHandler{
+		OnStore: func(_ context.Context, _, sopInstanceUID string, _ *dataset.Dataset) uint16 {
+			mu.Lock()
+			stored[sopInstanceUID]++
+			mu.Unlock()
+			return StatusSuccess
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	defer server.Stop()
+	server.SetSupportedAbstractSyntaxes([]string{VerificationSOPClassUID, CTImageStorageUID})
+
+	scu := NewSCU(SCUConfig{
+		CallingAE: "WINDOWSCU", CalledAE: "WINDOWSCP", Address: server.Addr(),
+		ExtendedNegotiation: &ExtendedNegotiation{
+			AsyncOperations: &AsynchronousOperationsWindow{
+				MaxOperationsInvoked:   4,
+				MaxOperationsPerformed: 4,
+			},
+		},
+	})
+	if err := scu.Associate(ctx, []PresentationContextItem{{
+		ID:               1,
+		AbstractSyntax:   CTImageStorageUID,
+		TransferSyntaxes: DefaultTransferSyntaxes(),
+	}}); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+	defer func() { _ = scu.Release(ctx) }()
+
+	// The window has to have been agreed, or this measures the default of one.
+	agreed := scu.Association().PeerUserInformation().AsyncOperations
+	if agreed == nil || agreed.MaxOperationsInvoked != 4 {
+		t.Fatalf("the peer did not agree a window of 4: %+v", agreed)
+	}
+
+	const total = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, total)
+	for i := 0; i < total; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			uid := fmt.Sprintf("1.2.3.%d", n)
+			if err := scu.Store(ctx, makeInstance(CTImageStorageUID, uid, "Window^Test")); err != nil {
+				errs <- fmt.Errorf("%s: %w", uid, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("a concurrent C-STORE failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(stored) != total {
+		t.Errorf("the SCP stored %d distinct instances, want %d", len(stored), total)
+	}
+	for uid, count := range stored {
+		if count != 1 {
+			t.Errorf("%s arrived %d times, want once", uid, count)
+		}
 	}
 }
 

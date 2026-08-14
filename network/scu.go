@@ -41,10 +41,87 @@ type SCU struct {
 	messageID   atomic.Uint32
 	mu          sync.Mutex
 
-	// opMu serializes DIMSE operations. Held for the whole of one — including,
-	// for Find, until the goroutine streaming its results has finished, since the
-	// operation is not over when Find returns.
-	opMu sync.Mutex
+	// sendMu serializes the sending of one complete message — its command and the
+	// data set that follows.
+	//
+	// Not the whole operation: an operation waiting for its response holds nothing,
+	// which is what lets several be outstanding at once. What it prevents is two
+	// senders interleaving the PDVs of different messages on one presentation
+	// context, which PS3.8 does not allow and which no reader could untangle.
+	sendMu sync.Mutex
+
+	// slots bounds how many operations are outstanding, from the negotiated
+	// asynchronous operations window. Nil for an unlimited window.
+	slots *operationSlots
+
+	// gate separates the operations that can overlap from the two that cannot.
+	//
+	// Echo, Store, Find and the N-services take it for reading: each waits for its
+	// own response by message ID, so several may be outstanding at once, bounded by
+	// the window.
+	//
+	// C-MOVE and C-GET take it for writing, exclusively. Both interleave other
+	// traffic on the association — a C-GET receives C-STORE sub-operation requests
+	// between its own responses, and a C-MOVE has a cancel watcher reading the
+	// association while nothing else does — so allowing another operation alongside
+	// them would have two readers competing for messages neither can attribute.
+	gate sync.RWMutex
+}
+
+// sendMessage writes one command and its optional data set as a unit.
+//
+// The lock spans both: a command that says a data set follows must be followed by
+// that data set on the wire, with nothing of another message's between.
+func (s *SCU) sendMessage(ctx context.Context, assoc *Association, contextID byte,
+	command []byte, dataSet []byte, hasDataSet bool) error {
+
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+
+	if err := assoc.SendPData(ctx, contextID, command, true); err != nil {
+		return err
+	}
+	if !hasDataSet {
+		return nil
+	}
+	return assoc.SendPData(ctx, contextID, dataSet, false)
+}
+
+// beginOperation reserves a slot in the negotiated window for an operation that
+// can overlap with others, blocking while the window is full.
+//
+// The returned function releases the slot and must be called exactly once.
+func (s *SCU) beginOperation(ctx context.Context) (func(), error) {
+	s.gate.RLock()
+
+	s.mu.Lock()
+	slots := s.slots
+	s.mu.Unlock()
+
+	if err := slots.acquire(ctx); err != nil {
+		s.gate.RUnlock()
+		return nil, err
+	}
+
+	return func() {
+		slots.release()
+		s.gate.RUnlock()
+	}, nil
+}
+
+// beginExclusiveOperation reserves the association for a C-MOVE or C-GET, waiting
+// for every overlapping operation to finish first.
+//
+// Exclusive because both interleave traffic that is not their own response on the
+// association: a C-GET receives C-STORE sub-operation requests, and a C-MOVE has a
+// cancel watcher reading it. Two readers with different ideas of what belongs to
+// them is how a retrieval loses a sub-operation.
+func (s *SCU) beginExclusiveOperation(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.gate.Lock()
+	return s.gate.Unlock, nil
 }
 
 // NewSCU creates a new SCU with the given configuration.
@@ -95,8 +172,25 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 		contexts = s.defaultContexts()
 	}
 
-	return s.association.RequestAssociationWithNegotiation(ctx, s.config.CallingAE, s.config.CalledAE,
-		contexts, s.config.Network.MaxPDUSize, s.config.ExtendedNegotiation)
+	if err := s.association.RequestAssociationWithNegotiation(ctx, s.config.CallingAE,
+		s.config.CalledAE, contexts, s.config.Network.MaxPDUSize,
+		s.config.ExtendedNegotiation); err != nil {
+		return err
+	}
+
+	// How many operations may be outstanding comes from what was negotiated, not
+	// from what was asked for: the peer's A-ASSOCIATE-AC is the agreement.
+	//
+	// One when nothing was negotiated, which is what the standard means by the
+	// absence of the item and what every association did before pipelining. A
+	// caller who wants more asks for it and the peer has to agree.
+	window := uint16(1)
+	if agreed := s.association.PeerUserInformation().AsyncOperations; agreed != nil {
+		window = agreed.MaxOperationsInvoked
+	}
+	s.slots = newOperationSlots(window)
+
+	return nil
 }
 
 // defaultContexts builds the default set of presentation contexts.
@@ -143,8 +237,11 @@ func (s *SCU) defaultContexts() []PresentationContextItem {
 
 // Echo performs a C-ECHO verification.
 func (s *SCU) Echo(ctx context.Context) error {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	s.mu.Lock()
 	assoc := s.association
@@ -163,26 +260,25 @@ func (s *SCU) Echo(ctx context.Context) error {
 	}
 
 	// Build and send C-ECHO-RQ
-	cmdDS := BuildCEchoRQ(s.nextMessageID())
+	messageID := s.nextMessageID()
+	cmdDS := BuildCEchoRQ(messageID)
 	cmdBytes, err := EncodeCommandDataset(cmdDS)
 	if err != nil {
 		return fmt.Errorf("failed to encode C-ECHO-RQ: %w", err)
 	}
 
-	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
+	if err := s.sendMessage(ctx, assoc, pcID, cmdBytes, nil, false); err != nil {
 		return fmt.Errorf("failed to send C-ECHO-RQ: %w", err)
 	}
 
-	// Receive C-ECHO-RSP
-	_, respData, isCmd, err := assoc.ReceivePData(ctx)
+	// Receive this operation's C-ECHO-RSP, by message ID: with another operation
+	// outstanding the next message on the wire may not be ours.
+	msg, err := assoc.ReceiveResponse(ctx, messageID)
 	if err != nil {
 		return fmt.Errorf("failed to receive C-ECHO-RSP: %w", err)
 	}
-	if !isCmd {
-		return NewDIMSEError("UNEXPECTED", "expected command, got data", 0)
-	}
 
-	respDS, err := DecodeCommandDataset(respData)
+	respDS, err := DecodeCommandDataset(msg.command)
 	if err != nil {
 		return fmt.Errorf("failed to decode C-ECHO-RSP: %w", err)
 	}
@@ -201,8 +297,11 @@ func (s *SCU) Echo(ctx context.Context) error {
 
 // Store sends a DICOM dataset to the SCP using C-STORE.
 func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	s.mu.Lock()
 	assoc := s.association
@@ -233,37 +332,32 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 				sopClassUID, assoc.ExplainNoContextFor(sopClassUID)))
 	}
 
-	// Build and send C-STORE-RQ command
-	cmdDS := BuildCStoreRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, PriorityMedium)
+	// Build the command and the data set, then send them as one message: the
+	// command says a data set follows, so nothing of another message's may come
+	// between them on this context.
+	messageID := s.nextMessageID()
+	cmdDS := BuildCStoreRQ(messageID, sopClassUID, sopInstanceUID, PriorityMedium)
 	cmdBytes, err := EncodeCommandDataset(cmdDS)
 	if err != nil {
 		return fmt.Errorf("failed to encode C-STORE-RQ: %w", err)
 	}
 
-	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
-		return fmt.Errorf("failed to send C-STORE-RQ command: %w", err)
-	}
-
-	// Send data set
 	dataBytes, err := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
 		return fmt.Errorf("failed to encode dataset: %w", err)
 	}
 
-	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
-		return fmt.Errorf("failed to send C-STORE data: %w", err)
+	if err := s.sendMessage(ctx, assoc, pcID, cmdBytes, dataBytes, true); err != nil {
+		return fmt.Errorf("failed to send C-STORE-RQ: %w", err)
 	}
 
-	// Receive C-STORE-RSP
-	_, respData, isCmd, err := assoc.ReceivePData(ctx)
+	// This operation's response, by message ID.
+	msg, err := assoc.ReceiveResponse(ctx, messageID)
 	if err != nil {
 		return fmt.Errorf("failed to receive C-STORE-RSP: %w", err)
 	}
-	if !isCmd {
-		return NewDIMSEError("UNEXPECTED", "expected command response, got data", 0)
-	}
 
-	respDS, err := DecodeCommandDataset(respData)
+	respDS, err := DecodeCommandDataset(msg.command)
 	if err != nil {
 		return fmt.Errorf("failed to decode C-STORE-RSP: %w", err)
 	}
@@ -353,44 +447,43 @@ func (s *SCU) FindWithSOPClass(ctx context.Context, sopClassUID string,
 func (s *SCU) findOnContext(ctx context.Context, assoc *Association, queryDS *dataset.Dataset,
 	sopClassUID string, pcID byte) (<-chan *CFindResult, error) {
 
-	// Held until the results have been streamed. Every early return below has to
-	// release it, which is why it is not a defer.
-	s.opMu.Lock()
+	// A slot is held until the results have been streamed, not just until this
+	// returns: a C-FIND is not finished when the channel is handed back. Every
+	// early return below has to release it, which is why it is not a defer.
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	// Build and send C-FIND-RQ
-	cmdDS := BuildCFindRQ(s.nextMessageID(), sopClassUID, PriorityMedium)
+	messageID := s.nextMessageID()
+	cmdDS := BuildCFindRQ(messageID, sopClassUID, PriorityMedium)
 	cmdBytes, err := EncodeCommandDataset(cmdDS)
 	if err != nil {
-		s.opMu.Unlock()
+		release()
 		return nil, fmt.Errorf("failed to encode C-FIND-RQ: %w", err)
 	}
 
-	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
-		s.opMu.Unlock()
-		return nil, fmt.Errorf("failed to send C-FIND-RQ command: %w", err)
-	}
-
-	// Send query dataset
 	dataBytes, err := EncodeDataset(queryDS, assoc.TransferSyntaxFor(pcID))
 	if err != nil {
-		s.opMu.Unlock()
+		release()
 		return nil, fmt.Errorf("failed to encode query dataset: %w", err)
 	}
 
-	if err := assoc.SendPData(ctx, pcID, dataBytes, false); err != nil {
-		s.opMu.Unlock()
-		return nil, fmt.Errorf("failed to send C-FIND query data: %w", err)
+	if err := s.sendMessage(ctx, assoc, pcID, cmdBytes, dataBytes, true); err != nil {
+		release()
+		return nil, fmt.Errorf("failed to send C-FIND-RQ: %w", err)
 	}
 
 	// Stream results on channel.
 	//
-	// The operation lock is released by the streaming goroutine, not here: a
-	// C-FIND is not finished when this returns, and letting another operation
-	// start now would have it read this query's matches.
+	// The slot is released by the streaming goroutine, not here: the operation is
+	// outstanding until its final status arrives, and the negotiated window counts
+	// it until then.
 	results := make(chan *CFindResult, 16)
 	go func() {
-		defer s.opMu.Unlock()
-		s.receiveFindResults(ctx, assoc, results)
+		defer release()
+		s.receiveFindResults(ctx, assoc, messageID, results)
 	}()
 	return results, nil
 }
@@ -401,22 +494,22 @@ type CFindResult struct {
 	Err     error
 }
 
-func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, results chan<- *CFindResult) {
+func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, messageID uint16,
+	results chan<- *CFindResult) {
 	defer close(results)
 
+	// Every response is taken by message ID rather than by reading whatever comes
+	// next. A C-FIND's ID stays live across all of its pending responses, and with
+	// another operation outstanding the next message on the wire may be that
+	// operation's — reading it here would deliver a store response as a match.
 	for {
-		// Receive command
-		_, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		msg, err := assoc.ReceiveResponse(ctx, messageID)
 		if err != nil {
 			results <- &CFindResult{Err: err}
 			return
 		}
-		if !isCmd {
-			results <- &CFindResult{Err: NewDIMSEError("UNEXPECTED", "expected command, got data", 0)}
-			return
-		}
 
-		cmdDS, err := DecodeCommandDataset(cmdData)
+		cmdDS, err := DecodeCommandDataset(msg.command)
 		if err != nil {
 			results <- &CFindResult{Err: err}
 			return
@@ -428,38 +521,31 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, result
 			return
 		}
 
-		if IsPending(status) {
-			// Receive the result dataset
-			resultCtxID, resultData, isCmd, err := assoc.ReceivePData(ctx)
-			if err != nil {
-				results <- &CFindResult{Err: err}
-				return
+		if !IsPending(status) {
+			// Final status: success, failure, or cancel.
+			if status != StatusSuccess && status != StatusCancel {
+				results <- &CFindResult{Err: NewDIMSEError("FIND_FAILED",
+					fmt.Sprintf("C-FIND failed with status 0x%04X", status), status)}
 			}
-			if isCmd {
-				results <- &CFindResult{Err: NewDIMSEError("UNEXPECTED", "expected data, got command", 0)}
-				return
-			}
+			return
+		}
 
-			resultDS, err := DecodeDataset(resultData, assoc.TransferSyntaxFor(resultCtxID))
-			if err != nil {
-				results <- &CFindResult{Err: err}
-				return
-			}
+		if !msg.hasDataSet {
+			results <- &CFindResult{Err: NewDIMSEError("UNEXPECTED",
+				"a pending C-FIND response carried no identifier", status)}
+			return
+		}
 
-			select {
-			case results <- &CFindResult{DataSet: resultDS}:
-			case <-ctx.Done():
-				results <- &CFindResult{Err: ctx.Err()}
-				return
-			}
-		} else {
-			// Final status (success, failure, or cancel)
-			if status != StatusSuccess {
-				if status != StatusCancel {
-					results <- &CFindResult{Err: NewDIMSEError("FIND_FAILED",
-						fmt.Sprintf("C-FIND failed with status 0x%04X", status), status)}
-				}
-			}
+		resultDS, err := DecodeDataset(msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
+		if err != nil {
+			results <- &CFindResult{Err: err}
+			return
+		}
+
+		select {
+		case results <- &CFindResult{DataSet: resultDS}:
+		case <-ctx.Done():
+			results <- &CFindResult{Err: ctx.Err()}
 			return
 		}
 	}
@@ -467,8 +553,11 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, result
 
 // Move performs a C-MOVE request.
 func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestination string) error {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginExclusiveOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	s.mu.Lock()
 	assoc := s.association
@@ -549,8 +638,11 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 
 // Get performs a C-GET request (retrieve objects on the same association).
 func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginExclusiveOperation(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 
 	s.mu.Lock()
 	assoc := s.association
@@ -718,8 +810,11 @@ func (s *SCU) Cancel(ctx context.Context, messageID uint16) error {
 
 // NEventReport sends an N-EVENT-REPORT-RQ.
 func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID string, eventTypeID uint16, ds *dataset.Dataset) (*NEventReportResponse, error) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	assoc := s.getAssociation()
 	if assoc == nil {
@@ -763,8 +858,11 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 
 // NGet sends an N-GET-RQ.
 func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NGetResponse, error) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	assoc := s.getAssociation()
 	if assoc == nil {
@@ -808,8 +906,11 @@ func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NG
 
 // NSet sends an N-SET-RQ.
 func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) (*NSetResponse, error) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	assoc := s.getAssociation()
 	if assoc == nil {
@@ -847,8 +948,11 @@ func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *
 
 // NAction sends an N-ACTION-RQ.
 func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, actionTypeID uint16, ds *dataset.Dataset) (*NActionResponse, error) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	assoc := s.getAssociation()
 	if assoc == nil {
@@ -890,8 +994,11 @@ func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, a
 
 // NCreate sends an N-CREATE-RQ.
 func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) (*NCreateResponse, error) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	assoc := s.getAssociation()
 	if assoc == nil {
@@ -932,8 +1039,11 @@ func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, d
 
 // NDelete sends an N-DELETE-RQ.
 func (s *SCU) NDelete(ctx context.Context, sopClassUID, sopInstanceUID string) (*NDeleteResponse, error) {
-	s.opMu.Lock()
-	defer s.opMu.Unlock()
+	release, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	assoc := s.getAssociation()
 	if assoc == nil {
