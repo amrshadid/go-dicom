@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed — the library no longer writes to your stderr uninvited
+Everything here came from reading the documentation against the code. Three
+defects turned up in the process, all of the shape 1.4.0 was about: prose and
+tests agreeing with each other while the code did something else.
 
-**`network` reported through `log.Printf` at 49 call sites**, onto the standard
+### Changed
+
+**The library no longer writes to your stderr uninvited.**
+
+`network` reported through `log.Printf` at 49 call sites, onto the standard
 logger, which a consumer cannot redirect or silence. `DefaultLogger` existed,
 was documented as "silent by default", and had 3 call sites against those 49 —
 so a program embedding an SCP got association errors, rejections and abandoned
@@ -43,7 +49,19 @@ since a behavioral test cannot catch one new `log.Printf` in a branch it does no
 reach. Another runs an SCP with `os.Stderr` swapped for a pipe and asserts the
 error paths report to `config.Logger` and write nothing to the process's stderr.
 
-### Fixed
+The corrections to what the documentation claimed:
+
+- **The README no longer contradicts itself about codec support.** It claimed
+  JPEG-LS and JPEG Lossless "have no bundled decoder" one paragraph after a table
+  correctly marking both as decoding. Both have had pure-Go decoders, registered
+  at init, since 1.3.0. JPEG 2000 is the only syntax that does not decode, and
+  the section now says so once.
+
+- **`doc.go` no longer advertises a limitation that was fixed.** It named
+  C-MOVE and C-GET not performing C-STORE sub-operations as the most significant
+  known gap; both have been implemented since 1.3.0, and `CONFORMANCE.md` §2.3
+  and the README parity table both already said so. This is the module's landing
+  text on pkg.go.dev.
 
 - **`network/doc.go` claimed data sets are not transcoded between transfer
   syntaxes.** They are — `transcodePixelData` is wired into `datasetcodec.go` and
@@ -51,11 +69,32 @@ error paths report to `config.Logger` and write nothing to the process's stderr.
   in `CONFORMANCE.md` §8.2 and the README, is that RLE Lossless is the only syntax
   pixel data is compressed *to*.
 
-## Documentation corrections
+- **`compress` no longer describes its own decoders as placeholders.** The
+  JPEG-LS and JPEG Lossless implementation guides told the reader to install
+  libcharls or libjpeg-turbo, uncomment a CGO block and rebuild with
+  `CGO_ENABLED=1` — for codecs this package decodes in pure Go, and via a CGO
+  path that has never existed in this module. `TestGetImplementationGuide`
+  asserted the same wrong claim, requiring the JPEG-LS guide to name libcharls,
+  so the guides and the test agreed with each other and not with the code. The
+  guides now state what is bundled and how to substitute a decoder, and the test
+  is pinned to the registry rather than to a hardcoded library name, so bundling
+  a JPEG 2000 decoder will fail it until its guide is rewritten.
 
-Two defects were found while checking the documentation against the code. The
-pattern in both is the same one 1.4.0 was about: prose and tests agreeing with
-each other while the code did something else.
+  `JPEGLSDecoderSkeleton` and `JPEGLosslessDecoderSkeleton` are deprecated: they
+  have no fields, no methods, and never had an implementation behind them.
+
+- **`CONFORMANCE.md` §8.1 said 42 of pydicom's 49 decodable files matched.** It is
+  43, and the 6 that do not are all JPEG 2000 — verified by running
+  `TestPixelsAgainstWholePydicomCorpus` against the corpus rather than by
+  recounting the claim.
+
+- **`qrscp` now defaults `-output` to `./received`**, matching `storescp`. It
+  defaulted to `./dcmstore`, which created a directory named after a Go import
+  path and read as a package of this module that was missing.
+
+- **`make lint` names the linter version CI uses.** `.golangci.yml` is a v2
+  configuration and a v1 binary refuses it outright rather than degrading, so the
+  target's `@latest` install instruction left a local run unable to lint at all.
 
 ### Fixed
 
@@ -84,47 +123,6 @@ each other while the code did something else.
   the git tag — which is why it went unnoticed for three releases. The Makefile
   now derives the version from `main.go`, so there is no third copy left to
   drift.
-
-### Changed
-
-- **The README no longer contradicts itself about codec support.** It claimed
-  JPEG-LS and JPEG Lossless "have no bundled decoder" one paragraph after a table
-  correctly marking both as decoding. Both have had pure-Go decoders, registered
-  at init, since 1.3.0. JPEG 2000 is the only syntax that does not decode, and
-  the section now says so once.
-
-- **`doc.go` no longer advertises a limitation that was fixed.** It named
-  C-MOVE and C-GET not performing C-STORE sub-operations as the most significant
-  known gap; both have been implemented since 1.3.0, and `CONFORMANCE.md` §2.3
-  and the README parity table both already said so. This is the module's landing
-  text on pkg.go.dev.
-
-- **`compress` no longer describes its own decoders as placeholders.** The
-  JPEG-LS and JPEG Lossless implementation guides told the reader to install
-  libcharls or libjpeg-turbo, uncomment a CGO block and rebuild with
-  `CGO_ENABLED=1` — for codecs this package decodes in pure Go, and via a CGO
-  path that has never existed in this module. `TestGetImplementationGuide`
-  asserted the same wrong claim, requiring the JPEG-LS guide to name libcharls,
-  so the guides and the test agreed with each other and not with the code. The
-  guides now state what is bundled and how to substitute a decoder, and the test
-  is pinned to the registry rather than to a hardcoded library name, so bundling
-  a JPEG 2000 decoder will fail it until its guide is rewritten.
-
-  `JPEGLSDecoderSkeleton` and `JPEGLosslessDecoderSkeleton` are deprecated: they
-  have no fields, no methods, and never had an implementation behind them.
-
-- **`CONFORMANCE.md` §8.1 said 42 of pydicom's 49 decodable files matched.** It is
-  43, and the 6 that do not are all JPEG 2000 — verified by running
-  `TestPixelsAgainstWholePydicomCorpus` against the corpus rather than by
-  recounting the claim.
-
-- **`qrscp` now defaults `-output` to `./received`**, matching `storescp`. It
-  defaulted to `./dcmstore`, which created a directory named after a Go import
-  path and read as a package of this module that was missing.
-
-- **`make lint` names the linter version CI uses.** `.golangci.yml` is a v2
-  configuration and a v1 binary refuses it outright rather than degrading, so the
-  target's `@latest` install instruction left a local run unable to lint at all.
 
 ## [1.4.0] - 2026-08-01
 
