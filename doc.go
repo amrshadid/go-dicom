@@ -107,7 +107,9 @@
 // PS3.10 (media storage and the file format), PS3.15 (security profiles), and
 // the DICOM JSON Model from PS3.18.
 //
-// Known gaps are listed in the Limitations section of the README rather than
-// left implicit; the most significant is that C-MOVE and C-GET do not yet
-// perform C-STORE sub-operations when acting as an SCP.
+// Known gaps are listed in Section 8 of CONFORMANCE.md and the Limitations
+// section of the README rather than left implicit. The two most significant:
+// JPEG 2000 pixel data needs a decoder you supply, and RLE Lossless is the only
+// transfer syntax this library compresses to, so a C-STORE over any other
+// compressed context fails rather than sending mislabelled bytes.
 package main

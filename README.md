@@ -547,14 +547,18 @@ Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above
 `filereader`.
 
-**RLE Lossless decodes.** `Dataset.PixelArray()` decompresses RLE pixel data,
-single- and multi-frame, grayscale and color. Verified against pydicom on its
-own test corpus, and checked in CI on every push.
+**RLE Lossless decodes**, single- and multi-frame, grayscale and color, as does
+every JPEG syntax in the table above except JPEG 2000 — all in pure Go, with no
+codec to install and nothing to register. `Dataset.PixelArray()` decompresses
+them without being asked. Verified against pydicom on its own test corpus, and
+checked in CI on every push: of the 49 files in that corpus pydicom can decode,
+43 decode here to the same samples, compared whole rather than by their leading
+values. The six remaining are all JPEG 2000.
 
-**No other compressed syntax decodes.** JPEG, JPEG-LS, and JPEG 2000 instances
+**JPEG 2000 is the one syntax that does not decode.** `.90` and `.91` instances
 parse, store, and transfer with their pixel data intact as opaque bytes, but
-have no bundled decoder. Baseline JPEG goes through the standard library and
-works for ordinary 8-bit images; the rest need a decoder you supply.
+need a decoder you supply. See [CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data)
+for why, and `examples/jpeg2000` for a working one to copy.
 
 **Compressed frames can be extracted**, which is the step before decoding. For a
 compressed instance, `PixelData` holds the encapsulation exactly as it appears in
@@ -570,17 +574,16 @@ frame, err := ds.GetEncapsulatedFrame(0)      // one frame, still compressed
 Multi-frame compressed images split correctly; verified against pydicom on
 `SC_rgb_rle_2frame.dcm`.
 
-To decode a syntax with no bundled decoder, register one:
+To decode JPEG 2000, register a decoder:
 
 ```go
 compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
 ```
 
-These three codecs are not implemented in this module, and there is no hidden
-CGO path that enables them — the error messages used to name a C library and
-tell you to rebuild with `CGO_ENABLED=1`, which changed nothing because there
-was no CGO implementation to enable. They now say plainly that a decoder must be
-supplied.
+JPEG 2000 is not implemented in this module, and there is no hidden CGO path
+that enables it — the error messages used to name a C library and tell you to
+rebuild with `CGO_ENABLED=1`, which changed nothing because there was no CGO
+implementation to enable. They now say plainly that a decoder must be supplied.
 
 Any type with `Decompress([]byte) ([]byte, error)` and `CanDecompress([]byte) bool`
 will do; `Dataset.PixelArray()` routes frames through it automatically once

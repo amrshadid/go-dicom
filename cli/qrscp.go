@@ -31,7 +31,9 @@ func (c *QRSCPCommand) Description() string { return "DICOM Query/Retrieve SCP (
 func (c *QRSCPCommand) AddFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.aeTitle, "aet", "QRSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
-	fs.StringVar(&c.outputDir, "output", "./dcmstore", "Storage directory for received instances")
+	// ./received, matching storescp, rather than ./dcmstore: a directory named
+	// after a Go import path reads as a package of this module that is missing.
+	fs.StringVar(&c.outputDir, "output", "./received", "Storage directory for received instances")
 	fs.StringVar(&c.moveDests, "move-dest", "",
 		"C-MOVE destinations as AETITLE=host:port, comma separated (e.g. DEST=127.0.0.1:11113)")
 }

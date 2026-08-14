@@ -102,23 +102,50 @@ func TestGetExternalCompressionStatus(t *testing.T) {
 // Implementation Guide Tests
 // ============================================================================
 
+// A guide has one job: tell the caller whether they must supply a decoder. It
+// used to get that backwards for two of the three codecs, instructing the reader
+// to install a C library and write CGO bindings for JPEG-LS and lossless JPEG
+// while this package was decoding both in pure Go. The test asserted the wrong
+// claim too — it required the JPEG-LS guide to name libcharls — so the guides and
+// the test agreed with each other and not with the code.
+//
+// These cases are therefore pinned to whether a decoder is bundled, and cross
+// checked against the registry rather than against a hardcoded expectation, so
+// that bundling a codec (JPEG 2000, one day) fails here until its guide is
+// rewritten.
 func TestGetImplementationGuide(t *testing.T) {
-	tests := []struct {
-		compressionType compress.CompressionType
-		expectedContent string
-	}{
-		{compress.JPEG_LS, "libcharls"},
-		{compress.JPEG_2000, "OpenJPEG"},
-		{compress.JPEG_LOSSLESS, "libjpeg-turbo"},
+	bundled := []compress.CompressionType{compress.JPEG_LS, compress.JPEG_LOSSLESS}
+	supplied := []compress.CompressionType{compress.JPEG_2000}
+
+	registry := compress.GetExternalRegistry()
+
+	for _, ct := range bundled {
+		guide := compress.GetImplementationGuide(ct)
+
+		if !registry.IsExternalDecoderAvailable(ct) {
+			t.Errorf("%s is documented as bundled but no decoder is registered for it", ct)
+		}
+		if !strings.Contains(guide, "pure Go") {
+			t.Errorf("the %s guide does not say it is decoded in pure Go:\n%s", ct, guide)
+		}
+		if strings.Contains(guide, "CGO_ENABLED=1") {
+			t.Errorf("the %s guide still tells the caller to rebuild with CGO_ENABLED=1, "+
+				"which has never enabled anything in this module:\n%s", ct, guide)
+		}
+		if strings.Contains(guide, "Not decoded by this package") {
+			t.Errorf("the %s guide claims the codec does not decode, but it does:\n%s", ct, guide)
+		}
 	}
 
-	for _, tt := range tests {
-		guide := compress.GetImplementationGuide(tt.compressionType)
-		if guide == "" {
-			t.Errorf("GetImplementationGuide(%s) returned empty string", tt.compressionType)
+	for _, ct := range supplied {
+		guide := compress.GetImplementationGuide(ct)
+
+		if registry.IsExternalDecoderAvailable(ct) {
+			t.Errorf("%s has a decoder registered, so its guide should no longer tell "+
+				"the caller to supply one", ct)
 		}
-		if !strings.Contains(guide, tt.expectedContent) {
-			t.Errorf("GetImplementationGuide(%s) doesn't contain '%s'", tt.compressionType, tt.expectedContent)
+		if !strings.Contains(guide, "RegisterExternalDecoder") {
+			t.Errorf("the %s guide does not say how to supply a decoder:\n%s", ct, guide)
 		}
 	}
 }
@@ -131,17 +158,19 @@ func TestExternalDecodersDocumentation(t *testing.T) {
 	}
 
 	for compressionType, guide := range guides {
-		// Check that guides contain installation steps
-		if !strings.Contains(guide, "Install") && !strings.Contains(guide, "install") {
-			t.Logf("Implementation guide for %s may not have installation instructions", compressionType)
+		// Every guide should name the transfer syntaxes it covers, since that is
+		// what a caller holding a file has in hand.
+		if !strings.Contains(guide, "1.2.840.10008.1.2.4.") {
+			t.Errorf("the %s guide names no transfer syntax:\n%s", compressionType, guide)
 		}
 
-		// Check that guides mention CGO
-		if !strings.Contains(guide, "CGO") && !strings.Contains(guide, "cgo") {
-			t.Logf("Implementation guide for %s doesn't mention CGO requirements", compressionType)
+		// And every one should say how to substitute a decoder, whether or not one
+		// is bundled — substitution is the point of the registry.
+		if !strings.Contains(guide, "RegisterExternalDecoder") {
+			t.Errorf("the %s guide does not mention RegisterExternalDecoder:\n%s",
+				compressionType, guide)
 		}
 
-		// Verify guide is not empty
 		if len(guide) < 50 {
 			t.Errorf("Implementation guide for %s is too short (%d chars)", compressionType, len(guide))
 		}

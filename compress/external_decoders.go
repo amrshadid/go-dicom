@@ -4,8 +4,14 @@ import (
 	"fmt"
 )
 
-// ExternalDecoderRegistry manages external (CGO-based) decoders
-// These require C libraries to be installed and linked
+// ExternalDecoderRegistry holds the decoder used for each codec that is not
+// decoded inline by Decompressor implementations in this package.
+//
+// "External" is historical: it once meant CGO bindings to C libraries, which
+// this module has never contained. What it means now is substitutable. JPEG-LS
+// and lossless JPEG are seeded with this package's own pure-Go decoders and work
+// out of the box; JPEG 2000 starts empty and needs one supplied. Any of the
+// three can be replaced with RegisterExternalDecoder.
 type ExternalDecoderRegistry struct {
 	jpegLSDecoder       Decompressor
 	jpeg2000Decoder     Decompressor
@@ -23,23 +29,19 @@ func GetExternalRegistry() *ExternalDecoderRegistry {
 	return externalRegistry
 }
 
-// initializeExternalDecoders initializes available external decoders.
-// Errors from tryInit functions are expected when external libraries are not
-// installed; they are logged but do not prevent the registry from being created.
+// initializeExternalDecoders seeds the registry with the decoders this package
+// implements, so that JPEG-LS and lossless JPEG pixel data decodes without the
+// caller registering anything.
+//
+// A nil entry means no decoder is bundled for that codec, which today is JPEG
+// 2000 alone. GetExternalDecoder reports it with errNoDecoder, and
+// RegisterExternalDecoder is how a caller fills it in.
 func initializeExternalDecoders() {
 	registry := GetExternalRegistry()
 
-	if jpegLSDecoder, err := tryInitJPEGLSDecoder(); err == nil && jpegLSDecoder != nil {
-		registry.jpegLSDecoder = jpegLSDecoder
-	}
-
-	if jpeg2000Decoder, err := tryInitJPEG2000Decoder(); err == nil && jpeg2000Decoder != nil {
-		registry.jpeg2000Decoder = jpeg2000Decoder
-	}
-
-	if jpegLosslessDecoder, err := tryInitJPEGLosslessDecoder(); err == nil && jpegLosslessDecoder != nil {
-		registry.jpegLosslessDecoder = jpegLosslessDecoder
-	}
+	registry.jpegLSDecoder = defaultJPEGLSDecoder()
+	registry.jpeg2000Decoder = defaultJPEG2000Decoder()
+	registry.jpegLosslessDecoder = defaultJPEGLosslessDecoder()
 }
 
 // RegisterExternalDecoder registers an external decoder
@@ -114,26 +116,27 @@ func errNoDecoder(compressionType CompressionType) error {
 		compressionType, compressionType, compressionType)
 }
 
-// tryInitJPEGLSDecoder reports that no JPEG-LS decoder is bundled.
+// defaultJPEGLSDecoder returns this package's pure-Go JPEG-LS decoder.
 //
-// It is kept as a hook: a build that wires in a real codec can replace the body
-// without changing callers. It does not attempt CGO, and never did.
-func tryInitJPEGLSDecoder() (Decompressor, error) {
-	// JPEG-LS is decoded in this package, in pure Go. The registry entry remains
-	// so a caller can still substitute their own decoder.
-	return NewJPEGLSDecompressor(), nil
+// It goes in the registry rather than being called directly so that a caller can
+// still substitute their own — for a faster codec, or one covering a case this
+// one refuses. Nothing is probed and no C library is involved.
+func defaultJPEGLSDecoder() Decompressor {
+	return NewJPEGLSDecompressor()
 }
 
-// tryInitJPEG2000Decoder reports that no JPEG 2000 decoder is bundled.
-func tryInitJPEG2000Decoder() (Decompressor, error) {
-	return nil, errNoDecoder(JPEG_2000)
+// defaultJPEG2000Decoder returns nil: no JPEG 2000 decoder is bundled, and this
+// is the only codec in the registry for which that is still true. See
+// CONFORMANCE.md section 8.1 for why, and examples/jpeg2000 for one to copy.
+func defaultJPEG2000Decoder() Decompressor {
+	return nil
 }
 
-// tryInitJPEGLosslessDecoder reports that no JPEG Lossless decoder is bundled.
-func tryInitJPEGLosslessDecoder() (Decompressor, error) {
-	// Lossless JPEG is decoded in this package, in pure Go. The registry entry
-	// remains so a caller can still substitute their own decoder.
-	return NewJPEGLosslessDecompressor(), nil
+// defaultJPEGLosslessDecoder returns this package's pure-Go lossless JPEG
+// decoder, covering .57 and .70 at every prediction selection value. Substitutable
+// for the same reasons as defaultJPEGLSDecoder.
+func defaultJPEGLosslessDecoder() Decompressor {
+	return NewJPEGLosslessDecompressor()
 }
 
 // ExternalCompressionStatus returns information about external compression support
@@ -151,12 +154,16 @@ func GetExternalCompressionStatus() []ExternalCompressionStatus {
 		{
 			CompressionType: JPEG_LS,
 			IsAvailable:     registry.IsExternalDecoderAvailable(JPEG_LS),
-			RequiredLibrary: "libcharls",
+			RequiredLibrary: "none — bundled, pure Go",
 			InstallationSteps: `
-JPEG-LS is not implemented in this module. Reading pixel data in this syntax
-reports that no decoder is registered until you supply one.
+JPEG-LS is decoded by this module, in pure Go: .80 and .81, lossless and
+near-lossless, 2 to 16 bits, single or multi component, in both line- and
+sample-interleaved modes. Nothing to install and nothing to register —
+Dataset.PixelArray decodes these frames already.
 
-Supply a decoder:
+CharLS (https://github.com/team-charls/charls) is the usual C library for this
+codec and is not needed here. If you would rather use it, or any other decoder,
+substitute yours:
 
   type myDecoder struct{}
 
@@ -165,12 +172,7 @@ Supply a decoder:
 
   compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG-LS, myDecoder{})
 
-Dataset.PixelArray then routes frames through it automatically.
-
-What to wrap is your choice. CharLS is the usual C library for this codec
-(https://github.com/team-charls/charls), which means CGO and its build and distribution consequences; a pure
-Go implementation avoids both. This module takes no position and bundles
-neither.
+Dataset.PixelArray then routes frames through yours instead.
 `,
 		},
 		{
@@ -201,12 +203,15 @@ neither.
 		{
 			CompressionType: JPEG_LOSSLESS,
 			IsAvailable:     registry.IsExternalDecoderAvailable(JPEG_LOSSLESS),
-			RequiredLibrary: "libjpeg-turbo (or libjpeg)",
+			RequiredLibrary: "none — bundled, pure Go",
 			InstallationSteps: `
-JPEG Lossless is not implemented in this module. Reading pixel data in this syntax
-reports that no decoder is registered until you supply one.
+Lossless JPEG is decoded by this module, in pure Go: .57 and .70, at every
+prediction selection value. Nothing to install and nothing to register —
+Dataset.PixelArray decodes these frames already.
 
-Supply a decoder:
+libjpeg-turbo (https://github.com/libjpeg-turbo/libjpeg-turbo) is the usual C
+library for this codec and is not needed here. If you would rather use it, or any
+other decoder, substitute yours:
 
   type myDecoder struct{}
 
@@ -215,12 +220,7 @@ Supply a decoder:
 
   compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG Lossless, myDecoder{})
 
-Dataset.PixelArray then routes frames through it automatically.
-
-What to wrap is your choice. libjpeg-turbo is the usual C library for this codec
-(https://github.com/libjpeg-turbo/libjpeg-turbo), which means CGO and its build and distribution consequences; a pure
-Go implementation avoids both. This module takes no position and bundles
-neither.
+Dataset.PixelArray then routes frames through yours instead.
 `,
 		},
 	}
@@ -241,76 +241,43 @@ func PrintExternalCompressionStatus() {
 	}
 }
 
-// CGO Skeleton Code - Skeleton implementations for external decoders
-// To enable these, uncomment the cgo directives and implement the C bindings
+// JPEGLSDecoderSkeleton was a placeholder for a CGO binding to CharLS.
+//
+// Deprecated: JPEG-LS is decoded by this package in pure Go — see
+// JPEGLSDecompressor. This type has no fields and no methods, has never had an
+// implementation behind it, and will be removed in the next major version.
+type JPEGLSDecoderSkeleton struct{}
 
-/*
-// JPEG-LS Decoder Skeleton (requires libcharls)
-
-// #cgo LDFLAGS: -lcharls
-// #include <charls/charls.h>
-// #include <stdlib.h>
+// JPEGLSImplementationGuide describes the state of JPEG-LS support.
 //
-// typedef struct {
-//     unsigned char* data;
-//     size_t length;
-// } ByteBuffer;
-//
-// ByteBuffer decode_jpeg_ls(unsigned char* input, size_t input_len) {
-//     ByteBuffer result = {NULL, 0};
-//     CharlsFrameInfo frame_info = {0};
-//     size_t output_size = 0;
-//
-//     // Get frame info to determine output size
-//     CharLS_DecodeFrame(input, input_len, &frame_info, &output_size);
-//
-//     unsigned char* output = (unsigned char*)malloc(output_size);
-//     if (output == NULL) return result;
-//
-//     // Decode the frame
-//     CharLS_DecodeFrame(input, input_len, output, output_size, &frame_info);
-//
-//     result.data = output;
-//     result.length = output_size;
-//     return result;
-// }
-*/
-
-// JPEGLSDecoderSkeleton provides skeleton for JPEG-LS implementation
-// Uncomment cgo directives and implement actual cgo code to enable
-type JPEGLSDecoderSkeleton struct {
-	// When implementing with cgo:
-	// - Import CharLS library
-	// - Implement Decompress() using cgo to call CharLS functions
-	// - Handle frame info extraction and memory management
-}
-
-// Documentation for JPEG-LS Implementation
+// It once instructed the caller to install libcharls, uncomment a CGO block and
+// build with CGO_ENABLED=1. None of that was ever true: there was no CGO
+// implementation to enable. The codec is now decoded in pure Go, so there is
+// nothing to install either.
 const JPEGLSImplementationGuide = `
-JPEG-LS Decoder Implementation Guide
-====================================
+JPEG-LS
+=======
 
-1. Install libcharls:
-   macOS: brew install charls
-   Ubuntu: sudo apt-get install libcharls-dev
-   Windows: Download from https://github.com/team-charls/charls
+Decoded by this package, in pure Go. Nothing to install, nothing to register.
 
-2. In external_decoders.go, uncomment the cgo section above
+  Transfer syntaxes: 1.2.840.10008.1.2.4.80 (lossless)
+                     1.2.840.10008.1.2.4.81 (near-lossless)
+  Bit depths:        2 to 16
+  Components:        single or multi
+  Interleave modes:  line and sample
+  Entry point:       compress.NewJPEGLSDecompressor()
 
-3. Implement Decompress method:
-   func (d *JPEGLSDecoder) Decompress(data []byte) ([]byte, error) {
-       // Use cgo to call CharLS C functions
-       // 1. Parse JPEG-LS header
-       // 2. Extract frame dimensions
-       // 3. Allocate output buffer
-       // 4. Call CharLS decoder
-       // 5. Return decompressed data
-   }
+Dataset.PixelArray decodes these frames without being asked.
 
-4. Build with: CGO_ENABLED=1 go build
+Verified against pydicom on its own corpus, whole frames rather than leading
+values, in TestPixelsAgainstWholePydicomCorpus.
 
-5. Test with JPEG-LS compressed DICOM files:
-   go test ./compress -v -run TestJPEGLS
+To substitute your own decoder — CharLS through CGO, or anything else:
+
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_LS, myDecoder)
+
+Any type with Decompress([]byte) ([]byte, error) and CanDecompress([]byte) bool
+will do.
 `
 
 /*
@@ -363,115 +330,78 @@ type JPEG2000DecoderSkeleton struct {
 	// - Handle JP2 file format parsing and memory management
 }
 
-// Documentation for JPEG-2000 Implementation
+// JPEG2000ImplementationGuide describes how to decode JPEG 2000 pixel data.
+//
+// Unlike the JPEG-LS and lossless JPEG guides, this one describes a real gap:
+// JPEG 2000 is the only codec in the registry with no bundled decoder.
 const JPEG2000ImplementationGuide = `
-JPEG-2000 Decoder Implementation Guide
-======================================
+JPEG 2000
+=========
 
-1. Install OpenJPEG:
-   macOS: brew install openjpeg
-   Ubuntu: sudo apt-get install libopenjp2-dev
-   Windows: Download from https://github.com/uclouvain/openjpeg
+Not decoded by this package. This is the only codec in the registry for which
+that is still true.
 
-2. In external_decoders.go, uncomment the cgo section above
+  Transfer syntaxes: 1.2.840.10008.1.2.4.90 (lossless)
+                     1.2.840.10008.1.2.4.91 (lossy)
 
-3. Implement Decompress method:
-   func (d *JPEG2000Decoder) Decompress(data []byte) ([]byte, error) {
-       // Use cgo to call OpenJPEG C functions
-       // 1. Parse JP2 header
-       // 2. Create decoder context
-       // 3. Setup decoding parameters
-       // 4. Read codestream
-       // 5. Decode image data
-       // 6. Convert to raw pixel format
-       // 7. Return decompressed data
-   }
+Instances parse, store and transfer with their pixel data intact as opaque
+bytes; only decoding needs a decoder you supply. See CONFORMANCE.md section 8.1
+for why none is bundled.
 
-4. Build with: CGO_ENABLED=1 go build
+Start from examples/jpeg2000 in this repository. It is a working decoder that
+shells out to OpenJPEG's opj_decompress, verified sample-for-sample against
+pydicom, and it is under 300 lines — copy it rather than starting from the
+C API:
 
-5. Test with JPEG-2000 compressed DICOM files:
-   go test ./compress -v -run TestJPEG2000
+  decoder, err := jpeg2000.NewDecoder() // errors if opj_decompress is not on PATH
+  if err != nil {
+      return err
+  }
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, decoder)
+
+Any type with Decompress([]byte) ([]byte, error) and CanDecompress([]byte) bool
+will do, so a CGO binding to OpenJPEG (https://github.com/uclouvain/openjpeg) or
+a pure-Go implementation fits the same interface. Dataset.PixelArray routes
+frames through whatever is registered.
 `
 
-/*
-// JPEG Lossless Decoder Skeleton (requires libjpeg-turbo)
+// JPEGLosslessDecoderSkeleton was a placeholder for a CGO binding to
+// libjpeg-turbo.
+//
+// Deprecated: lossless JPEG is decoded by this package in pure Go — see
+// JPEGLosslessDecompressor. This type has no fields and no methods, has never had
+// an implementation behind it, and will be removed in the next major version.
+type JPEGLosslessDecoderSkeleton struct{}
 
-// #cgo LDFLAGS: -lturbojpeg
-// #include <turbojpeg.h>
-// #include <stdlib.h>
+// JPEGLosslessImplementationGuide describes the state of lossless JPEG support.
 //
-// typedef struct {
-//     unsigned char* data;
-//     size_t length;
-//     int width;
-//     int height;
-//     int subsamp;
-// } JPEGLosslessResult;
-//
-// JPEGLosslessResult decode_jpeg_lossless(unsigned char* input, size_t input_len) {
-//     JPEGLosslessResult result = {NULL, 0, 0, 0, 0};
-//
-//     tjhandle handle = tjInitDecompress();
-//     if (!handle) return result;
-//
-//     int width, height, subsamp;
-//     tjDecompressHeader3(handle, input, input_len, &width, &height, &subsamp);
-//
-//     size_t output_size = width * height * tjPixelSize[TJPF_RGB];
-//     unsigned char* output = (unsigned char*)malloc(output_size);
-//
-//     tjDecompress2(handle, input, input_len, output, width, 0, height,
-//                   TJPF_RGB, TJFLAG_NOREALLOC);
-//
-//     tjDestroy(handle);
-//
-//     result.data = output;
-//     result.length = output_size;
-//     result.width = width;
-//     result.height = height;
-//     return result;
-// }
-*/
-
-// JPEGLosslessDecoderSkeleton provides skeleton for JPEG Lossless implementation
-// Uncomment cgo directives and implement actual cgo code to enable
-type JPEGLosslessDecoderSkeleton struct {
-	// When implementing with cgo:
-	// - Import libjpeg-turbo library
-	// - Implement Decompress() using cgo to call libjpeg-turbo functions
-	// - Handle both Huffman and Arithmetic coding modes
-}
-
-// Documentation for JPEG Lossless Implementation
+// It once instructed the caller to install libjpeg-turbo, uncomment a CGO block
+// and build with CGO_ENABLED=1. None of that was ever true: there was no CGO
+// implementation to enable. The codec is now decoded in pure Go, so there is
+// nothing to install either.
 const JPEGLosslessImplementationGuide = `
-JPEG Lossless Decoder Implementation Guide
-==========================================
+JPEG Lossless
+=============
 
-1. Install libjpeg-turbo:
-   macOS: brew install libjpeg-turbo
-   Ubuntu: sudo apt-get install libjpeg-turbo-dev
-   Windows: Download from https://github.com/libjpeg-turbo/libjpeg-turbo
+Decoded by this package, in pure Go. Nothing to install, nothing to register.
 
-2. In external_decoders.go, uncomment the cgo section above
+  Transfer syntaxes: 1.2.840.10008.1.2.4.57 (process 14)
+                     1.2.840.10008.1.2.4.70 (process 14, first-order prediction)
+  Predictors:        every prediction selection value
+  Components:        single or multi
+  Entry point:       compress.NewJPEGLosslessDecompressor()
 
-3. Implement Decompress method:
-   func (d *JPEGLosslessDecoder) Decompress(data []byte) ([]byte, error) {
-       // Use cgo to call libjpeg-turbo C functions
-       // 1. Create decompressor handle
-       // 2. Parse JPEG header (get dimensions, components)
-       // 3. Setup decompression parameters
-       // 4. Handle Huffman vs Arithmetic coding
-       // 5. Start decompression
-       // 6. Read scanlines or decompress in one pass
-       // 7. Convert to raw pixel format (usually RGB or grayscale)
-       // 8. Clean up resources
-       // 9. Return decompressed data
-   }
+Dataset.PixelArray decodes these frames without being asked.
 
-4. Build with: CGO_ENABLED=1 go build
+Verified against pydicom on its own corpus, whole frames rather than leading
+values, in TestPixelsAgainstWholePydicomCorpus.
 
-5. Test with JPEG Lossless compressed DICOM files:
-   go test ./compress -v -run TestJPEGLossless
+To substitute your own decoder — libjpeg-turbo through CGO, or anything else:
+
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_LOSSLESS, myDecoder)
+
+Any type with Decompress([]byte) ([]byte, error) and CanDecompress([]byte) bool
+will do.
 `
 
 // GetImplementationGuide returns the implementation guide for a specific decoder
