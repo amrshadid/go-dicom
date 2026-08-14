@@ -188,15 +188,15 @@
 //
 // # Limitations
 //
-//   - Operations are not pipelined: one is in flight at a time. The negotiated
-//     window says so — a proposed MaxOperationsInvoked above 1 is reduced to 1
-//     rather than telling the peer something untrue.
+//   - As an SCP, dispatch is one message at a time per association, so
+//     MaxOperationsPerformed does not bound concurrent dispatch. An SCU enforces
+//     its own window; a server answers in the order received.
 //   - RLE Lossless is the only syntax pixel data is compressed *to*. It is
 //     transcoded in both directions as the negotiated context requires, but a
 //     context needing any other compressed target fails rather than sending
 //     bytes described as something they are not.
-//   - An [SCU] performs one operation at a time, and is safe to share: operations
-//     on one are serialized, so several goroutines may use it. That bounds the
-//     number of associations a concurrent caller needs rather than raising
-//     throughput.
+//   - C-MOVE and C-GET take the association exclusively, so neither overlaps with
+//     another operation. Both interleave traffic that is not their own response —
+//     a C-GET receives C-STORE sub-operation requests, a C-MOVE has a cancel
+//     watcher reading the association.
 package network

@@ -62,6 +62,15 @@ type Association struct {
 	// Extended negotiation as agreed with the peer.
 	peerUserInfo UserInformationItem
 
+	// messages routes complete DIMSE messages to whichever operation is waiting
+	// for them, so more than one can be in flight. Created on first use, because
+	// an association that carries one operation at a time never needs it.
+	//
+	// Distinct from pending below: that queues raw PDV groups read ahead by a
+	// cancel watcher, one message at a time and in order. This routes whole
+	// messages by ID.
+	messages *messageRouter
+
 	// pending holds messages read ahead of the caller that asked for them.
 	//
 	// An operation that watches for C-CANCEL while it works has to read the

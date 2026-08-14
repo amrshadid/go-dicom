@@ -50,17 +50,36 @@ see [§2.4](#24-services-refused-when-unimplemented).
 The library imposes no ordering beyond what the standard requires. An
 association may carry any number of operations, answered in the order received.
 
-Asynchronous operations are negotiated at a window of one, and a larger window
-asked for by the application is reduced to one rather than proposed. This
-implementation issues one operation at a time and waits for the response, so
-proposing more would tell the peer something untrue — and a peer may size its own
-buffers by what it is told. `MaxOperationsPerformed`, which bounds what the peer
-may send us, is proposed as asked.
+**Asynchronous operations are negotiated and enforced as an SCU.** A window asked
+for by the application is proposed as asked and bounds how many operations may be
+outstanding: each waits for its own response by Message ID, so a response cannot
+reach the wrong caller. A window of zero — unlimited, per PS3.7 D.3.3.3 — is
+proposed as one instead, since every outstanding operation holds a goroutine and
+unlimited is not a bound this implementation can keep.
 
-An `SCU` is safe to share between goroutines: operations on one are serialized. It
-bounds the number of associations a concurrent caller needs, which matters because
-association setup is the expensive part and a peer may limit how many it accepts.
-It does not raise throughput.
+Which operations may overlap:
+
+| Operation | |
+|---|---|
+| C-ECHO, C-STORE, C-FIND, and all six N-services | Overlap, up to the negotiated window |
+| C-MOVE, C-GET | Take the association exclusively |
+
+C-MOVE and C-GET are exclusive because both interleave traffic that is not their
+own response: a C-GET receives C-STORE sub-operation requests between its
+responses, and a C-MOVE has a cancel watcher reading the association while nothing
+else does. Two readers with different ideas of what belongs to them is how a
+retrieval loses a sub-operation.
+
+**As an SCP, dispatch is still one message at a time per association.**
+`MaxOperationsPerformed` is proposed as asked but does not yet bound concurrent
+dispatch, because nothing is dispatched concurrently — a server answers a
+requestor's operations in the order received however many it has outstanding. That
+is the remaining half of asynchronous operations and it is not implemented.
+
+An `SCU` is safe to share between goroutines whatever the window. With the default
+window of one, operations serialize and sharing bounds the number of associations a
+concurrent caller needs, which matters because association setup is the expensive
+part and a peer may limit how many it accepts.
 
 ---
 

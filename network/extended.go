@@ -241,40 +241,34 @@ func (s *SOPClassExtendedNegotiation) Encode() []byte {
 	return buf.Bytes()
 }
 
-// MaxOperationsThisImplementationInvokes is how many DIMSE operations this
-// library keeps in flight on one association.
+// truthfulAsyncWindow reports the asynchronous operations window to propose.
 //
-// One. An SCU issues an operation and waits for its response before the next, and
-// operations on a shared SCU are serialized rather than pipelined.
-const MaxOperationsThisImplementationInvokes uint16 = 1
-
-// truthfulAsyncWindow reduces a proposed asynchronous operations window to what
-// this implementation actually does.
+// It used to reduce anything above one to one, because the SCU issued a single
+// operation and waited: proposing more told the peer something untrue, and a peer
+// may size its own buffers by what it is told.
 //
-// The window was previously sent exactly as the caller asked for it, and nothing
-// enforced it: a caller requesting four had four negotiated and reported back,
-// while the SCU issued one operation at a time and waited. The peer was told
-// something about us that was not true, and may size its own buffers by it.
+// The window is now enforced rather than clamped. Echo, Store, Find and the
+// N-services each wait for their own response by message ID, so the number
+// outstanding is bounded by what was negotiated — see SCU.beginOperation. C-MOVE
+// and C-GET still take the association exclusively, because both interleave
+// traffic that is not their own response on it.
 //
-// Zero means unlimited in PS3.7 D.3.3.3, which is further from the truth than any
-// finite number, so it is clamped too.
-//
-// MaxOperationsPerformed — how many we will accept from the peer — is left as
-// asked. It bounds what the peer may send us, and an SCP that reads and dispatches
-// one message at a time per association is not made incorrect by a peer sending
-// fewer than it could.
+// So the caller's window is passed through, with one thing still checked: a
+// proposal is a claim about behavior, and zero means unlimited in PS3.7 D.3.3.3.
+// Unlimited is not something this implementation can honor — every outstanding
+// operation holds a goroutine waiting on a response — so it is reported rather
+// than accepted silently.
 func truthfulAsyncWindow(proposed *AsynchronousOperationsWindow) *AsynchronousOperationsWindow {
 	if proposed == nil {
 		return nil
 	}
 
 	invoked := proposed.MaxOperationsInvoked
-	if invoked == 0 || invoked > MaxOperationsThisImplementationInvokes {
-		DefaultLogger.Warn("asynchronous operations: a window of %d operations invoked was "+
-			"requested and %d is negotiated, which is what this implementation performs — "+
-			"an SCU issues one operation at a time and waits for the response",
-			proposed.MaxOperationsInvoked, MaxOperationsThisImplementationInvokes)
-		invoked = MaxOperationsThisImplementationInvokes
+	if invoked == 0 {
+		DefaultLogger.Warn("asynchronous operations: an unlimited window of operations " +
+			"invoked was requested; proposing 1 instead, because unlimited is not a " +
+			"bound this implementation can hold to")
+		invoked = 1
 	}
 
 	return &AsynchronousOperationsWindow{

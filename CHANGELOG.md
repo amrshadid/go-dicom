@@ -13,6 +13,37 @@ tests agreeing with each other while the code did something else.
 
 ### Added
 
+- **DIMSE operations pipeline on one association, bounded by the negotiated
+  window.** The read side used to assume the next message belonged to the request
+  just sent, which is true only when one operation runs at a time — so operations
+  were serialized and the asynchronous operations window was reduced to one before
+  being proposed, because anything larger would have told the peer something
+  untrue.
+
+  Messages are now routed to the operation waiting for them by Message ID, and the
+  window is proposed as asked and enforced: C-ECHO, C-STORE, C-FIND and all six
+  N-services may overlap up to it.
+
+  **C-MOVE and C-GET take the association exclusively.** Both interleave traffic
+  that is not their own response — a C-GET receives C-STORE sub-operation requests
+  between its responses, and a C-MOVE has a cancel watcher reading the association
+  while nothing else does. Two readers with different ideas of what belongs to them
+  is how a retrieval loses a sub-operation.
+
+  The demultiplexing is cooperative rather than a goroutine owning the connection:
+  whichever caller needs a message does the reading and queues what belongs to
+  others. A dedicated owner would have had to take the read side from four
+  mechanisms that already depend on it — `Association.pending`, the cancel watcher,
+  a C-GET's unsolicited requests, and the SCP, which has no message IDs of its own
+  to wait on.
+
+  **As an SCP, dispatch is still one message at a time per association**, so
+  `MaxOperationsPerformed` is proposed as asked but does not bound concurrent
+  dispatch — a server answers in the order received however many the requestor has
+  outstanding. That is the remaining half of asynchronous operations, and
+  `CONFORMANCE.md` §1.3 says so rather than leaving it to be inferred from a
+  passing test.
+
 - **A JPEG-LS encoder, so RLE is no longer the only syntax this library
   compresses to.** `compress.EncodeJPEGLS` writes lossless JPEG-LS at 2 to 16
   bits, single or multi component, one scan per component, and the transcoding
