@@ -126,7 +126,9 @@ func (s *SCU) Echo(ctx context.Context) error {
 	// Find presentation context for Verification
 	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), VerificationSOPClassUID)
 	if !ok {
-		return NewAssociationError("NO_CONTEXT", "no accepted presentation context for Verification SOP Class")
+		return NewAssociationError("NO_CONTEXT",
+			fmt.Sprintf("no accepted presentation context for the Verification SOP Class: %s",
+				assoc.ExplainNoContextFor(VerificationSOPClassUID)))
 	}
 
 	// Build and send C-ECHO-RQ
@@ -193,7 +195,8 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 	if !ok {
 		return NewAssociationError("NO_CONTEXT",
-			fmt.Sprintf("no accepted presentation context for SOP Class %s", sopClassUID))
+			fmt.Sprintf("no accepted presentation context for SOP Class %s: %s",
+				sopClassUID, assoc.ExplainNoContextFor(sopClassUID)))
 	}
 
 	// Build and send C-STORE-RQ command
@@ -278,7 +281,13 @@ func (s *SCU) Find(ctx context.Context, queryDS *dataset.Dataset) (<-chan *CFind
 			return s.findOnContext(ctx, assoc, queryDS, candidate, pcID)
 		}
 	}
-	return nil, NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-FIND")
+	return nil, NewAssociationError("NO_CONTEXT",
+		fmt.Sprintf("no accepted presentation context for C-FIND — %s",
+			assoc.ExplainNoContextForAny(
+				PatientRootQueryRetrieveFind,
+				StudyRootQueryRetrieveFind,
+				PatientStudyOnlyQueryRetrieveFind,
+				ModalityWorklistInformationModelFindUID)))
 }
 
 // FindWithSOPClass performs a C-FIND against a named information model.
@@ -427,7 +436,12 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 		}
 		if !ok {
-			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-MOVE")
+			return NewAssociationError("NO_CONTEXT",
+				fmt.Sprintf("no accepted presentation context for C-MOVE — %s",
+					assoc.ExplainNoContextForAny(
+						PatientRootQueryRetrieveMove,
+						StudyRootQueryRetrieveMove,
+						PatientStudyOnlyQueryRetrieveMove)))
 		}
 	}
 
@@ -501,7 +515,12 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 			pcID, ok = FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
 		}
 		if !ok {
-			return NewAssociationError("NO_CONTEXT", "no accepted presentation context for C-GET")
+			return NewAssociationError("NO_CONTEXT",
+				fmt.Sprintf("no accepted presentation context for C-GET — %s",
+					assoc.ExplainNoContextForAny(
+						PatientRootQueryRetrieveGet,
+						StudyRootQueryRetrieveGet,
+						PatientStudyOnlyQueryRetrieveGet)))
 		}
 	}
 
