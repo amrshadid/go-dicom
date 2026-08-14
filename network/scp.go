@@ -517,10 +517,8 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 	defer watcher.finish()
 
 	if streamer, ok := handler.(CMoveStreamer); ok {
-		address, ok := s.config.resolveMoveDestination(moveDest)
+		address, ok := s.resolveMoveDestinationOrReport(moveDest)
 		if !ok {
-			DefaultLogger.Warn("C-MOVE destination %q is not configured; set SCPConfig.MoveDestinations "+
-				"or SCPConfig.ResolveMoveDestination", moveDest)
 			s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusMoveDestUnknown, 0, 0, 0)
 			return
 		}
@@ -560,10 +558,8 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 
 	// Unlike C-GET, the instances go to a third party named only by AE title,
 	// so the title must be resolvable to an address.
-	address, ok := s.config.resolveMoveDestination(moveDest)
+	address, ok := s.resolveMoveDestinationOrReport(moveDest)
 	if !ok {
-		DefaultLogger.Warn("C-MOVE destination %q is not configured; set SCPConfig.MoveDestinations "+
-			"or SCPConfig.ResolveMoveDestination", moveDest)
 		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID,
 			StatusMoveDestUnknown, 0, uint16(len(instances)), 0)
 		return
@@ -626,19 +622,13 @@ func (s *SCP) sendMoveSubOperations(ctx context.Context, assoc *Association, ctx
 		return 0, uint16(len(instances)), 0, 0
 	}
 
-	dest := NewSCU(SCUConfig{
-		CallingAE: s.config.AETitle,
-		CalledAE:  destAE,
-		Address:   destAddress,
-		Network:   s.config.Network,
-	})
-
-	if err := dest.Associate(ctx, contexts); err != nil {
-		DefaultLogger.Error("C-MOVE could not associate with destination %s at %s: %v",
-			destAE, destAddress, err)
+	dest := s.associateWithMoveDestination(ctx, destAE, destAddress, contexts)
+	if dest == nil {
 		return 0, uint16(len(instances)), 0, 0
 	}
 	defer func() { _ = dest.Release(ctx) }()
+
+	var counts subOperationCounts
 
 	for i, inst := range instances {
 		left := uint16(len(instances) - i - 1)
@@ -646,35 +636,20 @@ func (s *SCP) sendMoveSubOperations(ctx context.Context, assoc *Association, ctx
 		// Checked before each instance rather than only at the top: the point of
 		// a cancel is to stop work that has not happened yet.
 		if watcher != nil && watcher.wasCanceled() {
-			return completed, failed, warning, uint16(len(instances) - i)
+			return counts.completed, counts.failed, counts.warning, uint16(len(instances) - i)
 		}
 
-		if inst == nil {
-			failed++
-			continue
-		}
-		if err := dest.Store(ctx, inst); err != nil {
-			DefaultLogger.Error("C-MOVE sub-operation failed: %v", err)
-			failed++
-		} else {
-			completed++
-		}
+		s.sendOneMoveSubOperation(ctx, dest, inst, &counts)
 
 		// Progress goes back to the requestor, not the destination.
-		pendingDS := BuildCMoveRSP(messageID, sopClassUID, StatusPending,
-			left, completed, failed, warning)
-		pendingBytes, err := EncodeCommandDataset(pendingDS)
-		if err != nil {
-			continue
-		}
-		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
-			DefaultLogger.Error("C-MOVE pending response failed, abandoning sub-operations: %v", err)
-			failed += left
-			return completed, failed, warning, 0
+		if !s.sendPendingRetrieveRSP(ctx, assoc, ctxID, BuildCMoveRSP,
+			messageID, sopClassUID, left, counts) {
+			counts.failed += left
+			return counts.completed, counts.failed, counts.warning, 0
 		}
 	}
 
-	return completed, failed, warning, 0
+	return counts.completed, counts.failed, counts.warning, 0
 }
 
 // storageContextsFor builds presentation contexts covering the distinct SOP
@@ -787,6 +762,7 @@ func (s *SCP) sendGetSubOperations(ctx context.Context, assoc *Association, ctxI
 
 	// Sub-operations carry their own message IDs, independent of the C-GET's.
 	var subMessageID uint16
+	var counts subOperationCounts
 
 	for i, inst := range instances {
 		remaining := uint16(len(instances) - i - 1)
@@ -795,55 +771,22 @@ func (s *SCP) sendGetSubOperations(ctx context.Context, assoc *Association, ctxI
 		// retrieval here. What has already been sent stays sent; the rest is
 		// reported as remaining, which is what the requestor asked for.
 		if canceled.wasSet() {
-			return completed, failed, warning, uint16(len(instances) - i)
-		}
-
-		if inst == nil {
-			failed++
-			continue
-		}
-
-		instClass, instUID, ok := instanceUIDs(inst)
-		if !ok {
-			DefaultLogger.Warn("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
-			failed++
-			continue
-		}
-
-		// The instance travels on the presentation context negotiated for its
-		// own SOP Class, which may differ from the C-GET's.
-		subCtxID, ok := FindPresentationContextID(assoc.AcceptedContexts(), instClass)
-		if !ok {
-			DefaultLogger.Warn("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
-			failed++
-			continue
+			return counts.completed, counts.failed, counts.warning, uint16(len(instances) - i)
 		}
 
 		subMessageID++
-		if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID,
-			instClass, instUID, inst, messageID, canceled); err != nil {
-			DefaultLogger.Error("C-GET sub-operation for %s failed: %v", instUID, err)
-			failed++
-		} else {
-			completed++
-		}
+		s.sendOneGetSubOperation(ctx, assoc, inst, subMessageID, messageID, canceled, &counts)
 
 		// Pending response so the requestor sees progress before the final status.
-		pendingDS := BuildCGetRSP(messageID, sopClassUID, StatusPending,
-			remaining, completed, failed, warning)
-		pendingBytes, err := EncodeCommandDataset(pendingDS)
-		if err != nil {
-			continue
-		}
-		if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
+		if !s.sendPendingRetrieveRSP(ctx, assoc, ctxID, BuildCGetRSP,
+			messageID, sopClassUID, remaining, counts) {
 			// The association is gone; further sub-operations cannot succeed.
-			DefaultLogger.Error("C-GET pending response failed, abandoning sub-operations: %v", err)
-			failed += remaining
-			return completed, failed, warning, 0
+			counts.failed += remaining
+			return counts.completed, counts.failed, counts.warning, 0
 		}
 	}
 
-	return completed, failed, warning, 0
+	return counts.completed, counts.failed, counts.warning, 0
 }
 
 // sendCStoreSubOperation issues one C-STORE-RQ and waits for its response.
