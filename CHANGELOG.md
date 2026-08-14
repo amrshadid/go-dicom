@@ -179,6 +179,24 @@ The corrections to what the documentation claimed:
 
 ### Security
 
+- **The pinned Go toolchain was missing two standard library security patches.**
+  `go.mod` named `toolchain go1.25.12`, and govulncheck reported `GO-2026-6090`
+  (crypto/tls) and `GO-2026-5972` (encoding/asn1) as reachable from this code —
+  through `DialTLS`, `Transport.WritePDU`, `DecodePDU` and
+  `TLSConfig.buildTLSConfig`, so on the TLS paths a HIPAA deployment relies on.
+
+  Both are fixed in `go1.25.13`, which the toolchain directive now names.
+  Anyone building with `GOTOOLCHAIN=auto` therefore gets the patched standard
+  library. The `go 1.25.0` directive is unchanged, so the minimum supported
+  version has not moved.
+
+  The Module Validation job also pinned an exact patch release rather than the
+  `1.25` range. govulncheck's standard library findings are relative to the
+  toolchain doing the analysis, so a job resolving its own patch version reports a
+  different set of vulnerabilities week to week for reasons unconnected to this
+  code — which is how a scan under `go1.25.12` produced these findings while the
+  workflow was asking for `1.25`.
+
 - **`storescp`, `getscu` and `qrscp` wrote files to a path chosen by the peer.**
   All three named the file after the SOP Instance UID and joined it into the
   output directory unchecked:
