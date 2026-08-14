@@ -184,6 +184,30 @@ An archive or router receives an instance, stores it, and forwards it later; the
 pixel data travels as opaque bytes. [§8.1](#81-pixel-data) lists which of them
 this library can actually decode.
 
+**A server whose purpose is to store should accept all of them.** The library
+default is deliberately conservative, because it applies to every caller
+including an SCU that will try to decode what it asked for — and for that case,
+a compressed syntax it cannot decode moves the failure from association time,
+where the error names the cause, to pixel access, where it does not.
+
+That reasoning does not apply to a storage SCP, so the servers in this
+distribution accept everything:
+
+| Server | Transfer syntaxes |
+|---|---|
+| `dicom storescp` | all 37 |
+| `dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
+| `dicom echoscp` | the default four; verification carries no data set |
+
+Before this, a modality that stores JPEG-LS or JPEG 2000 natively — most modern
+equipment — could not store to either server: every compressed context was
+refused, the association was established with nothing usable on it, and the
+failure surfaced only on the first C-STORE.
+
+For your own SCP, pass `AllTransferSyntaxes()` to
+`SetSupportedTransferSyntaxes`, or `dcmstore.SupportedTransferSyntaxes()` if you
+are using that package.
+
 ### 3.2 Transfer syntaxes supported for files
 
 | Transfer Syntax | Data set | Pixel data |

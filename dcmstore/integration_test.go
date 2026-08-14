@@ -281,3 +281,70 @@ func retrieveContexts() []network.PresentationContextItem {
 		TransferSyntaxes: network.DefaultTransferSyntaxes(),
 	}}
 }
+
+// A modality that stores JPEG-LS or JPEG 2000 natively — most modern equipment —
+// used to be turned away: the library proposes and accepts the four uncompressed
+// transfer syntaxes by default, matching pynetdicom, so every compressed context
+// was refused and the association was established with nothing usable on it.
+//
+// A storage SCP does not have to decode an instance to keep it. This archive writes
+// a compressed instance with its encapsulated pixel data intact and serves it back
+// unchanged, which is what CONFORMANCE.md §8.2 says an archive or router needs.
+func TestAnArchiveAcceptsCompressedPixelData(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := dcmstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	scp := network.NewSCP(network.SCPConfig{
+		AETitle: "ARCHIVE", BindAddress: "127.0.0.1", Port: freePort(t),
+	})
+	scp.SetHandler(dcmstore.NewHandler(store))
+	scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
+	scp.SetSupportedTransferSyntaxes(dcmstore.SupportedTransferSyntaxes())
+
+	addr := serve(ctx, t, scp)
+
+	// JPEG-LS Lossless, which this library decodes, and JPEG 2000, which it does
+	// not. Both must store: storing is not decoding.
+	for _, syntax := range []string{
+		network.JPEGLSLosslessUID,
+		network.JPEG2000LosslessUID,
+		network.RLELosslessUID,
+	} {
+		t.Run(syntax, func(t *testing.T) {
+			scu := network.NewSCU(network.SCUConfig{
+				CallingAE: "MODALITY", CalledAE: "ARCHIVE", Address: addr,
+			})
+
+			// The modality proposes only its own syntax, as one that stores
+			// natively would.
+			if err := scu.Associate(ctx, []network.PresentationContextItem{{
+				ID:               1,
+				AbstractSyntax:   "1.2.840.10008.5.1.4.1.1.2",
+				TransferSyntaxes: []string{syntax},
+			}}); err != nil {
+				t.Fatalf("a modality proposing only %s could not associate: %v", syntax, err)
+			}
+			defer func() { _ = scu.Release(ctx) }()
+
+			uid := "1.2.9." + syntax
+			ds := instance{
+				patientID: "P9", patientName: "COMPRESSED^TEST",
+				studyUID: "1.2.9", seriesUID: "1.2.9.1",
+				sopInstanceUID: uid, modality: "CT",
+			}.dataset()
+
+			if err := scu.Store(ctx, ds); err != nil {
+				t.Fatalf("storing over %s failed: %v", syntax, err)
+			}
+
+			if _, ok := store.Instance(uid); !ok {
+				t.Errorf("the instance stored over %s is not in the index", syntax)
+			}
+		})
+	}
+}

@@ -284,3 +284,21 @@ func SupportedSOPClasses() []string {
 	classes = append(classes, network.AllQueryRetrieveSOPClassUIDs()...)
 	return classes
 }
+
+// SupportedTransferSyntaxes returns every transfer syntax a store-backed SCP
+// should accept, compressed ones included.
+//
+// This store keeps instances as it receives them, and it does not have to decode
+// an instance to store it: a compressed instance is written with its encapsulated
+// pixel data intact and served back unchanged. Refusing the compressed syntaxes —
+// which is what the library proposes by default, matching pynetdicom — would turn
+// away a modality that stores JPEG-LS or JPEG 2000 natively, which is most modern
+// equipment.
+//
+// Pair it with SupportedSOPClasses:
+//
+//	scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
+//	scp.SetSupportedTransferSyntaxes(dcmstore.SupportedTransferSyntaxes())
+func SupportedTransferSyntaxes() []string {
+	return network.AllTransferSyntaxes()
+}

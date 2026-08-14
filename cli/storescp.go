@@ -48,6 +48,19 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 		Port:    c.port,
 	})
 
+	// Accept compressed pixel data as well as the four uncompressed syntaxes the
+	// library proposes by default.
+	//
+	// A storage SCP's job is to keep what it is sent, and it does not have to
+	// decode an instance to store it — CONFORMANCE.md §8.2 makes that point about
+	// archives and routers. Refusing every compressed syntax meant a modality
+	// storing JPEG-LS or JPEG 2000 natively, which is most modern equipment, could
+	// not store here at all.
+	//
+	// The library default stays as it is, matching pynetdicom. This is a decision
+	// about a server whose purpose is known, not about the default for every caller.
+	scp.SetSupportedTransferSyntaxes(network.AllTransferSyntaxes())
+
 	received := 0
 	handler := &network.StorageHandler{
 		OnStore: func(_ context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {

@@ -53,6 +53,24 @@ tests agreeing with each other while the code did something else.
 
 ### Changed
 
+- **`storescp` and `qrscp` now accept compressed pixel data.** Both offered only
+  the four uncompressed transfer syntaxes — the library default, which matches
+  pynetdicom — so a modality that stores JPEG-LS or JPEG 2000 natively, which is
+  most modern equipment, could not store to either. Every compressed context was
+  refused, the association was established with nothing usable on it, and the
+  failure surfaced only on the first C-STORE.
+
+  A storage SCP does not have to decode an instance to keep it, which is what
+  `CONFORMANCE.md` §8.2 already said about archives and routers. Both servers now
+  accept all 37, and `dcmstore.SupportedTransferSyntaxes()` pairs with
+  `SupportedSOPClasses()` for anyone building their own.
+
+  **The library default is unchanged.** It applies to every caller, including an
+  SCU that will try to decode what it asked for, and for that case a compressed
+  syntax with no decoder moves the failure from association time — where #84 now
+  names the cause — to pixel access, where it does not. §3.1 records the decision
+  and why the two cases differ.
+
 - **`qrscp` now stores and queries for real.** It held instances in memory and
   never wrote them to disk at all — `-output` created a directory and nothing was
   put in it. Its C-FIND returned one *empty* identifier per stored instance, and
