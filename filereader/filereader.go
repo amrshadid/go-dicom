@@ -1290,6 +1290,11 @@ func validateDataElement(elem *DataElementValue) error {
 		if elem.Tag.IsPrivate() {
 			return nil
 		}
+		// Group lengths, (gggg,0000), are standard but not enumerated in the
+		// dictionary. See tag.IsGroupLength.
+		if elem.Tag.IsGroupLength() {
+			return nil
+		}
 		return fmt.Errorf("unknown standard tag: %s", elem.Tag)
 	}
 
