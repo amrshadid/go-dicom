@@ -431,3 +431,45 @@ func TestCompareElements(t *testing.T) {
 		})
 	}
 }
+
+// A group length element is standard, and must not be mistaken for an unknown tag.
+//
+// The dictionary lists only the two with names of their own — Command Group Length and
+// File Meta Information Group Length — so every other (gggg,0000) failed a dictionary
+// lookup and was reported as "unknown standard tag". Validating an ordinary older image
+// therefore produced one warning per group:
+//
+//	level=WARN msg="dataset: semantic validation" tag=(0008,0000)
+//	   err="unknown standard tag: (0008,0000)"
+//
+// Six lines for a file with nothing wrong with it. Found by storing a real corpus file
+// rather than a fixture generated here, which carries no group lengths.
+func TestIsGroupLength(t *testing.T) {
+	groupLengths := []tag.Tag{
+		tag.New(0x0000, 0x0000), // Command Group Length, in the dictionary
+		tag.New(0x0002, 0x0000), // File Meta Information Group Length, in the dictionary
+		tag.New(0x0008, 0x0000), // the rest are not, and were reported as unknown
+		tag.New(0x0010, 0x0000),
+		tag.New(0x0018, 0x0000),
+		tag.New(0x0020, 0x0000),
+		tag.New(0x0028, 0x0000),
+		tag.New(0x7FE0, 0x0000),
+	}
+	for _, gl := range groupLengths {
+		if !gl.IsGroupLength() {
+			t.Errorf("%s is a group length and was not recognized as one", gl)
+		}
+	}
+
+	notGroupLengths := []tag.Tag{
+		tag.New(0x0010, 0x0010), // PatientName
+		tag.New(0x0008, 0x0018), // SOPInstanceUID
+		tag.New(0x7FE0, 0x0010), // PixelData
+		tag.New(0x0000, 0x0001), // element 1 of a group, not 0
+	}
+	for _, gl := range notGroupLengths {
+		if gl.IsGroupLength() {
+			t.Errorf("%s is not a group length and was treated as one", gl)
+		}
+	}
+}

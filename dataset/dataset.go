@@ -418,6 +418,12 @@ func validateElementSemantics(t tag.Tag, elem *dataelem.DataElement) error {
 		if t.IsPrivate() {
 			return nil
 		}
+		// A group length, (gggg,0000), is a standard construct that the dictionary
+		// does not enumerate. Reporting one as an unknown tag warned once per group
+		// for any file that carries them, which older files do as a matter of course.
+		if t.IsGroupLength() {
+			return nil
+		}
 		return fmt.Errorf("unknown standard tag: %s", t.String())
 	}
 

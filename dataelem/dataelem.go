@@ -464,6 +464,11 @@ func (de *DataElement) ValidateAgainstDictionary() error {
 		if t.IsPrivate() {
 			return nil
 		}
+		// As are group lengths, (gggg,0000): a standard construct the dictionary does
+		// not enumerate beyond the two that have names of their own.
+		if t.IsGroupLength() {
+			return nil
+		}
 		return fmt.Errorf("unknown standard tag: %s", t.String())
 	}
 
