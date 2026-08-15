@@ -61,11 +61,22 @@ jobs:
       - name: Verify the version was stamped
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
         run: |
+          # The tag is "v1.5.0"; the version the CLI reports is "1.5.0". Those are the
+          # same version written two ways — the first is how git names tags, the second
+          # how semantic versions are written in prose and in go.mod. The CLI strips the
+          # prefix so a released binary and a `make build` of the same source do not
+          # disagree, which they did: the release said "v1.5.0", make said "1.5.0", and
+          # the Implementation Version Name sent to peers agreed with neither.
+          #
+          # This check compared against the raw tag, so it encoded that inconsistency
+          # and failed the build when it was fixed. Comparing against the tag with the
+          # prefix removed still verifies the stamp happened, which is what it is for.
+          expected="${GITHUB_REF_NAME#v}"
           stamped=$(./${{ matrix.output }} -v)
           echo "$stamped"
           case "$stamped" in
-            *"${{ github.ref_name }}"*) ;;
-            *) echo "::error::binary reports '$stamped', expected it to contain '${{ github.ref_name }}'"; exit 1 ;;
+            *"$expected"*) ;;
+            *) echo "::error::binary reports '$stamped', expected it to contain '$expected'"; exit 1 ;;
           esac
 
       - name: Upload artifact
