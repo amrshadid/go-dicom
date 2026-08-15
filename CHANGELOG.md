@@ -11,11 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed after the first tag
 
-Eleven fixes landed after v1.5.0 was first tagged, and the tag was moved to include
-them. All eleven were found by using the software rather than by testing it: three came
+Twelve fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All twelve were found by using the software rather than by testing it: three came
 out of building a demonstration recording of the CLI, one out of auditing the CLI's
 own help against the commands it advertises, and one out of rendering that help as a
 cover image for the recording.
+
+- **The version is reported consistently however the binary was built.** The source
+  declares `1.5.0`; the release workflow stamps the git tag, which is `v1.5.0`. So a
+  released binary said `go-dicom version v1.5.0` while the same source built with
+  `make` said `1.5.0`, and the Implementation Version Name sent to peers,
+  `GO-DICOM-1.5.0`, agreed with neither. The test that exists to stop those drifting
+  apart could not catch it: it runs against the source default and never sees the value
+  the linker stamps in. A leading `v` is now stripped at the point of display, so every
+  stamping form reads the same.
 
 - **Flags are honored wherever they are written.** Go's flag package stops at the
   first positional argument, so the forms the help itself documents parsed no flags at
