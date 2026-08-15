@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.5.1] - 2026-08-15
+## [1.5.0] - 2026-08-15
 
-Four fixes, all found by using the software rather than by testing it: three came
-out of building a demonstration recording, and one out of auditing the CLI's own
-help against the commands it advertises.
+### Fixed after the first tag
 
-### Fixed
+Four fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All four were found by using the software rather than by testing it: three came
+out of building a demonstration recording of the CLI, and one out of auditing the
+CLI's own help against the commands it advertises.
 
 - **`help <command>` works for every command.** The top-level list advertised
   sixteen commands and `help <name>` knew seven of them: each of the nine network
@@ -58,7 +59,7 @@ help against the commands it advertises.
   `echoscp`, `getscu`, `qrscp` and `tag-doc` were absent, so the only way to learn
   they existed was to run the binary with no arguments.
 
-## [1.5.0] - 2026-08-15
+### The release as first tagged
 
 This release started as a pass over the documentation, checking each claim against
 the code. Ten defects came out of it, and the pattern in almost every one is the
@@ -1119,8 +1120,7 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.1...HEAD
-[1.5.1]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.5.1
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...HEAD
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0

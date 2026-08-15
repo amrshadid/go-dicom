@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,17 +248,40 @@ func serveSCP(ctx context.Context, t *testing.T, scp *SCP) string {
 		t.Fatalf("Listen: %v", err)
 	}
 
+	// The connection goroutines are waited for, not just abandoned when the
+	// listener closes.
+	//
+	// Without this they outlive the test, and a test that swapped config.Logger for
+	// a buffer restores it in its own cleanup — so a handler still running raced the
+	// restore, reading the logger as it was being written. Detected under -race on
+	// CI rather than locally, because it needs the handler to still be logging at
+	// the moment the test ends.
+	//
+	// Cleanup runs last-in-first-out, and withConfigLogger is called before this,
+	// so its restore happens after this wait returns. The test's own `defer cancel()`
+	// runs before either, which is what unblocks the reads.
+	var wg sync.WaitGroup
+
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			transport, acceptErr := ln.Accept(ctx)
 			if acceptErr != nil {
 				return
 			}
-			go scp.handleConnection(ctx, transport)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				scp.handleConnection(ctx, transport)
+			}()
 		}
 	}()
 
-	t.Cleanup(func() { _ = ln.Close() })
+	t.Cleanup(func() {
+		_ = ln.Close()
+		wg.Wait()
+	})
 	return ln.Addr().String()
 }
 
