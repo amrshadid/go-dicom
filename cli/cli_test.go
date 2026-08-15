@@ -3,11 +3,27 @@ package cli_test
 import (
 	"flag"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/cli"
 )
+
+// testDICOMFile returns a real DICOM file from the repository.
+//
+// Several tests here created an empty temp file and required the command to succeed on
+// it, which asserted the very thing that was wrong: every file command accepted any
+// file at all and printed an empty table. An empty file is now an error, so a test that
+// means "the command works on a DICOM file" has to supply one.
+func testDICOMFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join("..", "dataset", "testdata", "pixellayout", "planar_bigendian.dcm")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	return path
+}
 
 func TestNewCLI(t *testing.T) {
 	c := cli.NewCLI("dicom", "1.0.0")
@@ -75,7 +91,7 @@ func TestShowCommandExecute(t *testing.T) {
 	defer os.Remove(tmpfile.Name())
 	tmpfile.Close()
 
-	err = cmd.Execute([]string{tmpfile.Name()})
+	err = cmd.Execute([]string{testDICOMFile(t)})
 	if err != nil {
 		t.Errorf("Execute failed: %v", err)
 	}
@@ -137,7 +153,7 @@ func TestInfoCommandExecute(t *testing.T) {
 	defer os.Remove(tmpfile.Name())
 	tmpfile.Close()
 
-	err = cmd.Execute([]string{tmpfile.Name()})
+	err = cmd.Execute([]string{testDICOMFile(t)})
 	if err != nil {
 		t.Errorf("Execute failed: %v", err)
 	}
@@ -180,7 +196,7 @@ func TestConvertCommandExecute(t *testing.T) {
 	tmpfile.Close()
 
 	outputFile := tmpfile.Name() + ".json"
-	err = cmd.Execute([]string{tmpfile.Name(), outputFile})
+	err = cmd.Execute([]string{testDICOMFile(t), outputFile})
 	if err != nil {
 		t.Errorf("Execute failed: %v", err)
 	}
@@ -231,7 +247,7 @@ func TestCLIRun(t *testing.T) {
 	defer os.Remove(tmpfile.Name())
 	tmpfile.Close()
 
-	err = c.Run([]string{"show", tmpfile.Name()})
+	err = c.Run([]string{"show", testDICOMFile(t)})
 	if err != nil {
 		t.Errorf("Run failed: %v", err)
 	}
@@ -426,7 +442,7 @@ func TestCodifyCommandExecute(t *testing.T) {
 	defer os.Remove(tmpfile.Name())
 	tmpfile.Close()
 
-	err = cmd.Execute([]string{tmpfile.Name()})
+	err = cmd.Execute([]string{testDICOMFile(t)})
 	if err != nil {
 		t.Errorf("Codify execute with empty DICOM file failed: %v", err)
 	}
@@ -466,7 +482,7 @@ func TestCodifyCommandWithOptions(t *testing.T) {
 		"-function", "myFunction",
 		"-exclude-size", "50",
 		"-output", outfile.Name(),
-		tmpfile.Name(),
+		testDICOMFile(t),
 	})
 	if err != nil {
 		t.Errorf("Codify with options failed: %v", err)

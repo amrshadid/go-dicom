@@ -11,11 +11,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed after the first tag
 
-Six fixes landed after v1.5.0 was first tagged, and the tag was moved to include
-them. All six were found by using the software rather than by testing it: three came
+Twelve fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All twelve were found by using the software rather than by testing it: three came
 out of building a demonstration recording of the CLI, one out of auditing the CLI's
 own help against the commands it advertises, and one out of rendering that help as a
 cover image for the recording.
+
+- **The version is reported consistently however the binary was built.** The source
+  declares `1.5.0`; the release workflow stamps the git tag, which is `v1.5.0`. So a
+  released binary said `go-dicom version v1.5.0` while the same source built with
+  `make` said `1.5.0`, and the Implementation Version Name sent to peers,
+  `GO-DICOM-1.5.0`, agreed with neither. The test that exists to stop those drifting
+  apart could not catch it: it runs against the source default and never sees the value
+  the linker stamps in. A leading `v` is now stripped at the point of display, so every
+  stamping form reads the same.
+
+- **Flags are honored wherever they are written.** Go's flag package stops at the
+  first positional argument, so the forms the help itself documents parsed no flags at
+  all:
+
+  ```
+  $ go-dicom convert patient.dcm data.csv --format csv   # wrote JSON, exit 0
+  $ go-dicom codify patient.dcm --output create.go       # wrote to stdout, exit 0
+  ```
+
+  `--format json`, `csv` and `nifti` produced byte-identical files. Both commands now
+  accept flags in any position, which is what the help already promised.
+
+- **`tag-doc <tag>` documents that tag.** The positional argument was read and
+  discarded, so `tag-doc 0010,0010` printed the first fifty dictionary entries and
+  exited zero. `(0010,0010)`, `0010,0010` and `00100010` are all accepted; junk is
+  refused with a message saying what a tag looks like.
+
+- **`tag-doc` with no arguments lists the dictionary, and writes no file.** It
+  announced "Displaying first 50 tags", listed none, printed three hardcoded counts,
+  and created `dicom_tags_text.txt` in the working directory as a side effect — one of
+  which reached this repository. It now lists real entries sorted by tag, honors
+  `-retired` and `-private`, counts what it actually has, and writes to a file only
+  when `-output` names one.
+
+- **`codify` produces Go that compiles.** Two defects: it emitted `package main` with
+  no `main` function, so the default output of a command whose purpose is runnable Go
+  would not build; and it decided whether a value was printable by ranging the string,
+  which yields U+FFFD for invalid UTF-8 — so binary values were written into the source
+  raw and the file failed to parse with "illegal UTF-8 encoding". Text VRs now go
+  through `strconv.Quote`; numeric and binary VRs are emitted as the bytes they are,
+  so the generated data set matches the file instead of carrying a placeholder.
+
+- **A file that is not DICOM is reported as such.** `show`, `info`, `convert` and
+  `codify` accepted any file at all: `show /etc/hosts` printed a header, a column
+  heading, no rows, and exited zero, and `show /dev/null` did the same without even a
+  warning. A file from which no element can be read is now an error.
 
 - **The CLI is called `go-dicom`, everywhere.** It shipped under two names: `go
   install` builds it as `go-dicom`, after the last element of the module path, while

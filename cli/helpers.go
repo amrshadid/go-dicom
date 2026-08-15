@@ -65,6 +65,24 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 	elements := make([]DicomElement, 0, len(df.MetaElements)+len(df.DataElements))
 	elements = appendElements(elements, df.MetaElements, 0)
 	elements = appendElements(elements, df.DataElements, 0)
+
+	// A file that yielded nothing is not a DICOM file, and saying so is more use than
+	// printing an empty table.
+	//
+	// The reader is deliberately tolerant — it recovers what it can from a truncated
+	// or malformed file, which is the right behavior for salvage. But it returns no
+	// error for a file with nothing recoverable in it, so `show /etc/hosts` printed a
+	// header, a column heading, no rows, and exited zero; `show /dev/null` did the
+	// same without even a warning. A mistyped filename is the common case, and it
+	// looked exactly like success.
+	//
+	// Every conformant DICOM file has at least one element, so an empty result is
+	// unambiguous.
+	if len(elements) == 0 {
+		return nil, fmt.Errorf("%s does not look like a DICOM file: no data elements "+
+			"could be read from it", filename)
+	}
+
 	return elements, nil
 }
 

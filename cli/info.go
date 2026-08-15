@@ -43,7 +43,8 @@ func (ic *InfoCommand) Execute(args []string) error {
 	fs := flag.NewFlagSet(ic.Name(), flag.ContinueOnError)
 	ic.AddFlags(fs)
 
-	if err := fs.Parse(args); err != nil {
+	positional, err := ParseArgs(fs, args)
+	if err != nil {
 		return fmt.Errorf("info: failed to parse flags: %v", err)
 	}
 
@@ -53,7 +54,7 @@ func (ic *InfoCommand) Execute(args []string) error {
 		return nil
 	}
 
-	remaining := fs.Args()
+	remaining := positional
 	if len(remaining) == 0 {
 		return fmt.Errorf("info: missing file specification\nRun 'go-dicom info -h' for usage")
 	}
