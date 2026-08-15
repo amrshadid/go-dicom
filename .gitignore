@@ -28,9 +28,10 @@ build/
 *.a
 
 # Generated binaries
-/dicom
+#
+# One entry, once. This block had /dicom twice and /diom — a typo that ignored
+# nothing, while looking like it covered the binary.
 /go-dicom
-/diom
 
 # IDE-specific files
 .idea/
@@ -277,9 +278,6 @@ generated/
 # Vendored dependencies
 vendor/
 Godeps/
-
-# Built CLI binary
-/dicom
 
 # Output written by running the CLI in the working copy. An instance received by
 # storescp or qrscp was committed once by accident, which put a DICOM file from an

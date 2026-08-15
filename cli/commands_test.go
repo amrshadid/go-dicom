@@ -421,3 +421,60 @@ func TestTheTwoTopLevelHelpListingsAgree(t *testing.T) {
 		t.Errorf("only %d commands are listed; the CLI has 16", n)
 	}
 }
+
+// The help must name the binary the user actually ran.
+//
+// The same source ships under two names: `go install` builds it as go-dicom, after the
+// last element of the module path, while the Makefile and the release assets call it
+// dicom. The help text hardcoded go-dicom, so anyone who installed from a release got
+// instructions for a command they did not have:
+//
+//	$ dicom
+//	USAGE:
+//	  go-dicom <command> [options] [arguments]
+//	$ go-dicom
+//	zsh: command not found: go-dicom
+//
+// Built under two different names here, because the name comes from argv and nothing
+// short of a real exec exercises that.
+func TestHelpNamesTheBinaryItWasInvokedAs(t *testing.T) {
+	for _, name := range []string{"dicom", "go-dicom", "dcmtool"} {
+		t.Run(name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), name)
+			if runtime.GOOS == "windows" {
+				binary += ".exe"
+			}
+
+			build := exec.Command("go", "build", "-o", binary, "github.com/amrshadid/go-dicom")
+			if out, err := build.CombinedOutput(); err != nil {
+				t.Fatalf("go build: %v\n%s", err, out)
+			}
+
+			// Both listings, and a per-command page, since each is rendered separately.
+			for _, args := range [][]string{{}, {"help"}, {"help", "show"}} {
+				out, err := exec.Command(binary, args...).CombinedOutput()
+				if err != nil {
+					t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+				}
+				text := string(out)
+
+				if !strings.Contains(text, name+" ") {
+					t.Errorf("%s %v never names the binary as %q:\n%s", name, args, name, text)
+				}
+				// The other names must not appear at all.
+				for _, wrong := range []string{"dicom", "go-dicom", "dcmtool"} {
+					if wrong == name {
+						continue
+					}
+					// "dicom" is a substring of "go-dicom", so only flag it where it is
+					// not part of the name actually in use.
+					stripped := strings.ReplaceAll(text, name, "")
+					if strings.Contains(stripped, wrong+" <command>") ||
+						strings.Contains(stripped, "'"+wrong+" help") {
+						t.Errorf("%s %v tells the user to run %q:\n%s", name, args, wrong, text)
+					}
+				}
+			}
+		})
+	}
+}

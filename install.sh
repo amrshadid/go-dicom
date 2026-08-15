@@ -18,7 +18,7 @@
 set -eu
 
 REPO="amrshadid/go-dicom"
-BIN="dicom"
+BIN="go-dicom"
 VERSION="${1:-latest}"
 
 say()  { printf '%s\n' "$*"; }
@@ -37,7 +37,7 @@ case "$os" in
   # Windows is built and published, but this script cannot sensibly install it:
   # there is no agreed place to put it and no PATH convention to rely on.
   MINGW*|MSYS*|CYGWIN*)
-    die "on Windows, download dicom-windows-amd64.exe from
+    die "on Windows, download go-dicom-windows-amd64.exe from
        https://github.com/$REPO/releases/latest
      and put it in a directory on your PATH." ;;
   *) die "unsupported operating system: $os" ;;
@@ -53,9 +53,9 @@ asset="${BIN}-${os_name}-${arch_name}"
 
 # The published set. A combination outside it should say so rather than 404 later.
 case "$asset" in
-  dicom-macos-arm64|dicom-macos-amd64|dicom-linux-amd64|dicom-linux-arm64) ;;
+  go-dicom-macos-arm64|go-dicom-macos-amd64|go-dicom-linux-amd64|go-dicom-linux-arm64) ;;
   *) die "no published binary for ${os_name}/${arch_name}. Build from source:
-       go build -o dicom github.com/$REPO" ;;
+       go build -o go-dicom github.com/$REPO" ;;
 esac
 
 # --- where to put it -----------------------------------------------------------
