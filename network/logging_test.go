@@ -398,3 +398,82 @@ func TestAnSCPDoesNotWriteToTheProcessStderr(t *testing.T) {
 		t.Logf("config.Logger received:\n%s", logged.String())
 	}
 }
+
+// A bare TCP connect-and-close is not a fault, and must not be logged as one.
+//
+// This is what every health check, load-balancer probe and port scan does: open a
+// connection, see that it opened, close it. The SCP read it as a failed association
+// request and logged an error per probe, so a server behind a load balancer produced
+// a steady stream of errors describing itself working correctly.
+//
+// It was found by watching a demo recording's server log rather than by a test —
+// the readiness probe in front of the demo was `nc -z`, and the log the recording
+// was meant to show quiet had an error in it from the probe itself.
+func TestABareConnectIsNotLoggedAsAnError(t *testing.T) {
+	logged := withConfigLogger(t, slog.LevelDebug)
+	withDefaultLoggerLevel(t, LogLevelDebug)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	scp := NewSCP(SCPConfig{AETitle: "TEST_SCP", BindAddress: "127.0.0.1"})
+	scp.SetHandler(&EchoHandler{})
+
+	ln, err := Listen("127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			transport, acceptErr := ln.Accept(ctx)
+			if acceptErr != nil {
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				scp.handleConnection(ctx, transport)
+			}()
+		}
+	}()
+
+	// Exactly what `nc -z` does.
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	_ = conn.Close()
+
+	// Wait for the handler to have reported something, so that an empty log means
+	// "nothing was logged" rather than "the test read it too early".
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && logged.Len() == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	_ = ln.Close()
+	cancel()
+	wg.Wait()
+
+	got := logged.String()
+	if got == "" {
+		t.Fatal("the probe was not reported at any level, so this test cannot tell " +
+			"a demotion to debug from the code path never having run")
+	}
+	for _, level := range []string{"level=ERROR", "level=WARN"} {
+		if strings.Contains(got, level) {
+			t.Errorf("a bare connect-and-close was logged at %s:\n%s\n\n"+
+				"A probe that opens and closes a connection is how health checks work. "+
+				"It reaches the PDU read as EOF and belongs at debug.",
+				strings.TrimPrefix(level, "level="), got)
+		}
+	}
+	if !strings.Contains(got, "level=DEBUG") {
+		t.Errorf("expected the probe at debug level, got:\n%s", got)
+	}
+}

@@ -12,7 +12,7 @@ import (
 // Declared as a var, not a const, so release builds can stamp the real tag in
 // with -ldflags "-X main.Version=...". The linker cannot rewrite a const, so
 // making this a const silently turns that injection into a no-op.
-var Version = "1.5.0"
+var Version = "1.5.1"
 
 func main() {
 	// Create CLI instance
