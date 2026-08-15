@@ -75,6 +75,8 @@ func (c *CLI) RegisterCommand(cmd Command) {
 
 	if help, ok := c.Commands["help"].(*HelpCommand); ok {
 		help.SetCommands(c.Commands)
+		help.SetMainHelp(c.ShowHelp)
+		help.SetProgramName(c.Name)
 	}
 }
 

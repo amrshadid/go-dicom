@@ -2,7 +2,7 @@
 # Run 'make help' to see all available targets
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-BINARY      := dicom
+BINARY      := go-dicom
 GO          := go
 GOFLAGS     := -race
 TIMEOUT     := 5m

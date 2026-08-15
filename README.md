@@ -35,9 +35,83 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 
 ### Installation
 
+**As a library:**
+
 ```bash
 go get github.com/amrshadid/go-dicom
 ```
+
+**As a CLI** — a single static binary, no CGO, nothing to install alongside it.
+
+The script works out which build suits your machine, verifies it against the
+checksums published with the release, and puts it somewhere already on your `PATH`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh | sh
+```
+
+It is worth reading before piping anything to a shell — it is about a hundred lines:
+[`install.sh`](./install.sh). To run it separately, or to choose where it lands:
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
+less install.sh
+sh install.sh                          # the latest release
+sh install.sh v1.5.0                   # a specific one
+PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
+```
+
+<details>
+<summary>Or download it yourself</summary>
+
+Pick your platform from the [latest release](https://github.com/amrshadid/go-dicom/releases/latest):
+
+| Platform | File |
+|---|---|
+| macOS, Apple Silicon | `go-dicom-macos-arm64` |
+| macOS, Intel | `go-dicom-macos-amd64` |
+| Linux, x86-64 | `go-dicom-linux-amd64` |
+| Linux, ARM64 | `go-dicom-linux-arm64` |
+| Windows, x86-64 | `go-dicom-windows-amd64.exe` |
+
+Then, on macOS or Linux:
+
+```bash
+# Verify it before you run it. SHA256SUMS is published with the release.
+shasum -a 256 -c --ignore-missing SHA256SUMS     # sha256sum -c on Linux
+
+mkdir -p ~/.local/bin
+install -m 755 go-dicom-macos-arm64 ~/.local/bin/go-dicom
+go-dicom help
+```
+
+If you downloaded through a browser rather than with `curl`, macOS attaches a
+quarantine flag and Gatekeeper will refuse to run the binary. Clear it with:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/go-dicom
+```
+
+On Windows, put `go-dicom-windows-amd64.exe` in a directory on your `PATH`.
+
+</details>
+
+<details>
+<summary>Or build it from source</summary>
+
+```bash
+git clone https://github.com/amrshadid/go-dicom
+cd go-dicom
+make build        # stamps the version; ./go-dicom version confirms it
+```
+
+`go install github.com/amrshadid/go-dicom@latest` also works and builds from source.
+Note that it resolves through the Go module proxy, which serves each version exactly
+as it was first published — so for a release whose tag was later moved, the binaries
+attached to the release and a `go install` of that version are not the same build.
+`make build` from a clone always matches the source you have.
+
+</details>
 
 ### DICOM Networking (SCU Client)
 
@@ -214,47 +288,47 @@ if seq, err := ds.GetSequence(tag.New(0x0040, 0xA730)); err == nil {
 
 ```bash
 # Build the CLI
-go build -o dicom .
+go build -o go-dicom .
 
 # === File Operations ===
-./dicom show patient.dcm           # Every element, as stored
-./dicom info patient.dcm           # Key metadata and image dimensions
-./dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
-./dicom codify patient.dcm         # Go source that recreates the file
-./dicom tag-doc 0010,0010          # What a tag means, from the dictionary
+./go-dicom show patient.dcm           # Every element, as stored
+./go-dicom info patient.dcm           # Key metadata and image dimensions
+./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
+./go-dicom codify patient.dcm         # Go source that recreates the file
+./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
 # Verification (ping a PACS)
-./dicom echoscu pacs.hospital.com:11112
+./go-dicom echoscu pacs.hospital.com:11112
 
 # Answer verification requests
-./dicom echoscp -port 11112
+./go-dicom echoscp -port 11112
 
 # Send DICOM files (.dcm, .ima, any DICOM format)
-./dicom storescu -aec PACS pacs:11112 study/*.dcm
+./go-dicom storescu -aec PACS pacs:11112 study/*.dcm
 
 # Start a storage server (receive files)
-./dicom storescp -port 11112 -output ./received/
+./go-dicom storescp -port 11112 -output ./received/
 
 # Query for patients/studies
-./dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
+./go-dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
 
 # Retrieve studies to a destination
-./dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
+./go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 
 # Retrieve on the same association, with no second server to run
-./dicom getscu -study 1.2.3.4 -output ./retrieved/ pacs:11112
+./go-dicom getscu -study 1.2.3.4 -output ./retrieved/ pacs:11112
 
 # Ask an archive to take responsibility for instances you have sent
-./dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
+./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
 
 # A storage and query/retrieve archive in one command: stores what it is
 # sent, indexes it, and answers C-FIND, C-MOVE and C-GET against it
-./dicom qrscp -port 11112 -output ./archive/
+./go-dicom qrscp -port 11112 -output ./archive/
 
 # Get help — `help <command>` works for every command above
-./dicom -h
-./dicom help qrscp
+./go-dicom -h
+./go-dicom help qrscp
 ```
 
 ## Architecture
@@ -380,7 +454,7 @@ with Affected instead of Requested SOP Instance UID, leaves the unit tests green
 fails the interoperability tests.
 
 ```bash
-go build -o dicom .
+go build -o go-dicom .
 PYNETDICOM_BIN=/path/to/venv/bin DCMTK_BIN=/usr/bin ./scripts/interop-test.sh
 ```
 
@@ -635,7 +709,7 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 go build ./...
 
 # Build the CLI tool
-go build -o dicom .
+go build -o go-dicom .
 
 # Run all tests (71 network tests + file I/O tests)
 go test -race ./...

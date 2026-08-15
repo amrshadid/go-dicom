@@ -11,10 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed after the first tag
 
-Four fixes landed after v1.5.0 was first tagged, and the tag was moved to include
-them. All four were found by using the software rather than by testing it: three came
-out of building a demonstration recording of the CLI, and one out of auditing the
-CLI's own help against the commands it advertises.
+Six fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All six were found by using the software rather than by testing it: three came
+out of building a demonstration recording of the CLI, one out of auditing the CLI's
+own help against the commands it advertises, and one out of rendering that help as a
+cover image for the recording.
+
+- **The CLI is called `go-dicom`, everywhere.** It shipped under two names: `go
+  install` builds it as `go-dicom`, after the last element of the module path, while
+  the Makefile and the release assets called it `dicom`. The help text hardcoded
+  `go-dicom`, so anyone who installed from a release was given instructions for a
+  command they did not have —
+
+  ```
+  $ dicom
+  USAGE:
+    go-dicom <command> [options] [arguments]
+  $ go-dicom
+  zsh: command not found: go-dicom
+  ```
+
+  The build, the release assets and the installer now all produce `go-dicom`, and the
+  help takes the name from how the binary was actually invoked, so it stays correct
+  for a renamed copy too. **The release assets are renamed** accordingly:
+  `go-dicom-macos-arm64` and so on.
+
+- **`go-dicom help` lists every command.** It printed seven — the file commands —
+  while the bare binary printed all sixteen grouped by category, because
+  `displayMainHelp` kept a third copy of the list with its own descriptions. So the
+  nine network commands, which are most of what the tool does, were absent from the
+  listing a user reaches by typing `help`. Both listings now come from one place and
+  print identically. Found by rendering `dicom help` as a cover image and counting
+  the commands on it.
 
 - **`help <command>` works for every command.** The top-level list advertised
   sixteen commands and `help <name>` knew seven of them: each of the nine network
@@ -48,12 +76,27 @@ CLI's own help against the commands it advertises.
   for any other reason is still an error. Found the same way, in the same
   demonstration.
 
+### Added
+
+- **An installer.** `install.sh` works out the platform, downloads the matching build
+  with the release's `SHA256SUMS`, and refuses to install unless the checksum matches.
+  It prefers a directory already on `PATH` so nothing needs sudo, and clears the macOS
+  quarantine flag that otherwise stops Gatekeeper running a downloaded binary.
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh | sh
+  ```
+
 ### Documentation
 
 - The README now opens with a recording of the CLI: reading a DICOM file, standing
   up an archive, storing two studies into it and querying them back. Nothing in it
   is staged — every command runs against a real archive that is empty when the
   recording starts.
+
+- The README now says how to install the CLI: the script, a manual download with a
+  platform table and the verification step, and building from source. It previously
+  covered only `go get` of the library.
 
 - The README's command list covered eleven of the sixteen CLI commands. `codify`,
   `echoscp`, `getscu`, `qrscp` and `tag-doc` were absent, so the only way to learn
