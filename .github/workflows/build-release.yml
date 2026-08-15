@@ -19,23 +19,23 @@ jobs:
           - os: linux
             arch: amd64
             runs-on: ubuntu-latest
-            output: dicom-linux-amd64
+            output: go-dicom-linux-amd64
           - os: linux
             arch: arm64
             runs-on: ubuntu-latest
-            output: dicom-linux-arm64
+            output: go-dicom-linux-arm64
           - os: darwin
             arch: amd64
             runs-on: macos-latest
-            output: dicom-macos-amd64
+            output: go-dicom-macos-amd64
           - os: darwin
             arch: arm64
             runs-on: macos-latest
-            output: dicom-macos-arm64
+            output: go-dicom-macos-arm64
           - os: windows
             arch: amd64
             runs-on: windows-latest
-            output: dicom-windows-amd64.exe
+            output: go-dicom-windows-amd64.exe
 
     steps:
       - name: Checkout code

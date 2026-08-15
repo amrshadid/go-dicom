@@ -1,7 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"flag"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -267,5 +272,209 @@ func TestHelpStillRejectsAnUnknownCommand(t *testing.T) {
 			"must not turn every unknown name into a success")
 	} else if !strings.Contains(err.Error(), "definitely-not-a-command") {
 		t.Errorf("the error should name what was asked for, got: %v", err)
+	}
+}
+
+// buildCLI builds the CLI binary once for a test and returns its path.
+//
+// Built by module path, not ".", because this package is not the main package — the
+// binary's main lives at the repository root.
+//
+// The commands this exercises parse flags with flag.ExitOnError, so their -h calls
+// os.Exit and cannot be driven from inside the test process. A subprocess is also
+// what a user actually runs.
+func buildCLI(t *testing.T) string {
+	t.Helper()
+
+	// The .exe matters: without it the build succeeds and every exec of the result
+	// fails with "executable file not found in %PATH%", because Windows decides what
+	// is runnable from the extension. Caught on the windows-latest runner.
+	name := "dicom"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+
+	binary := filepath.Join(t.TempDir(), name)
+	build := exec.Command("go", "build", "-o", binary, "github.com/amrshadid/go-dicom")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	return binary
+}
+
+// advertisedCommands returns the command names the top-level help lists, which is
+// the set a user can see and will therefore try.
+func advertisedCommands(t *testing.T, binary string) []string {
+	t.Helper()
+
+	out, err := exec.Command(binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running with no arguments should print help: %v\n%s", err, out)
+	}
+
+	// The command list is indented four spaces under each category heading.
+	pattern := regexp.MustCompile(`(?m)^ {4}([a-z][a-z-]*)\s`)
+	var names []string
+	for _, m := range pattern.FindAllStringSubmatch(string(out), -1) {
+		names = append(names, m[1])
+	}
+	if len(names) < 10 {
+		t.Fatalf("only found %d commands in the help output, so the parse is wrong:\n%s",
+			len(names), out)
+	}
+	return names
+}
+
+// Every command the CLI advertises must answer `help <name>` with its help, not with
+// a claim that it does not exist.
+//
+// The top-level list advertised sixteen commands and `help <name>` knew seven of
+// them. The nine network commands each said "unknown command 'storescu'" while
+// `storescu -h` printed a full page and the command ran fine — so a user following
+// the CLI's own closing instruction, "Use 'go-dicom help <command>' for more
+// information on a specific command", was told the command did not exist.
+func TestHelpWorksForEveryCommand(t *testing.T) {
+	binary := buildCLI(t)
+
+	for _, name := range advertisedCommands(t, binary) {
+		t.Run(name, func(t *testing.T) {
+			out, err := exec.Command(binary, "help", name).CombinedOutput()
+			text := string(out)
+
+			if err != nil {
+				t.Fatalf("`help %s` failed: %v\n%s", name, err, text)
+			}
+			if strings.Contains(text, "unknown command") {
+				t.Fatalf("`help %s` reports the command as unknown, but it is in the "+
+					"top-level list:\n%s", name, text)
+			}
+			if strings.TrimSpace(text) == "" {
+				t.Fatalf("`help %s` printed nothing", name)
+			}
+			// The output should be about the command asked for, not the general help.
+			if !strings.Contains(text, name) {
+				t.Errorf("`help %s` printed something that never mentions %q:\n%s",
+					name, name, text)
+			}
+		})
+	}
+}
+
+// A name that is not a command must still be reported as one, so that a typo is
+// told apart from a command that exists.
+func TestHelpRejectsAnUnknownCommandEndToEnd(t *testing.T) {
+	binary := buildCLI(t)
+
+	out, err := exec.Command(binary, "help", "nosuchcommand").CombinedOutput()
+
+	// A non-zero exit is not enough on its own: a binary that cannot start also
+	// gives one, with no output, and this test used to read that as success. On
+	// Windows, where the missing .exe meant nothing ran at all, it passed for that
+	// reason. So require that the process actually ran and then exited non-zero.
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("`help nosuchcommand` did not run to a normal exit: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "nosuchcommand") {
+		t.Errorf("the error should name what was asked for, got:\n%s", out)
+	}
+}
+
+// `go-dicom help` and `go-dicom` with no arguments must print the same thing.
+//
+// They did not. displayMainHelp kept its own copy of the command list — seven file
+// commands with their own descriptions — while the CLI's listing had all sixteen
+// grouped by category. So `go-dicom help` never mentioned any of the nine network
+// commands, which are most of what the tool does.
+//
+// This is the third place the command list was duplicated, and the second bug from
+// it. TestHelpWorksForEveryCommand did not catch this one: it asked for help on each
+// command by name and never compared the two listings, so the listing that omitted
+// nine commands looked fine from every angle it checked.
+func TestTheTwoTopLevelHelpListingsAgree(t *testing.T) {
+	binary := buildCLI(t)
+
+	bare, err := exec.Command(binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running with no arguments: %v\n%s", err, bare)
+	}
+	viaHelp, err := exec.Command(binary, "help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("`help`: %v\n%s", err, viaHelp)
+	}
+
+	if string(bare) != string(viaHelp) {
+		t.Errorf("`go-dicom` and `go-dicom help` print different things.\n\n"+
+			"bare:\n%s\nvia help:\n%s\n\n"+
+			"Both answer the same question and must not be maintained separately.",
+			bare, viaHelp)
+	}
+
+	// And the listing has to be complete, so that agreeing on a short list is not a
+	// way to pass this.
+	for _, name := range advertisedCommands(t, binary) {
+		if !strings.Contains(string(viaHelp), name) {
+			t.Errorf("`help` does not list %q", name)
+		}
+	}
+	if n := len(advertisedCommands(t, binary)); n < 16 {
+		t.Errorf("only %d commands are listed; the CLI has 16", n)
+	}
+}
+
+// The help must name the binary the user actually ran.
+//
+// The same source ships under two names: `go install` builds it as go-dicom, after the
+// last element of the module path, while the Makefile and the release assets call it
+// dicom. The help text hardcoded go-dicom, so anyone who installed from a release got
+// instructions for a command they did not have:
+//
+//	$ dicom
+//	USAGE:
+//	  go-dicom <command> [options] [arguments]
+//	$ go-dicom
+//	zsh: command not found: go-dicom
+//
+// Built under two different names here, because the name comes from argv and nothing
+// short of a real exec exercises that.
+func TestHelpNamesTheBinaryItWasInvokedAs(t *testing.T) {
+	for _, name := range []string{"dicom", "go-dicom", "dcmtool"} {
+		t.Run(name, func(t *testing.T) {
+			binary := filepath.Join(t.TempDir(), name)
+			if runtime.GOOS == "windows" {
+				binary += ".exe"
+			}
+
+			build := exec.Command("go", "build", "-o", binary, "github.com/amrshadid/go-dicom")
+			if out, err := build.CombinedOutput(); err != nil {
+				t.Fatalf("go build: %v\n%s", err, out)
+			}
+
+			// Both listings, and a per-command page, since each is rendered separately.
+			for _, args := range [][]string{{}, {"help"}, {"help", "show"}} {
+				out, err := exec.Command(binary, args...).CombinedOutput()
+				if err != nil {
+					t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+				}
+				text := string(out)
+
+				if !strings.Contains(text, name+" ") {
+					t.Errorf("%s %v never names the binary as %q:\n%s", name, args, name, text)
+				}
+				// The other names must not appear at all.
+				for _, wrong := range []string{"dicom", "go-dicom", "dcmtool"} {
+					if wrong == name {
+						continue
+					}
+					// "dicom" is a substring of "go-dicom", so only flag it where it is
+					// not part of the name actually in use.
+					stripped := strings.ReplaceAll(text, name, "")
+					if strings.Contains(stripped, wrong+" <command>") ||
+						strings.Contains(stripped, "'"+wrong+" help") {
+						t.Errorf("%s %v tells the user to run %q:\n%s", name, args, wrong, text)
+					}
+				}
+			}
+		})
 	}
 }

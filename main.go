@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/amrshadid/go-dicom/cli"
 )
@@ -14,9 +16,37 @@ import (
 // making this a const silently turns that injection into a no-op.
 var Version = "1.5.0"
 
+// programName is what this binary was invoked as.
+//
+// It cannot be a constant. The same source ships under two names: `go install` builds
+// it as go-dicom, after the last element of the module path, while the Makefile and
+// the release assets call it dicom. Hardcoding either one meant the help told half of
+// its users to run a command they do not have —
+//
+//	$ dicom
+//	USAGE:
+//	  go-dicom <command> [options] [arguments]
+//	$ go-dicom
+//	zsh: command not found: go-dicom
+//
+// Taking it from argv also covers a binary the user renamed themselves.
+func programName() string {
+	name := filepath.Base(os.Args[0])
+
+	// Windows invokes it with the extension, which is not how anyone types it.
+	name = strings.TrimSuffix(name, ".exe")
+
+	// os.Args[0] is not guaranteed to be set or meaningful — an empty or relative
+	// oddity should not produce help that reads "  . <command>".
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		return "go-dicom"
+	}
+	return name
+}
+
 func main() {
 	// Create CLI instance
-	dicomCLI := cli.NewCLI("go-dicom", Version)
+	dicomCLI := cli.NewCLI(programName(), Version)
 
 	// Register file commands
 	dicomCLI.RegisterCommand(&cli.ShowCommand{})

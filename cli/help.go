@@ -3,12 +3,55 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // HelpCommand displays help for available commands.
 type HelpCommand struct {
 	subcommand  string
 	allCommands map[string]Command
+
+	// showMainHelp renders the CLI's own top-level help. Set by RegisterCommand, so
+	// that `help` with no argument and the bare binary print the same thing.
+	showMainHelp func()
+
+	// programName is what the binary was invoked as. The help text is written with
+	// "go-dicom" in it and this replaces it at print time.
+	programName string
+}
+
+// SetProgramName tells the help text what this binary is called.
+//
+// The same source ships under two names — `go install` builds it as go-dicom, after
+// the module path, while the Makefile and the release assets call it dicom — so help
+// that hardcodes either one tells half of its users to run a command they do not
+// have. RegisterCommand sets this from the CLI's own name, which main takes from argv.
+func (hc *HelpCommand) SetProgramName(name string) {
+	hc.programName = name
+}
+
+// prog returns the name to print, falling back to the module's own for a HelpCommand
+// used without a CLI attached.
+func (hc *HelpCommand) prog() string {
+	if hc.programName == "" {
+		return "go-dicom"
+	}
+	return hc.programName
+}
+
+// print writes help text with the program name substituted in.
+//
+// A replace over the finished string rather than a format verb per occurrence: there
+// are dozens across these literals, and every one of them is the same substitution.
+// Safe here because no literal in this file contains the module path, where
+// "go-dicom" must survive untouched.
+func (hc *HelpCommand) print(text string) {
+	fmt.Print(strings.ReplaceAll(text, "go-dicom", hc.prog()))
+}
+
+func (hc *HelpCommand) println(text string) {
+	fmt.Println(strings.ReplaceAll(text, "go-dicom", hc.prog()))
 }
 
 // NewHelpCommand creates a new help command.
@@ -58,45 +101,53 @@ func (hc *HelpCommand) SetCommands(commands map[string]Command) {
 	hc.allCommands = commands
 }
 
+// SetMainHelp supplies the CLI's own top-level help renderer, so that
+// `go-dicom help` prints exactly what `go-dicom` prints.
+func (hc *HelpCommand) SetMainHelp(show func()) {
+	hc.showMainHelp = show
+}
+
 // displayMainHelp displays main help message
 func (hc *HelpCommand) displayMainHelp() error {
-	fmt.Println(`Go DICOM Command Line Interface
+	// Delegated to the CLI's own help, so that `go-dicom help` and `go-dicom` with no
+	// arguments cannot disagree.
+	//
+	// They did. This function kept a third copy of the command list — seven file
+	// commands with their own descriptions — while the CLI's own listing had all
+	// sixteen grouped by category. So `go-dicom help` simply did not mention any of
+	// the nine network commands, which are most of what the tool is for.
+	//
+	// Found by rendering `dicom help` as a cover image and counting the commands on
+	// it. The audit that caught the same bug in `help <command>` had checked each
+	// command individually and never compared this listing against the real one.
+	if hc.showMainHelp != nil {
+		hc.showMainHelp()
+		return nil
+	}
+
+	// Standalone, with no CLI attached: still derived from the registry rather than
+	// restated, so it can be incomplete but not wrong.
+	hc.println(`Go DICOM Command Line Interface
 
 USAGE:
   go-dicom <command> [options] [arguments]
 
 COMMANDS:`)
 
-	// Display all commands
-	commands := []string{"show", "info", "convert", "tag-doc", "codify", "help", "version"}
-	descriptions := map[string]string{
-		"show":    "Display DICOM file contents",
-		"info":    "Show DICOM file metadata and information",
-		"convert": "Convert DICOM files to other formats (JSON, CSV, NIfTI)",
-		"tag-doc": "Generate documentation for DICOM tags",
-		"codify":  "Read a DICOM file and produce Go code to create it",
-		"help":    "Display help for commands",
-		"version": "Display version information",
+	names := make([]string, 0, len(hc.allCommands))
+	for name := range hc.allCommands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		fmt.Printf("  %-12s %s\n", name, hc.allCommands[name].Description())
 	}
 
-	for _, cmd := range commands {
-		if desc, ok := descriptions[cmd]; ok {
-			fmt.Printf("  %-12s %s\n", cmd, desc)
-		}
-	}
-
-	fmt.Print(`
+	hc.print(`
 OPTIONS:
   -h, --help      Show help message
   -v, --version   Show version information
-
-EXAMPLES:
-  go-dicom show patient.dcm
-  go-dicom info patient.dcm --verbose
-  go-dicom convert patient.dcm --format json
-  go-dicom tag-doc --keyword PatientName
-  go-dicom codify patient.dcm --output create_patient.go
-  go-dicom help show
 
 Use 'go-dicom help <command>' for more information on a specific command.
 `)
@@ -140,7 +191,7 @@ func (hc *HelpCommand) displayCommandHelp(cmdName string) error {
 }
 
 func (hc *HelpCommand) helpShow() error {
-	fmt.Print(`COMMAND: show - Display DICOM file contents
+	hc.print(`COMMAND: show - Display DICOM file contents
 
 USAGE:
   go-dicom show <file> [options]
@@ -162,7 +213,7 @@ EXAMPLES:
 }
 
 func (hc *HelpCommand) helpInfo() error {
-	fmt.Print(`COMMAND: info - Show DICOM file metadata
+	hc.print(`COMMAND: info - Show DICOM file metadata
 
 USAGE:
   go-dicom info <file> [options]
@@ -184,7 +235,7 @@ EXAMPLES:
 }
 
 func (hc *HelpCommand) helpConvert() error {
-	fmt.Print(`COMMAND: convert - Convert DICOM to other formats
+	hc.print(`COMMAND: convert - Convert DICOM to other formats
 
 USAGE:
   go-dicom convert <file> --format <format> [options]
@@ -206,7 +257,7 @@ EXAMPLES:
 }
 
 func (hc *HelpCommand) helpTagDoc() error {
-	fmt.Print(`COMMAND: tag-doc - Generate tag documentation
+	hc.print(`COMMAND: tag-doc - Generate tag documentation
 
 USAGE:
   go-dicom tag-doc [options]
@@ -231,7 +282,7 @@ EXAMPLES:
 }
 
 func (hc *HelpCommand) helpCodify() error {
-	fmt.Print(`COMMAND: codify - Convert DICOM file to Go code
+	hc.print(`COMMAND: codify - Convert DICOM file to Go code
 
 USAGE:
   go-dicom codify <file> [options]
@@ -257,7 +308,7 @@ EXAMPLES:
 }
 
 func (hc *HelpCommand) helpVersion() error {
-	fmt.Print(`COMMAND: version - Display version information
+	hc.print(`COMMAND: version - Display version information
 
 USAGE:
   go-dicom version
@@ -272,7 +323,7 @@ EXAMPLES:
 }
 
 func (hc *HelpCommand) helpHelp() error {
-	fmt.Print(`COMMAND: help - Display help for commands
+	hc.print(`COMMAND: help - Display help for commands
 
 USAGE:
   go-dicom help [command]
