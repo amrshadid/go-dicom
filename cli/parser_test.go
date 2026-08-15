@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/tag"
@@ -173,12 +174,19 @@ func TestReadDICOMFileAcceptsRawDataset(t *testing.T) {
 
 // TestReadDICOMFileEmptyFile verifies an empty file yields no elements rather
 // than an error, since the CLI reports emptiness itself.
-func TestReadDICOMFileEmptyFile(t *testing.T) {
-	elements, err := readDICOMFile(writeTestFile(t, nil))
-	if err != nil {
-		t.Fatalf("readDICOMFile on an empty file: %v", err)
+// An empty file is refused rather than read as a data set with nothing in it.
+//
+// This used to require the opposite: no error, zero elements. That is what let every
+// file command accept any file at all — `show /etc/hosts` printed a header, a column
+// heading, no rows, and exited zero, and `show /dev/null` did the same without even a
+// warning. A mistyped filename is the common case and it looked like success.
+func TestReadDICOMFileRefusesAnEmptyFile(t *testing.T) {
+	_, err := readDICOMFile(writeTestFile(t, nil))
+	if err == nil {
+		t.Fatal("readDICOMFile accepted an empty file; a file with no elements in it " +
+			"is not a DICOM file and saying so is more use than an empty table")
 	}
-	if len(elements) != 0 {
-		t.Errorf("got %d elements from an empty file, want 0", len(elements))
+	if !strings.Contains(err.Error(), "does not look like a DICOM file") {
+		t.Errorf("the error does not explain what is wrong: %v", err)
 	}
 }

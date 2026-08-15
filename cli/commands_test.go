@@ -3,6 +3,10 @@ package cli
 import (
 	"errors"
 	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -476,5 +480,251 @@ func TestHelpNamesTheBinaryItWasInvokedAs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// fixture returns a DICOM file committed to this repository, for tests that need to
+// run a command against a real file.
+func fixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join("..", "dataset", "testdata", "pixellayout", "planar_bigendian.dcm")
+	if _, err := os.Stat(path); err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolving the fixture path: %v", err)
+	}
+	return abs
+}
+
+// convert must honor --format where the help says to put it.
+//
+// `convert in.dcm out.csv --format csv` wrote JSON. Go's flag package stops at the
+// first positional, so the flag was read as a positional and the format stayed at its
+// default. All three formats produced byte-identical files, exit zero, no warning.
+func TestConvertHonoursFormatAfterThePositionalArguments(t *testing.T) {
+	binary := buildCLI(t)
+	in := fixture(t)
+	dir := t.TempDir()
+
+	csv := filepath.Join(dir, "out.csv")
+	out, err := exec.Command(binary, "convert", in, csv, "--format", "csv").CombinedOutput()
+	if err != nil {
+		t.Fatalf("convert: %v\n%s", err, out)
+	}
+
+	body, err := os.ReadFile(csv)
+	if err != nil {
+		t.Fatalf("reading the output: %v", err)
+	}
+	if !strings.HasPrefix(string(body), "Tag,Name,VR") {
+		t.Errorf("--format csv did not produce CSV. First 80 bytes:\n%.80s\n\n"+
+			"If this starts with '{' the flag was ignored and JSON was written.", body)
+	}
+
+	// And the formats must actually differ, so that "it produced a file" is not
+	// mistaken for "it produced the right kind of file".
+	js := filepath.Join(dir, "out.json")
+	if out, err := exec.Command(binary, "convert", in, js, "--format", "json").CombinedOutput(); err != nil {
+		t.Fatalf("convert json: %v\n%s", err, out)
+	}
+	jsBody, err := os.ReadFile(js)
+	if err != nil {
+		t.Fatalf("reading the json: %v", err)
+	}
+	if string(jsBody) == string(body) {
+		t.Error("--format json and --format csv produced identical bytes")
+	}
+}
+
+// codify's output must be valid Go, and a package main must have a main function.
+//
+// It emitted `package main` with a dataset builder and nothing to call it, so the
+// default output of a command whose purpose is to produce runnable Go did not build:
+//
+//	runtime.main_main·f: function main is undeclared in the main package
+//
+// Parsed here rather than compiled: go/parser proves it is syntactically valid Go and
+// lets the declarations be inspected, without needing a module or the network.
+func TestCodifyGeneratesCompilableGo(t *testing.T) {
+	binary := buildCLI(t)
+	in := fixture(t)
+	dir := t.TempDir()
+	generated := filepath.Join(dir, "generated.go")
+
+	// --output after the positional, which is also the form the help documents.
+	if out, err := exec.Command(binary, "codify", in, "--output", generated).CombinedOutput(); err != nil {
+		t.Fatalf("codify: %v\n%s", err, out)
+	}
+
+	src, err := os.ReadFile(generated)
+	if err != nil {
+		t.Fatalf("codify wrote no file to --output: %v", err)
+	}
+
+	file, err := parser.ParseFile(token.NewFileSet(), "generated.go", src, parser.AllErrors)
+	if err != nil {
+		t.Fatalf("the generated Go does not parse: %v\n\n%s", err, src)
+	}
+
+	if file.Name.Name != "main" {
+		t.Fatalf("expected package main by default, got %q", file.Name.Name)
+	}
+
+	var hasMain bool
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+			hasMain = true
+		}
+	}
+	if !hasMain {
+		t.Error("the generated package main has no main function, so it cannot be " +
+			"built or run — which is the whole point of codify")
+	}
+}
+
+// tag-doc must document the tag it is given.
+//
+// The positional argument was read and discarded, so `tag-doc 0010,0010` printed the
+// first fifty dictionary entries and exited zero: an answer to a different question,
+// indistinguishable from success. Both the README and the command's own help show
+// that form.
+func TestTagDocDocumentsTheTagItIsGiven(t *testing.T) {
+	binary := buildCLI(t)
+
+	for _, form := range []string{"0010,0010", "(0010,0010)", "00100010"} {
+		out, err := exec.Command(binary, "tag-doc", form).CombinedOutput()
+		if err != nil {
+			t.Errorf("tag-doc %s: %v\n%s", form, err, out)
+			continue
+		}
+		text := string(out)
+		if !strings.Contains(text, "PatientName") {
+			t.Errorf("tag-doc %s did not document PatientName:\n%s", form, text)
+		}
+		if strings.Contains(text, "Dictionary Summary") || strings.Contains(text, "Dictionary\n=") {
+			t.Errorf("tag-doc %s listed the dictionary instead of the tag asked for", form)
+		}
+	}
+
+	// Junk must be refused rather than silently listing everything.
+	out, err := exec.Command(binary, "tag-doc", "not-a-tag").CombinedOutput()
+	if err == nil {
+		t.Errorf("tag-doc accepted junk as a tag:\n%s", out)
+	}
+}
+
+// A command that is asked to print something must not also write a file.
+//
+// tag-doc with no arguments created dicom_tags_text.txt in the working directory as a
+// side effect. One of those was committed to this repository by accident.
+func TestTagDocWritesNoFileUnlessAsked(t *testing.T) {
+	binary := buildCLI(t)
+	dir := t.TempDir()
+
+	cmd := exec.Command(binary, "tag-doc")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("tag-doc: %v\n%s", err, out)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading the working directory: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("tag-doc created %v without being asked to; listing goes to stdout "+
+			"unless -output names a file", names)
+	}
+}
+
+// A file that is not DICOM must be reported as such, not shown as an empty table.
+//
+// The reader is deliberately tolerant: it salvages what it can from a truncated or
+// malformed file, which is right for recovery. But it returns no error when there is
+// nothing to recover, so every file command accepted any file at all —
+//
+//	$ go-dicom show /etc/hosts
+//	=== DICOM File: /etc/hosts ===
+//	Tag          VR  Length  Value
+//	─────────────────────────────
+//	$ echo $?
+//	0
+//
+// — and /dev/null did the same without even a warning. A mistyped filename is the
+// common case and it looked exactly like success.
+func TestTheFileCommandsRejectFilesThatAreNotDicom(t *testing.T) {
+	binary := buildCLI(t)
+
+	notDicom := filepath.Join(t.TempDir(), "notdicom.txt")
+	if err := os.WriteFile(notDicom, []byte("this is not a DICOM file, not even close\n"), 0o644); err != nil {
+		t.Fatalf("writing the fixture: %v", err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.dcm")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatalf("writing the empty fixture: %v", err)
+	}
+
+	for _, path := range []string{notDicom, empty} {
+		for _, args := range [][]string{
+			{"show", path},
+			{"info", path},
+			{"codify", path},
+			{"convert", path, filepath.Join(t.TempDir(), "out.json")},
+		} {
+			out, err := exec.Command(binary, args...).CombinedOutput()
+			if err == nil {
+				t.Errorf("`%s %s` exited 0 on a file that is not DICOM:\n%s",
+					args[0], filepath.Base(path), out)
+				continue
+			}
+			if !strings.Contains(string(out), "does not look like a DICOM file") {
+				t.Errorf("`%s %s` failed but not with a useful reason:\n%s",
+					args[0], filepath.Base(path), out)
+			}
+		}
+	}
+
+	// And a real DICOM file must still be accepted, so this is not just refusing
+	// everything.
+	if out, err := exec.Command(binary, "show", fixture(t)).CombinedOutput(); err != nil {
+		t.Errorf("show rejected a real DICOM file: %v\n%s", err, out)
+	}
+}
+
+// No command may panic, whatever it is given. A panic prints a stack trace at a user
+// and exits 2, which is neither a diagnosis nor a clean failure.
+func TestNoCommandPanicsOnBadInput(t *testing.T) {
+	binary := buildCLI(t)
+	dir := t.TempDir()
+
+	junk := filepath.Join(dir, "junk.dcm")
+	if err := os.WriteFile(junk, []byte{0xFF, 0x00, 0x13, 0x37, 0xDE, 0xAD}, 0o644); err != nil {
+		t.Fatalf("writing junk: %v", err)
+	}
+
+	cases := [][]string{
+		{"show"}, {"info"}, {"convert"}, {"codify"}, {"tag-doc", "zzzz"},
+		{"show", "/nonexistent"}, {"info", "/nonexistent"}, {"codify", "/nonexistent"},
+		{"show", junk}, {"info", junk}, {"codify", junk},
+		{"convert", junk, filepath.Join(dir, "o.json")},
+		{"convert", fixture(t), filepath.Join(dir, "o.zzz"), "--format", "zzz"},
+		{"tag-doc", "9999,9999"},
+		{"findscu", "-level", "NOSUCHLEVEL", "127.0.0.1:1"},
+		{"echoscu", "127.0.0.1:1"},
+		{"storescu", "-aec", "X", "127.0.0.1:1", fixture(t)},
+	}
+
+	for _, args := range cases {
+		out, _ := exec.Command(binary, args...).CombinedOutput()
+		text := string(out)
+		if strings.Contains(text, "panic:") || strings.Contains(text, "goroutine 1 [running]") {
+			t.Errorf("`%s` panicked:\n%s", strings.Join(args, " "), text)
+		}
 	}
 }
