@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   test:
-    name: Test - Go ${{ matrix.go-version }}
+    name: Test - ${{ matrix.os }} - Go ${{ matrix.go-version }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -48,7 +48,7 @@ jobs:
           name: codecov-umbrella
 
   network-integration:
-    name: Network Integration Tests
+    name: Network Integration Tests - ${{ matrix.os }} - Go ${{ matrix.go-version }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

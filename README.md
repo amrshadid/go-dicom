@@ -8,6 +8,14 @@
 
 A comprehensive, high-performance Go library for reading, writing, manipulating, and **networking** DICOM (Digital Imaging and Communications in Medicine) data. The Go equivalent of Python's pydicom + pynetdicom.
 
+<p align="center">
+  <img src=".github/assets/demo.gif" alt="Reading a DICOM file, then standing up an archive, storing two studies into it with C-STORE, and querying them back with C-FIND — all from the CLI" width="100%">
+</p>
+
+<p align="center">
+  <em>Reading a file, then an archive that stores, indexes and answers queries — nothing staged, every command really runs.</em>
+</p>
+
 ## Overview
 
 go-dicom is designed for healthcare IT systems, medical imaging applications, PACS systems, and clinical data management. It provides:
@@ -21,7 +29,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** for file inspection, conversion, and network operations (echoscu, storescu, storescp, findscu, movescu)
+- **CLI tools** — 16 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), and the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`)
 
 ## Quick Start
 
@@ -209,13 +217,18 @@ if seq, err := ds.GetSequence(tag.New(0x0040, 0xA730)); err == nil {
 go build -o dicom .
 
 # === File Operations ===
-./dicom show patient.dcm          # Display DICOM file contents
-./dicom info patient.dcm           # Display file metadata
-./dicom convert patient.dcm out.json  # Convert to JSON
+./dicom show patient.dcm           # Every element, as stored
+./dicom info patient.dcm           # Key metadata and image dimensions
+./dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
+./dicom codify patient.dcm         # Go source that recreates the file
+./dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
 # Verification (ping a PACS)
 ./dicom echoscu pacs.hospital.com:11112
+
+# Answer verification requests
+./dicom echoscp -port 11112
 
 # Send DICOM files (.dcm, .ima, any DICOM format)
 ./dicom storescu -aec PACS pacs:11112 study/*.dcm
@@ -229,11 +242,19 @@ go build -o dicom .
 # Retrieve studies to a destination
 ./dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 
+# Retrieve on the same association, with no second server to run
+./dicom getscu -study 1.2.3.4 -output ./retrieved/ pacs:11112
+
 # Ask an archive to take responsibility for instances you have sent
 ./dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
 
-# Get help
+# A storage and query/retrieve archive in one command: stores what it is
+# sent, indexes it, and answers C-FIND, C-MOVE and C-GET against it
+./dicom qrscp -port 11112 -output ./archive/
+
+# Get help — `help <command>` works for every command above
 ./dicom -h
+./dicom help qrscp
 ```
 
 ## Architecture

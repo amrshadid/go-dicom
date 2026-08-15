@@ -213,3 +213,59 @@ func TestHelpListingMatchesRealCommands(t *testing.T) {
 		}
 	}
 }
+
+// The help command must be given the command registry.
+//
+// `help <name>` falls back to a command's own -h for anything it has no
+// hand-written page for. That fallback needs the registry, and nothing was passing
+// it: main registered a bare &HelpCommand{}, SetCommands was never called, and the
+// map stayed nil. The nine network commands each reported "unknown command
+// 'storescu'" while `storescu -h` printed a full page and the command ran.
+//
+// This checks the wiring rather than the output, because the network commands parse
+// flags with flag.ExitOnError — their -h calls os.Exit, so it cannot be invoked from
+// inside a test. TestHelpWorksForEveryCommand in the root package drives the built
+// binary and covers the behavior end to end.
+func TestTheHelpCommandIsGivenTheRegistry(t *testing.T) {
+	c := NewCLI("go-dicom", "test")
+	for _, cmd := range allCommands() {
+		c.RegisterCommand(cmd)
+	}
+
+	help, ok := c.Commands["help"].(*HelpCommand)
+	if !ok {
+		t.Fatal("the help command is not registered, so nothing here is being tested")
+	}
+
+	if help.allCommands == nil {
+		t.Fatal("the help command was never given the registry, so `help <name>` can " +
+			"only answer for commands with a hand-written page and reports every " +
+			"other one as unknown")
+	}
+
+	for name := range c.Commands {
+		if _, found := help.allCommands[name]; !found {
+			t.Errorf("the help command's registry is missing %q; `help %s` will report "+
+				"it as an unknown command", name, name)
+		}
+	}
+}
+
+// And help must still reject a name that is not a command, rather than the registry
+// fallback quietly succeeding on anything.
+func TestHelpStillRejectsAnUnknownCommand(t *testing.T) {
+	c := NewCLI("go-dicom", "test")
+	for _, cmd := range allCommands() {
+		c.RegisterCommand(cmd)
+	}
+
+	help := c.Commands["help"].(*HelpCommand)
+
+	err := help.displayCommandHelp("definitely-not-a-command")
+	if err == nil {
+		t.Error("help accepted a command that does not exist; the registry fallback " +
+			"must not turn every unknown name into a success")
+	} else if !strings.Contains(err.Error(), "definitely-not-a-command") {
+		t.Errorf("the error should name what was asked for, got: %v", err)
+	}
+}

@@ -7,9 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
-
 ## [1.5.0] - 2026-08-15
+
+### Fixed after the first tag
+
+Four fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All four were found by using the software rather than by testing it: three came
+out of building a demonstration recording of the CLI, and one out of auditing the
+CLI's own help against the commands it advertises.
+
+- **`help <command>` works for every command.** The top-level list advertised
+  sixteen commands and `help <name>` knew seven of them: each of the nine network
+  commands reported `unknown command 'storescu'`, while `storescu -h` printed a
+  full page of help and the command ran correctly. A user following the CLI's own
+  closing instruction — "Use 'go-dicom help <command>' for more information on a
+  specific command" — was told the command did not exist. Help for a command with
+  no hand-written page now comes from the command itself, so the two cannot drift
+  apart again.
+
+- **A bare TCP connect is no longer logged as an error.** Opening a connection and
+  closing it without sending a PDU — which is what every health check,
+  load-balancer probe and port scan does — arrived at the association read as an
+  EOF and was reported at error level. A server behind a load balancer produced a
+  steady stream of errors describing itself working correctly.
+
+- **Ordinary presentation context negotiation is no longer reported as a problem.**
+  Each refused context was logged at warning level, and a requestor proposing the
+  default set has around twenty while any server supports a subset — so every
+  association produced a handful of warnings, burying the refusals that matter.
+  An individual refusal is now debug; refusing *every* context, which leaves the
+  association established and useless, stays an error. Found by running the CLI for
+  a demonstration, where normal traffic looked like a fault.
+
+- **An association ending is no longer reported as an error.** A read timeout and
+  an EOF were both logged at error level, and both are how associations ordinarily
+  finish: a requestor that has done its work and gone leaves the server reading an
+  idle connection until the network timeout fires, and a requestor that exits
+  without releasing gives the server an EOF — which plenty of tools do. So every
+  completed query produced an error describing healthy traffic. A read that fails
+  for any other reason is still an error. Found the same way, in the same
+  demonstration.
+
+### Documentation
+
+- The README now opens with a recording of the CLI: reading a DICOM file, standing
+  up an archive, storing two studies into it and querying them back. Nothing in it
+  is staged — every command runs against a real archive that is empty when the
+  recording starts.
+
+- The README's command list covered eleven of the sixteen CLI commands. `codify`,
+  `echoscp`, `getscu`, `qrscp` and `tag-doc` were absent, so the only way to learn
+  they existed was to run the binary with no arguments.
+
+### The release as first tagged
 
 This release started as a pass over the documentation, checking each claim against
 the code. Ten defects came out of it, and the pattern in almost every one is the

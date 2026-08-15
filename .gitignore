@@ -280,3 +280,10 @@ Godeps/
 
 # Built CLI binary
 /dicom
+
+# Output written by running the CLI in the working copy. An instance received by
+# storescp or qrscp was committed once by accident, which put a DICOM file from an
+# interop test into the repository.
+/received/
+/archive/
+dicom_tags_text.txt

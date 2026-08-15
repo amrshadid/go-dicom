@@ -122,6 +122,19 @@ func (hc *HelpCommand) displayCommandHelp(cmdName string) error {
 	case "help":
 		return hc.helpHelp()
 	default:
+		// Delegated to the command's own -h rather than hand-written here.
+		//
+		// This switch listed only the file commands, so `help storescu` reported
+		// that storescu did not exist — while `storescu -h` printed a full page of
+		// help and the top-level command list advertised it. Nine of the sixteen
+		// commands were in that state: every network one.
+		//
+		// Writing nine more cases would have fixed the symptom and left the cause,
+		// which is that a command's help lives in two places and only one of them
+		// is exercised when the command is used.
+		if cmd, ok := hc.allCommands[cmdName]; ok {
+			return cmd.Execute([]string{"-h"})
+		}
 		return fmt.Errorf("help: unknown command '%s'", cmdName)
 	}
 }

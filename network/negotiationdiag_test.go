@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,7 +111,11 @@ func TestStoreExplainsAnAbstractSyntaxRefusal(t *testing.T) {
 // had no way to see why a modality kept failing.
 func TestAnSCPReportsRefusingEveryContext(t *testing.T) {
 	logged := withConfigLogger(t, slog.LevelDebug)
-	withDefaultLoggerLevel(t, LogLevelWarn)
+
+	// Debug, because an individual refusal is what ordinary negotiation looks
+	// like: a requestor proposes broadly and a server accepts what it supports.
+	// Only refusing every context is a warning, and this asserts both.
+	withDefaultLoggerLevel(t, LogLevelDebug)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -243,17 +248,40 @@ func serveSCP(ctx context.Context, t *testing.T, scp *SCP) string {
 		t.Fatalf("Listen: %v", err)
 	}
 
+	// The connection goroutines are waited for, not just abandoned when the
+	// listener closes.
+	//
+	// Without this they outlive the test, and a test that swapped config.Logger for
+	// a buffer restores it in its own cleanup — so a handler still running raced the
+	// restore, reading the logger as it was being written. Detected under -race on
+	// CI rather than locally, because it needs the handler to still be logging at
+	// the moment the test ends.
+	//
+	// Cleanup runs last-in-first-out, and withConfigLogger is called before this,
+	// so its restore happens after this wait returns. The test's own `defer cancel()`
+	// runs before either, which is what unblocks the reads.
+	var wg sync.WaitGroup
+
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			transport, acceptErr := ln.Accept(ctx)
 			if acceptErr != nil {
 				return
 			}
-			go scp.handleConnection(ctx, transport)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				scp.handleConnection(ctx, transport)
+			}()
 		}
 	}()
 
-	t.Cleanup(func() { _ = ln.Close() })
+	t.Cleanup(func() {
+		_ = ln.Close()
+		wg.Wait()
+	})
 	return ln.Addr().String()
 }
 
@@ -314,5 +342,110 @@ func TestTheAdviceInTheErrorActuallyWorks(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("the C-STORE reported success but the handler never ran")
+	}
+}
+
+// An ordinary association refuses several contexts — an SCU proposing the default
+// set has around twenty and any server supports a subset — so refusals must not be
+// warnings. Reporting each as one meant every association produced a handful,
+// burying the refusals that matter.
+func TestOrdinaryNegotiationIsNotReportedAsAProblem(t *testing.T) {
+	logged := withConfigLogger(t, slog.LevelDebug)
+	withDefaultLoggerLevel(t, LogLevelWarn) // the default: warnings and errors only
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// A server that supports verification and CT only, as a real one supports a
+	// subset of what a requestor offers.
+	scp := NewSCP(SCPConfig{AETitle: "SUBSET", BindAddress: "127.0.0.1"})
+	scp.SetHandler(&EchoHandler{})
+	scp.SetSupportedAbstractSyntaxes([]string{VerificationSOPClassUID, CTImageStorageUID})
+
+	addr := serveSCP(ctx, t, scp)
+
+	scu := NewSCU(SCUConfig{CallingAE: "SCU", CalledAE: "SUBSET", Address: addr})
+	if err := scu.Associate(ctx, nil); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+
+	// The association is usable — verification was accepted — so nothing about it
+	// is a problem worth a warning.
+	if err := scu.Echo(ctx); err != nil {
+		t.Fatalf("Echo: %v", err)
+	}
+	_ = scu.Release(ctx)
+
+	if got := logged.String(); got != "" {
+		t.Errorf("an ordinary association reported %d characters at warning level or above; "+
+			"refusing contexts a requestor speculatively proposed is not a problem:\n%s",
+			len(got), got)
+	}
+}
+
+// A requestor that finishes its work and goes leaves the server reading an idle
+// connection until the network timeout fires, and a requestor that exits without
+// releasing gives the server an EOF. Both are how associations ordinarily end, and
+// both were logged at error level — so a completed query produced an error
+// describing healthy traffic, and an archive's logs filled with them.
+func TestAnAssociationEndingIsNotAnError(t *testing.T) {
+	cases := []struct {
+		name  string
+		close func(t *testing.T, scu *SCU, ctx context.Context)
+	}{
+		{
+			name: "the requestor releases",
+			close: func(t *testing.T, scu *SCU, ctx context.Context) {
+				if err := scu.Release(ctx); err != nil {
+					t.Errorf("Release: %v", err)
+				}
+			},
+		},
+		{
+			// No release: the peer simply goes. Plenty of tools exit rather than
+			// releasing, and there is nothing the server can do about it.
+			name: "the requestor vanishes without releasing",
+			close: func(t *testing.T, scu *SCU, _ context.Context) {
+				if assoc := scu.Association(); assoc != nil {
+					_ = assoc.transport.Close()
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logged := withConfigLogger(t, slog.LevelDebug)
+			withDefaultLoggerLevel(t, LogLevelWarn) // the default
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			scp := NewSCP(SCPConfig{AETitle: "QUIETSCP", BindAddress: "127.0.0.1"})
+			scp.SetHandler(&EchoHandler{})
+			scp.SetSupportedAbstractSyntaxes([]string{VerificationSOPClassUID})
+
+			addr := serveSCP(ctx, t, scp)
+
+			scu := NewSCU(SCUConfig{CallingAE: "SCU", CalledAE: "QUIETSCP", Address: addr})
+			if err := scu.Associate(ctx, VerificationPresentationContexts()); err != nil {
+				t.Fatalf("Associate: %v", err)
+			}
+			if err := scu.Echo(ctx); err != nil {
+				t.Fatalf("Echo: %v", err)
+			}
+
+			tc.close(t, scu, ctx)
+
+			// Give the server a moment to notice and report.
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) && logged.Len() == 0 {
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			if got := logged.String(); got != "" {
+				t.Errorf("a completed association reported at warning level or above:\n%s", got)
+			}
+		})
 	}
 }

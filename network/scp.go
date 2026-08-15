@@ -193,6 +193,15 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	// Read the A-ASSOCIATE-RQ
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
+		// A connection that opens and closes without sending a PDU is not a fault.
+		// Every TCP health check, load-balancer probe and port scan does exactly
+		// that, and each one was logging an error describing a working server: a
+		// bare connect-and-close arrives here as EOF on the PDU header.
+		if endedNormally(err) {
+			DefaultLogger.Debug("connection from %s closed before an association was requested: %v",
+				transport.RemoteAddr(), err)
+			return
+		}
 		DefaultLogger.Error("failed to read association request: %v", err)
 		return
 	}
@@ -251,11 +260,9 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 		// Receive a PDU (could be command data or release/abort)
 		ctxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
 		if err != nil {
-			// Check if it's a normal release
-			if assocErr, ok := err.(*AssociationError); ok {
-				if assocErr.Code == "RELEASED" || assocErr.Code == "ABORTED" {
-					return
-				}
+			if endedNormally(err) {
+				DefaultLogger.Debug("association with %s ended: %v", assoc.CallingAE(), err)
+				return
 			}
 			DefaultLogger.Error("error receiving data: %v", err)
 			return
