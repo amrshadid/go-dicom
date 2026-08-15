@@ -64,8 +64,18 @@ var netDescriptions = map[string]string{
 }
 
 // RegisterCommand adds a command to the CLI.
+//
+// The help command is handed the registry as it grows, so that `help <name>` can
+// fall back to a command's own -h output. Propagating on every registration keeps
+// it independent of the order main registers things in: help is registered
+// part-way through the list, and wiring it only at its own registration would
+// leave out everything after it.
 func (c *CLI) RegisterCommand(cmd Command) {
 	c.Commands[cmd.Name()] = cmd
+
+	if help, ok := c.Commands["help"].(*HelpCommand); ok {
+		help.SetCommands(c.Commands)
+	}
 }
 
 // Run executes a command based on arguments.

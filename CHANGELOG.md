@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-15
+
+Four fixes, all found by using the software rather than by testing it: three came
+out of building a demonstration recording, and one out of auditing the CLI's own
+help against the commands it advertises.
+
 ### Fixed
+
+- **`help <command>` works for every command.** The top-level list advertised
+  sixteen commands and `help <name>` knew seven of them: each of the nine network
+  commands reported `unknown command 'storescu'`, while `storescu -h` printed a
+  full page of help and the command ran correctly. A user following the CLI's own
+  closing instruction — "Use 'go-dicom help <command>' for more information on a
+  specific command" — was told the command did not exist. Help for a command with
+  no hand-written page now comes from the command itself, so the two cannot drift
+  apart again.
+
+- **A bare TCP connect is no longer logged as an error.** Opening a connection and
+  closing it without sending a PDU — which is what every health check,
+  load-balancer probe and port scan does — arrived at the association read as an
+  EOF and was reported at error level. A server behind a load balancer produced a
+  steady stream of errors describing itself working correctly.
 
 - **Ordinary presentation context negotiation is no longer reported as a problem.**
   Each refused context was logged at warning level, and a requestor proposing the
@@ -25,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   completed query produced an error describing healthy traffic. A read that fails
   for any other reason is still an error. Found the same way, in the same
   demonstration.
+
+### Documentation
+
+- The README now opens with a recording of the CLI: reading a DICOM file, standing
+  up an archive, storing two studies into it and querying them back. Nothing in it
+  is staged — every command runs against a real archive that is empty when the
+  recording starts.
+
+- The README's command list covered eleven of the sixteen CLI commands. `codify`,
+  `echoscp`, `getscu`, `qrscp` and `tag-doc` were absent, so the only way to learn
+  they existed was to run the binary with no arguments.
 
 ## [1.5.0] - 2026-08-15
 
@@ -1087,7 +1119,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0

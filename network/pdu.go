@@ -67,7 +67,7 @@ const DefaultImplementationClassUID = "1.2.826.0.1.3680043.10.511"
 
 // DefaultImplementationVersionName identifies this implementation to peers in
 // the A-ASSOCIATE User Information item. Limited to 16 characters by PS3.7 D.3.3.2.
-const DefaultImplementationVersionName = "GO-DICOM-1.5.0"
+const DefaultImplementationVersionName = "GO-DICOM-1.5.1"
 
 // PDU is the interface for all Protocol Data Units.
 type PDU interface {
