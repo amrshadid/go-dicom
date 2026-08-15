@@ -11,10 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed after the first tag
 
-Four fixes landed after v1.5.0 was first tagged, and the tag was moved to include
-them. All four were found by using the software rather than by testing it: three came
-out of building a demonstration recording of the CLI, and one out of auditing the
-CLI's own help against the commands it advertises.
+Five fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All five were found by using the software rather than by testing it: three came
+out of building a demonstration recording of the CLI, one out of auditing the CLI's
+own help against the commands it advertises, and one out of rendering that help as a
+cover image for the recording.
+
+- **`go-dicom help` lists every command.** It printed seven — the file commands —
+  while the bare binary printed all sixteen grouped by category, because
+  `displayMainHelp` kept a third copy of the list with its own descriptions. So the
+  nine network commands, which are most of what the tool does, were absent from the
+  listing a user reaches by typing `help`. Both listings now come from one place and
+  print identically. Found by rendering `dicom help` as a cover image and counting
+  the commands on it.
 
 - **`help <command>` works for every command.** The top-level list advertised
   sixteen commands and `help <name>` knew seven of them: each of the nine network

@@ -3,12 +3,17 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"sort"
 )
 
 // HelpCommand displays help for available commands.
 type HelpCommand struct {
 	subcommand  string
 	allCommands map[string]Command
+
+	// showMainHelp renders the CLI's own top-level help. Set by RegisterCommand, so
+	// that `help` with no argument and the bare binary print the same thing.
+	showMainHelp func()
 }
 
 // NewHelpCommand creates a new help command.
@@ -58,8 +63,32 @@ func (hc *HelpCommand) SetCommands(commands map[string]Command) {
 	hc.allCommands = commands
 }
 
+// SetMainHelp supplies the CLI's own top-level help renderer, so that
+// `go-dicom help` prints exactly what `go-dicom` prints.
+func (hc *HelpCommand) SetMainHelp(show func()) {
+	hc.showMainHelp = show
+}
+
 // displayMainHelp displays main help message
 func (hc *HelpCommand) displayMainHelp() error {
+	// Delegated to the CLI's own help, so that `go-dicom help` and `go-dicom` with no
+	// arguments cannot disagree.
+	//
+	// They did. This function kept a third copy of the command list — seven file
+	// commands with their own descriptions — while the CLI's own listing had all
+	// sixteen grouped by category. So `go-dicom help` simply did not mention any of
+	// the nine network commands, which are most of what the tool is for.
+	//
+	// Found by rendering `dicom help` as a cover image and counting the commands on
+	// it. The audit that caught the same bug in `help <command>` had checked each
+	// command individually and never compared this listing against the real one.
+	if hc.showMainHelp != nil {
+		hc.showMainHelp()
+		return nil
+	}
+
+	// Standalone, with no CLI attached: still derived from the registry rather than
+	// restated, so it can be incomplete but not wrong.
 	fmt.Println(`Go DICOM Command Line Interface
 
 USAGE:
@@ -67,36 +96,20 @@ USAGE:
 
 COMMANDS:`)
 
-	// Display all commands
-	commands := []string{"show", "info", "convert", "tag-doc", "codify", "help", "version"}
-	descriptions := map[string]string{
-		"show":    "Display DICOM file contents",
-		"info":    "Show DICOM file metadata and information",
-		"convert": "Convert DICOM files to other formats (JSON, CSV, NIfTI)",
-		"tag-doc": "Generate documentation for DICOM tags",
-		"codify":  "Read a DICOM file and produce Go code to create it",
-		"help":    "Display help for commands",
-		"version": "Display version information",
+	names := make([]string, 0, len(hc.allCommands))
+	for name := range hc.allCommands {
+		names = append(names, name)
 	}
+	sort.Strings(names)
 
-	for _, cmd := range commands {
-		if desc, ok := descriptions[cmd]; ok {
-			fmt.Printf("  %-12s %s\n", cmd, desc)
-		}
+	for _, name := range names {
+		fmt.Printf("  %-12s %s\n", name, hc.allCommands[name].Description())
 	}
 
 	fmt.Print(`
 OPTIONS:
   -h, --help      Show help message
   -v, --version   Show version information
-
-EXAMPLES:
-  go-dicom show patient.dcm
-  go-dicom info patient.dcm --verbose
-  go-dicom convert patient.dcm --format json
-  go-dicom tag-doc --keyword PatientName
-  go-dicom codify patient.dcm --output create_patient.go
-  go-dicom help show
 
 Use 'go-dicom help <command>' for more information on a specific command.
 `)

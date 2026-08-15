@@ -111,3 +111,45 @@ func TestHelpRejectsAnUnknownCommandEndToEnd(t *testing.T) {
 		t.Errorf("the error should name what was asked for, got:\n%s", out)
 	}
 }
+
+// `go-dicom help` and `go-dicom` with no arguments must print the same thing.
+//
+// They did not. displayMainHelp kept its own copy of the command list — seven file
+// commands with their own descriptions — while the CLI's listing had all sixteen
+// grouped by category. So `go-dicom help` never mentioned any of the nine network
+// commands, which are most of what the tool does.
+//
+// This is the third place the command list was duplicated, and the second bug from
+// it. TestHelpWorksForEveryCommand did not catch this one: it asked for help on each
+// command by name and never compared the two listings, so the listing that omitted
+// nine commands looked fine from every angle it checked.
+func TestTheTwoTopLevelHelpListingsAgree(t *testing.T) {
+	binary := buildCLI(t)
+
+	bare, err := exec.Command(binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running with no arguments: %v\n%s", err, bare)
+	}
+	viaHelp, err := exec.Command(binary, "help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("`help`: %v\n%s", err, viaHelp)
+	}
+
+	if string(bare) != string(viaHelp) {
+		t.Errorf("`go-dicom` and `go-dicom help` print different things.\n\n"+
+			"bare:\n%s\nvia help:\n%s\n\n"+
+			"Both answer the same question and must not be maintained separately.",
+			bare, viaHelp)
+	}
+
+	// And the listing has to be complete, so that agreeing on a short list is not a
+	// way to pass this.
+	for _, name := range advertisedCommands(t, binary) {
+		if !strings.Contains(string(viaHelp), name) {
+			t.Errorf("`help` does not list %q", name)
+		}
+	}
+	if n := len(advertisedCommands(t, binary)); n < 16 {
+		t.Errorf("only %d commands are listed; the CLI has 16", n)
+	}
+}
