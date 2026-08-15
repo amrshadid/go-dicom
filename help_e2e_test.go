@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -16,7 +18,15 @@ import (
 func buildCLI(t *testing.T) string {
 	t.Helper()
 
-	binary := filepath.Join(t.TempDir(), "dicom")
+	// The .exe matters: without it the build succeeds and every exec of the result
+	// fails with "executable file not found in %PATH%", because Windows decides what
+	// is runnable from the extension. Caught on the windows-latest runner.
+	name := "dicom"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+
+	binary := filepath.Join(t.TempDir(), name)
 	build := exec.Command("go", "build", "-o", binary, ".")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
@@ -88,8 +98,14 @@ func TestHelpRejectsAnUnknownCommandEndToEnd(t *testing.T) {
 	binary := buildCLI(t)
 
 	out, err := exec.Command(binary, "help", "nosuchcommand").CombinedOutput()
-	if err == nil {
-		t.Errorf("`help nosuchcommand` exited 0; a typo must not look like success:\n%s", out)
+
+	// A non-zero exit is not enough on its own: a binary that cannot start also
+	// gives one, with no output, and this test used to read that as success. On
+	// Windows, where the missing .exe meant nothing ran at all, it passed for that
+	// reason. So require that the process actually ran and then exited non-zero.
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("`help nosuchcommand` did not run to a normal exit: %v\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "nosuchcommand") {
 		t.Errorf("the error should name what was asked for, got:\n%s", out)
