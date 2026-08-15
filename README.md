@@ -35,9 +35,83 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 
 ### Installation
 
+**As a library:**
+
 ```bash
 go get github.com/amrshadid/go-dicom
 ```
+
+**As a CLI** — a single static binary, no CGO, nothing to install alongside it.
+
+The script works out which build suits your machine, verifies it against the
+checksums published with the release, and puts it somewhere already on your `PATH`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh | sh
+```
+
+It is worth reading before piping anything to a shell — it is about a hundred lines:
+[`install.sh`](./install.sh). To run it separately, or to choose where it lands:
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
+less install.sh
+sh install.sh                          # the latest release
+sh install.sh v1.5.0                   # a specific one
+PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
+```
+
+<details>
+<summary>Or download it yourself</summary>
+
+Pick your platform from the [latest release](https://github.com/amrshadid/go-dicom/releases/latest):
+
+| Platform | File |
+|---|---|
+| macOS, Apple Silicon | `dicom-macos-arm64` |
+| macOS, Intel | `dicom-macos-amd64` |
+| Linux, x86-64 | `dicom-linux-amd64` |
+| Linux, ARM64 | `dicom-linux-arm64` |
+| Windows, x86-64 | `dicom-windows-amd64.exe` |
+
+Then, on macOS or Linux:
+
+```bash
+# Verify it before you run it. SHA256SUMS is published with the release.
+shasum -a 256 -c --ignore-missing SHA256SUMS     # sha256sum -c on Linux
+
+mkdir -p ~/.local/bin
+install -m 755 dicom-macos-arm64 ~/.local/bin/dicom
+dicom help
+```
+
+If you downloaded through a browser rather than with `curl`, macOS attaches a
+quarantine flag and Gatekeeper will refuse to run the binary. Clear it with:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/dicom
+```
+
+On Windows, put `dicom-windows-amd64.exe` in a directory on your `PATH`.
+
+</details>
+
+<details>
+<summary>Or build it from source</summary>
+
+```bash
+git clone https://github.com/amrshadid/go-dicom
+cd go-dicom
+make build        # stamps the version; ./dicom version confirms it
+```
+
+`go install github.com/amrshadid/go-dicom@latest` also works and builds from source.
+Note that it resolves through the Go module proxy, which serves each version exactly
+as it was first published — so for a release whose tag was later moved, the binaries
+attached to the release and a `go install` of that version are not the same build.
+`make build` from a clone always matches the source you have.
+
+</details>
 
 ### DICOM Networking (SCU Client)
 
