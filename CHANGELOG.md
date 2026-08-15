@@ -11,11 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed after the first tag
 
-Twelve fixes landed after v1.5.0 was first tagged, and the tag was moved to include
-them. All twelve were found by using the software rather than by testing it: three came
+Thirteen fixes landed after v1.5.0 was first tagged, and the tag was moved to include
+them. All thirteen were found by using the software rather than by testing it: three came
 out of building a demonstration recording of the CLI, one out of auditing the CLI's
 own help against the commands it advertises, and one out of rendering that help as a
 cover image for the recording.
+
+- **A group length is no longer reported as an unknown tag.** Every DICOM group may
+  carry a group length element, `(gggg,0000)`, and the dictionary enumerates only the
+  two with names of their own — so validating an ordinary file warned once per group:
+
+  ```
+  level=WARN msg="dataset: semantic validation" tag=(0008,0000)
+     err="unknown standard tag: (0008,0000)"
+  ```
+
+  Six lines for a file with nothing wrong with it. Found by storing a file from the
+  test corpus rather than one generated here: the fixtures this project generates carry
+  no group lengths, which is why twelve earlier rounds of hunting log noise missed it.
 
 - **The version is reported consistently however the binary was built.** The source
   declares `1.5.0`; the release workflow stamps the git tag, which is `v1.5.0`. So a
