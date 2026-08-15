@@ -47,7 +47,8 @@ func (cc *ConvertCommand) Execute(args []string) error {
 	fs := flag.NewFlagSet("convert", flag.ContinueOnError)
 	cc.AddFlags(fs)
 
-	if err := fs.Parse(args); err != nil {
+	positional, err := ParseArgs(fs, args)
+	if err != nil {
 		return fmt.Errorf("convert: failed to parse flags: %v", err)
 	}
 
@@ -57,7 +58,7 @@ func (cc *ConvertCommand) Execute(args []string) error {
 		return nil
 	}
 
-	remainingArgs := fs.Args()
+	remainingArgs := positional
 	if len(remainingArgs) < 2 {
 		return fmt.Errorf("convert: missing arguments (input output)\nRun 'go-dicom convert -h' for usage")
 	}
