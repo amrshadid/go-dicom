@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/amrshadid/go-dicom/charset"
 	"github.com/amrshadid/go-dicom/compress"
@@ -560,7 +561,9 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 
 // warn records a non-fatal problem found while reading the data set.
 func (dfr *DCMFileReader) warn(format string, args ...any) {
-	dfr.metaWarnings = append(dfr.metaWarnings, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	dfr.metaWarnings = append(dfr.metaWarnings, msg)
+	config.Logger.Warn("filereader: data set warning", "detail", msg)
 }
 
 // streamSizeOnce returns the total size of the underlying stream, measuring it
@@ -592,6 +595,31 @@ func (dfr *DCMFileReader) streamSizeOnce() (int64, error) {
 
 	dfr.streamSize = end
 	return end, nil
+}
+
+// itemBodyRemaining is how many bytes of an item body may still be read:
+// the rest of a defined-length sequence, capped by the rest of the stream.
+// -1 means the bound is not known (undefined-length sequence and unseekable).
+func (dfr *DCMFileReader) itemBodyRemaining(seqUndefined bool, seqStart int64, seqLength uint32) int64 {
+	var remain int64 = -1
+	if !seqUndefined {
+		remain = int64(seqLength) - (dfr.position - seqStart)
+		if remain < 0 {
+			remain = 0
+		}
+	}
+	size, err := dfr.streamSizeOnce()
+	if err != nil {
+		return remain
+	}
+	streamRemain := size - dfr.position
+	if streamRemain < 0 {
+		streamRemain = 0
+	}
+	if remain < 0 || streamRemain < remain {
+		return streamRemain
+	}
+	return remain
 }
 
 // readSequenceItems reads the items of a Sequence (SQ) element. A declared
@@ -629,15 +657,38 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 			// Where the item tag started, which is 8 bytes back: 4 for the tag
 			// and 4 for the length that readItemHeader has already consumed.
 			itemStart := dfr.position - 8
-			item, err := dfr.readSequenceItem(explicitVR, depth, marker.length)
+			itemLen := marker.length
+			if itemLen != UndefinedLength {
+				// A defined-length item whose declared body runs past the
+				// enclosing sequence (or the stream) still holds complete
+				// elements in the bytes that are present. Clamp to what
+				// remains so those elements are kept, instead of dropping
+				// the item because its length field is a few bytes too long.
+				// pydicom's DICOMDIR-nooffset is this: the last directory
+				// record claims 24 bytes past the sequence, every element
+				// inside it is complete, and discarding it loses an IMAGE.
+				//
+				// remain == 0 is different: the item header sits exactly at
+				// the sequence's end, so a clamp would keep an empty item
+				// that is not in the file. Warn and stop without recording it.
+				remain := dfr.itemBodyRemaining(undefined, start, declaredLength)
+				if remain == 0 {
+					dfr.warn("sequence item header at end of sequence; stopping without an empty item")
+					return items, nil
+				}
+				if remain > 0 && int64(itemLen) > remain {
+					dfr.warn("sequence item declared length %d overruns remaining %d bytes; keeping the complete elements that are present",
+						itemLen, remain)
+					itemLen = uint32(remain)
+				}
+			}
+			item, err := dfr.readSequenceItem(explicitVR, depth, itemLen)
 			if err != nil {
 				// A file cut short loses its last item, not the sequence. The
 				// items already read are complete and were parsed from bytes
 				// that are all there; discarding them because the next one is
 				// short throws away good data to punish a defect it had no part
-				// in. pydicom's DICOMDIR-nooffset ends 24 bytes into its last
-				// directory record, and dropping the sequence loses the other
-				// 51 records with it.
+				// in.
 				//
 				// Only for truncation. Any other error means the bytes did not
 				// mean what they claimed, and continuing past that would build
@@ -977,7 +1028,18 @@ type DICOMFile struct {
 // GetDataset converts the parsed file into a Dataset, recursively materializing
 // any nested sequences as sequence.Sequence values holding child Datasets.
 func (df *DICOMFile) GetDataset() *dataset.Dataset {
-	ds := elementsToDataset(df.DataElements, nil)
+	// Character set decisions are recorded on the file, not only logged: a
+	// caller writing the data set back is the one who needs to know a guess was
+	// made. GetDataset may be called more than once, so each is recorded once.
+	ds := elementsToDataset(df.DataElements, nil, func(warning string) {
+		for _, existing := range df.Warnings {
+			if existing == warning {
+				return
+			}
+		}
+		config.Logger.Warn("filereader: " + warning)
+		df.Warnings = append(df.Warnings, warning)
+	})
 
 	// The transfer syntax lives in the file meta header, which is not part of
 	// the data set. Carrying it across is what lets pixel access know whether
@@ -995,34 +1057,91 @@ func (df *DICOMFile) GetDataset() *dataset.Dataset {
 // item may override: PS3.5 allows Specific Character Set inside a sequence item,
 // and it applies to that item and anything below it. Passing nil at the top
 // level means "read it from these elements".
-func elementsToDataset(elements []*DataElementValue, inherited []string) *dataset.Dataset {
+//
+// warn records a decision the caller should know about; it may be nil.
+func elementsToDataset(elements []*DataElementValue, inherited []string, warn func(string)) *dataset.Dataset {
 	ds := dataset.NewDataset()
 
-	encodings := inherited
-	if declared := specificCharacterSetOf(elements); declared != nil {
-		encodings = declared
+	encodings, fellBack := encodingsFor(elements, inherited)
+
+	// Decode first, decide afterwards. Whether this data set may declare UTF-8
+	// depends on how the values came out, and the declaration has to be written
+	// in tag order, before the values it describes.
+	type decodedElement struct {
+		elem  *DataElementValue
+		value []byte
+	}
+	decoded := make([]decodedElement, 0, len(elements))
+	guessed, allUTF8 := false, true
+	for _, elem := range elements {
+		if elem.Items != nil || isSequenceVR(elem.VR) || elem.Tag == specificCharacterSetTag {
+			decoded = append(decoded, decodedElement{elem, elem.Value})
+			continue
+		}
+		value := decodeTextValue(dataelem.VR(elem.VR), elem.Value, encodings)
+		if dataelem.IsTextVR(dataelem.VR(elem.VR)) {
+			if fellBack && !isASCII(elem.Value) {
+				// Latin-1 is a guess: the file did not say, or named something
+				// this build does not know, and another single-byte set is
+				// possible. The caller is told rather than left to notice.
+				guessed = true
+			}
+			if !utf8.Valid(value) {
+				allUTF8 = false
+			}
+		}
+		decoded = append(decoded, decodedElement{elem, value})
 	}
 
-	for _, elem := range elements {
-		if elem.Items != nil || isSequenceVR(elem.VR) {
+	if guessed && warn != nil {
+		warn("text with no usable Specific Character Set (0008,0005) was decoded as ISO-8859-1, " +
+			"which is a guess; the default repertoire is ASCII (PS3.5 6.1.2.3)")
+	}
+	// Reached when a decoder returns an error and decodeTextValue keeps the
+	// bytes as they were found. The decoders here substitute U+FFFD for input
+	// they cannot map, so this is insurance rather than a path a corpus file
+	// takes today — and it is the difference between a data set that is wrong
+	// and one that lies about being right.
+	if !allUTF8 && warn != nil {
+		warn("keeping the declared Specific Character Set (0008,0005): some text did not decode, " +
+			"so the data set cannot claim ISO_IR 192 over it")
+	}
+
+	// A declaration is added when text was converted and the file had none.
+	// Without it, writing the data set back produces UTF-8 bytes that a reader
+	// decodes as the default repertoire — the same corruption, one file later.
+	addDeclaration := guessed && allUTF8 && !hasSpecificCharacterSet(elements)
+
+	for _, d := range decoded {
+		if addDeclaration && d.elem.Tag > specificCharacterSetTag {
+			_ = ds.Add(dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
+				[]byte(utf8CharacterSet)))
+			addDeclaration = false
+		}
+
+		if d.elem.Items != nil || isSequenceVR(d.elem.VR) {
 			seq := sequence.New()
-			for _, item := range elem.Items {
-				_ = seq.Append(elementsToDataset(item.Elements, encodings))
+			for _, item := range d.elem.Items {
+				_ = seq.Append(elementsToDataset(item.Elements, encodings, warn))
 			}
-			_ = ds.AddSequence(elem.Tag, seq)
+			_ = ds.AddSequence(d.elem.Tag, seq)
 			continue
 		}
 
-		value := elem.Value
-		if elem.Tag == specificCharacterSetTag {
+		value := d.value
+		if d.elem.Tag == specificCharacterSetTag && allUTF8 {
 			// The values below are UTF-8 now, so the attribute has to say so or
 			// the data set contradicts itself — and anything writing it back out
-			// would label UTF-8 bytes as something else.
+			// would label UTF-8 bytes as something else. Only when they really
+			// are UTF-8: this used to be unconditional, so a file whose text did
+			// not decode was labeled ISO_IR 192 over the bytes it came with.
 			value = []byte(utf8CharacterSet)
-		} else {
-			value = decodeTextValue(dataelem.VR(elem.VR), value, encodings)
 		}
-		_ = ds.Add(dataelem.NewDataElement(elem.Tag, dataelem.VR(elem.VR), value))
+		_ = ds.Add(dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), value))
+	}
+	if addDeclaration {
+		_ = ds.Add(dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
+			[]byte(utf8CharacterSet)))
 	}
 
 	return ds
@@ -1035,28 +1154,72 @@ const specificCharacterSetTag = tag.Tag(0x00080005)
 // declares.
 const utf8CharacterSet = "ISO_IR 192"
 
-// specificCharacterSetOf reads (0008,0005) from a flat element list, or nil when
-// it is absent.
-func specificCharacterSetOf(elements []*DataElementValue) []string {
+// isASCII reports whether every byte is in the default repertoire, which needs
+// no decoding whatever the declaration says.
+func isASCII(value []byte) bool {
+	for _, b := range value {
+		if b > 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
+// hasSpecificCharacterSet reports whether (0008,0005) is present at all.
+func hasSpecificCharacterSet(elements []*DataElementValue) bool {
+	for _, elem := range elements {
+		if elem.Tag == specificCharacterSetTag {
+			return true
+		}
+	}
+	return false
+}
+
+// encodingsFor settles the character set for a data set, and reports whether it
+// is a fallback rather than what the file asked for.
+//
+// PS3.5 6.1.2.3: an absent or empty Specific Character Set means the default
+// repertoire, which is ASCII. Files holding Latin-1 names under no declaration
+// are common from older equipment, and pydicom decodes them with iso8859 and
+// warns. Doing the same rescues the names; leaving the bytes alone and then
+// declaring ISO_IR 192 over them, which is what happened before, destroyed them
+// on the next write.
+func encodingsFor(elements []*DataElementValue, inherited []string) (encodings []string, fellBack bool) {
 	for _, elem := range elements {
 		if elem.Tag != specificCharacterSetTag {
 			continue
 		}
-		if strings.TrimSpace(string(elem.Value)) == "" {
-			return nil
-		}
-		// DecodeBytes works in Go's encoding names; the file names them the way
-		// DICOM does. Passing the DICOM name straight through finds no decoder,
-		// and the failure is silent — the bytes come back unchanged, which reads
-		// as "this text needed no decoding" rather than as an error.
 		declared := parseSpecificCharacterSetValue(strings.TrimSpace(string(elem.Value)))
-		converted, err := charset.ConvertEncodings(declared)
-		if err != nil {
-			return nil
+		if len(declared) == 0 {
+			return []string{charset.DefaultEncoding}, true
 		}
-		return converted
+		converted, err := charset.ConvertEncodings(declared)
+		if err != nil || len(converted) == 0 {
+			return []string{charset.DefaultEncoding}, true
+		}
+		return converted, isFallbackEncoding(declared, converted)
 	}
-	return nil
+	if inherited != nil {
+		return inherited, false
+	}
+	return []string{charset.DefaultEncoding}, true
+}
+
+// isFallbackEncoding reports whether the conversion gave the default because it
+// did not recognize what was declared, rather than because Latin-1 was asked
+// for. ISO_IR 999 decodes correctly today through this path; the caller is
+// still entitled to know a guess was made.
+func isFallbackEncoding(declared, converted []string) bool {
+	if len(converted) != 1 || converted[0] != charset.DefaultEncoding {
+		return false
+	}
+	for _, term := range declared {
+		switch strings.TrimSpace(term) {
+		case "", "ISO_IR 6", "ISO 2022 IR 6", "ISO_IR 100", "ISO 2022 IR 100":
+			return false
+		}
+	}
+	return true
 }
 
 // decodeTextValue converts a text value from its declared character set to
@@ -1125,6 +1288,10 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.FileMetaInfo = metaInfo
 		sniffed = true
 	}
+
+	// Dataset-time warnings are appended to the same slice. Remember how
+	// many belonged to the meta header so we can copy only the new ones.
+	nMeta := len(dfr.metaWarnings)
 
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
@@ -1223,6 +1390,11 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
 	}
+
+	// Sequence/item warnings are recorded while the data set is parsed, after
+	// the meta-header copy above. Append only those added since then so two
+	// identical real warnings are not collapsed into one.
+	dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[nMeta:]...)
 
 	return dicomFile, nil
 }
