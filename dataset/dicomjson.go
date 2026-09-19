@@ -299,8 +299,25 @@ func dicomJSONValues(vr dataelem.VR, raw []byte) ([]any, error) {
 		return binaryNumberValues(vr, raw)
 	}
 
-	// The rest are text, multi-valued by backslash.
 	text := strings.TrimRight(string(raw), "\x00 ")
+
+	// Padding alone is an element with no value, and the model says that by
+	// leaving Value out. It was written as [""], one value that happens to be
+	// empty, which neither pydicom nor dcm4che produces (#121).
+	if text == "" {
+		return nil, nil
+	}
+
+	// LT, ST, UT and UR hold one value, and a backslash in them is a
+	// character, not a separator (PS3.5 6.2). Splitting them turned the XML in
+	// examples_ybr_color.dcm's private UT into 17 values with every backslash
+	// gone, and trimming the pieces changed the text besides (#121).
+	switch vr {
+	case dataelem.LT, dataelem.ST, dataelem.UT, dataelem.UR:
+		return []any{text}, nil
+	}
+
+	// The rest are text, multi-valued by backslash.
 	parts := strings.Split(text, "\\")
 
 	switch vr {
