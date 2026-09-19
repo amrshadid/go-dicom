@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The CLI is called `go-dicom` everywhere** (#120). The 1.5.0 rename left the old
+  name in 58 lines across eight files, including `doc.go`, which is what pkg.go.dev
+  shows, and the release notes, which told readers to download `dicom-linux-amd64`
+  and friends while the assets are named `go-dicom-*`. CI built `-o dicom`, and the
+  interop script defaulted to `./dicom`. `PrintUsage` now shows the name it was
+  invoked as instead of a literal. A test greps the tracked files for the old name,
+  so the next rename cannot half-land.
+
 - **Storage Commitment's resource-limitation Failure Reason is 0213H** (#114). It
   was `0xA700`, the C-service status "Refused: Out of Resources", which is not one
   of the six Failure Reason values PS3.3 C.14.1.1 defines. So a requestor was told an
