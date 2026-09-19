@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **DICOM JSON keeps LT, ST, UT and UR as one value** (#121). These hold a single
+  value, and a backslash in them is a character (PS3.5 6.2). The JSON encoder split
+  them like any other text. The 26,974-character private UT in
+  `examples_ybr_color.dcm`, an XML document with Windows paths, came out as 17
+  values with all 16 backslashes gone, and trimming the pieces removed spaces as
+  well. An element holding only padding is now written with no `Value`, as pydicom
+  writes it, instead of `[""]`. Across pydicom's corpus these are the only two
+  differences from before, and both now match pydicom.
+
 - **An image can be sent over a Deflated context** (#132). Deflated Explicit VR
   Little Endian compresses the data set, and its Pixel Data is native. The network
   transcoder asked whether the syntax was compressed, went looking for a pixel

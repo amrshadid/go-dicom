@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -402,5 +403,69 @@ func putFloat64(b []byte, f float64) {
 	bits := math.Float64bits(f)
 	for i := 0; i < 8; i++ {
 		b[i] = byte(bits >> (8 * i))
+	}
+}
+
+// TestSingleValuedTextIsNotSplit covers #121. LT, ST, UT and UR have a value
+// multiplicity of one, and a backslash in them is a character, not a separator
+// (PS3.5 6.2). The JSON splitter split them anyway: the 26,974-character UT in
+// examples_ybr_color.dcm, an XML document with Windows paths in it, came out as
+// 17 values and no backslashes.
+func TestSingleValuedTextIsNotSplit(t *testing.T) {
+	const text = `C:\Studies\1\report.xml holds 2 \ 3`
+	for _, vr := range []dataelem.VR{dataelem.LT, dataelem.ST, dataelem.UT, dataelem.UR} {
+		ds := dataset.NewDataset()
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0019, 0x1050), vr, []byte(text+" ")))
+
+		value := elementOf(t, jsonOf(t, ds), "00191050")["Value"]
+		if got, ok := value.([]any); !ok || len(got) != 1 || got[0] != text {
+			t.Errorf("%s: Value is %#v, want the one string %q", vr, value, text)
+		}
+
+		// And back: one value in, the same bytes out.
+		encoded, err := ds.ToDICOMJSONString()
+		if err != nil {
+			t.Fatal(err)
+		}
+		back := dataset.NewDataset()
+		if err := back.FromDICOMJSONString(encoded); err != nil {
+			t.Fatalf("%s: FromDICOMJSONString: %v", vr, err)
+		}
+		elem, _ := back.Get(tag.New(0x0019, 0x1050))
+		if got := strings.TrimRight(string(elem.GetValue().([]byte)), " "); got != text {
+			t.Errorf("%s: round trip gave %q, want %q", vr, got, text)
+		}
+	}
+}
+
+// TestMultiValuedTextIsStillSplit: the fix must not reach the VRs where a
+// backslash does separate values.
+func TestMultiValuedTextIsStillSplit(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0008), dataelem.CS, []byte(`ORIGINAL\PRIMARY`)))
+	value := elementOf(t, jsonOf(t, ds), "00080008")["Value"]
+	if got, ok := value.([]any); !ok || len(got) != 2 {
+		t.Errorf("CS Value is %#v, want two values", value)
+	}
+}
+
+// TestPaddingOnlyTextHasNoValue: an element present with nothing in it but
+// padding is empty, and the model says so by leaving Value out. It was written
+// as [""], which pydicom, dcm4che and the standard's own examples do not do, and
+// which a consumer reads as one value that happens to be an empty string.
+func TestPaddingOnlyTextHasNoValue(t *testing.T) {
+	for vr, raw := range map[dataelem.VR][]byte{
+		dataelem.SH: []byte("  "),
+		dataelem.UI: {0x00, 0x00},
+		dataelem.LT: []byte("  "),
+		dataelem.PN: []byte("  "),
+		dataelem.DS: []byte("  "),
+	} {
+		ds := dataset.NewDataset()
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0019, 0x1050), vr, raw))
+		elem := elementOf(t, jsonOf(t, ds), "00191050")
+		if value, present := elem["Value"]; present {
+			t.Errorf("%s of padding alone: Value is %#v, want no Value member", vr, value)
+		}
 	}
 }
