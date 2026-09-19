@@ -324,8 +324,7 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	}
 	sopInstanceUID := extractStringValue(sopInstanceElem.GetValue())
 
-	// Find presentation context
-	pcID, ok := FindPresentationContextID(assoc.AcceptedContexts(), sopClassUID)
+	pcID, ok := storeContextFor(assoc.AcceptedContexts(), sopClassUID, ds.TransferSyntaxUID())
 	if !ok {
 		return NewAssociationError("NO_CONTEXT",
 			fmt.Sprintf("no accepted presentation context for SOP Class %s: %s",
@@ -373,6 +372,48 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	}
 
 	return nil
+}
+
+// storeContextFor picks the accepted context to send a data set on, given its
+// SOP class and the syntax it is held in.
+//
+// A class may have several accepted contexts: storescu proposes one per class
+// and syntax it holds, so the SCP can accept each on its own terms. The first a
+// map iteration returned was used, and that is random: a JPEG instance could go
+// out decoded on the Explicit VR context, or an uncompressed one on the JPEG
+// context and fail for want of an encoder, from one run to the next.
+//
+// So, in order: the data set's own syntax, which needs no transcoding; then an
+// uncompressed syntax, which anything this library can decode can be sent as,
+// Explicit VR Little Endian first; then whatever is left. Ties go to the lowest
+// ID, so the choice is the same every time.
+func storeContextFor(accepted map[byte]*PresentationContext, sopClassUID, sourceSyntax string) (byte, bool) {
+	rank := func(syntax string) int {
+		switch {
+		case sourceSyntax != "" && syntax == sourceSyntax:
+			return 0
+		case syntax == ExplicitVRLittleEndianUID:
+			return 1
+		case syntax == ImplicitVRLittleEndianUID, syntax == ExplicitVRBigEndianUID,
+			syntax == DeflatedExplicitVRLittleEndianUID:
+			return 2
+		default:
+			return 3
+		}
+	}
+
+	var best byte
+	bestRank, found := 0, false
+	for id, pc := range accepted {
+		if pc.AbstractSyntax != sopClassUID {
+			continue
+		}
+		r := rank(pc.TransferSyntax)
+		if !found || r < bestRank || (r == bestRank && id < best) {
+			best, bestRank, found = id, r, true
+		}
+	}
+	return best, found
 }
 
 // Find performs a C-FIND query and returns results on a channel.

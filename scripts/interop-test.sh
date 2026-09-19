@@ -160,6 +160,49 @@ PY
   fi
 }
 
+# send_classes sends objects the library's default proposal leaves out — RT
+# Dose, RT Plan, a Structured Report and an ECG — in one storescu invocation,
+# and checks the peer holds all four. storescu proposed that default whatever
+# it was sending, so each of these failed with "not among the presentation
+# contexts proposed" (#116). It now proposes what the files hold.
+#
+# Usage: send_classes <aec> <port> <receive dir>
+send_classes() {
+  local aec=$1 port=$2 recv=$3 src="$WORKDIR/classes"
+  mkdir -p "$src"
+  python3 - "$src" <<'PY'
+import shutil, sys
+from pydicom.data import get_testdata_file
+for name in ("rtdose.dcm", "rtplan.dcm", "test-SR.dcm", "waveform_ecg.dcm"):
+    shutil.copy(get_testdata_file(name), sys.argv[1])
+PY
+  find "$recv" -type f -delete
+  if ! "$GODICOM" storescu -aec "$aec" "127.0.0.1:$port" "$src"/*.dcm >/dev/null 2>&1; then
+    fail "RT, SR and ECG in one storescu run — storescu reported failures"
+    return
+  fi
+  if python3 - "$src" "$recv" <<'PY'
+import glob, os, sys, pydicom
+sent = {pydicom.dcmread(f).SOPInstanceUID for f in glob.glob(os.path.join(sys.argv[1], "*.dcm"))}
+held = set()
+for root, _, names in os.walk(sys.argv[2]):
+    for n in names:
+        try:
+            held.add(pydicom.dcmread(os.path.join(root, n)).SOPInstanceUID)
+        except Exception:
+            pass
+missing = sent - held
+if missing:
+    print(f"      the peer holds {len(sent) - len(missing)} of {len(sent)}", file=sys.stderr)
+    sys.exit(1)
+PY
+  then
+    pass "RT Dose, RT Plan, SR and ECG in one storescu run — all four stored"
+  else
+    fail "RT, SR and ECG in one storescu run — not all were stored"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # pynetdicom
 # ---------------------------------------------------------------------------
@@ -220,6 +263,8 @@ if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/storescu" ]; then
     else
       fail "C-STORE"
     fi
+
+    send_classes PYSCP 11151 "$WORKDIR/py_recv"
   else
     fail "pynetdicom storescp did not start listening"
   fi
@@ -401,6 +446,8 @@ PY
     else
       fail "C-STORE"
     fi
+
+    send_classes DCMTKSCP 11154 "$WORKDIR/dcmtk_recv"
   else
     fail "dcmtk storescp did not start listening"
   fi
