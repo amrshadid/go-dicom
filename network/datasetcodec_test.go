@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -286,5 +287,84 @@ func TestEncodeDatasetResolvesAmbiguousVRs(t *testing.T) {
 	}
 	if descriptor.GetVR() != dataelem.SS {
 		t.Errorf("the item's LUT Descriptor went out as %q, want SS from the image", descriptor.GetVR())
+	}
+}
+
+// TestDecodeDatasetRecordsItsSyntax covers #126. Whether Pixel Data holds pixels
+// or fragments is a property of the syntax alone, so a data set that forgets it
+// looks uncompressed to every writer and encoder downstream.
+func TestDecodeDatasetRecordsItsSyntax(t *testing.T) {
+	// RLE's data set is encoded as Explicit VR Little Endian; only its pixel data
+	// differs, and the test data set's is encoded as it stands.
+	for syntax, body := range map[string]string{
+		ImplicitVRLittleEndianUID: ImplicitVRLittleEndianUID,
+		ExplicitVRLittleEndianUID: ExplicitVRLittleEndianUID,
+		RLELosslessUID:            ExplicitVRLittleEndianUID,
+	} {
+		encoded, err := EncodeDataset(buildCodecTestDataset(), body)
+		if err != nil {
+			t.Fatalf("EncodeDataset: %v", err)
+		}
+		ds, err := DecodeDataset(encoded, syntax)
+		if err != nil {
+			t.Fatalf("DecodeDataset %s: %v", syntax, err)
+		}
+		if got := ds.TransferSyntaxUID(); got != syntax {
+			t.Errorf("decoded as %s, the data set records %q", syntax, got)
+		}
+	}
+}
+
+// TestDecodeDatasetReadsEncapsulatedPixelData covers pixel data as a conforming
+// peer sends it: undefined length, items, a Sequence Delimitation Item. The
+// decoder took the rest of the data set as the value, so the delimiter came
+// with it — written to a file, the sequence was closed twice and dcmtk refused
+// it — and so did any element after Pixel Data.
+func TestDecodeDatasetReadsEncapsulatedPixelData(t *testing.T) {
+	le := binary.LittleEndian
+	var items bytes.Buffer
+	for _, fragment := range [][]byte{{}, {0xFF, 0xD8, 0xFF, 0xD9}} { // empty offset table, one fragment
+		_ = binary.Write(&items, le, uint16(0xFFFE))
+		_ = binary.Write(&items, le, uint16(0xE000))
+		_ = binary.Write(&items, le, uint32(len(fragment)))
+		items.Write(fragment)
+	}
+
+	var wire bytes.Buffer
+	_ = binary.Write(&wire, le, uint16(0x7FE0))
+	_ = binary.Write(&wire, le, uint16(0x0010))
+	wire.WriteString("OB")
+	wire.Write([]byte{0, 0})
+	_ = binary.Write(&wire, le, undefinedLength)
+	wire.Write(items.Bytes())
+	_ = binary.Write(&wire, le, uint16(0xFFFE))
+	_ = binary.Write(&wire, le, uint16(0xE0DD))
+	_ = binary.Write(&wire, le, uint32(0))
+	// Data Set Trailing Padding, after Pixel Data.
+	_ = binary.Write(&wire, le, uint16(0xFFFC))
+	_ = binary.Write(&wire, le, uint16(0xFFFC))
+	wire.WriteString("OB")
+	wire.Write([]byte{0, 0})
+	_ = binary.Write(&wire, le, uint32(2))
+	wire.Write([]byte{0, 0})
+
+	ds, err := DecodeDataset(wire.Bytes(), JPEGBaselineUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+	elem, ok := ds.Get(tagPixelData)
+	if !ok {
+		t.Fatal("Pixel Data was lost")
+	}
+	if got := elem.GetValue().([]byte); !bytes.Equal(got, items.Bytes()) {
+		t.Errorf("Pixel Data holds % x, want the items alone, % x", got, items.Bytes())
+	}
+	if _, ok := ds.Get(tag.New(0xFFFC, 0xFFFC)); !ok {
+		t.Error("the element after Pixel Data was swallowed")
+	}
+
+	// And a sequence that never closes is an error, not a value.
+	if _, err := DecodeDataset(wire.Bytes()[:12+items.Len()], JPEGBaselineUID); err == nil {
+		t.Error("encapsulated pixel data with no delimiter decoded without error")
 	}
 }

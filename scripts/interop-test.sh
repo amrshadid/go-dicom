@@ -334,6 +334,46 @@ if [ -x "$DCMTK_BIN/storescu" ] && [ -x "$DCMTK_BIN/storescp" ]; then
     else
       fail "C-STORE as Implicit VR"
     fi
+
+    # A compressed instance, sent in its own syntax as a modality storing
+    # natively would. storescp wrote every instance as Explicit VR Little Endian,
+    # so this one became a file declaring native pixels and holding JPEG
+    # fragments (#126). The comparison is of the encapsulated bytes and the
+    # declared syntax, so it needs no JPEG decoder.
+    find "$WORKDIR/go_recv2" -type f -delete
+    compressed="$WORKDIR/compressed.dcm"
+    python3 -c "
+from pydicom.data import get_testdata_file
+import shutil
+shutil.copy(get_testdata_file('SC_rgb_jpeg_gdcm.dcm'), '$compressed')
+"
+    if "$DCMTK_BIN/storescu" -xs -aec GODICOM 127.0.0.1 11153 "$compressed" >/dev/null 2>&1; then
+      received=$(find "$WORKDIR/go_recv2" -type f | head -1)
+      if [ -z "$received" ]; then
+        fail "C-STORE compressed — peer reported success but no file was written"
+      elif ! "$DCMTK_BIN/dcmdump" "$received" >/dev/null 2>&1; then
+        fail "C-STORE compressed — dcmtk cannot read the stored file"
+      elif python3 - "$compressed" "$received" <<'PY'
+import sys, pydicom
+sent, kept = pydicom.dcmread(sys.argv[1]), pydicom.dcmread(sys.argv[2])
+problems = []
+if kept.file_meta.TransferSyntaxUID != sent.file_meta.TransferSyntaxUID:
+    problems.append(f"stored as {kept.file_meta.TransferSyntaxUID.name}, "
+                    f"sent as {sent.file_meta.TransferSyntaxUID.name}")
+if kept.PixelData != sent.PixelData:
+    problems.append("the encapsulated pixel data differs")
+if problems:
+    print("      " + "\n      ".join(problems), file=sys.stderr)
+    sys.exit(1)
+PY
+      then
+        pass "C-STORE compressed — stored in the syntax it was sent in, fragments intact"
+      else
+        fail "C-STORE compressed — the stored file does not match what was sent"
+      fi
+    else
+      fail "C-STORE compressed"
+    fi
   else
     fail "go-dicom storescp did not start listening"
   fi

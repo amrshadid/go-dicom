@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`storescp` and `qrscp` store a compressed instance in the syntax it arrived in**
+  (#126). Since 1.5.0 both servers accept compressed syntaxes (#93), but both wrote
+  every instance as Explicit VR Little Endian. A JPEG instance became a file that
+  declared native pixels and held JPEG fragments:
+
+  ```
+  pydicom: The length of the pixel data in the dataset (3884 bytes) doesn't match
+           the expected length (30000 bytes)
+  ```
+
+  No reader can decode that, and nothing in the file says what the fragments are.
+  The sender was told the store succeeded. #93's test sent instances with no pixel
+  data and checked only the status.
+
+  `DecodeDataset` never recorded the syntax a data set arrived in, so every writer
+  took a received data set to be uncompressed. It now records it, and
+  `filewriter.StorageTransferSyntax` gives the syntax to store in: the received one
+  for encapsulated data, Explicit VR Little Endian otherwise. The decoder also used to
+  take the rest of the data set as the encapsulated Pixel Data value. That value then
+  kept the peer's closing delimiter, so the written file closed the sequence twice and
+  dcmtk refused it. It also swallowed anything after Pixel Data. The decoder now reads
+  the items up to the delimiter.
+
 - **Writing an Implicit VR data set as Explicit VR no longer loses the pixel data**
   (#118). The reader gives an Implicit VR element the dictionary's VR, and for Pixel
   Data that is `OB or OW`. The writer put those eight characters into a two-byte field,

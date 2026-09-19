@@ -105,4 +105,4 @@ A retrieval returns instances whatever level it names — a C-GET at STUDY level
 
 Files and an index, no external dependency, not a database. The computed counts scan the index, so an archive of millions of instances wants real indexes behind it. `Handler` satisfies the network package's own interfaces, so replacing this with a database-backed store means implementing those.
 
-Instances are written as Explicit VR Little Endian whatever they arrived as. Pixel data is not recompressed — a compressed instance keeps its encapsulated bytes, and only the surrounding data set is re-encoded.
+Uncompressed instances are written as Explicit VR Little Endian whatever they arrived as. Compressed ones are written in the syntax they arrived in, which is the only record of their codec, and their pixel data is never decoded or recompressed.
