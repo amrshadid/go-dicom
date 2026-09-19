@@ -1135,6 +1135,10 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		sniffed = true
 	}
 
+	// Dataset-time warnings are appended to the same slice. Remember how
+	// many belonged to the meta header so we can copy only the new ones.
+	nMeta := len(dfr.metaWarnings)
+
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
 
@@ -1234,19 +1238,9 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 
 	// Sequence/item warnings are recorded while the data set is parsed, after
-	// the meta-header copy above. Fold in any that are not already present.
-	for _, w := range dfr.metaWarnings {
-		seen := false
-		for _, have := range dicomFile.Warnings {
-			if have == w {
-				seen = true
-				break
-			}
-		}
-		if !seen {
-			dicomFile.Warnings = append(dicomFile.Warnings, w)
-		}
-	}
+	// the meta-header copy above. Append only those added since then so two
+	// identical real warnings are not collapsed into one.
+	dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[nMeta:]...)
 
 	return dicomFile, nil
 }
