@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Storage Commitment's resource-limitation Failure Reason is 0213H** (#114). It
+  was `0xA700`, the C-service status "Refused: Out of Resources", which is not one
+  of the six Failure Reason values PS3.3 C.14.1.1 defines. So a requestor was told an
+  instance failed for a reason the standard does not have. The two reasons that
+  had no constant now have one:
+  `StorageCommitmentFailureClassInstanceConflict` (0119H) and
+  `StorageCommitmentFailureDuplicateTransactionUID` (0131H).
+  `StatusStorageCommitmentResourceLimitation` in `status.go` carried the same wrong
+  value and is corrected too. Code that uses the constants by name needs no change;
+  anything that received `0xA700` from this library was receiving an undefined value.
+
 - **DICOM JSON keeps LT, ST, UT and UR as one value** (#121). These hold a single
   value, and a backslash in them is a character (PS3.5 6.2). The JSON encoder split
   them like any other text. The 26,974-character private UT in
