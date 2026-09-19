@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compressed pixel data sent to dcmtk no longer aborts the association** (#128).
+  PS3.5 A.4 requires encapsulated Pixel Data to have undefined length and a closing
+  delimiter. `EncodeDataset` wrote it with its byte count, and dcmtk refuses that:
+
+  ```
+  E: Found explicit length Pixel Data in top level dataset with transfer syntax
+     JPEG Lossless, Non-hierarchical, 1st Order Prediction: Only undefined length permitted
+  ```
+
+  Every compressed data set go-dicom sent to dcmtk failed: a stored compressed file,
+  pixels this library compressed to RLE or JPEG-LS, and a C-GET or C-MOVE of a
+  compressed instance from `qrscp`. pynetdicom accepts both forms, and every
+  compressed send in the interop suite went to pynetdicom. `filewriter` had the same
+  defect and was fixed first. The interop suite now retrieves a JPEG instance from
+  `qrscp` with dcmtk's `getscu`.
+
+  Pixel Data that is not framed as items is now refused under a compressed syntax.
+  Sending it would describe native pixels as fragments, which the receiver cannot
+  detect.
+
 - **`storescp` and `qrscp` store a compressed instance in the syntax it arrived in**
   (#126). Since 1.5.0 both servers accept compressed syntaxes (#93), but both wrote
   every instance as Explicit VR Little Endian. A JPEG instance became a file that

@@ -33,6 +33,10 @@ type transferSyntaxEncoding struct {
 	ExplicitVR bool
 	BigEndian  bool
 	Deflated   bool
+
+	// Encapsulated means Pixel Data is carried as fragments, which PS3.5 A.4
+	// requires be sent with undefined length.
+	Encapsulated bool
 }
 
 // encodingForTransferSyntax maps a transfer syntax UID onto its wire encoding.
@@ -51,8 +55,10 @@ func encodingForTransferSyntax(ts string) transferSyntaxEncoding {
 	case "":
 		// No negotiated syntax known; DICOM's default encoding is implicit VR LE.
 		return transferSyntaxEncoding{ExplicitVR: false, BigEndian: false}
-	default:
+	case ExplicitVRLittleEndianUID:
 		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false}
+	default:
+		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false, Encapsulated: true}
 	}
 }
 
@@ -263,6 +269,46 @@ func readElementHeader(r *bytes.Reader, enc transferSyntaxEncoding, order binary
 	return t, vr, uint32(shortLen), nil
 }
 
+// writeEncapsulated writes Pixel Data held as fragments: OB, undefined length,
+// the items, and a Sequence Delimitation Item (PS3.5 A.4).
+//
+// It was written with its byte count, like any other element. pynetdicom accepts
+// that, and dcmtk refuses it and aborts the association:
+//
+//	Found explicit length Pixel Data in top level dataset with transfer syntax
+//	JPEG Lossless, Non-hierarchical, 1st Order Prediction: Only undefined length permitted
+//
+// filewriter had the same defect and was fixed first; this is its twin.
+//
+// Bytes that are not items are refused. Sending them would describe native
+// pixels as fragments, which the receiver has no way to detect.
+func writeEncapsulated(buf *bytes.Buffer, enc transferSyntaxEncoding, data []byte) error {
+	order := enc.byteOrder()
+	if len(data) < 8 || order.Uint16(data[0:2]) != tag.ItemTag.Group() ||
+		order.Uint16(data[2:4]) != tag.ItemTag.Element() {
+		return NewPDUError("ENCODE_DS",
+			"pixel data is not encapsulated, but the context negotiated a syntax that requires it")
+	}
+
+	for _, v := range []any{pixelDataTag.Group(), pixelDataTag.Element()} {
+		if err := binary.Write(buf, order, v); err != nil {
+			return err
+		}
+	}
+	buf.WriteString(string(dataelem.OB))
+	buf.Write([]byte{0x00, 0x00}) // reserved
+	if err := binary.Write(buf, order, undefinedLength); err != nil {
+		return err
+	}
+	buf.Write(data)
+	for _, v := range []any{tag.SequenceDelimiterTag.Group(), tag.SequenceDelimiterTag.Element(), uint32(0)} {
+		if err := binary.Write(buf, order, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // writeElement serializes a single data element.
 func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr dataelem.VR, data []byte) error {
 	order := enc.byteOrder()
@@ -408,6 +454,16 @@ func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosin
 		if !ok {
 			continue
 		}
+
+		// Only the top level: pixel data inside an item, such as an icon, is
+		// native whatever the syntax (PS3.5 A.4).
+		if enc.Encapsulated && t == pixelDataTag && enclosing == nil && len(data) > 0 {
+			if err := writeEncapsulated(&buf, enc, data); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
 		if err := writeElement(&buf, enc, t, ds.ResolveVR(t, elem, enclosing...), data); err != nil {
 			return nil, err
 		}
