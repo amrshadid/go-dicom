@@ -271,3 +271,33 @@ func TestStorageTransferSyntax(t *testing.T) {
 		t.Errorf("nil data set: %s", got)
 	}
 }
+
+// TestElementsFromDatasetWritesNumericValues covers #119: a number set in Go
+// was dropped with a warning, so a data set built in code wrote an image with
+// no Rows or Columns.
+func TestElementsFromDatasetWritesNumericValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, uint16(64)))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, 512))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0030), dataelem.DS, []float64{0.5, 0.25}))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0018, 0x9087), dataelem.FD, 1000.0))
+
+	for _, syntax := range []string{"1.2.840.10008.1.2.1", "1.2.840.10008.1.2.2"} {
+		back := readBytes(t, writeAsSyntax(t, filewriter.ElementsFromDataset(ds), syntax))
+		for tg, want := range map[tag.Tag][]byte{
+			tag.New(0x0028, 0x0010): {64, 0},
+			tag.New(0x0028, 0x0011): {0, 2},
+			tag.New(0x0028, 0x0030): []byte(`0.5\0.25`),
+			tag.New(0x0018, 0x9087): {0, 0, 0, 0, 0, 0x40, 0x8F, 0x40},
+		} {
+			elem, ok := back.Get(tg)
+			if !ok {
+				t.Errorf("%s: %s was not written", syntax, tg)
+				continue
+			}
+			if got := elem.GetValue().([]byte); !bytes.Equal(got, want) {
+				t.Errorf("%s: %s reads back as % x, want % x", syntax, tg, got, want)
+			}
+		}
+	}
+}

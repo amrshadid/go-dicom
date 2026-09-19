@@ -450,9 +450,14 @@ func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosin
 			continue
 		}
 
-		data, ok := elementValueBytes(elem)
-		if !ok {
-			continue
+		// A value that cannot be rendered is an error. It used to be skipped,
+		// and a number set in Go (Rows as uint16) was skipped every time: the
+		// peer received an image with no Rows and no error on either side.
+		vr := ds.ResolveVR(t, elem, enclosing...)
+		data, err := dataelem.ValueBytes(vr, elem.GetValue())
+		if err != nil {
+			return nil, NewPDUErrorf("ENCODE_DS",
+				"element %s: %v; refusing to send the data set without it", t.String(), err)
 		}
 
 		// Only the top level: pixel data inside an item, such as an icon, is
@@ -464,7 +469,7 @@ func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosin
 			continue
 		}
 
-		if err := writeElement(&buf, enc, t, ds.ResolveVR(t, elem, enclosing...), data); err != nil {
+		if err := writeElement(&buf, enc, t, vr, data); err != nil {
 			return nil, err
 		}
 	}
@@ -628,18 +633,6 @@ func isLongFormVR(vr dataelem.VR) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// elementValueBytes extracts an element's value as raw bytes.
-func elementValueBytes(elem *dataelem.DataElement) ([]byte, bool) {
-	switch v := elem.GetValue().(type) {
-	case []byte:
-		return v, true
-	case string:
-		return []byte(v), true
-	default:
-		return nil, false
 	}
 }
 

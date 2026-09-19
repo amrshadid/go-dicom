@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A number set in Go is written and sent** (#119). `NewDataElement` takes any
+  value, but both encoders rendered only `[]byte` and `string`. Rows set as
+  `uint16(64)` went out from `EncodeDataset` as nothing, with no error, and
+  `filewriter` dropped it with a warning. An image built in code reached the peer
+  without Rows or Columns, and the peer accepted it.
+
+  `dataelem.ValueBytes` renders a value by its VR, for both encoders:
+  - Go integers, floats and slices of them, for the numeric VRs and for the OW, OL,
+    OV, OF and OD words that pixel data uses;
+  - numbers as text for IS and DS, with DS kept within its 16 characters;
+  - `tag.Tag` for AT, `[]string`, and `PersonName`.
+
+  These are also what the decoders return, so a value read can be set again. A
+  value that does not fit is an error: 70000 in a US would otherwise have been
+  written as 4464. `EncodeDataset` now fails on such a value instead of sending the
+  data set without it.
+
 - **Compressed pixel data sent to dcmtk no longer aborts the association** (#128).
   PS3.5 A.4 requires encapsulated Pixel Data to have undefined length and a closing
   delimiter. `EncodeDataset` wrote it with its byte count, and dcmtk refuses that:
