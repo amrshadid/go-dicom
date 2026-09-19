@@ -538,7 +538,9 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 
 // warn records a non-fatal problem found while reading the data set.
 func (dfr *DCMFileReader) warn(format string, args ...any) {
-	dfr.metaWarnings = append(dfr.metaWarnings, fmt.Sprintf(format, args...))
+	msg := fmt.Sprintf(format, args...)
+	dfr.metaWarnings = append(dfr.metaWarnings, msg)
+	config.Logger.Warn("filereader: data set warning", "detail", msg)
 }
 
 // streamSizeOnce returns the total size of the underlying stream, measuring it
@@ -570,6 +572,31 @@ func (dfr *DCMFileReader) streamSizeOnce() (int64, error) {
 
 	dfr.streamSize = end
 	return end, nil
+}
+
+// itemBodyRemaining is how many bytes of an item body may still be read:
+// the rest of a defined-length sequence, capped by the rest of the stream.
+// -1 means the bound is not known (undefined-length sequence and unseekable).
+func (dfr *DCMFileReader) itemBodyRemaining(seqUndefined bool, seqStart int64, seqLength uint32) int64 {
+	var remain int64 = -1
+	if !seqUndefined {
+		remain = int64(seqLength) - (dfr.position - seqStart)
+		if remain < 0 {
+			remain = 0
+		}
+	}
+	size, err := dfr.streamSizeOnce()
+	if err != nil {
+		return remain
+	}
+	streamRemain := size - dfr.position
+	if streamRemain < 0 {
+		streamRemain = 0
+	}
+	if remain < 0 || streamRemain < remain {
+		return streamRemain
+	}
+	return remain
 }
 
 // readSequenceItems reads the items of a Sequence (SQ) element. A declared
@@ -607,15 +634,38 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 			// Where the item tag started, which is 8 bytes back: 4 for the tag
 			// and 4 for the length that readItemHeader has already consumed.
 			itemStart := dfr.position - 8
-			item, err := dfr.readSequenceItem(explicitVR, depth, marker.length)
+			itemLen := marker.length
+			if itemLen != UndefinedLength {
+				// A defined-length item whose declared body runs past the
+				// enclosing sequence (or the stream) still holds complete
+				// elements in the bytes that are present. Clamp to what
+				// remains so those elements are kept, instead of dropping
+				// the item because its length field is a few bytes too long.
+				// pydicom's DICOMDIR-nooffset is this: the last directory
+				// record claims 24 bytes past the sequence, every element
+				// inside it is complete, and discarding it loses an IMAGE.
+				//
+				// remain == 0 is different: the item header sits exactly at
+				// the sequence's end, so a clamp would keep an empty item
+				// that is not in the file. Warn and stop without recording it.
+				remain := dfr.itemBodyRemaining(undefined, start, declaredLength)
+				if remain == 0 {
+					dfr.warn("sequence item header at end of sequence; stopping without an empty item")
+					return items, nil
+				}
+				if remain > 0 && int64(itemLen) > remain {
+					dfr.warn("sequence item declared length %d overruns remaining %d bytes; keeping the complete elements that are present",
+						itemLen, remain)
+					itemLen = uint32(remain)
+				}
+			}
+			item, err := dfr.readSequenceItem(explicitVR, depth, itemLen)
 			if err != nil {
 				// A file cut short loses its last item, not the sequence. The
 				// items already read are complete and were parsed from bytes
 				// that are all there; discarding them because the next one is
 				// short throws away good data to punish a defect it had no part
-				// in. pydicom's DICOMDIR-nooffset ends 24 bytes into its last
-				// directory record, and dropping the sequence loses the other
-				// 51 records with it.
+				// in.
 				//
 				// Only for truncation. Any other error means the bytes did not
 				// mean what they claimed, and continuing past that would build
@@ -1093,6 +1143,10 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		sniffed = true
 	}
 
+	// Dataset-time warnings are appended to the same slice. Remember how
+	// many belonged to the meta header so we can copy only the new ones.
+	nMeta := len(dfr.metaWarnings)
+
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
 
@@ -1190,6 +1244,11 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
 	}
+
+	// Sequence/item warnings are recorded while the data set is parsed, after
+	// the meta-header copy above. Append only those added since then so two
+	// identical real warnings are not collapsed into one.
+	dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[nMeta:]...)
 
 	return dicomFile, nil
 }
