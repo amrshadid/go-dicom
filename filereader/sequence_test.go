@@ -275,6 +275,43 @@ func TestUndefinedLengthDoesNotAllocate(t *testing.T) {
 	}
 }
 
+// TestOverrunSequenceItemKept covers a defined-length item whose declared
+// body runs past the enclosing sequence. The elements inside the item are
+// complete; only the length field is too large. Dropping the item loses a
+// directory record (pydicom DICOMDIR-nooffset). Keep it and warn.
+func TestOverrunSequenceItemKept(t *testing.T) {
+	var item1, item2 dcmBuilder
+	item1.explicitElement(0x0008, 0x0100, "SH", []byte("CODE01  "))
+	item2.explicitElement(0x0008, 0x0100, "SH", []byte("CODE02  "))
+
+	// Sequence length is the bytes actually present: two item headers plus
+	// both bodies. Item 2 claims 24 extra body bytes that are not there.
+	overrun := uint32(24)
+	actual := uint32(8+item1.buf.Len()) + uint32(8+item2.buf.Len())
+
+	var b dcmBuilder
+	b.sequenceHeader(0x0004, 0x1220, actual) // DirectoryRecordSequence
+	b.rawTag(tag.ItemTag, uint32(item1.buf.Len()))
+	b.buf.Write(item1.bytes())
+	b.rawTag(tag.ItemTag, uint32(item2.buf.Len())+overrun)
+	b.buf.Write(item2.bytes())
+
+	dfr := newReaderFor(b.bytes())
+	elem, err := dfr.ReadDataElement(true)
+	if err != nil {
+		t.Fatalf("ReadDataElement: %v", err)
+	}
+	if len(elem.Items) != 2 {
+		t.Fatalf("got %d items, want 2 — the overrun last item was dropped", len(elem.Items))
+	}
+	if got := string(elem.Items[1].Elements[0].Value); got != "CODE02  " {
+		t.Errorf("item 1 value = %q, want %q", got, "CODE02  ")
+	}
+	if len(dfr.metaWarnings) == 0 {
+		t.Fatal("expected a warning that the item length overran the sequence")
+	}
+}
+
 // TestOversizedLengthRejected verifies that an element claiming far more bytes
 // than the stream holds is rejected instead of allocating for the claim.
 func TestOversizedLengthRejected(t *testing.T) {
