@@ -80,3 +80,38 @@ func TestFormatStatus(t *testing.T) {
 		t.Errorf("FormatStatus(0xFF00) = %q, want %q", s, "0xFF00 (Pending)")
 	}
 }
+
+// TestStatusCodesMatchTheStandard covers #137. The values here are PS3.7 Annex
+// C's, written as literals so a constant that drifts cannot pass by agreeing
+// with itself. StatusRefusedOutOfResources was 0x0112, which is No Such SOP
+// Instance: an SCP reporting exhaustion with it told the peer the instance did
+// not exist, and a peer that retries on a resource failure would not retry.
+func TestStatusCodesMatchTheStandard(t *testing.T) {
+	for name, tc := range map[string]struct{ got, want uint16 }{
+		"No Such SOP Instance":      {StatusNoSuchSOPInstance, 0x0112},
+		"Refused: Out of Resources": {StatusOutOfResources, 0xA700},
+		"Resource limitation":       {StatusResourceLimitation, 0x0213},
+		"Processing failure":        {StatusProcessingFailure, 0x0110},
+		"No Such SOP Class":         {StatusNoSuchSOPClass, 0x0118},
+		"SOP Class not supported":   {StatusRefusedSOPClassNotSupported, 0x0122},
+		"Missing attribute":         {StatusMissingAttribute, 0x0120},
+		"Duplicate invocation":      {StatusDuplicateInvocation, 0x0210},
+		"Unrecognized operation":    {StatusUnrecognizedOperation, 0x0211},
+		"Mistyped argument":         {StatusMistypedArgument, 0x0212},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = 0x%04X, want 0x%04X", name, tc.got, tc.want)
+		}
+	}
+
+	// The deprecated name keeps compiling, and keeps its value, so nobody's
+	// build breaks over our mistake.
+	if StatusRefusedOutOfResources != StatusNoSuchSOPInstance {
+		t.Error("the deprecated alias no longer matches StatusNoSuchSOPInstance")
+	}
+	// And the three are distinct: conflating them is what the bug was.
+	if StatusNoSuchSOPInstance == StatusOutOfResources ||
+		StatusNoSuchSOPInstance == StatusResourceLimitation {
+		t.Error("No Such SOP Instance must differ from both out-of-resources codes")
+	}
+}
