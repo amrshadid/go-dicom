@@ -17,6 +17,19 @@ var (
 	tagPixelData   = tag.New(0x7FE0, 0x0010)
 )
 
+// encapsulated frames fragments as encapsulated Pixel Data holds them: an empty
+// Basic Offset Table, then one item per fragment (PS3.5 A.4).
+func encapsulated(fragments ...[]byte) []byte {
+	var items bytes.Buffer
+	for _, fragment := range append([][]byte{{}}, fragments...) {
+		_ = binary.Write(&items, binary.LittleEndian, uint16(0xFFFE))
+		_ = binary.Write(&items, binary.LittleEndian, uint16(0xE000))
+		_ = binary.Write(&items, binary.LittleEndian, uint32(len(fragment)))
+		items.Write(fragment)
+	}
+	return items.Bytes()
+}
+
 func buildCodecTestDataset() *dataset.Dataset {
 	ds := dataset.NewDataset()
 	// 25 characters — deliberately odd, to exercise even-length padding.
@@ -56,7 +69,15 @@ func TestDatasetCodecRoundTripAllTransferSyntaxes(t *testing.T) {
 
 	for _, ts := range syntaxes {
 		t.Run(ts.name, func(t *testing.T) {
-			encoded, err := EncodeDataset(buildCodecTestDataset(), ts.uid)
+			ds := buildCodecTestDataset()
+			wantPixels := []byte{0x01, 0x02, 0x03, 0x04}
+			if encodingForTransferSyntax(ts.uid).Encapsulated {
+				// A compressed syntax carries Pixel Data as fragments, never as
+				// the native bytes above.
+				wantPixels = encapsulated(wantPixels)
+				_ = ds.Add(dataelem.NewDataElement(tagPixelData, dataelem.OB, wantPixels))
+			}
+			encoded, err := EncodeDataset(ds, ts.uid)
 			if err != nil {
 				t.Fatalf("EncodeDataset: %v", err)
 			}
@@ -81,8 +102,8 @@ func TestDatasetCodecRoundTripAllTransferSyntaxes(t *testing.T) {
 			if !ok {
 				t.Fatal("pixel data missing after round trip")
 			}
-			if !bytes.Equal(pixels.GetValue().([]byte), []byte{0x01, 0x02, 0x03, 0x04}) {
-				t.Errorf("pixel data = % x, want 01 02 03 04", pixels.GetValue())
+			if !bytes.Equal(pixels.GetValue().([]byte), wantPixels) {
+				t.Errorf("pixel data = % x, want % x", pixels.GetValue(), wantPixels)
 			}
 		})
 	}
@@ -366,5 +387,62 @@ func TestDecodeDatasetReadsEncapsulatedPixelData(t *testing.T) {
 	// And a sequence that never closes is an error, not a value.
 	if _, err := DecodeDataset(wire.Bytes()[:12+items.Len()], JPEGBaselineUID); err == nil {
 		t.Error("encapsulated pixel data with no delimiter decoded without error")
+	}
+}
+
+// TestEncodeDatasetSendsEncapsulatedPixelDataUndefined covers #128. PS3.5 A.4
+// requires encapsulated Pixel Data to have undefined length and a closing
+// Sequence Delimitation Item. It was sent with its byte count, which pynetdicom
+// accepts and dcmtk refuses, aborting the association.
+func TestEncodeDatasetSendsEncapsulatedPixelDataUndefined(t *testing.T) {
+	items := encapsulated([]byte{0xFF, 0xD8, 0xFF, 0xD9})
+
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tagPatientID, dataelem.LO, []byte("P1")))
+	// An implicit VR reader leaves the dictionary's "OB or OW"; encapsulated
+	// pixel data is OB whatever the image's Bits Allocated says.
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, []byte{16, 0}))
+	_ = ds.Add(dataelem.NewDataElement(tagPixelData, "OB or OW", items))
+	ds.SetTransferSyntaxUID(JPEGBaselineUID)
+
+	encoded, err := EncodeDataset(ds, JPEGBaselineUID)
+	if err != nil {
+		t.Fatalf("EncodeDataset: %v", err)
+	}
+
+	header := []byte{0xE0, 0x7F, 0x10, 0x00, 'O', 'B', 0, 0, 0xFF, 0xFF, 0xFF, 0xFF}
+	at := bytes.Index(encoded, header[:4])
+	if at < 0 {
+		t.Fatal("Pixel Data is missing from the encoding")
+	}
+	if got := encoded[at : at+len(header)]; !bytes.Equal(got, header) {
+		t.Errorf("Pixel Data header is % x, want % x: OB, undefined length", got, header)
+	}
+	delimiter := []byte{0xFE, 0xFF, 0xDD, 0xE0, 0, 0, 0, 0}
+	if !bytes.HasSuffix(encoded, delimiter) {
+		t.Errorf("the encoding does not end with a Sequence Delimitation Item: % x", encoded[len(encoded)-8:])
+	}
+	if n := bytes.Count(encoded, delimiter); n != 1 {
+		t.Errorf("%d delimiters, want 1", n)
+	}
+
+	back, err := DecodeDataset(encoded, JPEGBaselineUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+	elem, _ := back.Get(tagPixelData)
+	if got, _ := elem.GetValue().([]byte); !bytes.Equal(got, items) {
+		t.Errorf("the items did not survive: % x", got)
+	}
+}
+
+// TestEncodeDatasetRefusesNativePixelsUnderACompressedSyntax: bytes that are not
+// items cannot be sent as encapsulated, and sending them anyway would describe
+// pixels as fragments, which the receiver cannot detect.
+func TestEncodeDatasetRefusesNativePixelsUnderACompressedSyntax(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tagPixelData, dataelem.OW, []byte{1, 2, 3, 4}))
+	if _, err := EncodeDataset(ds, JPEGBaselineUID); err == nil {
+		t.Error("native pixel data was encoded under JPEG Baseline")
 	}
 }

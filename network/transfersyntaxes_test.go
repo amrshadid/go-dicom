@@ -127,16 +127,17 @@ func TestCompressedInstanceCanBeStored(t *testing.T) {
 	ds := dataset.NewDataset()
 	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0016), dataelem.UI, []byte(CTImageStorageUID)))
 	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0018), dataelem.UI, []byte("1.2.3.4.5\x00")))
-	// Opaque pixel bytes: the SCP never decodes them, which is the point.
-	_ = ds.Add(dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OB,
-		[]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}))
+	// Opaque fragments: the SCP never decodes them, which is the point. They are
+	// framed as items, as encapsulated pixel data always is (PS3.5 A.4).
+	pixels := encapsulated([]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08})
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OB, pixels))
 
 	if err := scu.Store(ctx, ds); err != nil {
 		t.Fatalf("Store over a compressed syntax: %v", err)
 	}
 
-	if storedBytes != 8 {
-		t.Errorf("the SCP received %d pixel bytes, want 8", storedBytes)
+	if storedBytes != len(pixels) {
+		t.Errorf("the SCP received %d pixel bytes, want %d", storedBytes, len(pixels))
 	}
 	_ = storedSyntax
 }

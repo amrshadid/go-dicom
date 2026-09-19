@@ -422,10 +422,6 @@ that gap, and two differences in how decoded samples are shaped and coloured.
   shares no code with this library. A round trip through this package's own
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
-- **Encapsulated pixel data is sent with an explicit length** (#128). PS3.5 A.4
-  requires an undefined length. pynetdicom accepts what is sent; dcmtk refuses it
-  and aborts the association. So a compressed instance sent to dcmtk, including one
-  retrieved from `qrscp`, fails. Receiving is not affected.
 
   Decoding has one gap of its own: **JPEG 2000** needs a registered external
   decoder, and without one an instance stored under it cannot be sent over a
@@ -435,7 +431,8 @@ that gap, and two differences in how decoded samples are shaped and coloured.
 
 Files this library writes are read by dcmtk and pydicom. Encapsulated pixel data
 is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
-requires.
+requires, both to a file and on the network. Native pixel data is never sent under
+a compressed syntax: the send fails rather than describe pixels as fragments.
 
 Where the dictionary gives an attribute two VRs, the one written is the one the
 data set calls for, resolved as pydicom resolves it. `US or SS` follows Pixel

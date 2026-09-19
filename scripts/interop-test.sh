@@ -405,6 +405,51 @@ PY
     fail "dcmtk storescp did not start listening"
   fi
   stop_server "$dcmtk_scp_pid"
+
+  # go-dicom sending compressed pixel data, which is where #128 was: PS3.5 A.4
+  # requires undefined length, and dcmtk aborts the association on anything
+  # else. pynetdicom accepts both, so the checks above never saw it. qrscp
+  # serves the instance it stored, so dcmtk supplies both ends.
+  if [ -x "$DCMTK_BIN/getscu" ]; then
+    note "C-GET compressed: dcmtk getscu <- go-dicom qrscp"
+    mkdir -p "$WORKDIR/qr_jpeg" "$WORKDIR/dcmtk_got"
+    compressed="$WORKDIR/compressed_get.dcm"
+    python3 -c "
+from pydicom.data import get_testdata_file
+import shutil
+shutil.copy(get_testdata_file('SC_rgb_jpeg_gdcm.dcm'), '$compressed')
+"
+    patient_id=$(python3 -c "import pydicom, sys; print(pydicom.dcmread(sys.argv[1]).PatientID)" "$compressed")
+    start_server "$WORKDIR" "$WORKDIR/qr_jpeg.log" \
+      "$GODICOM" qrscp -port 11157 -aet GOQRJ -output "$WORKDIR/qr_jpeg"
+    qr_jpeg_pid=$SERVER_PID
+    if wait_for_port 11157 &&
+      "$DCMTK_BIN/storescu" -xs -aec GOQRJ 127.0.0.1 11157 "$compressed" >/dev/null 2>&1; then
+      ( cd "$WORKDIR/dcmtk_got" && "$DCMTK_BIN/getscu" +xs -aec GOQRJ -P \
+          -k QueryRetrieveLevel=PATIENT -k PatientID="$patient_id" \
+          127.0.0.1 11157 >"$WORKDIR/dcmtk_getscu.log" 2>&1 ) || true
+      received=$(find "$WORKDIR/dcmtk_got" -type f | head -1)
+      if [ -z "$received" ]; then
+        fail "C-GET compressed — dcmtk retrieved nothing"
+        grep -E '^E:' "$WORKDIR/dcmtk_getscu.log" | head -3 >&2
+      elif python3 - "$compressed" "$received" <<'PY'
+import sys, pydicom
+sent, got = pydicom.dcmread(sys.argv[1]), pydicom.dcmread(sys.argv[2])
+if got.file_meta.TransferSyntaxUID != sent.file_meta.TransferSyntaxUID or got.PixelData != sent.PixelData:
+    print(f"      retrieved as {got.file_meta.TransferSyntaxUID.name}; fragments "
+          f"{'identical' if got.PixelData == sent.PixelData else 'differ'}", file=sys.stderr)
+    sys.exit(1)
+PY
+      then
+        pass "C-GET compressed — dcmtk retrieved the JPEG instance, fragments intact"
+      else
+        fail "C-GET compressed — the retrieved instance does not match what was stored"
+      fi
+    else
+      fail "C-GET compressed — could not store the instance in qrscp"
+    fi
+    stop_server "$qr_jpeg_pid"
+  fi
 else
   skip "dcmtk not available (set DCMTK_BIN)"
 fi
