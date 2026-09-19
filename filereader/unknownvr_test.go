@@ -166,3 +166,70 @@ func seqLength(s *sequence.Sequence) int {
 	}
 	return s.Length()
 }
+
+// unElementBE is VR UN in an Explicit VR Big Endian data set: the tag and
+// length use the file's byte order, but Note 2 says the value is little endian.
+func unElementBE(group, element uint16, value []byte) []byte {
+	var buf bytes.Buffer
+	_ = binary.Write(&buf, binary.BigEndian, group)
+	_ = binary.Write(&buf, binary.BigEndian, element)
+	buf.WriteString("UN")
+	buf.Write([]byte{0x00, 0x00})
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(value)))
+	buf.Write(value)
+	return buf.Bytes()
+}
+
+// TestUNInBigEndianFileIsNotSwapped covers the case #144 left as UN.
+//
+// Note 2's value is little endian even when the rest of the file is big
+// endian. Replacing UN with US/SS and then swapping as if the value used the
+// transfer syntax transposes the sample: Rows of 64 becomes 16384, and
+// BitsAllocated of 16 becomes 4096. The value is read as little endian and
+// the later swap is skipped.
+func TestUNInBigEndianFileIsNotSwapped(t *testing.T) {
+	rows := make([]byte, 2)
+	binary.LittleEndian.PutUint16(rows, 64)
+	bits := make([]byte, 2)
+	binary.LittleEndian.PutUint16(bits, 16)
+	ss := make([]byte, 2)
+	binary.LittleEndian.PutUint16(ss, 0xFFFF) // -1 as SS
+
+	var ds bytes.Buffer
+	ds.Write(unElementBE(0x0028, 0x0010, rows)) // Rows, US
+	ds.Write(unElementBE(0x0028, 0x0100, bits)) // Bits Allocated, US
+	ds.Write(unElementBE(0x0028, 0x1041, ss))   // Pixel Intensity Relationship Sign, SS
+
+	df := readFile(t, buildFile("1.2.840.10008.1.2.2", ds.Bytes(), false))
+	got := df.GetDataset()
+
+	for _, tc := range []struct {
+		name string
+		tg   tag.Tag
+		vr   string
+		want uint16
+	}{
+		{"Rows", tag.New(0x0028, 0x0010), "US", 64},
+		{"BitsAllocated", tag.New(0x0028, 0x0100), "US", 16},
+		{"PixelIntensityRelationshipSign", tag.New(0x0028, 0x1041), "SS", 0xFFFF},
+	} {
+		elem, ok := got.Get(tc.tg)
+		if !ok {
+			t.Errorf("%s was lost", tc.name)
+			continue
+		}
+		if string(elem.GetVR()) != tc.vr {
+			t.Errorf("%s VR = %q, want %s from the dictionary", tc.name, elem.GetVR(), tc.vr)
+			continue
+		}
+		raw, ok := elem.GetValue().([]byte)
+		if !ok || len(raw) < 2 {
+			t.Errorf("%s value is %T %v, want 2 little-endian bytes", tc.name, elem.GetValue(), raw)
+			continue
+		}
+		if got := binary.LittleEndian.Uint16(raw); got != tc.want {
+			t.Errorf("%s = %d (bytes % X), want %d — the UN value was swapped as big endian",
+				tc.name, got, raw, tc.want)
+		}
+	}
+}

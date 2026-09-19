@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A UN-encoded value in a big endian file is read as little endian** (#117,
+  by @team-humaki). PS3.5 6.2.2 Note 2 says a UN value is Implicit VR Little
+  Endian whatever the transfer syntax. After #144 a standard tag encoded as UN
+  takes its dictionary VR, but only in a little endian file: resolving it in a
+  big endian file would then swap the already-little-endian value by VR, so
+  Rows of 64 became 16384. The value is now read as little endian and the later
+  swap is skipped, so those files are typed instead of left as UN.
+
 - **32-bit big endian pixel data is no longer stored half-swapped** (#124, by
   @team-humaki). Pixel Data is OW, so reversing byte order by VR is two-byte
   words. At Bits Allocated 32 or 64 that leaves each sample's halves transposed:

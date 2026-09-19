@@ -313,6 +313,12 @@ type DataElementValue struct {
 	// Items holds the parsed child datasets of a Sequence (SQ) element.
 	// It is nil for non-sequence elements.
 	Items []*SequenceItemValue
+
+	// unReplaced is set when the file encoded this element as VR UN and the
+	// dictionary supplied a concrete VR. PS3.5 §6.2.2 Note 2: the value is
+	// Implicit VR Little Endian regardless of the transfer syntax, so a later
+	// big-endian swap must not run on this element or anything nested in it.
+	unReplaced bool
 }
 
 // SequenceItemValue is a single item within a Sequence (SQ) element,
@@ -429,12 +435,22 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 			// Sequence stayed an opaque blob.
 			// Defined length only: an undefined length means items whatever the
 			// dictionary says (Note 5), and the branch below reads them.
-			if known := dictionaryVRForUN(element.VR, element.Tag, dfr.reader.GetByteOrder()); known != "" &&
+			if known := dictionaryVRForUN(element.VR, element.Tag); known != "" &&
 				element.Length != UndefinedLength {
 				element.VR = known
+				element.unReplaced = true
 				// Note 2 again: the value is implicit VR little endian, so
 				// anything nested inside it is too.
 				elementIsImplicit = true
+				// Length was already read in the file's transfer syntax. The
+				// value — and any nested items — is little endian even when
+				// the rest of the data set is big endian. Restore after this
+				// element so the next sibling keeps the file's byte order.
+				if dfr.reader.GetByteOrder() == filebase.BigEndian {
+					savedOrder := dfr.reader.GetByteOrder()
+					dfr.reader.SetByteOrder(filebase.LittleEndian)
+					defer dfr.reader.SetByteOrder(savedOrder)
+				}
 			}
 		}
 	} else {
@@ -1521,13 +1537,12 @@ func validateDataElement(elem *DataElementValue) error {
 // (dataset.ResolveVR). Guessing either would describe bytes as something they
 // may not be.
 //
-// Little endian only. Note 2 says a UN value is little endian whatever the
-// transfer syntax, so in a big endian file a resolved value would be the one
-// value in the data set that must not be byte-swapped — and normalizeByteOrder
-// swaps by VR. Keeping UN there is correct rather than conservative: the bytes
-// stay as they are, which is what UN means.
-func dictionaryVRForUN(vr string, t tag.Tag, order filebase.ByteOrder) string {
-	if vr != "UN" || order == filebase.BigEndian {
+// Note 2 says a UN value is little endian whatever the transfer syntax. In a
+// big endian file the caller must therefore read the value as little endian
+// and skip the later VR-width swap (see unReplaced). Refusing to resolve UN
+// in a big endian file leaves those values untyped.
+func dictionaryVRForUN(vr string, t tag.Tag) string {
+	if vr != "UN" {
 		return ""
 	}
 	if t.Group()%2 == 1 {
@@ -1580,6 +1595,13 @@ func isValidVRVariant(actual, expected string) bool {
 // at the sample width instead. Encapsulated (undefined-length) Pixel Data is
 // fragments, not samples, and is left to the VR rule.
 func normalizeByteOrder(elem *DataElementValue, bitsAllocated int) {
+	// A UN-replaced value (and anything nested in it) is already little endian
+	// by Note 2. Swapping it as if it used the file's big endian transfer
+	// syntax would transpose every US/SS/UL sample.
+	if elem.unReplaced {
+		return
+	}
+
 	// Swap in place: the value was allocated by this reader and is not shared.
 	if elem.Tag == tag.New(0x7FE0, 0x0010) && !elem.UndefinedLength {
 		dataelem.SwapBytes(elem.Value, dataelem.PixelDataEndianWidth(dataelem.VR(elem.VR), bitsAllocated))
