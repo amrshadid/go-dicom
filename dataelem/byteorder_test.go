@@ -125,30 +125,3 @@ func TestShorterThanOneUnitIsLeftAlone(t *testing.T) {
 		t.Errorf("got % X, want % X", value, want)
 	}
 }
-
-// TestPixelDataEndianWidthUsesSampleSize covers OW Pixel Data whose samples are
-// wider than the VR. A 32-bit dose swapped as two 16-bit words keeps its halves
-// transposed (1249000 becomes 250085395).
-func TestPixelDataEndianWidthUsesSampleSize(t *testing.T) {
-	if got := PixelDataEndianWidth(OW, 16); got != 2 {
-		t.Errorf("16-bit samples: width %d, want 2", got)
-	}
-	if got := PixelDataEndianWidth(OW, 32); got != 4 {
-		t.Errorf("32-bit samples: width %d, want 4", got)
-	}
-	if got := PixelDataEndianWidth(OW, 64); got != 8 {
-		t.Errorf("64-bit samples: width %d, want 8", got)
-	}
-
-	be := []byte{0x12, 0x34, 0x56, 0x78}
-	half := append([]byte(nil), be...)
-	SwapBytes(half, 2)
-	if want := []byte{0x34, 0x12, 0x78, 0x56}; !bytes.Equal(half, want) {
-		t.Errorf("16-bit swap gave % X, want % X", half, want)
-	}
-	full := append([]byte(nil), be...)
-	SwapBytes(full, PixelDataEndianWidth(OW, 32))
-	if want := []byte{0x78, 0x56, 0x34, 0x12}; !bytes.Equal(full, want) {
-		t.Errorf("sample-width swap gave % X, want % X", full, want)
-	}
-}

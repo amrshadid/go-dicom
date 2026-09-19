@@ -18,33 +18,6 @@ func IsByteOrderSensitive(vr VR) bool {
 	return ok
 }
 
-// PixelDataEndianWidth is the unit Pixel Data (OW) must be reversed in when
-// converting byte order. The VR is two-byte words, which is right until
-// BitsAllocated is 32 or 64: each sample then needs its whole width reversed,
-// not two 16-bit swaps that leave the halves transposed.
-func PixelDataEndianWidth(vr VR, bitsAllocated int) int {
-	if bitsAllocated >= 32 && bitsAllocated%8 == 0 {
-		return bitsAllocated / 8
-	}
-	if width, ok := byteOrderSensitiveVRs[vr]; ok {
-		return width
-	}
-	return 0
-}
-
-// SwapBytes reverses each width-byte unit of value in place. A width below 2,
-// or a value shorter than one unit, is left alone.
-func SwapBytes(value []byte, width int) {
-	if width < 2 || len(value) < width {
-		return
-	}
-	for off := 0; off+width <= len(value); off += width {
-		for i, j := off, off+width-1; i < j; i, j = i+1, j-1 {
-			value[i], value[j] = value[j], value[i]
-		}
-	}
-}
-
 // SwapByteOrder converts a value between big and little endian in place,
 // reversing each multi-byte number according to the VR's width.
 //
@@ -59,8 +32,13 @@ func SwapBytes(value []byte, width int) {
 // big endian.
 func SwapByteOrder(vr VR, value []byte) {
 	width, sensitive := byteOrderSensitiveVRs[vr]
-	if !sensitive {
+	if !sensitive || len(value) < width {
 		return
 	}
-	SwapBytes(value, width)
+
+	for off := 0; off+width <= len(value); off += width {
+		for i, j := off, off+width-1; i < j; i, j = i+1, j-1 {
+			value[i], value[j] = value[j], value[i]
+		}
+	}
 }

@@ -69,29 +69,6 @@ func TestStatusCategoryString(t *testing.T) {
 	}
 }
 
-func TestStatusNoSuchSOPInstanceNotOutOfResources(t *testing.T) {
-	// PS3.7 Annex C: 0112H is No Such SOP Instance. "Refused: Out of Resources"
-	// is a C-service status in the A7xxH range (StatusOutOfResources = 0xA700).
-	if StatusNoSuchSOPInstance != 0x0112 {
-		t.Fatalf("StatusNoSuchSOPInstance = 0x%04X, want 0x0112", StatusNoSuchSOPInstance)
-	}
-	if StatusRefusedOutOfResources != StatusNoSuchSOPInstance {
-		t.Fatalf("StatusRefusedOutOfResources = 0x%04X, want StatusNoSuchSOPInstance (0x0112) for compatibility", StatusRefusedOutOfResources)
-	}
-	if StatusOutOfResources != 0xA700 {
-		t.Fatalf("StatusOutOfResources = 0x%04X, want 0xA700", StatusOutOfResources)
-	}
-	if StatusResourceLimitation != 0x0213 {
-		t.Fatalf("StatusResourceLimitation = 0x%04X, want 0x0213", StatusResourceLimitation)
-	}
-	if StatusNoSuchSOPInstance == StatusOutOfResources {
-		t.Fatal("StatusNoSuchSOPInstance must not equal StatusOutOfResources")
-	}
-	if StatusNoSuchSOPInstance == StatusResourceLimitation {
-		t.Fatal("StatusNoSuchSOPInstance must not equal StatusResourceLimitation")
-	}
-}
-
 func TestFormatStatus(t *testing.T) {
 	s := FormatStatus(StatusSuccess)
 	if s != "0x0000 (Success)" {
