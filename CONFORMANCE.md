@@ -454,6 +454,15 @@ is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
 requires, both to a file and on the network. Native pixel data is never sent under
 a compressed syntax: the send fails rather than describe pixels as fragments.
 
+On reading, an element encoded as UN whose tag the dictionary knows takes that
+VR, and its value is read as Implicit VR Little Endian, which PS3.5 6.2.2 Note 2
+allows whatever the transfer syntax; pydicom does the same by default. A private
+creator is LO (PS3.5 7.8.1). Anything else private keeps UN, an ambiguous
+dictionary entry keeps UN, and a UN element in a big endian file keeps UN,
+because Note 2's little endian value must not be byte-swapped with the rest of
+the data set. An undefined length means items whatever the dictionary says
+(Note 5), and they are parsed as a sequence.
+
 Where the dictionary gives an attribute two VRs, the one written is the one the
 data set calls for, resolved as pydicom resolves it. `US or SS` follows Pixel
 Representation (PS3.3 C.7.6.3), which a sequence item takes from the image

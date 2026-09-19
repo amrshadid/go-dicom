@@ -20,6 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A standard tag encoded as UN is read with its dictionary VR** (#117). An
+  intermediary that does not know a tag re-encodes it as UN, and PS3.5 6.2.2 Note 2
+  lets a receiver that does know it read the value as Implicit VR Little Endian.
+  The VR was kept as UN instead, so the typed accessors refused the value and a
+  UN-encoded sequence was never parsed: pydicom's `rtdose_rle.dcm` had 35 such
+  elements, its Referenced RT Plan Sequence stayed an opaque blob, and the reader
+  emitted 35 "VR mismatch ... got UN" warnings about a thing it could have
+  resolved. It now reads like `rtdose.dcm`, the same study written normally.
+
+  A private creator becomes LO (PS3.5 7.8.1). Every other private tag keeps UN,
+  as does an ambiguous dictionary entry, and a UN element in a big endian file,
+  whose value is little endian by Note 2 and must not be swapped with the rest.
+  Across pydicom's corpus the only UN elements left are the four pydicom also
+  leaves.
+
 - **Text with no declared character set is decoded instead of mislabeled** (#115).
   `GetDataset` rewrote Specific Character Set (0008,0005) to `ISO_IR 192`
   unconditionally, while a value was left as it was found when there was no
