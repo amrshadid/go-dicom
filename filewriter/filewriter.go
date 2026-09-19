@@ -317,6 +317,16 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		return dfw.writeSequence(elem, forceExplicitVR)
 	}
 
+	// The VR field is exactly two bytes (PS3.5 6.2), and this writes elem.VR into
+	// it as given. A VR of any other length — a dictionary's "OB or OW", or none
+	// at all — shifts every byte after it, and the file reads as corrupt from
+	// that element on. ElementsFromDataset resolves the VR first; this is for a
+	// DataElement built by hand, which should produce a readable file whatever it
+	// holds. UN is what the standard says an element of unknown VR is.
+	if len(elem.VR) != 2 {
+		elem = &DataElement{Tag: elem.Tag, VR: "UN", Value: elem.Value, Length: elem.Length}
+	}
+
 	// Values are held little endian in memory, so numeric ones must be
 	// converted when the target syntax is big endian. Swap a copy: the caller's
 	// value must not be mutated by writing.

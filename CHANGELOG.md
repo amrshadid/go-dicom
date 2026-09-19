@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Writing an Implicit VR data set as Explicit VR no longer loses the pixel data**
+  (#118). The reader gives an Implicit VR element the dictionary's VR, and for Pixel
+  Data that is `OB or OW`. The writer put those eight characters into a two-byte field,
+  so `OB` became the VR and `r OW` became the length:
+
+  ```
+  E: DcmElement: PixelData (7fe0,0010) larger (1464803442) than remaining bytes
+  ```
+
+  `storescp` and `qrscp` always write Explicit VR. So every image an Implicit VR sender
+  stored in them was corrupt: DICOM's default transfer syntax, and what dcmtk sends.
+  CT_small sent that way arrived with 25 of its 257 elements. Six files in pydicom's
+  corpus lost elements when rewritten, `MR_small_implicit.dcm` its Pixel Data among
+  them.
+
+  The interop suite never noticed. Its C-STORE fixture is Explicit VR. Its round trip
+  tolerated two rewrites dcmtk refuses, on the grounds that both fixtures are
+  malformed, but dcmtk reads one of them, `meta_missing_tsyntax.dcm`, as supplied. Both
+  rewrites were refused because of this defect. The round trip now judges each file
+  against its source, and dcmtk also sends the fixture as Implicit VR.
+
+  `Dataset.ResolveVR` now settles the VR for the file writer, the network encoder and
+  DICOM JSON. Before, only the JSON path resolved it, and the network encoder sent
+  `UN`. The rules are pydicom's:
+  - `US or SS` follows Pixel Representation, inherited into sequence items.
+  - Pixel Data is `OB` at 8 bits or fewer and `OW` otherwise.
+  - LUT Data is `US` for a single entry and `OW` otherwise.
+  - Anything else that offers `OW` is `OW`.
+
+  JSON output for the corpus is byte-identical.
+
 ## [1.5.0] - 2026-08-15
 
 ### Fixed after the first tag

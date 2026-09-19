@@ -6,6 +6,7 @@ import (
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -225,4 +226,65 @@ func trimPadding(b []byte) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// TestEncodeDatasetResolvesAmbiguousVRs covers a data set received or read as
+// Implicit VR and sent on as Explicit VR. It holds the dictionary's VRs, and the
+// ambiguous ones went out as UN: legal, but a peer storing what it was sent kept
+// the pixels as UN. Resolved, Pixel Data is OW, and a value in a signed image is
+// SS — inside a sequence item too, where the image's Pixel Representation
+// decides.
+func TestEncodeDatasetResolvesAmbiguousVRs(t *testing.T) {
+	item := dataset.NewDataset()
+	_ = item.Add(dataelem.NewDataElement(tag.New(0x0028, 0x3002), "US or SS", []byte{0, 16, 0, 0x80, 16, 0}))
+	lut := sequence.New()
+	_ = lut.Append(item)
+
+	// The sequence goes in with Add rather than AddSequence, as a reader's does,
+	// so no parent is recorded and the encoder has to carry the image down.
+	implicit := dataset.NewDataset()
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, []byte{16, 0}))
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0103), dataelem.US, []byte{1, 0}))
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0106), "US or SS", []byte{0xFB, 0xFF}))
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x3000), dataelem.SQ, lut))
+	_ = implicit.Add(dataelem.NewDataElement(tagPixelData, "OB or OW", []byte{1, 0, 2, 0}))
+	if item.Parent() != nil {
+		t.Fatal("Add recorded a parent, so this does not test the encoder")
+	}
+
+	encoded, err := EncodeDataset(implicit, ExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("EncodeDataset: %v", err)
+	}
+	back, err := DecodeDataset(encoded, ExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+
+	for tg, want := range map[tag.Tag]dataelem.VR{
+		tagPixelData:            dataelem.OW,
+		tag.New(0x0028, 0x0106): dataelem.SS,
+	} {
+		elem, ok := back.Get(tg)
+		if !ok {
+			t.Errorf("%s was lost", tg)
+			continue
+		}
+		if elem.GetVR() != want {
+			t.Errorf("%s went out as %q, want %s", tg, elem.GetVR(), want)
+		}
+	}
+
+	seq, err := back.GetSequence(tag.New(0x0028, 0x3000))
+	if err != nil || seq.Length() != 1 {
+		t.Fatalf("the sequence was lost: %v", err)
+	}
+	raw, _ := seq.Get(0)
+	descriptor, ok := raw.(*dataset.Dataset).Get(tag.New(0x0028, 0x3002))
+	if !ok {
+		t.Fatal("the item's LUT Descriptor was lost")
+	}
+	if descriptor.GetVR() != dataelem.SS {
+		t.Errorf("the item's LUT Descriptor went out as %q, want SS from the image", descriptor.GetVR())
+	}
 }

@@ -108,6 +108,12 @@ func (ds *Dataset) ToDICOMJSON() (map[string]DICOMJSONElement, error) {
 // ToDICOMJSONWithOptions converts the data set, holding large binary values out
 // of line when asked.
 func (ds *Dataset) ToDICOMJSONWithOptions(opts DICOMJSONOptions) (map[string]DICOMJSONElement, error) {
+	return ds.toDICOMJSON(opts, nil)
+}
+
+// toDICOMJSON converts the data set as an item of enclosing, nearest first, so
+// an element can take its VR from the image the item describes.
+func (ds *Dataset) toDICOMJSON(opts DICOMJSONOptions, enclosing []*Dataset) (map[string]DICOMJSONElement, error) {
 	out := make(map[string]DICOMJSONElement)
 
 	for _, elem := range ds.GetAll() {
@@ -116,7 +122,7 @@ func (ds *Dataset) ToDICOMJSONWithOptions(opts DICOMJSONOptions) (map[string]DIC
 			return nil, fmt.Errorf("dataset: an element has an unreadable tag (%T); "+
 				"refusing to write JSON with it omitted", elem)
 		}
-		converted, err := ds.elementToDICOMJSON(t, elem, opts)
+		converted, err := ds.elementToDICOMJSON(t, elem, opts, enclosing)
 		if err != nil {
 			return nil, err
 		}
@@ -146,9 +152,9 @@ func dicomJSONKey(t tag.Tag) string {
 
 // elementToDICOMJSON converts one element.
 func (ds *Dataset) elementToDICOMJSON(t tag.Tag, elem *dataelem.DataElement,
-	opts DICOMJSONOptions) (DICOMJSONElement, error) {
+	opts DICOMJSONOptions, enclosing []*Dataset) (DICOMJSONElement, error) {
 
-	vr := ds.resolveJSONVR(t, elem)
+	vr := ds.resolveJSONVR(t, elem, enclosing)
 	out := DICOMJSONElement{VR: string(vr)}
 
 	if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
@@ -160,7 +166,7 @@ func (ds *Dataset) elementToDICOMJSON(t tag.Tag, elem *dataelem.DataElement,
 			if !ok {
 				continue
 			}
-			nested, err := inner.ToDICOMJSONWithOptions(opts)
+			nested, err := inner.toDICOMJSON(opts, append([]*Dataset{ds}, enclosing...))
 			if err != nil {
 				return out, err
 			}
@@ -192,43 +198,30 @@ func (ds *Dataset) elementToDICOMJSON(t tag.Tag, elem *dataelem.DataElement,
 	return out, nil
 }
 
-// resolveJSONVR settles on one value representation to write.
+// resolveJSONVR is ResolveVR with one restriction, on an element nobody typed.
 //
-// The JSON model has no way to say "either of these". A dictionary entry may,
-// because some attributes take their VR from another attribute in the same data
-// set, and a reader that has not resolved it carries the ambiguity in the VR
-// itself — "OB or OW", "US or SS". Writing that verbatim produces a document no
-// consumer will accept, and picking arbitrarily produces one that is accepted
-// and wrong: US read as SS turns 40000 into -25536.
+// An absent value representation and an explicit UN mean the same thing to a
+// reader: nobody said what this is. They were handled differently, so a private
+// creator stored without a VR — which is how an implicit VR file stores
+// everything — came out as UN where the same element with an explicit UN came
+// out as LO.
 //
-// So the deciding attribute is consulted. Pixel Representation (0028,0103) says
-// whether pixel values are signed, and Bits Allocated (0028,0100) whether pixel
-// data is bytes or words. An element with no value representation at all becomes
-// UN, which is what the standard says an unknown one is.
-func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement) dataelem.VR {
-	vr := elem.GetVR()
+// PS3.5 6.2.2 lets a sender write UN when it does not know the value
+// representation, and lets a receiver look the tag up instead. Carrying UN into
+// JSON would base64 a date or a patient name, which is a valid document that no
+// consumer can use — pydicom, dcm4che and dcmtk all resolve it, and a document
+// that disagrees with all three is not interchange.
+//
+// Only for text: the bytes of a UN element already are the text, so reading them
+// as the dictionary VR needs no reinterpretation. A UN that the dictionary calls
+// SQ holds an encoded sequence, and claiming SQ without parsing it would produce
+// a Value that is not there.
+func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement, enclosing []*Dataset) dataelem.VR {
 	if _, ok := elem.GetValue().(*sequence.Sequence); ok {
 		return dataelem.SQ
 	}
 
-	switch vr {
-	// An absent value representation and an explicit UN mean the same thing to
-	// a reader: nobody said what this is. They were handled differently, so a
-	// private creator stored without a VR — which is how an implicit VR file
-	// stores everything — came out as UN where the same element with an
-	// explicit UN came out as LO.
-	case "", dataelem.UN:
-		// PS3.5 6.2.2 lets a sender write UN when it does not know the value
-		// representation, and lets a receiver look the tag up instead. Carrying
-		// UN into JSON would base64 a date or a patient name, which is a valid
-		// document that no consumer can use — pydicom, dcm4che and dcmtk all
-		// resolve it, and a document that disagrees with all three is not
-		// interchange.
-		//
-		// Only for text: the bytes of a UN element already are the text, so
-		// reading them as the dictionary VR needs no reinterpretation. A UN that
-		// the dictionary calls SQ holds an encoded sequence, and claiming SQ
-		// without parsing it would produce a Value that is not there.
+	if vr := elem.GetVR(); vr == "" || vr == dataelem.UN {
 		if private := ds.privateVR(t); private != "" {
 			return private
 		}
@@ -239,24 +232,8 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement) dataelem
 			}
 		}
 		return dataelem.UN
-
-	case "US or SS":
-		if ds.unsignedPixelValues() {
-			return dataelem.US
-		}
-		return dataelem.SS
-
-	case "OB or OW", "OW or OB":
-		// PS3.5 A.1: pixel data is OW unless each sample fits in a byte.
-		if bits, ok := ds.uint16Value(tag.New(0x0028, 0x0100)); ok && bits <= 8 {
-			return dataelem.OB
-		}
-		return dataelem.OW
-
-	case "OB or OD":
-		return dataelem.OB
 	}
-	return vr
+	return ds.ResolveVR(t, elem, enclosing...)
 }
 
 // privateVR resolves a private tag through the private dictionary.
@@ -310,26 +287,6 @@ func (ds *Dataset) privateVR(t tag.Tag) dataelem.VR {
 		}
 	}
 	return ""
-}
-
-// unsignedPixelValues reports what Pixel Representation says. Absent, it is 0 —
-// unsigned — which is the standard'"'"'s default and the common case.
-func (ds *Dataset) unsignedPixelValues() bool {
-	v, ok := ds.uint16Value(tag.New(0x0028, 0x0103))
-	return !ok || v == 0
-}
-
-// uint16Value reads a two-byte unsigned value.
-func (ds *Dataset) uint16Value(t tag.Tag) (uint16, bool) {
-	elem, ok := ds.Get(t)
-	if !ok {
-		return 0, false
-	}
-	raw, ok := elem.GetValue().([]byte)
-	if !ok || len(raw) < 2 {
-		return 0, false
-	}
-	return binary.LittleEndian.Uint16(raw), true
 }
 
 // dicomJSONValues renders a non-sequence, non-binary value.
