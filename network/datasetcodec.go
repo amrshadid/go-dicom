@@ -83,43 +83,15 @@ func EncodeDataset(ds *dataset.Dataset, transferSyntax string) ([]byte, error) {
 	}
 
 	enc := encodingForTransferSyntax(transferSyntax)
-	var buf bytes.Buffer
-
-	for _, elem := range ds.GetAll() {
-		// An element whose tag cannot be read is an error, not something to
-		// skip. Skipping it sent a data set the peer accepted as complete while
-		// an attribute was missing from it — the worst outcome available, since
-		// nothing on either side reports a problem.
-		t, ok := elem.Tag()
-		if !ok {
-			return nil, NewPDUErrorf("ENCODE_DS",
-				"element has an unreadable tag (%T); refusing to send a data set with it omitted",
-				elem.GetTag())
-		}
-
-		// A sequence holds nested data sets rather than a byte value, so it is
-		// serialized recursively. Skipping it here would transmit the element
-		// as empty and silently drop every nested item.
-		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
-			if err := writeSequence(&buf, enc, t, seq); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		data, ok := elementValueBytes(elem)
-		if !ok {
-			continue
-		}
-		if err := writeElement(&buf, enc, t, elem.GetVR(), data); err != nil {
-			return nil, err
-		}
+	body, err := encodeDatasetBody(ds, enc, nil)
+	if err != nil {
+		return nil, err
 	}
 
 	if enc.Deflated {
-		return deflateBytes(buf.Bytes())
+		return deflateBytes(body)
 	}
-	return buf.Bytes(), nil
+	return body, nil
 }
 
 // DecodeDataset parses a data set encoded with the given transfer syntax.
@@ -243,10 +215,9 @@ func readElementHeader(r *bytes.Reader, enc transferSyntaxEncoding, order binary
 func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr dataelem.VR, data []byte) error {
 	order := enc.byteOrder()
 
-	// Resolve the VR first: it determines the pad byte as well as the header form.
-	if vr == "" {
-		vr = dataelem.VR(t.GetVR())
-	}
+	// The caller resolves the VR, since it determines the pad byte as well as the
+	// header form. The VR field is still exactly two bytes (PS3.5 6.2) whatever
+	// the caller did, so anything else goes out as UN.
 	if len(vr) != 2 {
 		vr = dataelem.UN
 	}
@@ -299,7 +270,8 @@ func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr d
 // the encoding self-describing and is accepted by every conforming peer. Item
 // tags always use the implicit-style header — tag then 4-byte length, no VR —
 // even inside an explicit VR transfer syntax (PS3.5 Section 7.5).
-func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq *sequence.Sequence) error {
+func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq *sequence.Sequence,
+	enclosing []*dataset.Dataset) error {
 	order := enc.byteOrder()
 
 	// Serialize the items first so the sequence length is known up front.
@@ -312,7 +284,7 @@ func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq
 			continue
 		}
 
-		childBytes, err := encodeDatasetBody(child, enc)
+		childBytes, err := encodeDatasetBody(child, enc, enclosing)
 		if err != nil {
 			return err
 		}
@@ -348,28 +320,43 @@ func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq
 }
 
 // encodeDatasetBody serializes a data set's elements without applying the
-// deflate wrapper, so it can be nested inside a sequence item.
-func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding) ([]byte, error) {
+// deflate wrapper, so it can be nested inside a sequence item. enclosing lists
+// the data sets ds is an item of, nearest first.
+//
+// Each element goes out with the VR dataset.ResolveVR settles on. A data set
+// received or read as Implicit VR holds the dictionary's VR, and the ambiguous
+// ones — "OB or OW" for Pixel Data, "US or SS" — fell through to UN here: legal,
+// but a peer storing it as sent kept image pixels as UN.
+func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosing []*dataset.Dataset) ([]byte, error) {
 	var buf bytes.Buffer
 
 	for _, elem := range ds.GetAll() {
+		// An element whose tag cannot be read is an error, not something to
+		// skip. Skipping it sent a data set the peer accepted as complete while
+		// an attribute was missing from it — the worst outcome available, since
+		// nothing on either side reports a problem.
 		t, ok := elem.Tag()
 		if !ok {
 			return nil, NewPDUErrorf("ENCODE_DS",
 				"element has an unreadable tag (%T); refusing to send a data set with it omitted",
 				elem.GetTag())
 		}
+
+		// A sequence holds nested data sets rather than a byte value, so it is
+		// serialized recursively. Skipping it here would transmit the element
+		// as empty and silently drop every nested item.
 		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
-			if err := writeSequence(&buf, enc, t, seq); err != nil {
+			if err := writeSequence(&buf, enc, t, seq, append([]*dataset.Dataset{ds}, enclosing...)); err != nil {
 				return nil, err
 			}
 			continue
 		}
+
 		data, ok := elementValueBytes(elem)
 		if !ok {
 			continue
 		}
-		if err := writeElement(&buf, enc, t, elem.GetVR(), data); err != nil {
+		if err := writeElement(&buf, enc, t, ds.ResolveVR(t, elem, enclosing...), data); err != nil {
 			return nil, err
 		}
 	}

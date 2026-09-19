@@ -48,10 +48,22 @@ func elementValueBytes(elem *dataelem.DataElement) ([]byte, bool) {
 // item missing. That failure is silent: the element is present, its length is
 // zero, and nothing reports it.
 //
+// Each element is written with the VR dataset.ResolveVR settles on. A data set
+// read from an Implicit VR file holds the dictionary's VR, and for Pixel Data
+// that is "OB or OW". Copied into an Explicit VR header it put "OB" in the VR
+// field and " or OW" where the reserved bytes and the length belong, so a reader
+// took the length from "r OW" and lost Pixel Data and whatever followed it.
+//
 // Elements whose tag cannot be read are dropped, with a warning naming the type
 // found. There is no tag to write them under, so the alternative is refusing the
 // whole data set for one unreadable element.
 func ElementsFromDataset(ds *dataset.Dataset) []*DataElement {
+	return elementsFromDataset(ds, nil)
+}
+
+// elementsFromDataset converts ds as an item of enclosing, nearest first, which
+// is where an item's elements find the Pixel Representation deciding their VR.
+func elementsFromDataset(ds *dataset.Dataset, enclosing []*dataset.Dataset) []*DataElement {
 	if ds == nil {
 		return nil
 	}
@@ -69,7 +81,7 @@ func ElementsFromDataset(ds *dataset.Dataset) []*DataElement {
 			out = append(out, &DataElement{
 				Tag:   t,
 				VR:    "SQ",
-				Items: sequenceItems(seq),
+				Items: sequenceItems(seq, append([]*dataset.Dataset{ds}, enclosing...)),
 			})
 			continue
 		}
@@ -87,7 +99,7 @@ func ElementsFromDataset(ds *dataset.Dataset) []*DataElement {
 
 		out = append(out, &DataElement{
 			Tag:    t,
-			VR:     string(elem.GetVR()),
+			VR:     string(ds.ResolveVR(t, elem, enclosing...)),
 			Value:  value,
 			Length: uint32(len(value)),
 		})
@@ -96,8 +108,9 @@ func ElementsFromDataset(ds *dataset.Dataset) []*DataElement {
 }
 
 // sequenceItems converts a sequence's items, recursing through
-// ElementsFromDataset so nesting of any depth is carried across.
-func sequenceItems(seq *sequence.Sequence) []*SequenceItem {
+// elementsFromDataset so nesting of any depth is carried across. enclosing is
+// the chain of data sets the items sit inside, nearest first.
+func sequenceItems(seq *sequence.Sequence, enclosing []*dataset.Dataset) []*SequenceItem {
 	if seq == nil {
 		return nil
 	}
@@ -110,7 +123,7 @@ func sequenceItems(seq *sequence.Sequence) []*SequenceItem {
 			// as an item, and guessing would corrupt the sequence.
 			continue
 		}
-		items = append(items, &SequenceItem{Elements: ElementsFromDataset(child)})
+		items = append(items, &SequenceItem{Elements: elementsFromDataset(child, enclosing)})
 	}
 	return items
 }

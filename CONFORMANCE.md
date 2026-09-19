@@ -433,10 +433,17 @@ Files this library writes are read by dcmtk and pydicom. Encapsulated pixel data
 is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
 requires.
 
-Two of pydicom's own fixtures are refused by dcmtk however they are written —
-`SC_rgb_jpeg.dcm`, which holds implicit VR inside a file declaring explicit, and
-`meta_missing_tsyntax.dcm`, which carries no transfer syntax at all. Both are
-read here, and both come back out no more conformant than they went in.
+Where the dictionary gives an attribute two VRs, the one written is the one the
+data set calls for, resolved as pydicom resolves it. `US or SS` follows Pixel
+Representation (PS3.3 C.7.6.3), which a sequence item takes from the image
+enclosing it. Pixel Data is OB at 8 bits allocated or fewer and OW above that
+(PS3.5 A.1, A.2). LUT Data is US for a single entry and OW otherwise, and any
+other choice offering OW is OW. An element with no known VR is written as UN.
+The same rules apply to files, to data sets sent over the network, and to DICOM
+JSON.
+
+Every file in pydicom's corpus, read and written back, is read by dcmtk. That includes `SC_rgb_jpeg.dcm`, which holds implicit VR inside a file
+declaring explicit. dcmtk refuses it as supplied and reads it once rewritten.
 
 ### 8.4 Truncated files
 

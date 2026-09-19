@@ -317,6 +317,23 @@ if [ -x "$DCMTK_BIN/storescu" ] && [ -x "$DCMTK_BIN/storescp" ]; then
     else
       fail "C-STORE"
     fi
+
+    # The same instance again, sent as Implicit VR Little Endian — DICOM's
+    # default, and what most modalities send. storescp writes Explicit VR, so
+    # this is the conversion that put "OB or OW" in the VR field and lost the
+    # pixel data (#118). The fixture is Explicit VR, so the check above never
+    # made it.
+    find "$WORKDIR/go_recv2" -type f -delete
+    if "$DCMTK_BIN/storescu" -xi -aec GODICOM 127.0.0.1 11153 "$FIXTURE" >/dev/null 2>&1; then
+      received=$(find "$WORKDIR/go_recv2" -type f | head -1)
+      if [ -n "$received" ]; then
+        verify_transfer "$received" "C-STORE as Implicit VR"
+      else
+        fail "C-STORE as Implicit VR — peer reported success but no file was written"
+      fi
+    else
+      fail "C-STORE as Implicit VR"
+    fi
   else
     fail "go-dicom storescp did not start listening"
   fi
@@ -594,25 +611,32 @@ raise SystemExit(0 if copied else 1)
 PYEOF
   then
     if go run ./scripts/roundtrip-check "$rt_src" "$rt_out" > "$WORKDIR/rt.log" 2>&1; then
+      # Each file is judged against its own source: one dcmtk reads as supplied
+      # and not as written is a regression, whatever the rest do. This used to
+      # tolerate two rejections, on the grounds that two fixtures are malformed.
+      # dcmtk reads one of the two, meta_missing_tsyntax.dcm, as supplied. Its
+      # rewrite was refused because the writer put "OB or OW" in its VR field
+      # (#118).
       rt_total=0
-      rt_bad=0
+      rt_regressed=0
+      rt_malformed=0
       for written in "$rt_out"/*.dcm; do
         [ -f "$written" ] || continue
         rt_total=$((rt_total + 1))
-        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>&1; then
-          rt_bad=$((rt_bad + 1))
-          echo "   dcmtk rejects $(basename "$written")" >&2
+        "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>&1 && continue
+        if "$DCMTK_BIN/dcmdump" "$rt_src/$(basename "$written")" >/dev/null 2>&1; then
+          rt_regressed=$((rt_regressed + 1))
+          echo "   dcmtk reads $(basename "$written") as supplied, and rejects it as written" >&2
+        else
+          rt_malformed=$((rt_malformed + 1))
         fi
       done
 
-      # Two of pydicom's fixtures are themselves non-conformant — one holds
-      # implicit VR inside a file declaring explicit, the other has no transfer
-      # syntax at all — and dcmtk refuses them however they are written.
-      if [ "$rt_bad" -le 2 ]; then
-        pass "round trip — dcmtk reads $((rt_total - rt_bad)) of $rt_total files this writer produced"
+      if [ "$rt_regressed" -eq 0 ]; then
+        pass "round trip — dcmtk reads $((rt_total - rt_malformed)) of $rt_total files this writer produced, and rejects none it reads as supplied"
         RAN_ANY=1
       else
-        fail "dcmtk rejects $rt_bad of $rt_total files this writer produced"
+        fail "dcmtk rejects $rt_regressed files this writer produced that it reads as supplied"
       fi
     else
       fail "the round trip harness failed"
