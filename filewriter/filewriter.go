@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"fmt"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/filebase"
@@ -30,22 +31,10 @@ type FileMetaInfo struct {
 }
 
 // isEncapsulatedSyntax reports whether a transfer syntax carries pixel data as
-// fragments rather than as a contiguous value.
-//
-// Everything outside the four uncompressed syntaxes does. Listing those rather
-// than enumerating the compressed ones means a syntax added to the standard
-// later is treated as compressed, which is the safe direction: writing an
-// explicit length for encapsulated data produces a file strict parsers reject,
-// while undefined length for native data would be caught by any round trip.
+// fragments rather than as a contiguous value. compress.IsEncapsulated is the
+// one answer the file writer and the network encoder share.
 func isEncapsulatedSyntax(uid string) bool {
-	switch uid {
-	case "1.2.840.10008.1.2", // Implicit VR Little Endian
-		"1.2.840.10008.1.2.1",    // Explicit VR Little Endian
-		"1.2.840.10008.1.2.1.99", // Deflated Explicit VR Little Endian
-		"1.2.840.10008.1.2.2":    // Explicit VR Big Endian
-		return false
-	}
-	return uid != ""
+	return compress.IsEncapsulated(uid)
 }
 
 // pixelDataTag is (7FE0,0010).

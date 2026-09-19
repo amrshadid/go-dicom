@@ -55,10 +55,9 @@ func encodingForTransferSyntax(ts string) transferSyntaxEncoding {
 	case "":
 		// No negotiated syntax known; DICOM's default encoding is implicit VR LE.
 		return transferSyntaxEncoding{ExplicitVR: false, BigEndian: false}
-	case ExplicitVRLittleEndianUID:
-		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false}
 	default:
-		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false, Encapsulated: true}
+		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false,
+			Encapsulated: compress.IsEncapsulated(ts)}
 	}
 }
 

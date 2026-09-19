@@ -72,7 +72,32 @@ func TransferSyntaxToCompressionType(uid string) (CompressionType, error) {
 // Helper Functions for Transfer Syntax Detection
 // ========================================================================
 
-// IsCompressed returns true if the transfer syntax indicates compressed data
+// IsEncapsulated reports whether a transfer syntax carries Pixel Data as
+// fragments rather than as native samples.
+//
+// It is not the same question as IsCompressed. Deflated Explicit VR Little
+// Endian compresses the whole data set, and its Pixel Data is native. Asking
+// IsCompressed sent the network transcoder looking for a pixel encoder for
+// Deflated, so no image could be sent to a peer that chose it (#132).
+//
+// Everything outside the uncompressed syntaxes and Deflated is encapsulated.
+// Listing those rather than the compressed ones means a syntax added to the
+// standard later is treated as encapsulated, which is the safe direction:
+// native bytes described as fragments would be caught by any round trip, while
+// fragments described as native would not. An empty syntax is not encapsulated:
+// nothing says it is.
+func IsEncapsulated(uid string) bool {
+	switch uid {
+	case "", ImplicitVRLittleEndian, ExplicitVRLittleEndian, ExplicitVRBigEndian,
+		DeflatedExplicitVRLittleEnd:
+		return false
+	}
+	return true
+}
+
+// IsCompressed reports whether a transfer syntax compresses anything, the
+// data set (Deflated) or the pixel data. Whether Pixel Data is fragments is
+// IsEncapsulated.
 func IsCompressed(uid string) bool {
 	switch uid {
 	case ImplicitVRLittleEndian, ExplicitVRLittleEndian, ExplicitVRBigEndian:

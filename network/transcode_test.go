@@ -218,3 +218,43 @@ func TestTranscodingDoesNotMutateTheCaller(t *testing.T) {
 		t.Errorf("the caller's transfer syntax changed to %q", ds.TransferSyntaxUID())
 	}
 }
+
+// TestNativePixelDataIsSentOverDeflated covers #132. Deflated Explicit VR Little
+// Endian compresses the data set, not the pixels: its Pixel Data is native. The
+// transcoder asked whether the syntax was compressed, which Deflated is, went
+// looking for a pixel encoder for it, and refused, so no image could be sent to
+// a peer that chose Deflated.
+func TestNativePixelDataIsSentOverDeflated(t *testing.T) {
+	pixels := []byte{1, 0, 2, 0, 3, 0, 4, 0}
+	ds := dataset.NewDataset()
+	for _, e := range []*dataelem.DataElement{
+		dataelem.NewDataElement(tag.New(0x0028, 0x0002), dataelem.US, []byte{1, 0}),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0004), dataelem.CS, []byte("MONOCHROME2 ")),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, []byte{2, 0}),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, []byte{2, 0}),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, []byte{16, 0}),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0101), dataelem.US, []byte{16, 0}),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0102), dataelem.US, []byte{15, 0}),
+		dataelem.NewDataElement(tag.New(0x0028, 0x0103), dataelem.US, []byte{0, 0}),
+		dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OW, pixels),
+	} {
+		_ = ds.Add(e)
+	}
+	ds.SetTransferSyntaxUID(network.ExplicitVRLittleEndianUID)
+
+	encoded, err := network.EncodeDataset(ds, network.DeflatedExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("EncodeDataset over Deflated: %v", err)
+	}
+	back, err := network.DecodeDataset(encoded, network.DeflatedExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+	elem, ok := back.Get(tag.New(0x7FE0, 0x0010))
+	if !ok {
+		t.Fatal("Pixel Data was lost")
+	}
+	if got := elem.GetValue().([]byte); !bytes.Equal(got, pixels) {
+		t.Errorf("Pixel Data arrived as % x, want the native bytes % x", got, pixels)
+	}
+}

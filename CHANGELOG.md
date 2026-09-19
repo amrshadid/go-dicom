@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An image can be sent over a Deflated context** (#132). Deflated Explicit VR
+  Little Endian compresses the data set, and its Pixel Data is native. The network
+  transcoder asked whether the syntax was compressed, went looking for a pixel
+  encoder for Deflated, and refused:
+
+  ```
+  cannot encode pixel data as 1.2.840.10008.1.2.1.99: this library writes RLE Lossless ...
+  ```
+
+  So a peer that chose Deflated received no image from go-dicom. dcmtk's
+  `storescp +xa` does exactly that. `compress.IsEncapsulated` now answers the
+  question that matters, whether Pixel Data is fragments, and the transcoder, the
+  network encoder and `filewriter` share it.
+
 - **`storescu` sends RT, SR and waveform objects** (#116). It proposed the
   library's default presentation contexts whatever it was sending, so an RT Dose,
   RT Plan, RT Structure Set, Structured Report or ECG failed with "not among the
