@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Text with no declared character set is decoded instead of mislabeled** (#115).
+  `GetDataset` rewrote Specific Character Set (0008,0005) to `ISO_IR 192`
+  unconditionally, while a value was left as it was found when there was no
+  encoding to apply — and an empty declaration yielded none. A file declaring
+  nothing and holding Latin-1 names therefore kept Latin-1 bytes under a UTF-8
+  declaration, and the README's own round trip destroyed the names: pydicom read
+  `Müller^Jürgen` from the original and `M?ller^J?rgen` after a write-back.
+
+  An absent, empty or unknown declaration now decodes as ISO-8859-1, which is what
+  pydicom does, with a warning that a guess was made. A file that had no
+  declaration gains one, so the next reader is not handed UTF-8 described as
+  something else. And the declaration is written only when every text value in
+  scope is valid UTF-8; otherwise the file's own is kept, with a warning.
+
+  No corpus file changes: they all declare a character set or are pure ASCII,
+  which is why pydicom's seventeen charset fixtures never caught this.
+
 - **A sequence item whose length overruns its sequence is kept** (#122, by
   @team-humaki). The item was dropped although every element inside it was
   complete: only its length field was wrong. pydicom's `DICOMDIR-nooffset` came
