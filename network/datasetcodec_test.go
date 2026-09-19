@@ -446,3 +446,55 @@ func TestEncodeDatasetRefusesNativePixelsUnderACompressedSyntax(t *testing.T) {
 		t.Error("native pixel data was encoded under JPEG Baseline")
 	}
 }
+
+// TestEncodeDatasetSendsNumericValues covers #119. Rows set in Go as uint16(64)
+// went out as nothing: the element was skipped, EncodeDataset returned no error,
+// and the peer received an image with no Rows and no way to know.
+func TestEncodeDatasetSendsNumericValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, uint16(64)))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, 512))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0020, 0x0013), dataelem.IS, 7))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0030), dataelem.DS, []float64{0.5, 0.25}))
+
+	for _, syntax := range []string{ImplicitVRLittleEndianUID, ExplicitVRLittleEndianUID} {
+		encoded, err := EncodeDataset(ds, syntax)
+		if err != nil {
+			t.Fatalf("%s: EncodeDataset: %v", syntax, err)
+		}
+		back, err := DecodeDataset(encoded, syntax)
+		if err != nil {
+			t.Fatalf("%s: DecodeDataset: %v", syntax, err)
+		}
+		for tg, want := range map[tag.Tag][]byte{
+			tag.New(0x0028, 0x0010): {64, 0},
+			tag.New(0x0028, 0x0011): {0, 2},
+			tag.New(0x0020, 0x0013): []byte("7 "),
+			tag.New(0x0028, 0x0030): []byte(`0.5\0.25`), // even, so unpadded
+		} {
+			elem, ok := back.Get(tg)
+			if !ok {
+				t.Errorf("%s: %s was not sent", syntax, tg)
+				continue
+			}
+			if got := elem.GetValue().([]byte); !bytes.Equal(got, want) {
+				t.Errorf("%s: %s went out as % x, want % x", syntax, tg, got, want)
+			}
+		}
+	}
+}
+
+// TestEncodeDatasetRefusesAValueItCannotSend: the element is not left out.
+// Leaving it out sends a data set the peer takes as complete.
+func TestEncodeDatasetRefusesAValueItCannotSend(t *testing.T) {
+	for name, value := range map[string]any{
+		"a number too large for US": 70000,
+		"a type with no encoding":   struct{}{},
+	} {
+		ds := dataset.NewDataset()
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, value))
+		if _, err := EncodeDataset(ds, ExplicitVRLittleEndianUID); err == nil {
+			t.Errorf("%s: EncodeDataset returned no error", name)
+		}
+	}
+}

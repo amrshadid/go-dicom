@@ -9,35 +9,6 @@ import (
 	"github.com/amrshadid/go-dicom/sequence"
 )
 
-// elementValueBytes renders an element's value as the bytes to write.
-//
-// A Dataset holds whatever a caller put in it. Elements read by filereader carry
-// []byte, and elements built in code carry a string — dataelem.NewDataElement
-// takes an interface{}, and a string is the obvious thing to pass. Both have to
-// write, or building a data set the natural way produces a file with every value
-// empty.
-//
-// The bool is what stops that being silent: a value of any other type is refused
-// here and reported by the caller, rather than becoming a zero-length element.
-//
-// network.EncodeDataset has the same helper for the same reason. The two are
-// small enough to keep separate, and a data set that sends over the network but
-// writes to disk empty is the failure that came of them disagreeing.
-func elementValueBytes(elem *dataelem.DataElement) ([]byte, bool) {
-	switch v := elem.GetValue().(type) {
-	case nil:
-		// An element with no value at all is legitimate: a type 2 attribute is
-		// sent present and empty.
-		return nil, true
-	case []byte:
-		return v, true
-	case string:
-		return []byte(v), true
-	default:
-		return nil, false
-	}
-}
-
 // ElementsFromDataset converts a Dataset into elements this package can write,
 // descending into sequences.
 //
@@ -86,20 +57,24 @@ func elementsFromDataset(ds *dataset.Dataset, enclosing []*dataset.Dataset) []*D
 			continue
 		}
 
-		value, ok := elementValueBytes(elem)
-		if !ok {
-			// A value of a type this cannot render is reported rather than written
-			// as empty. Silently writing nothing is what a discarded type assertion
+		// dataelem.ValueBytes renders what a caller may have put in the data set:
+		// bytes, text, or Go numbers, which were dropped here until #119. The
+		// network encoder uses the same function, so the two cannot disagree.
+		vr := ds.ResolveVR(t, elem, enclosing...)
+		value, err := dataelem.ValueBytes(vr, elem.GetValue())
+		if err != nil {
+			// A value that cannot be rendered is reported rather than written as
+			// empty. Silently writing nothing is what a discarded type assertion
 			// used to do here, and it produced files where every element was
 			// present, correctly typed, and empty.
 			config.Logger.Warn("filewriter: dropping an element whose value cannot be written",
-				"tag", t.String(), "vr", elem.GetVR(), "type", fmt.Sprintf("%T", elem.GetValue()))
+				"tag", t.String(), "vr", vr, "type", fmt.Sprintf("%T", elem.GetValue()), "err", err)
 			continue
 		}
 
 		out = append(out, &DataElement{
 			Tag:    t,
-			VR:     string(ds.ResolveVR(t, elem, enclosing...)),
+			VR:     string(vr),
 			Value:  value,
 			Length: uint32(len(value)),
 		})
