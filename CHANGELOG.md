@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`storescu` sends RT, SR and waveform objects** (#116). It proposed the
+  library's default presentation contexts whatever it was sending, so an RT Dose,
+  RT Plan, RT Structure Set, Structured Report or ECG failed with "not among the
+  presentation contexts proposed", even against an SCP that supports them. Eight
+  corpus objects sent in one run: 3 of 8 stored by `qrscp` and pynetdicom, and 0
+  of 8 by dcmtk, which accepted Deflated for the default contexts and ran into
+  #132.
+
+  It now reads each file's header first and proposes one context per SOP class and
+  syntax it holds: the file's own syntax, plus Explicit and Implicit VR Little
+  Endian for an SCP that will not take it compressed. Over 128 contexts, the most
+  one association carries, the files go over several associations. An unreadable
+  file is reported and the rest still go. All eight now reach all three peers.
+
+  `SCU.Store` chose among a class's accepted contexts in map order, which is
+  random. It now prefers the data set's own syntax, then an uncompressed one, and
+  breaks ties by the lowest ID.
+
 - **A number set in Go is written and sent** (#119). `NewDataElement` takes any
   value, but both encoders rendered only `[]byte` and `string`. Rows set as
   `uint16(64)` went out from `EncodeDataset` as nothing, with no error, and
