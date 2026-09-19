@@ -307,6 +307,20 @@ Character Set reads `ISO_IR 192` to match the values it now describes.
 An item may declare its own character set, and it applies to that item and
 everything below it, as PS3.5 allows.
 
+A file that declares nothing, declares an empty value, or names a term this
+build does not know is decoded as ISO-8859-1, with a warning on
+`DICOMFile.Warnings` saying a guess was made. PS3.5 6.1.2.3 makes the default
+repertoire ASCII, so non-ASCII text under no declaration is non-conformant, and
+common from older equipment; pydicom reads it the same way. The data set then
+declares `ISO_IR 192`, and gains that declaration if the file had none, so
+writing it back does not hand the next reader UTF-8 bytes described as
+something else.
+
+The declaration is written only when every text value in scope really is UTF-8.
+If a value did not decode, the file's own Specific Character Set is kept and a
+warning says why: a data set that is wrong is better than one that says it is
+right.
+
 Over 30 encodings are supported: the single-byte ISO_IR sets, and ISO 2022
 escape sequences for Japanese, Chinese and Korean. Measured against pydicom's
 seventeen character set fixtures — Arabic, Greek, Hebrew, Japanese, Korean,
