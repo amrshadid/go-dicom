@@ -540,7 +540,7 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 func (dfr *DCMFileReader) warn(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	dfr.metaWarnings = append(dfr.metaWarnings, msg)
-	config.Logger.Warn("filereader: " + msg)
+	config.Logger.Warn("filereader: data set warning", "detail", msg)
 }
 
 // streamSizeOnce returns the total size of the underlying stream, measuring it
@@ -644,8 +644,16 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 				// pydicom's DICOMDIR-nooffset is this: the last directory
 				// record claims 24 bytes past the sequence, every element
 				// inside it is complete, and discarding it loses an IMAGE.
+				//
+				// remain == 0 is different: the item header sits exactly at
+				// the sequence's end, so a clamp would keep an empty item
+				// that is not in the file. Warn and stop without recording it.
 				remain := dfr.itemBodyRemaining(undefined, start, declaredLength)
-				if remain >= 0 && int64(itemLen) > remain {
+				if remain == 0 {
+					dfr.warn("sequence item header at end of sequence; stopping without an empty item")
+					return items, nil
+				}
+				if remain > 0 && int64(itemLen) > remain {
 					dfr.warn("sequence item declared length %d overruns remaining %d bytes; keeping the complete elements that are present",
 						itemLen, remain)
 					itemLen = uint32(remain)

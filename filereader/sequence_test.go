@@ -312,6 +312,38 @@ func TestOverrunSequenceItemKept(t *testing.T) {
 	}
 }
 
+// TestItemHeaderAtSequenceEndDropped covers a second item whose header sits
+// exactly at the sequence's end. The header claims a body, but remain is 0, so
+// clamping would keep an empty item that is not in the file. Stop instead.
+func TestItemHeaderAtSequenceEndDropped(t *testing.T) {
+	var item1 dcmBuilder
+	item1.explicitElement(0x0008, 0x0100, "SH", []byte("CODE01  "))
+
+	// Sequence length covers item 1 and an 8-byte second item header only.
+	seqLen := uint32(8+item1.buf.Len()) + 8
+
+	var b dcmBuilder
+	b.sequenceHeader(0x0004, 0x1220, seqLen)
+	b.rawTag(tag.ItemTag, uint32(item1.buf.Len()))
+	b.buf.Write(item1.bytes())
+	b.rawTag(tag.ItemTag, 16) // header at sequence end; claimed 16-byte body is not present
+
+	dfr := newReaderFor(b.bytes())
+	elem, err := dfr.ReadDataElement(true)
+	if err != nil {
+		t.Fatalf("ReadDataElement: %v", err)
+	}
+	if len(elem.Items) != 1 {
+		t.Fatalf("got %d items, want 1 — empty item at sequence end was kept", len(elem.Items))
+	}
+	if got := string(elem.Items[0].Elements[0].Value); got != "CODE01  " {
+		t.Errorf("item 0 value = %q, want %q", got, "CODE01  ")
+	}
+	if len(dfr.metaWarnings) == 0 {
+		t.Fatal("expected a warning that the item header sat at the sequence end")
+	}
+}
+
 // TestOversizedLengthRejected verifies that an element claiming far more bytes
 // than the stream holds is rejected instead of allocating for the claim.
 func TestOversizedLengthRejected(t *testing.T) {
