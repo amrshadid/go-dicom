@@ -23,15 +23,6 @@ import (
 // every file to answer a query.
 const indexFileName = "index.json"
 
-// transferSyntaxUID is what instances are written as.
-//
-// Explicit VR Little Endian, always, whatever the instance arrived as: a store
-// that keeps each instance in the syntax it was received in has to record which
-// that was per file, and the point of this package is to be simple enough to
-// trust. Pixel data is not recompressed — a compressed instance keeps its
-// encapsulated bytes, and only the surrounding data set is re-encoded.
-const transferSyntaxUID = "1.2.840.10008.1.2.1"
-
 // Instance is one stored SOP instance and the attributes it can be queried by.
 type Instance struct {
 	SOPClassUID    string `json:"sopClassUID"`
@@ -434,6 +425,13 @@ func (s *Store) saveIndex() error {
 }
 
 // writeInstance writes a data set as a Part 10 file.
+//
+// Uncompressed instances are written as Explicit VR Little Endian, whatever
+// they arrived as, and compressed ones in the syntax they arrived in, which is
+// the only record of their codec; filewriter.StorageTransferSyntax decides. Pixel
+// data is never recompressed or decoded on the way in. Every instance was
+// written as Explicit VR Little Endian once, compressed ones included, and those
+// files hold fragments no reader can decode.
 func writeInstance(path, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) error {
 	file, err := os.Create(path)
 	if err != nil {
@@ -444,7 +442,7 @@ func writeInstance(path, sopClassUID, sopInstanceUID string, ds *dataset.Dataset
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    sopClassUID,
 		MediaStorageSOPInstanceUID: sopInstanceUID,
-		TransferSyntaxUID:          transferSyntaxUID,
+		TransferSyntaxUID:          filewriter.StorageTransferSyntax(ds),
 	})
 
 	// ElementsFromDataset descends into sequences. Copying Value and ignoring

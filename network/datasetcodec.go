@@ -106,7 +106,14 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 		data = inflated
 	}
 
+	// The data set records the syntax it arrived in, as the file reader's does.
+	// Whether Pixel Data holds pixels or encapsulated fragments, and which codec
+	// made them, is a property of the syntax and nothing else. Without it a
+	// received JPEG instance looked uncompressed: storescp and qrscp wrote its
+	// fragments into files declaring Explicit VR Little Endian, and forwarding it
+	// over an uncompressed context would have sent them as pixels.
 	ds := dataset.NewDataset()
+	ds.SetTransferSyntaxUID(transferSyntax)
 	r := bytes.NewReader(data)
 	order := enc.byteOrder()
 
@@ -131,13 +138,20 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 		}
 
 		// An undefined length on a non-sequence element means encapsulated
-		// pixel data, which is delimited rather than sized. Consume the
-		// remainder as an opaque value so the surrounding elements still decode.
+		// pixel data: items, closed by a Sequence Delimitation Item (PS3.5 A.4).
+		// The value is the items alone, as the file reader holds it.
+		//
+		// This used to take the rest of the data set as the value. That kept the
+		// peer's delimiter inside it, so a file written from it closed the
+		// sequence twice and dcmtk refused it, and it swallowed any element
+		// after Pixel Data.
 		if length == undefinedLength {
-			value := make([]byte, r.Len())
-			_, _ = io.ReadFull(r, value)
+			value, err := readEncapsulated(r, order)
+			if err != nil {
+				return nil, err
+			}
 			_ = ds.Add(dataelem.NewDataElement(t, vr, value))
-			break
+			continue
 		}
 
 		if uint64(length) > uint64(r.Len()) {
@@ -157,6 +171,44 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 	}
 
 	return ds, nil
+}
+
+// readEncapsulated reads encapsulated pixel data up to and including its
+// Sequence Delimitation Item, and returns the items without the delimiter.
+func readEncapsulated(r *bytes.Reader, order binary.ByteOrder) ([]byte, error) {
+	var value bytes.Buffer
+	for {
+		var group, element uint16
+		var length uint32
+		if err := binary.Read(r, order, &group); err != nil {
+			return nil, NewPDUError("DECODE_DS", "encapsulated pixel data has no sequence delimiter")
+		}
+		if err := binary.Read(r, order, &element); err != nil {
+			return nil, NewPDUError("DECODE_DS", "truncated item tag in encapsulated pixel data")
+		}
+		if err := binary.Read(r, order, &length); err != nil {
+			return nil, NewPDUError("DECODE_DS", "truncated item length in encapsulated pixel data")
+		}
+
+		switch tag.New(group, element) {
+		case tag.SequenceDelimiterTag:
+			return value.Bytes(), nil
+		case tag.ItemTag:
+			if uint64(length) > uint64(r.Len()) {
+				return nil, NewPDUErrorf("DECODE_DS",
+					"a pixel data fragment declares %d bytes but only %d remain", length, r.Len())
+			}
+			_ = binary.Write(&value, order, group)
+			_ = binary.Write(&value, order, element)
+			_ = binary.Write(&value, order, length)
+			if _, err := io.CopyN(&value, r, int64(length)); err != nil {
+				return nil, NewPDUErrorf("DECODE_DS", "reading a pixel data fragment: %v", err)
+			}
+		default:
+			return nil, NewPDUErrorf("DECODE_DS",
+				"unexpected tag %s in encapsulated pixel data", tag.New(group, element).String())
+		}
+	}
 }
 
 // readElementHeader reads one element's tag, VR, and value length.

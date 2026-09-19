@@ -422,6 +422,10 @@ that gap, and two differences in how decoded samples are shaped and coloured.
   shares no code with this library. A round trip through this package's own
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
+- **Encapsulated pixel data is sent with an explicit length** (#128). PS3.5 A.4
+  requires an undefined length. pynetdicom accepts what is sent; dcmtk refuses it
+  and aborts the association. So a compressed instance sent to dcmtk, including one
+  retrieved from `qrscp`, fails. Receiving is not affected.
 
   Decoding has one gap of its own: **JPEG 2000** needs a registered external
   decoder, and without one an instance stored under it cannot be sent over a
@@ -441,6 +445,11 @@ enclosing it. Pixel Data is OB at 8 bits allocated or fewer and OW above that
 other choice offering OW is OW. An element with no known VR is written as UN.
 The same rules apply to files, to data sets sent over the network, and to DICOM
 JSON.
+
+A storage SCP built on this library (`storescp`, `qrscp`, `dcmstore`) writes an
+uncompressed instance as Explicit VR Little Endian, whatever it arrived as, and a
+compressed one in the syntax it arrived in, with its fragments untouched. The syntax
+is the only record of which codec made the fragments.
 
 Every file in pydicom's corpus, read and written back, is read by dcmtk. That includes `SC_rgb_jpeg.dcm`, which holds implicit VR inside a file
 declaring explicit. dcmtk refuses it as supplied and reads it once rewritten.

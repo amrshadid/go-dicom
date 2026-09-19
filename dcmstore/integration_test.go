@@ -1,11 +1,13 @@
 package dcmstore_test
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/dcmstore"
 	"github.com/amrshadid/go-dicom/network"
@@ -344,6 +346,98 @@ func TestAnArchiveAcceptsCompressedPixelData(t *testing.T) {
 
 			if _, ok := store.Instance(uid); !ok {
 				t.Errorf("the instance stored over %s is not in the index", syntax)
+			}
+		})
+	}
+}
+
+// TestACompressedInstanceIsStoredInItsOwnSyntax is what the test above could not
+// see. Its instances carry no pixel data, so a store reporting success was all
+// it could check — and success was reported for files that could not be read.
+//
+// Every instance was written as Explicit VR Little Endian, so a compressed one
+// became a file declaring native pixels and holding encapsulated fragments.
+// Nothing can decode that, and nothing in the file says what the fragments are.
+//
+// The modality here holds native pixels and the SCU compresses them for the
+// negotiated context, so the archive receives real RLE and JPEG-LS data.
+func TestACompressedInstanceIsStoredInItsOwnSyntax(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := dcmstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	scp := network.NewSCP(network.SCPConfig{
+		AETitle: "ARCHIVE", BindAddress: "127.0.0.1", Port: freePort(t),
+	})
+	scp.SetHandler(dcmstore.NewHandler(store))
+	scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
+	scp.SetSupportedTransferSyntaxes(dcmstore.SupportedTransferSyntaxes())
+	addr := serve(ctx, t, scp)
+
+	pixels := make([]byte, 16*16)
+	for i := range pixels {
+		pixels[i] = byte(i * 7)
+	}
+	u16 := func(v uint16) []byte { return []byte{byte(v), byte(v >> 8)} }
+
+	for _, syntax := range []string{network.RLELosslessUID, network.JPEGLSLosslessUID} {
+		t.Run(syntax, func(t *testing.T) {
+			uid := "1.2.10." + syntax
+			ds := instance{
+				patientID: "P10", patientName: "PIXELS^TEST",
+				studyUID: "1.2.10", seriesUID: "1.2.10.1",
+				sopInstanceUID: uid, modality: "CT",
+			}.dataset()
+			for _, e := range []*dataelem.DataElement{
+				dataelem.NewDataElement(tag.New(0x0028, 0x0002), dataelem.US, u16(1)),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0004), dataelem.CS, []byte("MONOCHROME2 ")),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, u16(16)),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, u16(16)),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, u16(8)),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0101), dataelem.US, u16(8)),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0102), dataelem.US, u16(7)),
+				dataelem.NewDataElement(tag.New(0x0028, 0x0103), dataelem.US, u16(0)),
+				dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OB, pixels),
+			} {
+				_ = ds.Add(e)
+			}
+			ds.SetTransferSyntaxUID(network.ExplicitVRLittleEndianUID)
+
+			scu := network.NewSCU(network.SCUConfig{
+				CallingAE: "MODALITY", CalledAE: "ARCHIVE", Address: addr,
+			})
+			if err := scu.Associate(ctx, []network.PresentationContextItem{{
+				ID: 1, AbstractSyntax: "1.2.840.10008.5.1.4.1.1.2",
+				TransferSyntaxes: []string{syntax},
+			}}); err != nil {
+				t.Fatalf("associate: %v", err)
+			}
+			defer func() { _ = scu.Release(ctx) }()
+			if err := scu.Store(ctx, ds); err != nil {
+				t.Fatalf("Store: %v", err)
+			}
+
+			inst, ok := store.Instance(uid)
+			if !ok {
+				t.Fatal("the instance is not in the index")
+			}
+			back, err := store.Load(ctx, inst)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := back.TransferSyntaxUID(); got != syntax {
+				t.Errorf("the stored file declares %s; the instance arrived as %s", got, syntax)
+			}
+			decoded, err := back.DecodedPixelData()
+			if err != nil {
+				t.Fatalf("the stored pixel data does not decode: %v", err)
+			}
+			if !bytes.Equal(decoded, pixels) {
+				t.Errorf("the stored pixel data decodes to %d bytes that differ from the %d sent",
+					len(decoded), len(pixels))
 			}
 		})
 	}

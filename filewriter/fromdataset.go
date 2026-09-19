@@ -127,3 +127,25 @@ func sequenceItems(seq *sequence.Sequence, enclosing []*dataset.Dataset) []*Sequ
 	}
 	return items
 }
+
+// explicitVRLittleEndianUID is what an uncompressed data set is stored as.
+const explicitVRLittleEndianUID = "1.2.840.10008.1.2.1"
+
+// StorageTransferSyntax returns the transfer syntax a data set should be written
+// in by something that keeps what it is sent: an archive, or a storage SCP.
+//
+// Uncompressed data is written as Explicit VR Little Endian whatever it arrived
+// as. It is the same data under a different encoding, and Explicit VR is the one
+// every reader handles without consulting a dictionary.
+//
+// Encapsulated pixel data keeps the syntax it arrived in, because the syntax is
+// the only record of which codec made the fragments. storescp and qrscp wrote
+// every instance as Explicit VR Little Endian, so a JPEG instance became a file
+// declaring native pixels and holding JPEG fragments — decodable by nothing, and
+// unrecoverable, since the syntax that described it was gone.
+func StorageTransferSyntax(ds *dataset.Dataset) string {
+	if ds != nil && isEncapsulatedSyntax(ds.TransferSyntaxUID()) {
+		return ds.TransferSyntaxUID()
+	}
+	return explicitVRLittleEndianUID
+}
