@@ -230,9 +230,9 @@ distribution accept everything:
 
 | Server | Transfer syntaxes |
 |---|---|
-| `dicom storescp` | all 37 |
-| `dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
-| `dicom echoscp` | the default four; verification carries no data set |
+| `go-dicom storescp` | all 37 |
+| `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
+| `go-dicom echoscp` | the default four; verification carries no data set |
 
 Before this, a modality that stores JPEG-LS or JPEG 2000 natively — most modern
 equipment — could not store to either server: every compressed context was

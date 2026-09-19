@@ -1,4 +1,4 @@
-// Command dicom is a command-line interface for reading, writing, and
+// Command go-dicom is a command-line interface for reading, writing, and
 // networking DICOM (Digital Imaging and Communications in Medicine) data.
 //
 // It is the executable front end to the go-dicom library. Every subcommand is
@@ -17,27 +17,27 @@
 // Inspect and convert DICOM files. These accept .dcm, .ima, DICOMDIR, and raw
 // DICOM streams.
 //
-//	dicom show patient.dcm              # display the data elements
-//	dicom info patient.dcm              # display file metadata
-//	dicom convert patient.dcm out.json  # convert to DICOM JSON, CSV, or NIfTI
-//	dicom tag-doc 0010,0010             # look up a tag in the data dictionary
-//	dicom codify patient.dcm            # emit Go source that rebuilds the file
+//	go-dicom show patient.dcm              # display the data elements
+//	go-dicom info patient.dcm              # display file metadata
+//	go-dicom convert patient.dcm out.json  # convert to DICOM JSON, CSV, or NIfTI
+//	go-dicom tag-doc 0010,0010             # look up a tag in the data dictionary
+//	go-dicom codify patient.dcm            # emit Go source that rebuilds the file
 //
 // # Network commands
 //
 // Act as a DICOM Service Class User (client) or Service Class Provider
 // (server) over the DICOM Upper Layer Protocol.
 //
-//	dicom echoscu pacs.hospital.com:11112              # C-ECHO verification
-//	dicom echoscp -port 11112                          # verification server
-//	dicom storescu -aec PACS pacs:11112 study/*.dcm    # send files
-//	dicom storescp -port 11112 -output ./received/     # receive and save files
-//	dicom findscu -patient-name "Smith*" pacs:11112    # query
-//	dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
-//	dicom getscu -study 1.2.3.4 pacs:11112
-//	dicom qrscp -port 11112                            # combined store + Q/R server
+//	go-dicom echoscu pacs.hospital.com:11112              # C-ECHO verification
+//	go-dicom echoscp -port 11112                          # verification server
+//	go-dicom storescu -aec PACS pacs:11112 study/*.dcm    # send files
+//	go-dicom storescp -port 11112 -output ./received/     # receive and save files
+//	go-dicom findscu -patient-name "Smith*" pacs:11112    # query
+//	go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
+//	go-dicom getscu -study 1.2.3.4 pacs:11112
+//	go-dicom qrscp -port 11112                            # combined store + Q/R server
 //
-// Run "dicom help <command>" for the flags a given subcommand accepts.
+// Run "go-dicom help <command>" for the flags a given subcommand accepts.
 //
 // # Library packages
 //

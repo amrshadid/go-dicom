@@ -161,11 +161,11 @@ jobs:
 
             | Platform | File |
             |----------|------|
-            | Linux x86-64 | `dicom-linux-amd64` |
-            | Linux ARM64 | `dicom-linux-arm64` |
-            | macOS Intel | `dicom-macos-amd64` |
-            | macOS Apple Silicon | `dicom-macos-arm64` |
-            | Windows x86-64 | `dicom-windows-amd64.exe` |
+            | Linux x86-64 | `go-dicom-linux-amd64` |
+            | Linux ARM64 | `go-dicom-linux-arm64` |
+            | macOS Intel | `go-dicom-macos-amd64` |
+            | macOS Apple Silicon | `go-dicom-macos-arm64` |
+            | Windows x86-64 | `go-dicom-windows-amd64.exe` |
 
             Checksums are in `SHA256SUMS`:
 

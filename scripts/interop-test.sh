@@ -9,7 +9,7 @@
 # pydicom rather than with go-dicom's own reader.
 #
 # Environment:
-#   GODICOM       path to the go-dicom binary (default: ./dicom)
+#   GODICOM       path to the go-dicom binary (default: ./go-dicom)
 #   PYNETDICOM_BIN directory holding pynetdicom's console scripts
 #   DCMTK_BIN      directory holding dcmtk's tools (default: /usr/bin)
 #
@@ -19,12 +19,12 @@
 
 set -euo pipefail
 
-GODICOM="${GODICOM:-./dicom}"
+GODICOM="${GODICOM:-./go-dicom}"
 # Resolve to an absolute path: servers are started from a scratch directory, so
 # a relative path would not resolve there.
 if [ ! -x "$GODICOM" ]; then
   echo "go-dicom binary not found or not executable: $GODICOM" >&2
-  echo "Build it first (go build -o dicom .) or set GODICOM." >&2
+  echo "Build it first (go build -o go-dicom .) or set GODICOM." >&2
   exit 1
 fi
 GODICOM="$(cd "$(dirname "$GODICOM")" && pwd)/$(basename "$GODICOM")"
