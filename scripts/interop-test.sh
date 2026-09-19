@@ -602,12 +602,92 @@ PYEOF
         sed -n '1,20p' "$WORKDIR/commit_scp.log" >&2
       fi
     else
-      skip "go-dicom has no commitscu command; skipping the storage commitment check"
+      # commitscu ships with go-dicom. A failure here is a failure: this used to
+      # report a skip, which read as "not applicable" whatever went wrong.
+      fail "commitscu could not send the storage commitment request"
+      sed -n '1,20p' "$WORKDIR/commit_scu.log" >&2
     fi
   else
     fail "pynetdicom storage commitment SCP did not start listening"
   fi
   stop_server "$commit_pid"
+
+  # The other direction: pynetdicom asks go-dicom's archive to commit what it
+  # holds. qrscp refused the Push Model context until #113, so commitscu, which
+  # ships here, had no go-dicom peer. One instance was stored, one never was.
+  note "Storage Commitment: pynetdicom -> go-dicom qrscp"
+  commit_req_py="$WORKDIR/commit_req.py"
+  cat > "$commit_req_py" <<'PYEOF'
+import sys, threading
+import pydicom
+from pydicom.dataset import Dataset
+from pynetdicom import AE, evt
+from pynetdicom.sop_class import StorageCommitmentPushModel
+
+port, fixture = int(sys.argv[1]), sys.argv[2]
+stored = pydicom.dcmread(fixture, stop_before_pixels=True)
+done, report = threading.Event(), {}
+
+def handle_report(event):
+    info = event.event_information
+    report["type"] = event.event_type
+    report["transaction"] = info.TransactionUID
+    report["committed"] = [i.ReferencedSOPInstanceUID for i in info.get("ReferencedSOPSequence", [])]
+    report["failed"] = [(i.ReferencedSOPInstanceUID, i.FailureReason) for i in info.get("FailedSOPSequence", [])]
+    done.set()
+    return 0x0000, None
+
+ae = AE(ae_title="PYREQ")
+ae.add_requested_context(StorageCommitmentPushModel)
+assoc = ae.associate("127.0.0.1", port, ae_title="GOQRC",
+                     evt_handlers=[(evt.EVT_N_EVENT_REPORT, handle_report)])
+if not assoc.is_established:
+    sys.exit("no association")
+
+req = Dataset()
+req.TransactionUID = "1.2.826.0.1.3680043.8.498.113"
+req.ReferencedSOPSequence = []
+for inst in (stored.SOPInstanceUID, "1.2.3.404"):
+    item = Dataset()
+    item.ReferencedSOPClassUID = stored.SOPClassUID
+    item.ReferencedSOPInstanceUID = inst
+    req.ReferencedSOPSequence.append(item)
+
+status, _ = assoc.send_n_action(req, 1, StorageCommitmentPushModel, "1.2.840.10008.1.20.1.1")
+done.wait(10)
+assoc.release()
+
+problems = []
+if not status or status.Status != 0x0000:
+    problems.append(f"N-ACTION status {status.Status if status else None}")
+if report.get("type") != 2:
+    problems.append(f"event type {report.get('type')}, want 2 (one failure)")
+if report.get("transaction") != req.TransactionUID:
+    problems.append(f"transaction {report.get('transaction')}")
+if report.get("committed") != [stored.SOPInstanceUID]:
+    problems.append(f"committed {report.get('committed')}")
+if report.get("failed") != [("1.2.3.404", 0x0112)]:
+    problems.append(f"failed {report.get('failed')}")
+if problems:
+    sys.exit("; ".join(problems))
+PYEOF
+
+  mkdir -p "$WORKDIR/qr_commit"
+  start_server "$WORKDIR" "$WORKDIR/qr_commit.log" \
+    "$GODICOM" qrscp -port 11703 -aet GOQRC -output "$WORKDIR/qr_commit"
+  qr_commit_pid=$SERVER_PID
+  if wait_for_port 11703 &&
+    "$GODICOM" storescu -aec GOQRC 127.0.0.1:11703 "$FIXTURE" >/dev/null 2>&1; then
+    if "$PYNETDICOM_BIN/python" "$commit_req_py" 11703 "$FIXTURE" > "$WORKDIR/commit_req.log" 2>&1; then
+      pass "Storage Commitment — qrscp committed what it held and failed the unknown instance with 0112H"
+    else
+      fail "Storage Commitment — pynetdicom's request to qrscp was not answered correctly"
+      grep -v '^[IW]:' "$WORKDIR/commit_req.log" | sed -n '1,5p' >&2
+    fi
+  else
+    fail "Storage Commitment — could not store the fixture in qrscp"
+  fi
+  stop_server "$qr_commit_pid"
 fi
 
 # ---------------------------------------------------------------------------

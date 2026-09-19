@@ -442,3 +442,70 @@ func TestACompressedInstanceIsStoredInItsOwnSyntax(t *testing.T) {
 		})
 	}
 }
+
+// TestAnArchiveCommitsWhatItStored is #113 over a real association: a modality
+// stores an instance, then asks the archive to commit it and one it never sent.
+// The Push Model was not among the archive's classes, so the context was
+// refused before the handler was reached, and commitscu had no go-dicom peer.
+func TestAnArchiveCommitsWhatItStored(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	store, err := dcmstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	scp := network.NewSCP(network.SCPConfig{
+		AETitle: "ARCHIVE", BindAddress: "127.0.0.1", Port: freePort(t),
+	})
+	scp.SetHandler(dcmstore.NewHandler(store))
+	scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
+	addr := serve(ctx, t, scp)
+
+	scu := network.NewSCU(network.SCUConfig{CallingAE: "MODALITY", CalledAE: "ARCHIVE", Address: addr})
+	contexts := append(storageContexts(), network.StorageCommitmentPresentationContexts()...)
+	for i := range contexts {
+		contexts[i].ID = byte(2*i + 1)
+	}
+	if err := scu.Associate(ctx, contexts); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+	defer func() { _ = scu.Release(ctx) }()
+
+	stored := instance{patientID: "P113", studyUID: "1.2.113", seriesUID: "1.2.113.1", sopInstanceUID: "1.2.113.1.1"}
+	if err := scu.Store(ctx, stored.dataset()); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	const ct = "1.2.840.10008.5.1.4.1.1.2"
+	rsp, err := scu.RequestStorageCommitment(ctx, &network.StorageCommitmentRequest{
+		TransactionUID: "1.2.113.7",
+		Instances: []network.SOPInstanceReference{
+			{SOPClassUID: ct, SOPInstanceUID: "1.2.113.1.1"},
+			{SOPClassUID: ct, SOPInstanceUID: "1.2.113.404"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("the archive refused the commitment request: %v", err)
+	}
+	if rsp.Status != network.StatusSuccess {
+		t.Fatalf("N-ACTION status 0x%04X", rsp.Status)
+	}
+
+	result, err := scu.ReceiveStorageCommitmentResult(ctx)
+	if err != nil {
+		t.Fatalf("ReceiveStorageCommitmentResult: %v", err)
+	}
+	if result.TransactionUID != "1.2.113.7" {
+		t.Errorf("transaction %q, want the request's", result.TransactionUID)
+	}
+	if len(result.Successful) != 1 || result.Successful[0].SOPInstanceUID != "1.2.113.1.1" {
+		t.Errorf("committed %+v, want the stored instance", result.Successful)
+	}
+	if len(result.Failed) != 1 || result.Failed[0].Reason != network.StorageCommitmentFailureNoSuchObject {
+		t.Errorf("failed %+v, want the unknown instance with 0x0112", result.Failed)
+	}
+	if got := result.EventTypeID(); got != network.StorageCommitmentEventFailures {
+		t.Errorf("event type %d, want %d: one instance failed", got, network.StorageCommitmentEventFailures)
+	}
+}
