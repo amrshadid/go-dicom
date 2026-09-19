@@ -20,6 +20,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A sequence item whose length overruns its sequence is kept** (#122, by
+  @team-humaki). The item was dropped although every element inside it was
+  complete: only its length field was wrong. pydicom's `DICOMDIR-nooffset` came
+  back with 51 of its 52 records, one IMAGE record short, and nothing appeared in
+  `DICOMFile.Warnings`, because data set warnings were copied to the file before
+  the data set was parsed. The item is now clamped to the bytes that are there and
+  its elements kept, with a warning; an item header sitting exactly at the
+  sequence's end ends the sequence rather than adding an empty item.
+
+- **`StatusRefusedOutOfResources` was 0x0112, which is No Such SOP Instance**
+  (#137, by @team-humaki). PS3.7 Annex C: "Refused: Out of Resources" is a
+  C-service status in the A7xxH range. An SCP handler reporting exhaustion with
+  that constant told the peer the instance did not exist, and a peer that retries
+  on a resource failure would not retry. `StatusNoSuchSOPInstance` is the correct
+  name; the old one remains as a deprecated alias, so callers keep compiling.
+
 - **The CLI is called `go-dicom` everywhere** (#120). The 1.5.0 rename left the old
   name in 58 lines across eight files, including `doc.go`, which is what pkg.go.dev
   shows, and the release notes, which told readers to download `dicom-linux-amd64`
