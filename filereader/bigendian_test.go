@@ -147,11 +147,11 @@ func widePixelDataset(order binary.ByteOrder, samples []uint32) []byte {
 		order.PutUint16(b, v)
 		writeShort(group, element, "US", b)
 	}
-	putUS(0x0028, 0x0010, 1)    // Rows
-	putUS(0x0028, 0x0011, 2)    // Columns
-	putUS(0x0028, 0x0100, 32)   // BitsAllocated
-	putUS(0x0028, 0x0101, 32)   // BitsStored
-	putUS(0x0028, 0x0103, 0)    // PixelRepresentation
+	putUS(0x0028, 0x0010, 1)  // Rows
+	putUS(0x0028, 0x0011, 2)  // Columns
+	putUS(0x0028, 0x0100, 32) // BitsAllocated
+	putUS(0x0028, 0x0101, 32) // BitsStored
+	putUS(0x0028, 0x0103, 0)  // PixelRepresentation
 
 	pix := make([]byte, 4*len(samples))
 	for i, s := range samples {
