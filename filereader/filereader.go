@@ -1135,6 +1135,11 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		reader.SetByteOrder(filebase.BigEndian)
 	}
 
+	// bitsAllocated is (0028,0100) from an element already converted to little
+	// endian. Native Pixel Data is swapped at this sample width; tracking it
+	// as elements are read avoids a quadratic scan of everything so far.
+	bitsAllocated := 0
+
 	for {
 		element, err := dfr.ReadDataElement(dicomFile.ExplicitVR)
 		if err != nil {
@@ -1173,7 +1178,14 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		// Big endian values are converted once here so that everything
 		// downstream can assume little endian; see normalizeByteOrder.
 		if !dicomFile.IsLittleEndian {
-			normalizeByteOrder(element)
+			ba := 0
+			if element.Tag == tag.New(0x7FE0, 0x0010) {
+				ba = bitsAllocated
+			}
+			normalizeByteOrder(element, ba)
+		}
+		if element.Tag == tag.New(0x0028, 0x0100) && len(element.Value) >= 2 {
+			bitsAllocated = int(binary.LittleEndian.Uint16(element.Value))
 		}
 
 		if err := validateDataElement(element); err != nil {
@@ -1340,14 +1352,35 @@ func isValidVRVariant(actual, expected string) bool {
 // model — reads them as little endian. Rather than thread the file's byte order
 // through all of that, big endian values are normalised once here, so a data
 // set means the same thing regardless of how the file was encoded.
-func normalizeByteOrder(elem *DataElementValue) {
+//
+// Native Pixel Data is OW, so a VR-width swap is 16-bit words. When
+// BitsAllocated is 32 or 64 that leaves each sample's halves transposed; swap
+// at the sample width instead. Encapsulated (undefined-length) Pixel Data is
+// fragments, not samples, and is left to the VR rule.
+func normalizeByteOrder(elem *DataElementValue, bitsAllocated int) {
 	// Swap in place: the value was allocated by this reader and is not shared.
-	dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+	if elem.Tag == tag.New(0x7FE0, 0x0010) && !elem.UndefinedLength {
+		dataelem.SwapBytes(elem.Value, dataelem.PixelDataEndianWidth(dataelem.VR(elem.VR), bitsAllocated))
+	} else {
+		dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+	}
 
 	// Sequence items carry their own elements, encoded the same way.
+	// An Icon Image Sequence item has its own Bits Allocated (usually 8);
+	// passing the parent's 32-bit dose width would swap the icon 4 bytes at
+	// a time. Track it after each nested element is converted so the lookup
+	// sees little-endian US values.
 	for _, item := range elem.Items {
+		itemBits := 0
 		for _, nested := range item.Elements {
-			normalizeByteOrder(nested)
+			ba := 0
+			if nested.Tag == tag.New(0x7FE0, 0x0010) {
+				ba = itemBits
+			}
+			normalizeByteOrder(nested, ba)
+			if nested.Tag == tag.New(0x0028, 0x0100) && len(nested.Value) >= 2 {
+				itemBits = int(binary.LittleEndian.Uint16(nested.Value))
+			}
 		}
 	}
 }

@@ -700,7 +700,6 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 // normalizeNativePixelBytes puts native pixel data into the layout every
 // accessor above assumes: samples pixel-interleaved, little endian.
 func normalizeNativePixelBytes(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
-	pixelBytes = fixWideBigEndianSamples(pixelBytes, info, transferSyntax)
 	pixelBytes = upsampleYBR422(pixelBytes, info)
 	return deinterleavePlanes(pixelBytes, info)
 }
@@ -743,39 +742,6 @@ func upsampleYBR422(pixelBytes []byte, info *PixelDataInfo) []byte {
 		i := pair * 6
 		out[i], out[i+1], out[i+2] = y1, cb, cr
 		out[i+3], out[i+4], out[i+5] = y2, cb, cr
-	}
-	return out
-}
-
-// fixWideBigEndianSamples repairs samples wider than the VR they arrived in.
-//
-// Explicit VR Big Endian is byte-swapped on read according to the VR, and pixel
-// data is OW — two-byte words. That is right until BitsAllocated is 32 or 64, at
-// which point each sample has had its 16-bit halves swapped but not its whole
-// width, and every value comes out scrambled. RT Dose is the common case: a dose
-// of 1249000 reads back as 250085395.
-//
-// Swapping the 16-bit words within each sample completes the reversal. pydicom
-// reaches the same values by interpreting the raw bytes at the sample width,
-// which is what archives expect regardless of what the VR alone would imply.
-func fixWideBigEndianSamples(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
-	const explicitVRBigEndian = "1.2.840.10008.1.2.2"
-	if transferSyntax != explicitVRBigEndian {
-		return pixelBytes
-	}
-	width := info.BitsAllocated / 8
-	if width <= 2 {
-		return pixelBytes
-	}
-
-	out := make([]byte, len(pixelBytes))
-	copy(out, pixelBytes)
-	for start := 0; start+width <= len(out); start += width {
-		sample := out[start : start+width]
-		for i, j := 0, len(sample)-2; i < j; i, j = i+2, j-2 {
-			sample[i], sample[j] = sample[j], sample[i]
-			sample[i+1], sample[j+1] = sample[j+1], sample[i+1]
-		}
 	}
 	return out
 }

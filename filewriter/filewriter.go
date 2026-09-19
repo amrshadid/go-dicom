@@ -3,6 +3,7 @@ package filewriter
 import (
 	"bytes"
 	"compress/flate"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/config"
@@ -129,6 +130,11 @@ type DCMFileWriter struct {
 	// encapsulated records that the target transfer syntax carries pixel data
 	// as fragments, which PS3.5 A.4 requires be written with undefined length.
 	encapsulated bool
+
+	// bitsAllocated is (0028,0100) from an element already passed to
+	// WriteDataElement. Native Pixel Data is swapped at this sample width when
+	// writing Explicit VR Big Endian, not at the OW 16-bit VR width.
+	bitsAllocated int
 }
 
 // NewDCMFileWriter creates a new DICOM file writer.
@@ -327,13 +333,22 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		elem = &DataElement{Tag: elem.Tag, VR: "UN", Value: elem.Value, Length: elem.Length}
 	}
 
+	if elem.Tag == tag.New(0x0028, 0x0100) && len(elem.Value) >= 2 {
+		dfw.bitsAllocated = int(binary.LittleEndian.Uint16(elem.Value))
+	}
+
 	// Values are held little endian in memory, so numeric ones must be
 	// converted when the target syntax is big endian. Swap a copy: the caller's
-	// value must not be mutated by writing.
+	// value must not be mutated by writing. Native Pixel Data uses the sample
+	// width from BitsAllocated so 32- and 64-bit OW samples are not half-swapped.
 	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(elem.VR)) {
 		swapped := make([]byte, len(elem.Value))
 		copy(swapped, elem.Value)
-		dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
+		if elem.Tag == pixelDataTag {
+			dataelem.SwapBytes(swapped, dataelem.PixelDataEndianWidth(dataelem.VR(elem.VR), dfw.bitsAllocated))
+		} else {
+			dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
+		}
 		elem = &DataElement{
 			Tag: elem.Tag, VR: elem.VR, Value: swapped, Length: uint32(len(swapped)),
 		}
