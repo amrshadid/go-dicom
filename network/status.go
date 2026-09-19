@@ -133,7 +133,7 @@ const (
 const (
 	StatusStorageCommitmentRefused            uint16 = 0x0110
 	StatusStorageCommitmentNoSuchObject       uint16 = 0x0112
-	StatusStorageCommitmentResourceLimitation uint16 = 0xA700
+	StatusStorageCommitmentResourceLimitation uint16 = 0x0213 // not 0xA700, a C-service status (#114)
 )
 
 // StatusCategory represents the category of a DICOM status code.
