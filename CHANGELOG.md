@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **32-bit big endian pixel data is no longer stored half-swapped** (#124, by
+  @team-humaki). Pixel Data is OW, so reversing byte order by VR is two-byte
+  words. At Bits Allocated 32 or 64 that leaves each sample's halves transposed:
+  an RT Dose of 1249000 was stored as 250085395. The pixel accessor compensated,
+  but only while the transfer syntax was still big endian, so reading a file
+  looked right and rewriting it handed every other reader the scramble — in a
+  file, over the network, and in DICOM JSON alike. Native Pixel Data is now
+  swapped at the sample width Bits Allocated gives, on read and on write, and a
+  sequence item uses its own Bits Allocated, so an 8-bit icon inside a 32-bit
+  dose is not swapped at the parent's width.
+
 - **A standard tag encoded as UN is read with its dictionary VR** (#117). An
   intermediary that does not know a tag re-encodes it as UN, and PS3.5 6.2.2 Note 2
   lets a receiver that does know it read the value as Implicit VR Little Endian.
