@@ -419,6 +419,23 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 			if err := dfr.readExplicitLength(element); err != nil {
 				return nil, err
 			}
+
+			// An intermediary that does not know a tag re-encodes it as UN.
+			// PS3.5 6.2.2 Note 2 lets a receiver that does know it read the
+			// value as Implicit VR Little Endian, whatever the transfer syntax,
+			// and pydicom does so by default. Without this the typed accessors
+			// refuse the value and a UN-encoded sequence is never parsed:
+			// rtdose_rle.dcm has 35 such elements and its Referenced RT Plan
+			// Sequence stayed an opaque blob.
+			// Defined length only: an undefined length means items whatever the
+			// dictionary says (Note 5), and the branch below reads them.
+			if known := dictionaryVRForUN(element.VR, element.Tag, dfr.reader.GetByteOrder()); known != "" &&
+				element.Length != UndefinedLength {
+				element.VR = known
+				// Note 2 again: the value is implicit VR little endian, so
+				// anything nested inside it is too.
+				elementIsImplicit = true
+			}
 		}
 	} else {
 		length, err := dfr.reader.ReadUint32()
@@ -1494,6 +1511,39 @@ func validateDataElement(elem *DataElementValue) error {
 	}
 
 	return nil
+}
+
+// dictionaryVRForUN gives the VR to read a UN element with, or "" to keep UN.
+//
+// Only a public tag the dictionary knows unambiguously: a private tag has no
+// entry to take a VR from, and an entry offering a choice ("US or SS") cannot be
+// settled without the attributes that decide it, which is the writer's job
+// (dataset.ResolveVR). Guessing either would describe bytes as something they
+// may not be.
+//
+// Little endian only. Note 2 says a UN value is little endian whatever the
+// transfer syntax, so in a big endian file a resolved value would be the one
+// value in the data set that must not be byte-swapped — and normalizeByteOrder
+// swaps by VR. Keeping UN there is correct rather than conservative: the bytes
+// stay as they are, which is what UN means.
+func dictionaryVRForUN(vr string, t tag.Tag, order filebase.ByteOrder) string {
+	if vr != "UN" || order == filebase.BigEndian {
+		return ""
+	}
+	if t.Group()%2 == 1 {
+		// A private creator is LO by definition — its value is the vendor's own
+		// name (PS3.5 7.8.1) — so it needs no dictionary. Every other private
+		// tag keeps UN: there is no entry to take a VR from.
+		if e := t.Element(); e >= 0x0010 && e <= 0x00FF {
+			return "LO"
+		}
+		return ""
+	}
+	known := t.GetVR()
+	if known == "" || known == "UN" || strings.Contains(known, " or ") {
+		return ""
+	}
+	return known
 }
 
 // isValidVRVariant checks if a VR is a valid variant of the expected VR.
