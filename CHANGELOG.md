@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`qrscp` answers Storage Commitment** (#113). `commitscu` shipped, but no
+  go-dicom server offered the Push Model, so it had no go-dicom peer. The SCP side
+  already existed. `dcmstore.Handler` now implements `StorageCommitmentProvider`,
+  and `dcmstore.SupportedSOPClasses()` includes the Push Model, so any archive built
+  on the package gets it. An instance is committed only if the store holds it under
+  the SOP Class named and its file is on disk, since the index alone could promise a
+  file that has gone. Otherwise it fails with 0112H, 0119H or 0110H. pynetdicom and
+  `commitscu` both get their answer from `qrscp` on the same association.
+
 ### Fixed
 
 - **Storage Commitment's resource-limitation Failure Reason is 0213H** (#114). It

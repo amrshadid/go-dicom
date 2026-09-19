@@ -184,6 +184,12 @@ Both timings in PS3.4 Annex J are implemented:
 An archive that verifies durability before promising it needs the second form.
 Answering immediately is a promise made before it is true.
 
+`dcmstore`, and so `qrscp`, answers on the same association, because a C-STORE
+there is complete when it is acknowledged. An instance is committed only if the
+store holds it under the SOP Class named and its file is on disk. Otherwise it
+fails with 0112H (not held), 0119H (held under another class) or 0110H (file
+missing), the Failure Reasons of PS3.3 C.14.1.1.
+
 ---
 
 ## 3. Presentation contexts and transfer syntaxes

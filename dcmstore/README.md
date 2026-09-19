@@ -19,7 +19,9 @@ scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
 log.Fatal(scp.ListenAndServe(ctx))
 ```
 
-That accepts C-STORE, answers C-FIND at all four levels, and serves C-GET and C-MOVE from what it has received. Verified over a real association in `integration_test.go`.
+That accepts C-STORE, answers C-FIND at all four levels, serves C-GET and C-MOVE from what it has received, and answers Storage Commitment. Verified over a real association in `integration_test.go`.
+
+A commitment is answered at once, from the store. An instance is committed only if the store holds it under the SOP Class the requestor named **and** its file is on disk: the index is a cache of the files, and committing on it alone would promise an instance whose file has gone. Anything else fails with the Failure Reason that says why: `0112H` not held, `0119H` held under another class, `0110H` file missing.
 
 ## Using the store directly
 

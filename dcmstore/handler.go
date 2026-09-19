@@ -2,6 +2,8 @@ package dcmstore
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/network"
@@ -94,6 +96,63 @@ func (h *Handler) HandleCStore(ctx context.Context, req *network.CStoreRequest) 
 	}
 
 	return response, nil
+}
+
+// HandleStorageCommitment answers a Storage Commitment Push Model request
+// (PS3.4 Annex J) from what the store holds.
+//
+// Successful is a promise that the instance is stored durably and can be
+// retrieved, so it is made only for an instance the store holds under the SOP
+// Class the requestor named, with its file on disk. The file is checked and not
+// only the index: the index is a cache of the files, and committing on it
+// alone would promise an instance whose file has gone. Everything else fails
+// with the Failure Reason that says why (PS3.3 C.14.1.1):
+//
+//   - not in the store: 0112H, no such object instance;
+//   - held under a different class: 0119H, class/instance conflict;
+//   - in the index but its file is missing or unreadable: 0110H, processing
+//     failure.
+//
+// The answer is given at once. A C-STORE here is complete when it is
+// acknowledged, so there is nothing to wait for, and the SCP sends the result
+// on the same association.
+func (h *Handler) HandleStorageCommitment(ctx context.Context,
+	req *network.StorageCommitmentRequest) (*network.StorageCommitmentResult, error) {
+
+	result := &network.StorageCommitmentResult{TransactionUID: req.TransactionUID}
+	for _, ref := range req.Instances {
+		if err := ctx.Err(); err != nil {
+			// Neither list may claim an instance that was not checked.
+			return nil, err
+		}
+		reason, ok := h.commitment(ref)
+		if ok {
+			result.Successful = append(result.Successful, ref)
+			continue
+		}
+		result.Failed = append(result.Failed, network.StorageCommitmentFailure{
+			SOPInstanceReference: ref,
+			Reason:               reason,
+		})
+	}
+	return result, nil
+}
+
+// commitment decides one instance: whether it can be committed, and if not,
+// the Failure Reason.
+func (h *Handler) commitment(ref network.SOPInstanceReference) (uint16, bool) {
+	inst, ok := h.store.Instance(ref.SOPInstanceUID)
+	if !ok {
+		return network.StorageCommitmentFailureNoSuchObject, false
+	}
+	if inst.SOPClassUID != ref.SOPClassUID {
+		return network.StorageCommitmentFailureClassInstanceConflict, false
+	}
+	info, err := os.Stat(filepath.Join(h.store.Root(), filepath.FromSlash(inst.Path)))
+	if err != nil || !info.Mode().IsRegular() {
+		return network.StorageCommitmentFailureProcessingFailure, false
+	}
+	return 0, true
 }
 
 // HandleCFind matches a query against the store.
@@ -272,7 +331,8 @@ func (h *Handler) streamInstances(ctx context.Context, query *dataset.Dataset,
 }
 
 // SupportedSOPClasses returns the abstract syntaxes a store-backed SCP should
-// accept: verification, every storage class, and the query/retrieve models.
+// accept: verification, every storage class, the query/retrieve models, and the
+// Storage Commitment Push Model, which Handler answers from the store.
 //
 // Provided because an archive that accepts a C-STORE for one SOP class and
 // refuses another is a configuration mistake more often than a decision, and the
@@ -282,6 +342,10 @@ func SupportedSOPClasses() []string {
 	classes = append(classes, network.VerificationSOPClassUID)
 	classes = append(classes, network.AllStorageSOPClassUIDs()...)
 	classes = append(classes, network.AllQueryRetrieveSOPClassUIDs()...)
+	// A modality commits what it stored so it can delete its own copy. Without
+	// this the context was refused before the handler was reached, and
+	// commitscu, which ships in this repository, had no go-dicom peer (#113).
+	classes = append(classes, network.StorageCommitmentPushModelUID)
 	return classes
 }
 

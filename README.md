@@ -323,7 +323,8 @@ go build -o go-dicom .
 ./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
 
 # A storage and query/retrieve archive in one command: stores what it is
-# sent, indexes it, and answers C-FIND, C-MOVE and C-GET against it
+# sent, indexes it, answers C-FIND, C-MOVE and C-GET against it, and
+# commits what it holds (commitscu above works against it)
 ./go-dicom qrscp -port 11112 -output ./archive/
 
 # Get help — `help <command>` works for every command above
