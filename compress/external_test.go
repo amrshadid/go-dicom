@@ -111,11 +111,17 @@ func TestGetExternalCompressionStatus(t *testing.T) {
 //
 // These cases are therefore pinned to whether a decoder is bundled, and cross
 // checked against the registry rather than against a hardcoded expectation, so
-// that bundling a codec (JPEG 2000, one day) fails here until its guide is
-// rewritten.
+// that bundling a codec fails here until its guide is rewritten. That is what
+// happened: this list said "JPEG 2000, one day", and the day it was bundled the
+// test caught its guide still telling the caller to supply a decoder.
+//
+// Every codec in the registry is now bundled, so the second list is empty. It
+// stays because the next codec to be added starts there.
 func TestGetImplementationGuide(t *testing.T) {
-	bundled := []compress.CompressionType{compress.JPEG_LS, compress.JPEG_LOSSLESS}
-	supplied := []compress.CompressionType{compress.JPEG_2000}
+	bundled := []compress.CompressionType{
+		compress.JPEG_LS, compress.JPEG_LOSSLESS, compress.JPEG_2000,
+	}
+	var supplied []compress.CompressionType
 
 	registry := compress.GetExternalRegistry()
 

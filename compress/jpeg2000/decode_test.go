@@ -1,4 +1,4 @@
-package jpeg2000
+package jpeg2000_test
 
 import (
 	"crypto/sha256"
@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"testing"
+
+	"github.com/amrshadid/go-dicom/compress/jpeg2000"
 )
 
 // pydicomFrame is what pydicom decodes one fixture to.
@@ -63,7 +65,7 @@ func TestDecodeAgainstPydicom(t *testing.T) {
 			}
 			c := fixtureCodestream(t, dir, want.file)
 
-			img, err := Decode(c)
+			img, err := jpeg2000.Decode(c)
 			if err != nil {
 				t.Fatalf("decoding: %v", err)
 			}
@@ -92,7 +94,7 @@ func TestDecodeAgainstPydicom(t *testing.T) {
 			if mean := sum / float64(want.samples); math.Abs(mean-want.mean) > 0.01 {
 				t.Errorf("the samples average %f, pydicom's %f", mean, want.mean)
 			}
-			if c.CodingFor(0).Wavelet == Wavelet97Irreversible {
+			if c.CodingFor(0).Wavelet == jpeg2000.Wavelet97Irreversible {
 				return // an inexact filter: the mean above is the check
 			}
 			if got := hex.EncodeToString(digest.Sum(nil))[:16]; got != want.digest {
@@ -121,13 +123,6 @@ func asDICOMStores(v int32, codestreamSigned bool, want pydicomFrame) int32 {
 	return v
 }
 
-func abs(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
 // BenchmarkDecode measures a whole frame, which is what a caller pays: tier-2,
 // tier-1, dequantization, the inverse wavelet and the level shift together.
 func BenchmarkDecode(b *testing.B) {
@@ -148,7 +143,7 @@ func BenchmarkDecode(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				if _, err := Decode(c); err != nil {
+				if _, err := jpeg2000.Decode(c); err != nil {
 					b.Fatal(err)
 				}
 			}

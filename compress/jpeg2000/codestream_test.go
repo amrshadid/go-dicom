@@ -266,7 +266,7 @@ func buildCodestream(t *testing.T, patch func(cod, siz []byte)) []byte {
 
 // firstFrame returns the first encapsulated frame of a DICOM file, which for
 // these fixtures is one JPEG 2000 codestream.
-func firstFrame(t *testing.T, path string) []byte {
+func firstFrame(t testing.TB, path string) []byte {
 	t.Helper()
 
 	raw, err := os.ReadFile(path)

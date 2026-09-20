@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JPEG 2000 decodes, in pure Go** (#72). It was the last codec in the registry
+  with no bundled decoder: `.90` and `.91` instances parsed, stored and
+  transferred with their pixel data intact, but could not be read without a
+  decoder the caller supplied. `Dataset.PixelArray` now decodes them without
+  being asked — both the 5/3 reversible and 9/7 irreversible wavelets, 1 to 16
+  bits, signed or unsigned, single or multi component, any number of tiles and
+  quality layers, with the reversible and irreversible component transforms. No
+  CGO and nothing to register; a decoder you register still takes precedence, so
+  code already using `examples/jpeg2000` is unaffected.
+
+  `TestPixelsAgainstWholePydicomCorpus` no longer skips anything: **all 49** files
+  in pydicom's corpus that pydicom can decode now decode here to the same
+  samples, up from 43. Reversible codestreams match sample for sample. An
+  irreversible one is held to a tolerance of one, because the 9/7 filter is
+  defined in real arithmetic and ISO 15444-4 grades a decoder on how close it
+  comes rather than on equality.
+
+  Features the decoder does not implement are refused by name rather than
+  guessed at — subsampled components, custom precinct sizes, the code-block
+  style options, packed packet headers, progression-order changes. A decoder
+  that quietly mis-decodes is worse than none: the image looks plausible and the
+  numbers are wrong, and in an RT Dose that is a wrong dose.
+
+  A codestream states its own signedness and may disagree with the data set's
+  Pixel Representation; real files do. The data set is the authority, so an
+  unsigned sample in a data set that calls it signed is read back as two's
+  complement of Bits Stored — without which `J2K_pixelrep_mismatch.dcm` reads its
+  background as 6192 rather than -2000.
+
 - **`qrscp` answers Storage Commitment** (#113). `commitscu` shipped, but no
   go-dicom server offered the Push Model, so it had no go-dicom peer. The SCP side
   already existed. `dcmstore.Handler` now implements `StorageCommitmentProvider`,
