@@ -61,6 +61,17 @@ func TestPixelsAgainstWholePydicomCorpus(t *testing.T) {
 			}
 
 			samples, width, signed := flattenSamples(arr)
+
+			// PixelArrayBySample gives back a type chosen by Bits Allocated, so
+			// 16-bit samples arrive as uint16 whether or not they are signed.
+			// Pixel Representation is what says which they are, and pydicom's
+			// numbers — the ones in the table — are read that way, so the
+			// comparison has to be too. Without this a signed lossy frame
+			// averages tens of thousands against pydicom's handful.
+			if info, err := df.GetDataset().GetPixelDataInfo(); err == nil &&
+				info.PixelRepresentation == 1 {
+				signed = true
+			}
 			if len(samples) != want.n {
 				t.Fatalf("decoded %d samples, pydicom reads %d", len(samples), want.n)
 			}

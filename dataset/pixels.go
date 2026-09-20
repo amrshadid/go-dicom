@@ -864,14 +864,25 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 			Decompress(fragment)
 	}
 
-	// Everything else goes through the registry. JPEG-LS and JPEG Lossless are
-	// registered there at init by this module's own pure-Go decoders, so they
-	// resolve without the caller doing anything; JPEG 2000 has no bundled
-	// decoder and resolves only if the caller registered one.
+	// Everything else goes through the registry. JPEG-LS, JPEG Lossless and
+	// JPEG 2000 are registered there at init by this module's own pure-Go
+	// decoders, so they resolve without the caller doing anything.
 	decoder, err := compress.GetExternalRegistry().GetExternalDecoder(compression)
 	if err != nil {
 		return nil, fmt.Errorf("no decoder available for %s; supply one with "+
 			"compress.GetExternalRegistry().RegisterExternalDecoder: %w", compression, err)
+	}
+
+	// JPEG 2000 needs the layout for the same reason RLE does, and for one
+	// more. A codestream carries its own sample depth and its own signedness,
+	// and DICOM's Bits Allocated and Pixel Representation may differ from both:
+	// Bits Allocated decides how wide each sample is written, and where the two
+	// disagree about sign the data set is the authority. A decoder the caller
+	// registered gets the plain call, since only this one knows what to do with
+	// the extra arguments.
+	if bundled, ok := decoder.(*compress.JPEG2000Decompressor); ok {
+		return bundled.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored,
+			info.PixelRepresentation)
 	}
 	return decoder.Decompress(fragment)
 }

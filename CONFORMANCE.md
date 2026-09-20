@@ -253,7 +253,7 @@ are using that package.
 | Deflated Explicit VR Little Endian | read/write | yes |
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
-| JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | no bundled decoder |
+| JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
@@ -376,22 +376,33 @@ at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded.
 
 Every file in pydicom's corpus that pydicom can decode decodes here to the same
-samples, bar JPEG 2000 — 43 of its 49, compared whole rather than by their
-leading values. The six it does not are all JPEG 2000, and
-`TestPixelsAgainstWholePydicomCorpus` names each one it skips. What follows is
-that gap, and two differences in how decoded samples are shaped and coloured.
+samples: **all 49 of them**, compared whole rather than by their leading values,
+with nothing skipped for want of a decoder. What follows are two differences in
+how decoded samples are shaped and coloured, and the one tolerance.
 
-- **JPEG 2000 does not decode.** There is no bundled codec and no hidden CGO
-  path: wavelet transforms plus EBCOT arithmetic coding is thousands of lines to
-  implement correctly, and binding openjpeg would cost this library a property it
-  advertises. Instances parse, store, and transfer with their pixel data intact
-  as opaque bytes.
+- **JPEG 2000 decodes in pure Go**, `.90` and `.91`, both wavelets, 1 to 16 bits,
+  signed or unsigned, single or multi component, any number of tiles and quality
+  layers, with the reversible and irreversible component transforms. There is no
+  CGO and nothing to register.
 
-  Supply a decoder with
-  `compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, …)`.
-  `examples/jpeg2000` is a working one to copy — it shells out to openjpeg's
-  `opj_decompress` — and it is verified sample-for-sample against pydicom, along
-  with the registry actually consulting it.
+  A reversible codestream is required to match pydicom sample for sample. An
+  irreversible one is held to a tolerance of one: the 9/7 filter is defined in
+  real arithmetic, so two conformant decoders can land either side of a half,
+  and ISO 15444-4 grades a decoder on how close it comes rather than on
+  equality. Against OpenJPEG the corpus's irreversible file is 22 samples of
+  262144 out by one.
+
+  Features outside that set are refused by name rather than guessed at:
+  subsampled components, custom precinct sizes, the code-block style options
+  (bypass, termall, vertical causal, reset, segmentation marks), packed packet
+  headers, and progression-order changes. A decoder that quietly mis-decodes is
+  worse than none — the image looks plausible and the numbers are wrong, and in
+  an RT Dose that is a wrong dose.
+
+  A codestream's own signedness may disagree with the data set's Pixel
+  Representation, and real files do: the data set is the authority, so an
+  unsigned sample in a data set that calls it signed is read back as two's
+  complement of Bits Stored.
 
 - **`PixelArray` flattens color samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their
@@ -443,9 +454,9 @@ that gap, and two differences in how decoded samples are shaped and coloured.
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
 
-  Decoding has one gap of its own: **JPEG 2000** needs a registered external
-  decoder, and without one an instance stored under it cannot be sent over a
-  context that negotiated anything else.
+  Decoding has no gaps of its own: every compressed syntax in the table above
+  decodes here, so an instance stored under any of them can be transcoded onto
+  whichever context a peer accepts.
 
 ### 8.3 Writing
 

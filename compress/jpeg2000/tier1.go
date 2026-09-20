@@ -215,6 +215,21 @@ func DecodeBlock(block CodeBlockData, magnitudeBits int) ([]int32, error) {
 	return d.data, nil
 }
 
+// DecodeBlockBytesReadForTest decodes a block and reports how far into its data
+// the coding passes read.
+//
+// It exists for the test that requires every code-block of every fixture to
+// land on its last byte, which is the check that says tier-1 made the encoder's
+// decisions in the encoder's contexts. That test reads the corpus, so it has to
+// live in the external test package, which cannot see decodeBlock.
+func DecodeBlockBytesReadForTest(block CodeBlockData, magnitudeBits int) (int, error) {
+	d, err := decodeBlock(block, magnitudeBits)
+	if err != nil {
+		return 0, err
+	}
+	return d.mq.bp, nil
+}
+
 // decodeBlock is DecodeBlock, returning the decoder itself so that tests can
 // ask how much of the block's data the passes consumed.
 func decodeBlock(block CodeBlockData, magnitudeBits int) (*blockDecoder, error) {

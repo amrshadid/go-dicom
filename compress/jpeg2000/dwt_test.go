@@ -186,3 +186,10 @@ func forward53(x []float32, i0, i1 int) {
 		x[k] = float32(buf[pad+k])
 	}
 }
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

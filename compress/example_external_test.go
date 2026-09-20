@@ -23,24 +23,25 @@ func (passthroughDecoder) CanDecompress(data []byte) bool {
 	return len(data) > 0
 }
 
-// ExampleExternalDecoderRegistry_RegisterExternalDecoder shows how to supply a
-// decoder for a codec this module does not implement.
+// ExampleExternalDecoderRegistry_RegisterExternalDecoder shows how to put your
+// own decoder in place of a bundled one.
 //
-// JPEG-LS, JPEG 2000, and JPEG Lossless have no bundled implementation. Until a
-// decoder is registered, reading pixel data in one of those syntaxes reports
-// that none is available; once registered, Dataset.PixelArray routes frames
-// through it automatically.
+// Every codec in the registry now has a pure-Go decoder, so registering is no
+// longer about filling a gap — it is about substitution: a faster codec, a
+// CGO binding to a C library, or one that accepts something this module
+// refuses. Whatever is registered last is what Dataset.PixelArray uses.
+//
+// The three bytes below are not a JPEG 2000 frame and the bundled decoder would
+// refuse them. That they decode is the proof that the substitution took effect.
 func ExampleExternalDecoderRegistry_RegisterExternalDecoder() {
 	registry := compress.GetExternalRegistry()
 
-	fmt.Println("before:", registry.IsExternalDecoderAvailable(compress.JPEG_2000))
+	fmt.Println("bundled:", registry.IsExternalDecoderAvailable(compress.JPEG_2000))
 
 	if err := registry.RegisterExternalDecoder(compress.JPEG_2000, passthroughDecoder{}); err != nil {
 		fmt.Println("register:", err)
 		return
 	}
-
-	fmt.Println("after: ", registry.IsExternalDecoderAvailable(compress.JPEG_2000))
 
 	decoder, err := registry.GetExternalDecoder(compress.JPEG_2000)
 	if err != nil {
@@ -54,8 +55,10 @@ func ExampleExternalDecoderRegistry_RegisterExternalDecoder() {
 	}
 	fmt.Println("decoded", len(out), "bytes")
 
+	// Put the bundled decoder back, since the registry is process-wide.
+	_ = registry.RegisterExternalDecoder(compress.JPEG_2000, compress.NewJPEG2000Decompressor())
+
 	// Output:
-	// before: false
-	// after:  true
+	// bundled: true
 	// decoded 3 bytes
 }

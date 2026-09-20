@@ -1,15 +1,7 @@
 package jpeg2000
 
 import (
-	"bytes"
-	"os"
-	"path/filepath"
 	"testing"
-
-	"github.com/amrshadid/go-dicom/compress"
-	"github.com/amrshadid/go-dicom/filebase"
-	"github.com/amrshadid/go-dicom/filereader"
-	"github.com/amrshadid/go-dicom/tag"
 )
 
 // TestTileGeometryPartitionsTheImage checks the structural facts the packet
@@ -169,101 +161,4 @@ func TestTileBoundsCoverTheImageExactly(t *testing.T) {
 	if area != 400*400 {
 		t.Errorf("the tiles cover %d samples, the image has %d", area, 400*400)
 	}
-}
-
-// TestGeometryOfEveryFixture builds the geometry of every tile and component of
-// the corpus files, and checks the same partition invariants on real
-// parameters, including the multi-tile one.
-func TestGeometryOfEveryFixture(t *testing.T) {
-	dir := os.Getenv("GODICOM_PYDICOM_DATA")
-	if dir == "" {
-		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
-	}
-
-	for name := range fixtureFrames(t, dir) {
-		t.Run(name, func(t *testing.T) {
-			c := fixtureCodestream(t, dir, name)
-			total := 0
-			for tile := 0; tile < c.NumTiles(); tile++ {
-				for comp := range c.Components {
-					tc, err := c.TileComponentFor(tile, comp)
-					if err != nil {
-						t.Fatalf("tile %d component %d: %v", tile, comp, err)
-					}
-					samples := 0
-					for _, res := range tc.Resolutions {
-						for _, band := range res.Bands {
-							covered := 0
-							for _, block := range band.Blocks {
-								covered += block.Width() * block.Height()
-							}
-							if covered != band.Width()*band.Height() {
-								t.Errorf("tile %d component %d resolution %d band %d: blocks cover %d of %d",
-									tile, comp, res.Index, band.Type, covered, band.Width()*band.Height())
-							}
-							samples += band.Width() * band.Height()
-						}
-					}
-					if samples != tc.Width()*tc.Height() {
-						t.Errorf("tile %d component %d: bands hold %d samples, the tile has %d",
-							tile, comp, samples, tc.Width()*tc.Height())
-					}
-					total += samples
-				}
-			}
-			// Every sample of the image, once, across all tiles and components.
-			if want := int(c.Width-c.XOffset) * int(c.Height-c.YOffset) * len(c.Components); total != want {
-				t.Errorf("the tiles hold %d samples, the image has %d", total, want)
-			}
-		})
-	}
-}
-
-// fixtureFrames maps each JPEG 2000 fixture in the corpus to its first frame.
-func fixtureFrames(t testing.TB, dir string) map[string][]byte {
-	t.Helper()
-
-	names := []string{
-		"MR_small_jp2klossless.dcm", "693_J2KI.dcm", "J2K_pixelrep_mismatch.dcm",
-		"SC_rgb_gdcm_KY.dcm", "GDCMJ2K_TextGBR.dcm", "JPEG2000.dcm",
-	}
-	out := map[string][]byte{}
-	for _, name := range names {
-		raw, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		df, err := filereader.ReadDICOMFile(filebase.NewFileReader(bytes.NewReader(raw)))
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		elem, ok := df.GetDataset().Get(tag.New(0x7FE0, 0x0010))
-		if !ok {
-			continue
-		}
-		pixels, _ := elem.GetValue().([]byte)
-		frames, errs := compress.GenerateFrames(bytes.NewReader(pixels), 1, "<")
-		select {
-		case frame := <-frames:
-			out[name] = frame
-		case err := <-errs:
-			t.Fatalf("%s: %v", name, err)
-		}
-	}
-	if len(out) == 0 {
-		t.Skip("no JPEG 2000 fixtures in this corpus")
-	}
-	return out
-}
-
-// fixtureCodestream parses one fixture's first frame.
-func fixtureCodestream(t testing.TB, dir, name string) *Codestream {
-	t.Helper()
-
-	frame := fixtureFrames(t, dir)[name]
-	c, err := ParseCodestream(frame)
-	if err != nil {
-		t.Fatalf("%s: %v", name, err)
-	}
-	return c
 }
