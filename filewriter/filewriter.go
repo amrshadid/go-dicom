@@ -38,6 +38,9 @@ func isEncapsulatedSyntax(uid string) bool {
 	return compress.IsEncapsulated(uid)
 }
 
+// bitsAllocatedTag is (0028,0100).
+var bitsAllocatedTag = tag.New(0x0028, 0x0100)
+
 // pixelDataTag is (7FE0,0010).
 var pixelDataTag = tag.New(0x7FE0, 0x0010)
 
@@ -120,9 +123,8 @@ type DCMFileWriter struct {
 	// as fragments, which PS3.5 A.4 requires be written with undefined length.
 	encapsulated bool
 
-	// bitsAllocated is (0028,0100) from an element already passed to
-	// WriteDataElement. Native Pixel Data is swapped at this sample width when
-	// writing Explicit VR Big Endian, not at the OW 16-bit VR width.
+	// bitsAllocated is (0028,0100) as written, for the Pixel Data byte-order
+	// swap when the target syntax is big endian.
 	bitsAllocated int
 }
 
@@ -312,6 +314,13 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		return dfw.writeSequence(elem, forceExplicitVR)
 	}
 
+	// Bits Allocated decides the width Pixel Data is byte-swapped in below, and
+	// precedes it in tag order. A nested writer has its own, so an icon inside a
+	// 32-bit image is not swapped at the parent's width.
+	if elem.Tag == bitsAllocatedTag && len(elem.Value) >= 2 {
+		dfw.bitsAllocated = int(binary.LittleEndian.Uint16(elem.Value))
+	}
+
 	// The VR field is exactly two bytes (PS3.5 6.2), and this writes elem.VR into
 	// it as given. A VR of any other length — a dictionary's "OB or OW", or none
 	// at all — shifts every byte after it, and the file reads as corrupt from
@@ -322,19 +331,16 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		elem = &DataElement{Tag: elem.Tag, VR: "UN", Value: elem.Value, Length: elem.Length}
 	}
 
-	if elem.Tag == tag.New(0x0028, 0x0100) && len(elem.Value) >= 2 {
-		dfw.bitsAllocated = int(binary.LittleEndian.Uint16(elem.Value))
-	}
-
 	// Values are held little endian in memory, so numeric ones must be
 	// converted when the target syntax is big endian. Swap a copy: the caller's
-	// value must not be mutated by writing. Native Pixel Data uses the sample
-	// width from BitsAllocated so 32- and 64-bit OW samples are not half-swapped.
+	// value must not be mutated by writing.
 	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(elem.VR)) {
 		swapped := make([]byte, len(elem.Value))
 		copy(swapped, elem.Value)
 		if elem.Tag == pixelDataTag {
-			dataelem.SwapBytes(swapped, dataelem.PixelDataEndianWidth(dataelem.VR(elem.VR), dfw.bitsAllocated))
+			// At the sample width, not the width OW implies: a 32-bit sample
+			// reversed in two-byte units keeps its halves transposed (#124).
+			dataelem.SwapBytes(swapped, dataelem.PixelDataSwapWidth(dataelem.VR(elem.VR), dfw.bitsAllocated))
 		} else {
 			dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
 		}

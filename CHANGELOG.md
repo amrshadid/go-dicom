@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **32-bit big endian pixel data is no longer stored half-swapped** (#124, by
-  @team-humaki). Pixel Data is OW, so reversing byte order by VR is two-byte
+- **32-bit big endian pixel data is no longer stored half-swapped** (#124).
+  Pixel Data is OW, so reversing byte order by VR is two-byte
   words. At Bits Allocated 32 or 64 that leaves each sample's halves transposed:
   an RT Dose of 1249000 was stored as 250085395. The pixel accessor compensated,
   but only while the transfer syntax was still big endian, so reading a file
@@ -63,8 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   No corpus file changes: they all declare a character set or are pure ASCII,
   which is why pydicom's seventeen charset fixtures never caught this.
 
-- **A sequence item whose length overruns its sequence is kept** (#122, by
-  @team-humaki). The item was dropped although every element inside it was
+- **A sequence item whose length overruns its sequence is kept** (#122). The item was dropped although every element inside it was
   complete: only its length field was wrong. pydicom's `DICOMDIR-nooffset` came
   back with 51 of its 52 records, one IMAGE record short, and nothing appeared in
   `DICOMFile.Warnings`, because data set warnings were copied to the file before
@@ -73,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequence's end ends the sequence rather than adding an empty item.
 
 - **`StatusRefusedOutOfResources` was 0x0112, which is No Such SOP Instance**
-  (#137, by @team-humaki). PS3.7 Annex C: "Refused: Out of Resources" is a
+  (#137). PS3.7 Annex C: "Refused: Out of Resources" is a
   C-service status in the A7xxH range. An SCP handler reporting exhaustion with
   that constant told the peer the instance did not exist, and a peer that retries
   on a resource failure would not retry. `StatusNoSuchSOPInstance` is the correct

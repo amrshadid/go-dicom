@@ -674,7 +674,7 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 		// corrections belong here. Encapsulated data does not: a decoder's output
 		// convention governs it, and the ones in this package already produce
 		// pixel-interleaved little-endian samples.
-		return normalizeNativePixelBytes(pixelBytes, info, ds.TransferSyntaxUID()), nil
+		return normalizeNativePixelBytes(pixelBytes, info), nil
 	}
 
 	encData, err := ds.ExtractEncapsulatedFrames()
@@ -699,7 +699,12 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 
 // normalizeNativePixelBytes puts native pixel data into the layout every
 // accessor above assumes: samples pixel-interleaved, little endian.
-func normalizeNativePixelBytes(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
+//
+// Byte order is not its business: the reader converts a big endian file once,
+// at the sample width, so the data set holds little endian samples whatever the
+// file was (#124). This used to re-swap wide samples here, which fixed the
+// accessor and left the data set itself wrong.
+func normalizeNativePixelBytes(pixelBytes []byte, info *PixelDataInfo) []byte {
 	pixelBytes = upsampleYBR422(pixelBytes, info)
 	return deinterleavePlanes(pixelBytes, info)
 }

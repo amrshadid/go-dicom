@@ -18,22 +18,12 @@ func IsByteOrderSensitive(vr VR) bool {
 	return ok
 }
 
-// PixelDataEndianWidth is the unit Pixel Data (OW) must be reversed in when
-// converting byte order. The VR is two-byte words, which is right until
-// BitsAllocated is 32 or 64: each sample then needs its whole width reversed,
-// not two 16-bit swaps that leave the halves transposed.
-func PixelDataEndianWidth(vr VR, bitsAllocated int) int {
-	if bitsAllocated >= 32 && bitsAllocated%8 == 0 {
-		return bitsAllocated / 8
-	}
-	if width, ok := byteOrderSensitiveVRs[vr]; ok {
-		return width
-	}
-	return 0
-}
-
-// SwapBytes reverses each width-byte unit of value in place. A width below 2,
+// SwapBytes reverses each width-byte unit of value in place. A width below two,
 // or a value shorter than one unit, is left alone.
+//
+// SwapByteOrder takes the width from the VR, which is right for every value
+// except Pixel Data: OW says two-byte words, and a 32- or 64-bit sample needs
+// its whole width reversed (see PixelDataSwapWidth).
 func SwapBytes(value []byte, width int) {
 	if width < 2 || len(value) < width {
 		return
@@ -43,6 +33,31 @@ func SwapBytes(value []byte, width int) {
 			value[i], value[j] = value[j], value[i]
 		}
 	}
+}
+
+// PixelDataSwapWidth gives the unit native Pixel Data must be reversed in when
+// converting byte order, or 0 when it must not be reversed at all.
+//
+// Pixel Data is OW, so the VR's width is two bytes. That is right until Bits
+// Allocated is 32 or 64, when reversing in two-byte units leaves each sample
+// with its halves transposed: an RT Dose of 1249000 became 250085395 (#124).
+// pydicom reads the raw bytes at the sample width, which is what archives
+// expect whatever the VR alone implies.
+//
+// OB is bytes and is never reversed (PS3.5 7.3), whatever Bits Allocated says;
+// a file with 32-bit samples in OB is non-conformant (PS3.5 A.2 requires OW
+// above 8 bits) and reversing it would corrupt data the VR says to leave alone.
+func PixelDataSwapWidth(vr VR, bitsAllocated int) int {
+	if vr != OW {
+		if width, sensitive := byteOrderSensitiveVRs[vr]; sensitive {
+			return width
+		}
+		return 0
+	}
+	if bitsAllocated >= 32 && bitsAllocated%8 == 0 {
+		return bitsAllocated / 8
+	}
+	return byteOrderSensitiveVRs[OW]
 }
 
 // SwapByteOrder converts a value between big and little endian in place,

@@ -556,9 +556,7 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 
 // warn records a non-fatal problem found while reading the data set.
 func (dfr *DCMFileReader) warn(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	dfr.metaWarnings = append(dfr.metaWarnings, msg)
-	config.Logger.Warn("filereader: data set warning", "detail", msg)
+	dfr.metaWarnings = append(dfr.metaWarnings, fmt.Sprintf(format, args...))
 }
 
 // streamSizeOnce returns the total size of the underlying stream, measuring it
@@ -590,31 +588,6 @@ func (dfr *DCMFileReader) streamSizeOnce() (int64, error) {
 
 	dfr.streamSize = end
 	return end, nil
-}
-
-// itemBodyRemaining is how many bytes of an item body may still be read:
-// the rest of a defined-length sequence, capped by the rest of the stream.
-// -1 means the bound is not known (undefined-length sequence and unseekable).
-func (dfr *DCMFileReader) itemBodyRemaining(seqUndefined bool, seqStart int64, seqLength uint32) int64 {
-	var remain int64 = -1
-	if !seqUndefined {
-		remain = int64(seqLength) - (dfr.position - seqStart)
-		if remain < 0 {
-			remain = 0
-		}
-	}
-	size, err := dfr.streamSizeOnce()
-	if err != nil {
-		return remain
-	}
-	streamRemain := size - dfr.position
-	if streamRemain < 0 {
-		streamRemain = 0
-	}
-	if remain < 0 || streamRemain < remain {
-		return streamRemain
-	}
-	return remain
 }
 
 // readSequenceItems reads the items of a Sequence (SQ) element. A declared
@@ -652,38 +625,43 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 			// Where the item tag started, which is 8 bytes back: 4 for the tag
 			// and 4 for the length that readItemHeader has already consumed.
 			itemStart := dfr.position - 8
-			itemLen := marker.length
-			if itemLen != UndefinedLength {
-				// A defined-length item whose declared body runs past the
-				// enclosing sequence (or the stream) still holds complete
-				// elements in the bytes that are present. Clamp to what
-				// remains so those elements are kept, instead of dropping
-				// the item because its length field is a few bytes too long.
-				// pydicom's DICOMDIR-nooffset is this: the last directory
-				// record claims 24 bytes past the sequence, every element
-				// inside it is complete, and discarding it loses an IMAGE.
-				//
-				// remain == 0 is different: the item header sits exactly at
-				// the sequence's end, so a clamp would keep an empty item
-				// that is not in the file. Warn and stop without recording it.
-				remain := dfr.itemBodyRemaining(undefined, start, declaredLength)
-				if remain == 0 {
-					dfr.warn("sequence item header at end of sequence; stopping without an empty item")
+
+			// An item whose declared body runs past the end of its sequence is
+			// still an item: its elements are all there, and only the length
+			// field is wrong. Dropping it loses real data — pydicom's
+			// DICOMDIR-nooffset declares 248 bytes for its last directory
+			// record with 224 left, and the record it holds is complete, so the
+			// file came back with 51 of its 52 records and an IMAGE missing
+			// (#122).
+			//
+			// The item is read to the end of the sequence instead. A header
+			// sitting exactly at that end has nothing to read and is not an
+			// item at all: recording one would invent a record the file does
+			// not contain.
+			length := marker.length
+			if !undefined && length != UndefinedLength {
+				remaining := int64(declaredLength) - (dfr.position - start)
+				if remaining <= 0 {
+					dfr.warn("sequence item header at the end of the sequence, "+
+						"declaring %d bytes with none left; ending the sequence", length)
 					return items, nil
 				}
-				if remain > 0 && int64(itemLen) > remain {
-					dfr.warn("sequence item declared length %d overruns remaining %d bytes; keeping the complete elements that are present",
-						itemLen, remain)
-					itemLen = uint32(remain)
+				if int64(length) > remaining {
+					dfr.warn("sequence item declares %d bytes with %d left in the sequence; "+
+						"keeping the complete elements it holds", length, remaining)
+					length = uint32(remaining)
 				}
 			}
-			item, err := dfr.readSequenceItem(explicitVR, depth, itemLen)
+
+			item, err := dfr.readSequenceItem(explicitVR, depth, length)
 			if err != nil {
 				// A file cut short loses its last item, not the sequence. The
 				// items already read are complete and were parsed from bytes
 				// that are all there; discarding them because the next one is
 				// short throws away good data to punish a defect it had no part
-				// in.
+				// in. pydicom's DICOMDIR-nooffset ends 24 bytes into its last
+				// directory record, and dropping the sequence loses the other
+				// 51 records with it.
 				//
 				// Only for truncation. Any other error means the bytes did not
 				// mean what they claimed, and continuing past that would build
@@ -1243,6 +1221,13 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 	// Whether the encoding has to be worked out from the data set itself.
 	sniffed := false
+	// Bits Allocated as it is read, for the Pixel Data byte-order swap below.
+	bitsAllocated := 0
+	// How many warnings belonged to the meta header. Warnings recorded while the
+	// data set is parsed are appended after it, and were never copied to the
+	// file at all: the copy below happens before the data set is read, so a
+	// truncated or overrunning sequence warned into a slice nobody looked at.
+	metaWarningCount := 0
 
 	// A DICOM Part 10 file opens with a 128-byte preamble and the characters
 	// DICM. A raw DICOM stream — as produced by some modalities, and what
@@ -1263,6 +1248,7 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.FileMetaInfo = metaInfo
 		dicomFile.MetaElements = dfr.metaElements
 		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
+		metaWarningCount = len(dfr.metaWarnings)
 	} else {
 		// Without a meta header there is no stated transfer syntax. Implicit VR
 		// Little Endian is the DICOM default (PS3.5 Section 10.1), but the first
@@ -1272,10 +1258,6 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.FileMetaInfo = metaInfo
 		sniffed = true
 	}
-
-	// Dataset-time warnings are appended to the same slice. Remember how
-	// many belonged to the meta header so we can copy only the new ones.
-	nMeta := len(dfr.metaWarnings)
 
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
@@ -1319,11 +1301,6 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		reader.SetByteOrder(filebase.BigEndian)
 	}
 
-	// bitsAllocated is (0028,0100) from an element already converted to little
-	// endian. Native Pixel Data is swapped at this sample width; tracking it
-	// as elements are read avoids a quadratic scan of everything so far.
-	bitsAllocated := 0
-
 	for {
 		element, err := dfr.ReadDataElement(dicomFile.ExplicitVR)
 		if err != nil {
@@ -1362,13 +1339,11 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		// Big endian values are converted once here so that everything
 		// downstream can assume little endian; see normalizeByteOrder.
 		if !dicomFile.IsLittleEndian {
-			ba := 0
-			if element.Tag == tag.New(0x7FE0, 0x0010) {
-				ba = bitsAllocated
-			}
-			normalizeByteOrder(element, ba)
+			normalizeByteOrder(element, bitsAllocated)
 		}
-		if element.Tag == tag.New(0x0028, 0x0100) && len(element.Value) >= 2 {
+		// Bits Allocated decides how wide a native Pixel Data sample is, and it
+		// precedes Pixel Data in every conforming file (group 0028 before 7FE0).
+		if element.Tag == bitsAllocatedTag && len(element.Value) >= 2 {
 			bitsAllocated = int(binary.LittleEndian.Uint16(element.Value))
 		}
 
@@ -1387,10 +1362,11 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
 	}
 
-	// Sequence/item warnings are recorded while the data set is parsed, after
-	// the meta-header copy above. Append only those added since then so two
-	// identical real warnings are not collapsed into one.
-	dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[nMeta:]...)
+	// The warnings recorded while the data set was parsed, which the copy above
+	// could not have seen.
+	if len(dfr.metaWarnings) > metaWarningCount {
+		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[metaWarningCount:]...)
+	}
 
 	return dicomFile, nil
 }
@@ -1574,38 +1550,36 @@ func isValidVRVariant(actual, expected string) bool {
 // model — reads them as little endian. Rather than thread the file's byte order
 // through all of that, big endian values are normalised once here, so a data
 // set means the same thing regardless of how the file was encoded.
-//
-// Native Pixel Data is OW, so a VR-width swap is 16-bit words. When
-// BitsAllocated is 32 or 64 that leaves each sample's halves transposed; swap
-// at the sample width instead. Encapsulated (undefined-length) Pixel Data is
-// fragments, not samples, and is left to the VR rule.
 func normalizeByteOrder(elem *DataElementValue, bitsAllocated int) {
-	// Swap in place: the value was allocated by this reader and is not shared.
-	if elem.Tag == tag.New(0x7FE0, 0x0010) && !elem.UndefinedLength {
-		dataelem.SwapBytes(elem.Value, dataelem.PixelDataEndianWidth(dataelem.VR(elem.VR), bitsAllocated))
+	// Native Pixel Data is reversed at its sample width, not at the width OW
+	// implies: at 32 or 64 bits the two-byte swap leaves each sample's halves
+	// transposed, which is #124. Encapsulated Pixel Data is fragments, not
+	// samples, and is never reversed.
+	if elem.Tag == pixelDataTag && !elem.UndefinedLength {
+		dataelem.SwapBytes(elem.Value, dataelem.PixelDataSwapWidth(dataelem.VR(elem.VR), bitsAllocated))
 	} else {
+		// Swap in place: the value was allocated by this reader and is not shared.
 		dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
 	}
 
-	// Sequence items carry their own elements, encoded the same way.
-	// An Icon Image Sequence item has its own Bits Allocated (usually 8);
-	// passing the parent's 32-bit dose width would swap the icon 4 bytes at
-	// a time. Track it after each nested element is converted so the lookup
-	// sees little-endian US values.
+	// Sequence items carry their own elements, encoded the same way, and an
+	// item describing its own image — an icon — has its own Bits Allocated.
 	for _, item := range elem.Items {
 		itemBits := 0
 		for _, nested := range item.Elements {
-			ba := 0
-			if nested.Tag == tag.New(0x7FE0, 0x0010) {
-				ba = itemBits
-			}
-			normalizeByteOrder(nested, ba)
-			if nested.Tag == tag.New(0x0028, 0x0100) && len(nested.Value) >= 2 {
+			normalizeByteOrder(nested, itemBits)
+			if nested.Tag == bitsAllocatedTag && len(nested.Value) >= 2 {
 				itemBits = int(binary.LittleEndian.Uint16(nested.Value))
 			}
 		}
 	}
 }
+
+// bitsAllocatedTag is (0028,0100) and pixelDataTag is (7FE0,0010).
+var (
+	bitsAllocatedTag = tag.New(0x0028, 0x0100)
+	pixelDataTag     = tag.New(0x7FE0, 0x0010)
+)
 
 // isPlausibleVR reports whether two bytes could be a Value Representation.
 //

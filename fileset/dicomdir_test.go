@@ -74,9 +74,10 @@ func TestDICOMDIRRecordCounts(t *testing.T) {
 		{"DICOMDIR-reordered", 52, 2, 31, "the sequence order is not the tree"},
 		// Media with nothing on it yet, which is a valid file-set.
 		{"DICOMDIR-empty.dcm", 0, 0, 0, ""},
-		// The last record's declared length overruns the sequence. The record
-		// is complete; only its length is wrong, so it is kept.
-		{"DICOMDIR-nooffset", 52, 2, 31, "the last record is complete and only its length is wrong"},
+		// The last record's declared length runs 24 bytes past the end of the
+		// sequence, but the record itself is complete: only the length field is
+		// wrong, so it is kept and the file reads like DICOMDIR (#122).
+		{"DICOMDIR-nooffset", 52, 2, 31, "the last record is complete; only its length is wrong"},
 	}
 
 	for _, tc := range tests {

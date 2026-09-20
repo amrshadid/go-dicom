@@ -5,15 +5,16 @@ package network
 
 // --- General Status Codes (all services) ---
 const (
-	// StatusNoSuchSOPInstance is 0112H, "No Such SOP Instance" (PS3.7 Annex C).
+	// StatusNoSuchSOPInstance is 0112H. PS3.7 Annex C gives that code to "No
+	// Such SOP Instance"; "Refused: Out of Resources" is a C-service status in
+	// the A7xxH range, and this constant carried that name (#137). A handler
+	// reporting exhaustion with it told the peer the instance did not exist,
+	// and a peer that retries on a resource failure would not retry.
 	StatusNoSuchSOPInstance uint16 = 0x0112
 
-	// StatusRefusedOutOfResources is a deprecated name for StatusNoSuchSOPInstance.
-	//
-	// Deprecated: 0x0112 is No Such SOP Instance, not "Refused: Out of Resources".
-	// Use StatusNoSuchSOPInstance. For C-service out-of-resources use
-	// StatusOutOfResources (0xA700). For N-service resource limitation use
-	// StatusResourceLimitation (0x0213).
+	// Deprecated: 0x0112 is No Such SOP Instance. Use StatusNoSuchSOPInstance
+	// for that, StatusOutOfResources (0xA700) for a C-service that is out of
+	// resources, or StatusResourceLimitation (0x0213) for an N-service.
 	StatusRefusedOutOfResources = StatusNoSuchSOPInstance
 
 	StatusRefusedSOPClassNotSupported uint16 = 0x0122
