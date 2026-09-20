@@ -1,0 +1,43 @@
+package jpeg2000_test
+
+import (
+	"testing"
+
+	"github.com/amrshadid/go-dicom/compress/jpeg2000"
+)
+
+// FuzzParseCodestream runs the parser against arbitrary bytes. Every length in
+// a codestream comes from the file, and this file came from a peer: a segment
+// length, a component count, a tile index or a Psot can each point past the end
+// or drive an allocation. The parser may return any error it likes; it may not
+// panic and it may not hang.
+func FuzzParseCodestream(f *testing.F) {
+	f.Add([]byte{})
+	f.Add([]byte{0xFF, 0x4F})                                     // SOC alone
+	f.Add([]byte{0xFF, 0x4F, 0xFF, 0x51, 0x00, 0x29})             // SOC, a SIZ that stops
+	f.Add([]byte{0xFF, 0x4F, 0xFF, 0x90, 0x00, 0x0A, 0, 0, 0xFF}) // a tile-part that stops
+	f.Add([]byte{0x00, 0x00, 0x00, 0x0C, 0x6A, 0x50, 0x20, 0x20}) // a JP2 signature box
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		c, err := jpeg2000.ParseCodestream(data)
+		if err != nil {
+			return
+		}
+		// A codestream that parsed must describe something coherent, since the
+		// decoder that follows will size its buffers from these numbers.
+		if c.Width == 0 || c.Height == 0 {
+			t.Fatalf("parsed a codestream of %dx%d", c.Width, c.Height)
+		}
+		if len(c.Components) == 0 {
+			t.Fatal("parsed a codestream with no components")
+		}
+		if c.NumTiles() <= 0 {
+			t.Fatalf("parsed a codestream with %d tiles", c.NumTiles())
+		}
+		for _, comp := range c.Components {
+			if comp.Depth < 1 || comp.Depth > 16 {
+				t.Fatalf("component depth %d", comp.Depth)
+			}
+		}
+	})
+}
