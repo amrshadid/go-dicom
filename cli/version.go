@@ -34,10 +34,10 @@ func (vc *VersionCommand) Execute(args []string) error {
 // PrintVersion prints version information to stdout.
 //
 // The version is normalized, because it arrives from two places that disagree. The
-// source declares "1.5.0"; the release workflow stamps the git tag with
-// -ldflags "-X main.Version=${{ github.ref_name }}", and a tag is "v1.5.0". So a
-// released binary reported "go-dicom version v1.5.0" while the same source built with
-// make reported "1.5.0" — and the wire identifier, GO-DICOM-1.5.0, agreed with neither.
+// source declares "1.6.0"; the release workflow stamps the git tag with
+// -ldflags "-X main.Version=${{ github.ref_name }}", and a tag is "v1.6.0". So a
+// released binary reported "go-dicom version v1.6.0" while the same source built with
+// make reported "1.6.0" — and the wire identifier, GO-DICOM-1.6.0, agreed with neither.
 //
 // The test that exists to stop the command line and the wire version drifting apart
 // cannot catch that: it runs against the source default and never sees the stamped

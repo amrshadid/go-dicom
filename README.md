@@ -57,7 +57,7 @@ It is worth reading before piping anything to a shell — it is about a hundred 
 curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
 less install.sh
 sh install.sh                          # the latest release
-sh install.sh v1.5.0                   # a specific one
+sh install.sh v1.6.0                   # a specific one
 PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
 ```
 
