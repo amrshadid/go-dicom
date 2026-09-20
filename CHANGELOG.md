@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Dataset.PixelArrayInterpreted` reads signed samples as signed** (#159).
+  `PixelArray` and `PixelArrayBySample` choose their Go type from Bits Allocated
+  alone, so a signed 16-bit image came back as `[][][]uint16` and a sample of
+  -2016 read as 63520. The values were the stored bits and were not wrong; the
+  type did not say how to read them, and every caller of a signed image had to
+  know to reinterpret.
+
+  Changing those two would break a documented contract — code asserting
+  `[][][]uint16` would begin to panic — so the signed reading is a new call
+  instead. It applies `(0028,0103)` and nothing else, the way
+  `pixels.Accessor.GetInterpretedValue` already does, returning `int8`, `int16`
+  or `int32` for a signed data set and exactly what `PixelArray` returns for an
+  unsigned one.
+
+  Sign extension is from **Bits Stored**, not Bits Allocated. For a 13-bit
+  sample in a 16-bit word the sign bit is bit 12, so a stored `0x1830` is -2000
+  where a plain `int16` conversion gives 6192. Most files store the two widths
+  equal and hide the difference, which is why the test that proves it is
+  synthetic rather than from the corpus.
+
 - **JPEG 2000 decodes, in pure Go** (#72). It was the last codec in the registry
   with no bundled decoder: `.90` and `.91` instances parsed, stored and
   transferred with their pixel data intact, but could not be read without a

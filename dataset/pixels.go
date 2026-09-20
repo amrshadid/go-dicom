@@ -126,6 +126,12 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 //   - For 16-bit: returns [][][]uint16 (frames, rows, cols) for grayscale
 //   - For 32-bit: returns [][][]uint32 (frames, rows, cols) for grayscale
 //
+// The type follows Bits Allocated alone. (0028,0103) Pixel Representation is
+// not consulted, so a signed image comes back in an unsigned type and a sample
+// of -2016 reads as 63520. The values are the stored bits and are not wrong;
+// the type does not say how to read them. PixelArrayInterpreted applies Pixel
+// Representation and returns a signed array for a signed data set.
+//
 // For single-frame images, the first dimension is 1.
 // Returns error if pixel data is not present or cannot be parsed.
 // Leverages the pixels module for efficient data access when appropriate.
@@ -889,6 +895,9 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 
 // PixelArrayBySample returns pixel data with color samples in their own
 // dimension, matching the shape PixelDataShape reports.
+//
+// Like PixelArray, its type follows Bits Allocated and not Pixel
+// Representation; see PixelArrayInterpreted for signed samples.
 //
 // For multi-sample data the result is [frames][rows][columns][samples]; for
 // single-sample data it is [frames][rows][columns], the same as PixelArray.

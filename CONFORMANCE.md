@@ -409,6 +409,14 @@ how decoded samples are shaped and coloured, and the one tolerance.
   order are correct. `PixelArrayBySample` returns the four-dimensional shape that
   `PixelDataShape` reports.
 
+- **`PixelArray`'s Go type follows Bits Allocated, not Pixel Representation.** A
+  signed image arrives in an unsigned type, so a sample of −2016 reads as 63520.
+  The values are the stored bits and are not wrong; the type does not say how to
+  read them. `PixelArrayInterpreted` applies `(0028,0103)` and returns a signed
+  array for a signed data set, sign-extending from Bits Stored — which matters
+  when Bits Stored is narrower than Bits Allocated, where a plain conversion of
+  the whole word gives the wrong number.
+
 - **Samples are returned in the color space the Photometric Interpretation
   names.** A `YBR_FULL` instance yields YBR, not RGB, because the attribute
   describes the samples as stored and converting them while it still says YBR
