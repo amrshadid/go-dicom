@@ -69,6 +69,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A pre-release tag is published as a pre-release** (#157). The release
+  workflow triggers on `v*`, which matches `v1.6.0-rc.1` as readily as
+  `v1.6.0`, and then published both the same way: no `prerelease` input was
+  given, so a release candidate cut for testing would have been marked Latest
+  and offered to everyone as the current version. A hyphen is what semver uses
+  to mark a pre-release and it is the only signal a tag carries, so that is what
+  decides it now. Its notes fall back to the base version's section, then to
+  `[Unreleased]`, with a line saying what it is — a test build published with no
+  notes is the one kind of release whose contents most need reading.
+
+- **The tests run on every pull request** (#158). They were restricted to pull
+  requests targeting `main` or `develop`, so a pull request based on another
+  feature branch got no checks at all. Work that arrives as dependent stages —
+  the JPEG 2000 decoder came as four — could then only be reviewed by pointing
+  every stage at `develop` and reading overlapping diffs.
+
+- **Three `fileset` benchmarks that had never run, run** (#155).
+  `BenchmarkAddFile`, `BenchmarkListFiles` and `BenchmarkGetStatistics` built
+  their filenames as `"test_" + string(rune(i)) + ".dcm"`, and at `i = 0` that
+  is a NUL byte, which no filesystem accepts; each failed on its first
+  iteration. `string(i)` on an integer is what `go vet`'s `stringintconv` flags,
+  and wrapping it as `string(rune(i))` silences the warning while leaving the
+  meaning as wrong — the tool went quiet and the code stayed broken.
+
+
 - **Signed pixel values are read as signed** (#156). Three places built a
   `pixels.PixelData` and set `pd.PixelRepresentation = 0 // unsigned by default`,
   discarding (0028,0103) — which the same `info` struct was holding. There is no
