@@ -97,7 +97,8 @@ func decodeSingleBand(t *testing.T, c *Codestream) []int32 {
 			for x := 0; x < bw; x++ {
 				row := block.Block.Y0 - band.Y0 + y
 				col := block.Block.X0 - band.X0 + x
-				out[row*w+col] = samples[y*bw+x]
+				// The samples are in halves (see DecodeBlock).
+				out[row*w+col] = samples[y*bw+x] / 2
 			}
 		}
 	}

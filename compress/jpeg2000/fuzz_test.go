@@ -40,6 +40,22 @@ func FuzzParseCodestream(f *testing.F) {
 			}
 		}
 
+		// And the whole decode, which is what a caller will actually run: every
+		// length, index and allocation from here to the pixels comes out of
+		// this file. Any error is fine; a panic is not, and neither is an image
+		// whose planes are not the size it claims.
+		if img, err := jpeg2000.Decode(c); err == nil {
+			if img.Width <= 0 || img.Height <= 0 {
+				t.Fatalf("decoded an image of %dx%d", img.Width, img.Height)
+			}
+			for i, plane := range img.Components {
+				if len(plane) != img.Width*img.Height {
+					t.Fatalf("component %d has %d samples for a %dx%d image",
+						i, len(plane), img.Width, img.Height)
+				}
+			}
+		}
+
 		// And the packets, which is where the lengths a file controls turn into
 		// slices: a segment length, a pass count, a tag tree value. Any error is
 		// fine; a panic or a claim on bytes that are not there is not.

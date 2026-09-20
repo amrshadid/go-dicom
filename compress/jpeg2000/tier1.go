@@ -200,9 +200,13 @@ func MagnitudeBits(q Quantization, band Band, resolution, levels int) (int, erro
 
 // DecodeBlock decodes one code-block into signed coefficients, row by row.
 //
-// The values returned are magnitudes at their true bit positions, signed: what
-// remains before them is dequantization, which belongs to the subband and not
-// to the block. magnitudeBits is the band's Mb, from MagnitudeBits.
+// The values returned are in units of half a coefficient: a returned 3 means
+// 1.5. The half is the reconstruction estimate a truncated coefficient carries
+// (see setSignificant), and it is kept rather than rounded away because a lossy
+// decode multiplies these by a quantization step, where half a unit still
+// counts. Dividing by two, rounding towards zero, gives the coefficient.
+//
+// magnitudeBits is the band's Mb, from MagnitudeBits.
 func DecodeBlock(block CodeBlockData, magnitudeBits int) ([]int32, error) {
 	d, err := decodeBlock(block, magnitudeBits)
 	if err != nil {
@@ -238,7 +242,9 @@ func decodeBlock(block CodeBlockData, magnitudeBits int) (*blockDecoder, error) 
 		// Every plane the band could hold is zero, so the block is all zeros.
 		return d, nil
 	}
-	if plane > 30 {
+	// One less than an int32 holds: the estimates below are kept in units of
+	// half a coefficient, which costs a bit.
+	if plane > 29 {
 		return nil, errorf("a code-block claims bit plane %d, past what an int32 holds", plane)
 	}
 
@@ -414,11 +420,23 @@ func (b *blockDecoder) decodeSign(i int) {
 	}
 }
 
-// setSignificant marks a coefficient significant and gives it the bit that made
-// it so.
+// setSignificant marks a coefficient significant and gives it the value its
+// new bit plane implies.
+//
+// That value is the middle of the interval the bit plane leaves open, not its
+// floor. A coefficient that first becomes significant at plane p is known only
+// to lie in [2^p, 2^(p+1)), and the best estimate of it is 1.5 * 2^p. Taking
+// the floor instead biases every truncated coefficient downwards, which is
+// visible in the decoded image: against pydicom it was 1005 of MR_small's 4096
+// samples wrong, three quarters of them low by one.
+//
+// The half is carried by working in units of half a coefficient throughout and
+// halving at the end (applySigns), so the estimate stays exact in integers. A
+// coefficient decoded all the way to plane 0 comes out at its true value, since
+// the half is then below the last bit and the halving drops it.
 func (b *blockDecoder) setSignificant(x, y, i, plane int) {
 	b.flags[i] |= flagSignificant
-	b.data[y*b.w+x] = 1 << uint(plane)
+	b.data[y*b.w+x] = 3 << uint(plane)
 	for _, n := range neighborWrites {
 		b.flags[i+n.dy*b.stride+n.dx] |= n.bit
 	}
@@ -472,8 +490,13 @@ func (b *blockDecoder) refinementPass(plane int) {
 						cx = cxRefineNear
 					}
 				}
+				// A refinement halves the interval the coefficient is known
+				// to lie in, and moves the estimate to the middle of whichever
+				// half it names.
 				if b.mq.decode(cx) == 1 {
-					b.data[y*b.w+x] |= 1 << uint(plane)
+					b.data[y*b.w+x] += 1 << uint(plane)
+				} else {
+					b.data[y*b.w+x] -= 1 << uint(plane)
 				}
 				b.flags[i] |= flagRefined
 			}
@@ -543,8 +566,10 @@ func (b *blockDecoder) clearVisited(i, n int) {
 	}
 }
 
-// applySigns turns the magnitudes into signed values, and clears the visited
-// marks that only mattered within a plane.
+// applySigns gives the estimates their signs. The half a unit they are carried
+// in is kept: a lossy decode multiplies them by a quantization step, and
+// rounding them to whole coefficients first would throw the half away before it
+// could count.
 func (b *blockDecoder) applySigns() {
 	for y := 0; y < b.h; y++ {
 		for x := 0; x < b.w; x++ {
