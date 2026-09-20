@@ -56,6 +56,32 @@ func FuzzParseCodestream(f *testing.F) {
 				t.Fatalf("tile %d: code-blocks claim %d bytes of a %d byte tile",
 					tile, used, data.TileBytes)
 			}
+
+			// And tier-1, which turns those bytes into coefficients. Its loop
+			// bounds are a pass count and a bit plane, both from the header, and
+			// both able to send a shift or an index out of range.
+			for _, block := range data.Blocks {
+				res := data.Components[block.Component].Resolutions[block.Resolution]
+				var band jpeg2000.Band
+				for _, candidate := range res.Bands {
+					if candidate.Type == block.BandType {
+						band = candidate
+					}
+				}
+				bits, err := jpeg2000.MagnitudeBits(c.QuantForTile(tile, block.Component),
+					band, block.Resolution, c.CodingForTile(tile, block.Component).Levels)
+				if err != nil {
+					continue
+				}
+				samples, err := jpeg2000.DecodeBlock(block, bits)
+				if err != nil {
+					continue
+				}
+				if want := block.Block.Width() * block.Block.Height(); len(samples) != want {
+					t.Fatalf("a %dx%d block decoded to %d samples",
+						block.Block.Width(), block.Block.Height(), len(samples))
+				}
+			}
 		}
 	})
 }
