@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Signed pixel values are read as signed** (#156). Three places built a
+  `pixels.PixelData` and set `pd.PixelRepresentation = 0 // unsigned by default`,
+  discarding (0028,0103) — which the same `info` struct was holding. There is no
+  default about it: Pixel Representation is Type 1 on every image module, always
+  present, and it is the only attribute that says whether a sample is signed.
+
+  The `pixels` package had handled both all along: it has `signExtend`, and
+  `GetInterpretedValue` branches on the representation. The support was there and
+  the value never reached it. A CT sample of -2000 HU, which is air, came back
+  from `PixelArrayWithAccessor` as 63536, and `GetPixelStatistics` reported a
+  minimum of 63536 for an image whose minimum is negative — so a signed image
+  could not report a minimum below zero at all.
+
 - **32-bit big endian pixel data is no longer stored half-swapped** (#124).
   Pixel Data is OW, so reversing byte order by VR is two-byte
   words. At Bits Allocated 32 or 64 that leaves each sample's halves transposed:

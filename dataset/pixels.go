@@ -184,7 +184,7 @@ func (ds *Dataset) PixelArrayWithAccessor() (*pixels.Accessor, error) {
 	pd.HighBit = uint16(info.HighBit)
 	pd.NumberOfFrames = uint32(info.NumberOfFrames)
 	pd.SamplesPerPixel = uint16(info.SamplesPerPixel)
-	pd.PixelRepresentation = 0 // unsigned by default
+	pd.PixelRepresentation = uint16(info.PixelRepresentation)
 	pd.PhotometricInterpretation = info.PhotometricInterpretation
 	pd.LittleEndian = true // DICOM default
 
@@ -367,7 +367,7 @@ func (ds *Dataset) GetPixelStatistics() (*pixels.Statistics, error) {
 	pd.HighBit = uint16(info.HighBit)
 	pd.NumberOfFrames = uint32(info.NumberOfFrames)
 	pd.SamplesPerPixel = uint16(info.SamplesPerPixel)
-	pd.PixelRepresentation = 0 // unsigned by default
+	pd.PixelRepresentation = uint16(info.PixelRepresentation)
 	pd.PhotometricInterpretation = info.PhotometricInterpretation
 	pd.LittleEndian = true // DICOM default
 
@@ -407,7 +407,7 @@ func (ds *Dataset) GetPixelStatisticsSampled(sampleRate float64) (*pixels.Statis
 	pd.HighBit = uint16(info.HighBit)
 	pd.NumberOfFrames = uint32(info.NumberOfFrames)
 	pd.SamplesPerPixel = uint16(info.SamplesPerPixel)
-	pd.PixelRepresentation = 0 // unsigned by default
+	pd.PixelRepresentation = uint16(info.PixelRepresentation)
 	pd.PhotometricInterpretation = info.PhotometricInterpretation
 	pd.LittleEndian = true // DICOM default
 
