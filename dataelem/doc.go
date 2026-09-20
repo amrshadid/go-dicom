@@ -24,6 +24,14 @@
 //	name, _ := elem.GetValue()
 //	fmt.Println(name) // Output: Smith^John
 //
+// A value may also be a Go number or a slice of them, which the encoders render
+// by VR through ValueBytes. A value that does not fit its VR fails to encode
+// rather than being written wrong:
+//
+//	rows := dataelem.NewDataElement(0x00280010, dataelem.US, uint16(512))
+//	spacing := dataelem.NewDataElement(0x00280030, dataelem.DS, []float64{0.5, 0.5})
+//	pixels := dataelem.NewDataElement(0x7FE00010, dataelem.OW, []int16{-1, 0, 1})
+//
 // DataElements are thread-safe for concurrent reads via RWMutex. For write
 // operations, use explicit locking.
 //

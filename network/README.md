@@ -210,22 +210,22 @@ The library includes CLI tools equivalent to pynetdicom's command-line utilities
 
 ```bash
 # Build
-go build -o dicom .
+go build -o go-dicom .
 
 # Verification (ping)
-./dicom echoscu pacs.hospital.com:11112
+./go-dicom echoscu pacs.hospital.com:11112
 
 # Send DICOM files (any format: .dcm, .ima, etc.)
-./dicom storescu -aec PACS pacs:11112 study/*.dcm
+./go-dicom storescu -aec PACS pacs:11112 study/*.dcm
 
 # Receive DICOM files
-./dicom storescp -port 11112 -output ./received/
+./go-dicom storescp -port 11112 -output ./received/
 
 # Query for studies
-./dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
+./go-dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
 
 # Retrieve studies
-./dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
+./go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 ```
 
 ## Architecture

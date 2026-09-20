@@ -1,11 +1,18 @@
 name: Tests and Quality Checks
 
 
+# Pushes are only worth building on the two branches that keep history; a
+# feature branch is covered by its pull request.
+#
+# Pull requests are built whatever they target. Restricting this to main and
+# develop meant a pull request based on another feature branch got no checks at
+# all, so a stack of them could only be reviewed by pointing every one at
+# develop and reading four overlapping diffs. One stage per pull request is
+# worth more than the runner minutes.
 on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
 
 permissions:
   contents: read
@@ -175,7 +182,7 @@ jobs:
           /usr/bin/storescu --version | head -1
 
       - name: Build CLI
-        run: go build -o dicom .
+        run: go build -o go-dicom .
 
       # Verifies go-dicom against two independent implementations, in both
       # directions, comparing the transferred data with pydicom. Every critical
@@ -183,7 +190,7 @@ jobs:
       # successfully and would have failed against any real peer.
       - name: Run interoperability tests
         env:
-          GODICOM: ./dicom
+          GODICOM: ./go-dicom
           DCMTK_BIN: /usr/bin
         run: |
           export PYNETDICOM_BIN="$HOME/dicomvenv/bin"
@@ -289,21 +296,21 @@ jobs:
         run: go mod download
 
       - name: Build CLI
-        run: go build -o dicom .
+        run: go build -o go-dicom .
 
       - name: Verify CLI help
-        run: ./dicom -h
+        run: ./go-dicom -h
 
       - name: Verify CLI version
-        run: ./dicom -v
+        run: ./go-dicom -v
 
       - name: Verify network CLI commands are registered
         run: |
-          ./dicom -h | grep -q echoscu
-          ./dicom -h | grep -q storescu
-          ./dicom -h | grep -q storescp
-          ./dicom -h | grep -q findscu
-          ./dicom -h | grep -q movescu
+          ./go-dicom -h | grep -q echoscu
+          ./go-dicom -h | grep -q storescu
+          ./go-dicom -h | grep -q storescp
+          ./go-dicom -h | grep -q findscu
+          ./go-dicom -h | grep -q movescu
 
   module-check:
     name: Module Validation

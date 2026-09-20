@@ -246,3 +246,58 @@ func TestElementsFromDatasetDropsUnrenderableValues(t *testing.T) {
 		t.Errorf("the surviving element is %s, want the CS one", elements[0].Tag)
 	}
 }
+
+// TestStorageTransferSyntax covers the choice a storage SCP makes when it writes
+// what it was sent: uncompressed data as Explicit VR Little Endian, encapsulated
+// data in its own syntax, which is the only record of its codec.
+func TestStorageTransferSyntax(t *testing.T) {
+	tests := []struct{ arrived, want string }{
+		{"", "1.2.840.10008.1.2.1"},                          // built in memory
+		{"1.2.840.10008.1.2", "1.2.840.10008.1.2.1"},         // Implicit VR Little Endian
+		{"1.2.840.10008.1.2.2", "1.2.840.10008.1.2.1"},       // Explicit VR Big Endian
+		{"1.2.840.10008.1.2.1.99", "1.2.840.10008.1.2.1"},    // Deflated: inflated on arrival
+		{"1.2.840.10008.1.2.4.70", "1.2.840.10008.1.2.4.70"}, // JPEG Lossless
+		{"1.2.840.10008.1.2.4.90", "1.2.840.10008.1.2.4.90"}, // JPEG 2000, which nothing here decodes
+		{"1.2.840.10008.1.2.5", "1.2.840.10008.1.2.5"},       // RLE Lossless
+	}
+	for _, tc := range tests {
+		ds := dataset.NewDataset()
+		ds.SetTransferSyntaxUID(tc.arrived)
+		if got := filewriter.StorageTransferSyntax(ds); got != tc.want {
+			t.Errorf("arrived as %q: stored as %s, want %s", tc.arrived, got, tc.want)
+		}
+	}
+	if got := filewriter.StorageTransferSyntax(nil); got != "1.2.840.10008.1.2.1" {
+		t.Errorf("nil data set: %s", got)
+	}
+}
+
+// TestElementsFromDatasetWritesNumericValues covers #119: a number set in Go
+// was dropped with a warning, so a data set built in code wrote an image with
+// no Rows or Columns.
+func TestElementsFromDatasetWritesNumericValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, uint16(64)))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, 512))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0030), dataelem.DS, []float64{0.5, 0.25}))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0018, 0x9087), dataelem.FD, 1000.0))
+
+	for _, syntax := range []string{"1.2.840.10008.1.2.1", "1.2.840.10008.1.2.2"} {
+		back := readBytes(t, writeAsSyntax(t, filewriter.ElementsFromDataset(ds), syntax))
+		for tg, want := range map[tag.Tag][]byte{
+			tag.New(0x0028, 0x0010): {64, 0},
+			tag.New(0x0028, 0x0011): {0, 2},
+			tag.New(0x0028, 0x0030): []byte(`0.5\0.25`),
+			tag.New(0x0018, 0x9087): {0, 0, 0, 0, 0, 0x40, 0x8F, 0x40},
+		} {
+			elem, ok := back.Get(tg)
+			if !ok {
+				t.Errorf("%s: %s was not written", syntax, tg)
+				continue
+			}
+			if got := elem.GetValue().([]byte); !bytes.Equal(got, want) {
+				t.Errorf("%s: %s reads back as % x, want % x", syntax, tg, got, want)
+			}
+		}
+	}
+}

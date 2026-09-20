@@ -34,10 +34,10 @@ func (vc *VersionCommand) Execute(args []string) error {
 // PrintVersion prints version information to stdout.
 //
 // The version is normalized, because it arrives from two places that disagree. The
-// source declares "1.5.0"; the release workflow stamps the git tag with
-// -ldflags "-X main.Version=${{ github.ref_name }}", and a tag is "v1.5.0". So a
-// released binary reported "go-dicom version v1.5.0" while the same source built with
-// make reported "1.5.0" — and the wire identifier, GO-DICOM-1.5.0, agreed with neither.
+// source declares "1.6.0"; the release workflow stamps the git tag with
+// -ldflags "-X main.Version=${{ github.ref_name }}", and a tag is "v1.6.0". So a
+// released binary reported "go-dicom version v1.6.0" while the same source built with
+// make reported "1.6.0" — and the wire identifier, GO-DICOM-1.6.0, agreed with neither.
 //
 // The test that exists to stop the command line and the wire version drifting apart
 // cannot catch that: it runs against the source default and never sees the stamped
@@ -73,18 +73,20 @@ func PrintUsage(name string) {
 	fmt.Println("  -v, --version  Show version")
 	fmt.Println("  -h, --help     Show help")
 	fmt.Println("\nExamples:")
-	fmt.Println("  dicom show patient.dcm")
-	fmt.Println("  dicom show -exclude-private patient.dcm")
-	fmt.Println("  dicom info -verbose patient.dcm")
-	fmt.Println("  dicom convert --format=json patient.dcm output.json")
+	// The name this was invoked as, not a literal: the binary is go-dicom, and
+	// a reader who renamed it should see the name they typed (#120).
+	fmt.Printf("  %s show patient.dcm\n", name)
+	fmt.Printf("  %s show -exclude-private patient.dcm\n", name)
+	fmt.Printf("  %s info -verbose patient.dcm\n", name)
+	fmt.Printf("  %s convert --format=json patient.dcm output.json\n", name)
 }
 
 // PrintHelp prints detailed help information to stdout.
 func PrintHelp() {
-	fmt.Println("PyDICOM Go - DICOM File Manipulation Tool")
+	fmt.Println("go-dicom - DICOM file manipulation tool")
 	fmt.Println()
 	fmt.Println("USAGE:")
-	fmt.Println("  dicom [command] [options] [arguments]")
+	fmt.Println("  go-dicom [command] [options] [arguments]")
 	fmt.Println()
 	fmt.Println("COMMANDS:")
 	fmt.Println("  show SPEC              Display DICOM file contents")
@@ -109,11 +111,11 @@ func PrintHelp() {
 	fmt.Println("  file.dcm::0010,0010    Specific tag")
 	fmt.Println()
 	fmt.Println("EXAMPLES:")
-	fmt.Println("  dicom show patient.dcm")
-	fmt.Println("  dicom show patient.dcm::PatientName")
-	fmt.Println("  dicom show -exclude-private patient.dcm")
-	fmt.Println("  dicom info patient.dcm")
-	fmt.Println("  dicom info -verbose -stats patient.dcm")
-	fmt.Println("  dicom convert patient.dcm output.json")
-	fmt.Println("  dicom convert --format=csv patient.dcm output.csv")
+	fmt.Println("  go-dicom show patient.dcm")
+	fmt.Println("  go-dicom show patient.dcm::PatientName")
+	fmt.Println("  go-dicom show -exclude-private patient.dcm")
+	fmt.Println("  go-dicom info patient.dcm")
+	fmt.Println("  go-dicom info -verbose -stats patient.dcm")
+	fmt.Println("  go-dicom convert patient.dcm output.json")
+	fmt.Println("  go-dicom convert --format=csv patient.dcm output.csv")
 }

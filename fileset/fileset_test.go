@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -567,13 +568,13 @@ func BenchmarkAddFile(b *testing.B) {
 
 	// Create test files
 	for i := 0; i < b.N; i++ {
-		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
+		file := filepath.Join(tmpDir, "test_"+strconv.Itoa(i)+".dcm")
 		writeMinimalDICOM(b, file)
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
+		file := filepath.Join(tmpDir, "test_"+strconv.Itoa(i)+".dcm")
 		fs.AddFile(file)
 	}
 }
@@ -586,7 +587,7 @@ func BenchmarkListFiles(b *testing.B) {
 
 	// Add test files
 	for i := 0; i < 50; i++ {
-		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
+		file := filepath.Join(tmpDir, "test_"+strconv.Itoa(i)+".dcm")
 		writeMinimalDICOM(b, file)
 		fs.AddFile(file)
 	}
@@ -605,7 +606,7 @@ func BenchmarkGetStatistics(b *testing.B) {
 
 	// Add test files
 	for i := 0; i < 50; i++ {
-		file := filepath.Join(tmpDir, "test_"+string(rune(i))+".dcm")
+		file := filepath.Join(tmpDir, "test_"+strconv.Itoa(i)+".dcm")
 		writeMinimalDICOM(b, file)
 		fs.AddFile(file)
 	}

@@ -7,6 +7,319 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.6.0] - 2026-09-20
+
+### Added
+
+- **`Dataset.PixelArrayInterpreted` reads signed samples as signed** (#159).
+  `PixelArray` and `PixelArrayBySample` choose their Go type from Bits Allocated
+  alone, so a signed 16-bit image came back as `[][][]uint16` and a sample of
+  -2016 read as 63520. The values were the stored bits and were not wrong; the
+  type did not say how to read them, and every caller of a signed image had to
+  know to reinterpret.
+
+  Changing those two would break a documented contract — code asserting
+  `[][][]uint16` would begin to panic — so the signed reading is a new call
+  instead. It applies `(0028,0103)` and nothing else, the way
+  `pixels.Accessor.GetInterpretedValue` already does, returning `int8`, `int16`
+  or `int32` for a signed data set and exactly what `PixelArray` returns for an
+  unsigned one.
+
+  Sign extension is from **Bits Stored**, not Bits Allocated. For a 13-bit
+  sample in a 16-bit word the sign bit is bit 12, so a stored `0x1830` is -2000
+  where a plain `int16` conversion gives 6192. Most files store the two widths
+  equal and hide the difference, which is why the test that proves it is
+  synthetic rather than from the corpus.
+
+- **JPEG 2000 decodes, in pure Go** (#72). It was the last codec in the registry
+  with no bundled decoder: `.90` and `.91` instances parsed, stored and
+  transferred with their pixel data intact, but could not be read without a
+  decoder the caller supplied. `Dataset.PixelArray` now decodes them without
+  being asked — both the 5/3 reversible and 9/7 irreversible wavelets, 1 to 16
+  bits, signed or unsigned, single or multi component, any number of tiles and
+  quality layers, with the reversible and irreversible component transforms. No
+  CGO and nothing to register; a decoder you register still takes precedence, so
+  code already using `examples/jpeg2000` is unaffected.
+
+  `TestPixelsAgainstWholePydicomCorpus` no longer skips anything: **all 49** files
+  in pydicom's corpus that pydicom can decode now decode here to the same
+  samples, up from 43. Reversible codestreams match sample for sample. An
+  irreversible one is held to a tolerance of one, because the 9/7 filter is
+  defined in real arithmetic and ISO 15444-4 grades a decoder on how close it
+  comes rather than on equality.
+
+  Features the decoder does not implement are refused by name rather than
+  guessed at — subsampled components, custom precinct sizes, the code-block
+  style options, packed packet headers, progression-order changes. A decoder
+  that quietly mis-decodes is worse than none: the image looks plausible and the
+  numbers are wrong, and in an RT Dose that is a wrong dose.
+
+  A codestream states its own signedness and may disagree with the data set's
+  Pixel Representation; real files do. The data set is the authority, so an
+  unsigned sample in a data set that calls it signed is read back as two's
+  complement of Bits Stored — without which `J2K_pixelrep_mismatch.dcm` reads its
+  background as 6192 rather than -2000.
+
+- **`qrscp` answers Storage Commitment** (#113). `commitscu` shipped, but no
+  go-dicom server offered the Push Model, so it had no go-dicom peer. The SCP side
+  already existed. `dcmstore.Handler` now implements `StorageCommitmentProvider`,
+  and `dcmstore.SupportedSOPClasses()` includes the Push Model, so any archive built
+  on the package gets it. An instance is committed only if the store holds it under
+  the SOP Class named and its file is on disk, since the index alone could promise a
+  file that has gone. Otherwise it fails with 0112H, 0119H or 0110H. pynetdicom and
+  `commitscu` both get their answer from `qrscp` on the same association.
+
+### Fixed
+
+- **A pre-release tag is published as a pre-release** (#157). The release
+  workflow triggers on `v*`, which matches `v1.6.0-rc.1` as readily as
+  `v1.6.0`, and then published both the same way: no `prerelease` input was
+  given, so a release candidate cut for testing would have been marked Latest
+  and offered to everyone as the current version. A hyphen is what semver uses
+  to mark a pre-release and it is the only signal a tag carries, so that is what
+  decides it now. Its notes fall back to the base version's section, then to
+  `[Unreleased]`, with a line saying what it is — a test build published with no
+  notes is the one kind of release whose contents most need reading.
+
+- **The tests run on every pull request** (#158). They were restricted to pull
+  requests targeting `main` or `develop`, so a pull request based on another
+  feature branch got no checks at all. Work that arrives as dependent stages —
+  the JPEG 2000 decoder came as four — could then only be reviewed by pointing
+  every stage at `develop` and reading overlapping diffs.
+
+- **Three `fileset` benchmarks that had never run, run** (#155).
+  `BenchmarkAddFile`, `BenchmarkListFiles` and `BenchmarkGetStatistics` built
+  their filenames as `"test_" + string(rune(i)) + ".dcm"`, and at `i = 0` that
+  is a NUL byte, which no filesystem accepts; each failed on its first
+  iteration. `string(i)` on an integer is what `go vet`'s `stringintconv` flags,
+  and wrapping it as `string(rune(i))` silences the warning while leaving the
+  meaning as wrong — the tool went quiet and the code stayed broken.
+
+
+- **Signed pixel values are read as signed** (#156). Three places built a
+  `pixels.PixelData` and set `pd.PixelRepresentation = 0 // unsigned by default`,
+  discarding (0028,0103) — which the same `info` struct was holding. There is no
+  default about it: Pixel Representation is Type 1 on every image module, always
+  present, and it is the only attribute that says whether a sample is signed.
+
+  The `pixels` package had handled both all along: it has `signExtend`, and
+  `GetInterpretedValue` branches on the representation. The support was there and
+  the value never reached it. A CT sample of -2000 HU, which is air, came back
+  from `PixelArrayWithAccessor` as 63536, and `GetPixelStatistics` reported a
+  minimum of 63536 for an image whose minimum is negative — so a signed image
+  could not report a minimum below zero at all.
+
+- **32-bit big endian pixel data is no longer stored half-swapped** (#124).
+  Pixel Data is OW, so reversing byte order by VR is two-byte
+  words. At Bits Allocated 32 or 64 that leaves each sample's halves transposed:
+  an RT Dose of 1249000 was stored as 250085395. The pixel accessor compensated,
+  but only while the transfer syntax was still big endian, so reading a file
+  looked right and rewriting it handed every other reader the scramble — in a
+  file, over the network, and in DICOM JSON alike. Native Pixel Data is now
+  swapped at the sample width Bits Allocated gives, on read and on write, and a
+  sequence item uses its own Bits Allocated, so an 8-bit icon inside a 32-bit
+  dose is not swapped at the parent's width.
+
+- **A standard tag encoded as UN is read with its dictionary VR** (#117). An
+  intermediary that does not know a tag re-encodes it as UN, and PS3.5 6.2.2 Note 2
+  lets a receiver that does know it read the value as Implicit VR Little Endian.
+  The VR was kept as UN instead, so the typed accessors refused the value and a
+  UN-encoded sequence was never parsed: pydicom's `rtdose_rle.dcm` had 35 such
+  elements, its Referenced RT Plan Sequence stayed an opaque blob, and the reader
+  emitted 35 "VR mismatch ... got UN" warnings about a thing it could have
+  resolved. It now reads like `rtdose.dcm`, the same study written normally.
+
+  A private creator becomes LO (PS3.5 7.8.1). Every other private tag keeps UN,
+  as does an ambiguous dictionary entry, and a UN element in a big endian file,
+  whose value is little endian by Note 2 and must not be swapped with the rest.
+  Across pydicom's corpus the only UN elements left are the four pydicom also
+  leaves.
+
+- **Text with no declared character set is decoded instead of mislabeled** (#115).
+  `GetDataset` rewrote Specific Character Set (0008,0005) to `ISO_IR 192`
+  unconditionally, while a value was left as it was found when there was no
+  encoding to apply — and an empty declaration yielded none. A file declaring
+  nothing and holding Latin-1 names therefore kept Latin-1 bytes under a UTF-8
+  declaration, and the README's own round trip destroyed the names: pydicom read
+  `Müller^Jürgen` from the original and `M?ller^J?rgen` after a write-back.
+
+  An absent, empty or unknown declaration now decodes as ISO-8859-1, which is what
+  pydicom does, with a warning that a guess was made. A file that had no
+  declaration gains one, so the next reader is not handed UTF-8 described as
+  something else. And the declaration is written only when every text value in
+  scope is valid UTF-8; otherwise the file's own is kept, with a warning.
+
+  No corpus file changes: they all declare a character set or are pure ASCII,
+  which is why pydicom's seventeen charset fixtures never caught this.
+
+- **A sequence item whose length overruns its sequence is kept** (#122). The item was dropped although every element inside it was
+  complete: only its length field was wrong. pydicom's `DICOMDIR-nooffset` came
+  back with 51 of its 52 records, one IMAGE record short, and nothing appeared in
+  `DICOMFile.Warnings`, because data set warnings were copied to the file before
+  the data set was parsed. The item is now clamped to the bytes that are there and
+  its elements kept, with a warning; an item header sitting exactly at the
+  sequence's end ends the sequence rather than adding an empty item.
+
+- **`StatusRefusedOutOfResources` was 0x0112, which is No Such SOP Instance**
+  (#137). PS3.7 Annex C: "Refused: Out of Resources" is a
+  C-service status in the A7xxH range. An SCP handler reporting exhaustion with
+  that constant told the peer the instance did not exist, and a peer that retries
+  on a resource failure would not retry. `StatusNoSuchSOPInstance` is the correct
+  name; the old one remains as a deprecated alias, so callers keep compiling.
+
+- **The CLI is called `go-dicom` everywhere** (#120). The 1.5.0 rename left the old
+  name in 58 lines across eight files, including `doc.go`, which is what pkg.go.dev
+  shows, and the release notes, which told readers to download `dicom-linux-amd64`
+  and friends while the assets are named `go-dicom-*`. CI built `-o dicom`, and the
+  interop script defaulted to `./dicom`. `PrintUsage` now shows the name it was
+  invoked as instead of a literal. A test greps the tracked files for the old name,
+  so the next rename cannot half-land.
+
+- **Storage Commitment's resource-limitation Failure Reason is 0213H** (#114). It
+  was `0xA700`, the C-service status "Refused: Out of Resources", which is not one
+  of the six Failure Reason values PS3.3 C.14.1.1 defines. So a requestor was told an
+  instance failed for a reason the standard does not have. The two reasons that
+  had no constant now have one:
+  `StorageCommitmentFailureClassInstanceConflict` (0119H) and
+  `StorageCommitmentFailureDuplicateTransactionUID` (0131H).
+  `StatusStorageCommitmentResourceLimitation` in `status.go` carried the same wrong
+  value and is corrected too. Code that uses the constants by name needs no change;
+  anything that received `0xA700` from this library was receiving an undefined value.
+
+- **DICOM JSON keeps LT, ST, UT and UR as one value** (#121). These hold a single
+  value, and a backslash in them is a character (PS3.5 6.2). The JSON encoder split
+  them like any other text. The 26,974-character private UT in
+  `examples_ybr_color.dcm`, an XML document with Windows paths, came out as 17
+  values with all 16 backslashes gone, and trimming the pieces removed spaces as
+  well. An element holding only padding is now written with no `Value`, as pydicom
+  writes it, instead of `[""]`. Across pydicom's corpus these are the only two
+  differences from before, and both now match pydicom.
+
+- **An image can be sent over a Deflated context** (#132). Deflated Explicit VR
+  Little Endian compresses the data set, and its Pixel Data is native. The network
+  transcoder asked whether the syntax was compressed, went looking for a pixel
+  encoder for Deflated, and refused:
+
+  ```
+  cannot encode pixel data as 1.2.840.10008.1.2.1.99: this library writes RLE Lossless ...
+  ```
+
+  So a peer that chose Deflated received no image from go-dicom. dcmtk's
+  `storescp +xa` does exactly that. `compress.IsEncapsulated` now answers the
+  question that matters, whether Pixel Data is fragments, and the transcoder, the
+  network encoder and `filewriter` share it.
+
+- **`storescu` sends RT, SR and waveform objects** (#116). It proposed the
+  library's default presentation contexts whatever it was sending, so an RT Dose,
+  RT Plan, RT Structure Set, Structured Report or ECG failed with "not among the
+  presentation contexts proposed", even against an SCP that supports them. Eight
+  corpus objects sent in one run: 3 of 8 stored by `qrscp` and pynetdicom, and 0
+  of 8 by dcmtk, which accepted Deflated for the default contexts and ran into
+  #132.
+
+  It now reads each file's header first and proposes one context per SOP class and
+  syntax it holds: the file's own syntax, plus Explicit and Implicit VR Little
+  Endian for an SCP that will not take it compressed. Over 128 contexts, the most
+  one association carries, the files go over several associations. An unreadable
+  file is reported and the rest still go. All eight now reach all three peers.
+
+  `SCU.Store` chose among a class's accepted contexts in map order, which is
+  random. It now prefers the data set's own syntax, then an uncompressed one, and
+  breaks ties by the lowest ID.
+
+- **A number set in Go is written and sent** (#119). `NewDataElement` takes any
+  value, but both encoders rendered only `[]byte` and `string`. Rows set as
+  `uint16(64)` went out from `EncodeDataset` as nothing, with no error, and
+  `filewriter` dropped it with a warning. An image built in code reached the peer
+  without Rows or Columns, and the peer accepted it.
+
+  `dataelem.ValueBytes` renders a value by its VR, for both encoders:
+  - Go integers, floats and slices of them, for the numeric VRs and for the OW, OL,
+    OV, OF and OD words that pixel data uses;
+  - numbers as text for IS and DS, with DS kept within its 16 characters;
+  - `tag.Tag` for AT, `[]string`, and `PersonName`.
+
+  These are also what the decoders return, so a value read can be set again. A
+  value that does not fit is an error: 70000 in a US would otherwise have been
+  written as 4464. `EncodeDataset` now fails on such a value instead of sending the
+  data set without it.
+
+- **Compressed pixel data sent to dcmtk no longer aborts the association** (#128).
+  PS3.5 A.4 requires encapsulated Pixel Data to have undefined length and a closing
+  delimiter. `EncodeDataset` wrote it with its byte count, and dcmtk refuses that:
+
+  ```
+  E: Found explicit length Pixel Data in top level dataset with transfer syntax
+     JPEG Lossless, Non-hierarchical, 1st Order Prediction: Only undefined length permitted
+  ```
+
+  Every compressed data set go-dicom sent to dcmtk failed: a stored compressed file,
+  pixels this library compressed to RLE or JPEG-LS, and a C-GET or C-MOVE of a
+  compressed instance from `qrscp`. pynetdicom accepts both forms, and every
+  compressed send in the interop suite went to pynetdicom. `filewriter` had the same
+  defect and was fixed first. The interop suite now retrieves a JPEG instance from
+  `qrscp` with dcmtk's `getscu`.
+
+  Pixel Data that is not framed as items is now refused under a compressed syntax.
+  Sending it would describe native pixels as fragments, which the receiver cannot
+  detect.
+
+- **`storescp` and `qrscp` store a compressed instance in the syntax it arrived in**
+  (#126). Since 1.5.0 both servers accept compressed syntaxes (#93), but both wrote
+  every instance as Explicit VR Little Endian. A JPEG instance became a file that
+  declared native pixels and held JPEG fragments:
+
+  ```
+  pydicom: The length of the pixel data in the dataset (3884 bytes) doesn't match
+           the expected length (30000 bytes)
+  ```
+
+  No reader can decode that, and nothing in the file says what the fragments are.
+  The sender was told the store succeeded. #93's test sent instances with no pixel
+  data and checked only the status.
+
+  `DecodeDataset` never recorded the syntax a data set arrived in, so every writer
+  took a received data set to be uncompressed. It now records it, and
+  `filewriter.StorageTransferSyntax` gives the syntax to store in: the received one
+  for encapsulated data, Explicit VR Little Endian otherwise. The decoder also used to
+  take the rest of the data set as the encapsulated Pixel Data value. That value then
+  kept the peer's closing delimiter, so the written file closed the sequence twice and
+  dcmtk refused it. It also swallowed anything after Pixel Data. The decoder now reads
+  the items up to the delimiter.
+
+- **Writing an Implicit VR data set as Explicit VR no longer loses the pixel data**
+  (#118). The reader gives an Implicit VR element the dictionary's VR, and for Pixel
+  Data that is `OB or OW`. The writer put those eight characters into a two-byte field,
+  so `OB` became the VR and `r OW` became the length:
+
+  ```
+  E: DcmElement: PixelData (7fe0,0010) larger (1464803442) than remaining bytes
+  ```
+
+  `storescp` and `qrscp` always write Explicit VR. So every image an Implicit VR sender
+  stored in them was corrupt: DICOM's default transfer syntax, and what dcmtk sends.
+  CT_small sent that way arrived with 25 of its 257 elements. Six files in pydicom's
+  corpus lost elements when rewritten, `MR_small_implicit.dcm` its Pixel Data among
+  them.
+
+  The interop suite never noticed. Its C-STORE fixture is Explicit VR. Its round trip
+  tolerated two rewrites dcmtk refuses, on the grounds that both fixtures are
+  malformed, but dcmtk reads one of them, `meta_missing_tsyntax.dcm`, as supplied. Both
+  rewrites were refused because of this defect. The round trip now judges each file
+  against its source, and dcmtk also sends the fixture as Implicit VR.
+
+  `Dataset.ResolveVR` now settles the VR for the file writer, the network encoder and
+  DICOM JSON. Before, only the JSON path resolved it, and the network encoder sent
+  `UN`. The rules are pydicom's:
+  - `US or SS` follows Pixel Representation, inherited into sequence items.
+  - Pixel Data is `OB` at 8 bits or fewer and `OW` otherwise.
+  - LUT Data is `US` for a single entry and `OW` otherwise.
+  - Anything else that offers `OW` is `OW`.
+
+  JSON output for the corpus is byte-identical.
+
 ## [1.5.0] - 2026-08-15
 
 ### Fixed after the first tag

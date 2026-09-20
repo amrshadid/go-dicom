@@ -33,6 +33,10 @@ type transferSyntaxEncoding struct {
 	ExplicitVR bool
 	BigEndian  bool
 	Deflated   bool
+
+	// Encapsulated means Pixel Data is carried as fragments, which PS3.5 A.4
+	// requires be sent with undefined length.
+	Encapsulated bool
 }
 
 // encodingForTransferSyntax maps a transfer syntax UID onto its wire encoding.
@@ -52,7 +56,8 @@ func encodingForTransferSyntax(ts string) transferSyntaxEncoding {
 		// No negotiated syntax known; DICOM's default encoding is implicit VR LE.
 		return transferSyntaxEncoding{ExplicitVR: false, BigEndian: false}
 	default:
-		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false}
+		return transferSyntaxEncoding{ExplicitVR: true, BigEndian: false,
+			Encapsulated: compress.IsEncapsulated(ts)}
 	}
 }
 
@@ -83,43 +88,15 @@ func EncodeDataset(ds *dataset.Dataset, transferSyntax string) ([]byte, error) {
 	}
 
 	enc := encodingForTransferSyntax(transferSyntax)
-	var buf bytes.Buffer
-
-	for _, elem := range ds.GetAll() {
-		// An element whose tag cannot be read is an error, not something to
-		// skip. Skipping it sent a data set the peer accepted as complete while
-		// an attribute was missing from it — the worst outcome available, since
-		// nothing on either side reports a problem.
-		t, ok := elem.Tag()
-		if !ok {
-			return nil, NewPDUErrorf("ENCODE_DS",
-				"element has an unreadable tag (%T); refusing to send a data set with it omitted",
-				elem.GetTag())
-		}
-
-		// A sequence holds nested data sets rather than a byte value, so it is
-		// serialized recursively. Skipping it here would transmit the element
-		// as empty and silently drop every nested item.
-		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
-			if err := writeSequence(&buf, enc, t, seq); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		data, ok := elementValueBytes(elem)
-		if !ok {
-			continue
-		}
-		if err := writeElement(&buf, enc, t, elem.GetVR(), data); err != nil {
-			return nil, err
-		}
+	body, err := encodeDatasetBody(ds, enc, nil)
+	if err != nil {
+		return nil, err
 	}
 
 	if enc.Deflated {
-		return deflateBytes(buf.Bytes())
+		return deflateBytes(body)
 	}
-	return buf.Bytes(), nil
+	return body, nil
 }
 
 // DecodeDataset parses a data set encoded with the given transfer syntax.
@@ -134,7 +111,14 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 		data = inflated
 	}
 
+	// The data set records the syntax it arrived in, as the file reader's does.
+	// Whether Pixel Data holds pixels or encapsulated fragments, and which codec
+	// made them, is a property of the syntax and nothing else. Without it a
+	// received JPEG instance looked uncompressed: storescp and qrscp wrote its
+	// fragments into files declaring Explicit VR Little Endian, and forwarding it
+	// over an uncompressed context would have sent them as pixels.
 	ds := dataset.NewDataset()
+	ds.SetTransferSyntaxUID(transferSyntax)
 	r := bytes.NewReader(data)
 	order := enc.byteOrder()
 
@@ -159,13 +143,20 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 		}
 
 		// An undefined length on a non-sequence element means encapsulated
-		// pixel data, which is delimited rather than sized. Consume the
-		// remainder as an opaque value so the surrounding elements still decode.
+		// pixel data: items, closed by a Sequence Delimitation Item (PS3.5 A.4).
+		// The value is the items alone, as the file reader holds it.
+		//
+		// This used to take the rest of the data set as the value. That kept the
+		// peer's delimiter inside it, so a file written from it closed the
+		// sequence twice and dcmtk refused it, and it swallowed any element
+		// after Pixel Data.
 		if length == undefinedLength {
-			value := make([]byte, r.Len())
-			_, _ = io.ReadFull(r, value)
+			value, err := readEncapsulated(r, order)
+			if err != nil {
+				return nil, err
+			}
 			_ = ds.Add(dataelem.NewDataElement(t, vr, value))
-			break
+			continue
 		}
 
 		if uint64(length) > uint64(r.Len()) {
@@ -185,6 +176,44 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 	}
 
 	return ds, nil
+}
+
+// readEncapsulated reads encapsulated pixel data up to and including its
+// Sequence Delimitation Item, and returns the items without the delimiter.
+func readEncapsulated(r *bytes.Reader, order binary.ByteOrder) ([]byte, error) {
+	var value bytes.Buffer
+	for {
+		var group, element uint16
+		var length uint32
+		if err := binary.Read(r, order, &group); err != nil {
+			return nil, NewPDUError("DECODE_DS", "encapsulated pixel data has no sequence delimiter")
+		}
+		if err := binary.Read(r, order, &element); err != nil {
+			return nil, NewPDUError("DECODE_DS", "truncated item tag in encapsulated pixel data")
+		}
+		if err := binary.Read(r, order, &length); err != nil {
+			return nil, NewPDUError("DECODE_DS", "truncated item length in encapsulated pixel data")
+		}
+
+		switch tag.New(group, element) {
+		case tag.SequenceDelimiterTag:
+			return value.Bytes(), nil
+		case tag.ItemTag:
+			if uint64(length) > uint64(r.Len()) {
+				return nil, NewPDUErrorf("DECODE_DS",
+					"a pixel data fragment declares %d bytes but only %d remain", length, r.Len())
+			}
+			_ = binary.Write(&value, order, group)
+			_ = binary.Write(&value, order, element)
+			_ = binary.Write(&value, order, length)
+			if _, err := io.CopyN(&value, r, int64(length)); err != nil {
+				return nil, NewPDUErrorf("DECODE_DS", "reading a pixel data fragment: %v", err)
+			}
+		default:
+			return nil, NewPDUErrorf("DECODE_DS",
+				"unexpected tag %s in encapsulated pixel data", tag.New(group, element).String())
+		}
+	}
 }
 
 // readElementHeader reads one element's tag, VR, and value length.
@@ -239,14 +268,53 @@ func readElementHeader(r *bytes.Reader, enc transferSyntaxEncoding, order binary
 	return t, vr, uint32(shortLen), nil
 }
 
+// writeEncapsulated writes Pixel Data held as fragments: OB, undefined length,
+// the items, and a Sequence Delimitation Item (PS3.5 A.4).
+//
+// It was written with its byte count, like any other element. pynetdicom accepts
+// that, and dcmtk refuses it and aborts the association:
+//
+//	Found explicit length Pixel Data in top level dataset with transfer syntax
+//	JPEG Lossless, Non-hierarchical, 1st Order Prediction: Only undefined length permitted
+//
+// filewriter had the same defect and was fixed first; this is its twin.
+//
+// Bytes that are not items are refused. Sending them would describe native
+// pixels as fragments, which the receiver has no way to detect.
+func writeEncapsulated(buf *bytes.Buffer, enc transferSyntaxEncoding, data []byte) error {
+	order := enc.byteOrder()
+	if len(data) < 8 || order.Uint16(data[0:2]) != tag.ItemTag.Group() ||
+		order.Uint16(data[2:4]) != tag.ItemTag.Element() {
+		return NewPDUError("ENCODE_DS",
+			"pixel data is not encapsulated, but the context negotiated a syntax that requires it")
+	}
+
+	for _, v := range []any{pixelDataTag.Group(), pixelDataTag.Element()} {
+		if err := binary.Write(buf, order, v); err != nil {
+			return err
+		}
+	}
+	buf.WriteString(string(dataelem.OB))
+	buf.Write([]byte{0x00, 0x00}) // reserved
+	if err := binary.Write(buf, order, undefinedLength); err != nil {
+		return err
+	}
+	buf.Write(data)
+	for _, v := range []any{tag.SequenceDelimiterTag.Group(), tag.SequenceDelimiterTag.Element(), uint32(0)} {
+		if err := binary.Write(buf, order, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // writeElement serializes a single data element.
 func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr dataelem.VR, data []byte) error {
 	order := enc.byteOrder()
 
-	// Resolve the VR first: it determines the pad byte as well as the header form.
-	if vr == "" {
-		vr = dataelem.VR(t.GetVR())
-	}
+	// The caller resolves the VR, since it determines the pad byte as well as the
+	// header form. The VR field is still exactly two bytes (PS3.5 6.2) whatever
+	// the caller did, so anything else goes out as UN.
 	if len(vr) != 2 {
 		vr = dataelem.UN
 	}
@@ -299,7 +367,8 @@ func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr d
 // the encoding self-describing and is accepted by every conforming peer. Item
 // tags always use the implicit-style header — tag then 4-byte length, no VR —
 // even inside an explicit VR transfer syntax (PS3.5 Section 7.5).
-func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq *sequence.Sequence) error {
+func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq *sequence.Sequence,
+	enclosing []*dataset.Dataset) error {
 	order := enc.byteOrder()
 
 	// Serialize the items first so the sequence length is known up front.
@@ -312,7 +381,7 @@ func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq
 			continue
 		}
 
-		childBytes, err := encodeDatasetBody(child, enc)
+		childBytes, err := encodeDatasetBody(child, enc, enclosing)
 		if err != nil {
 			return err
 		}
@@ -348,28 +417,58 @@ func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq
 }
 
 // encodeDatasetBody serializes a data set's elements without applying the
-// deflate wrapper, so it can be nested inside a sequence item.
-func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding) ([]byte, error) {
+// deflate wrapper, so it can be nested inside a sequence item. enclosing lists
+// the data sets ds is an item of, nearest first.
+//
+// Each element goes out with the VR dataset.ResolveVR settles on. A data set
+// received or read as Implicit VR holds the dictionary's VR, and the ambiguous
+// ones — "OB or OW" for Pixel Data, "US or SS" — fell through to UN here: legal,
+// but a peer storing it as sent kept image pixels as UN.
+func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosing []*dataset.Dataset) ([]byte, error) {
 	var buf bytes.Buffer
 
 	for _, elem := range ds.GetAll() {
+		// An element whose tag cannot be read is an error, not something to
+		// skip. Skipping it sent a data set the peer accepted as complete while
+		// an attribute was missing from it — the worst outcome available, since
+		// nothing on either side reports a problem.
 		t, ok := elem.Tag()
 		if !ok {
 			return nil, NewPDUErrorf("ENCODE_DS",
 				"element has an unreadable tag (%T); refusing to send a data set with it omitted",
 				elem.GetTag())
 		}
+
+		// A sequence holds nested data sets rather than a byte value, so it is
+		// serialized recursively. Skipping it here would transmit the element
+		// as empty and silently drop every nested item.
 		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
-			if err := writeSequence(&buf, enc, t, seq); err != nil {
+			if err := writeSequence(&buf, enc, t, seq, append([]*dataset.Dataset{ds}, enclosing...)); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		data, ok := elementValueBytes(elem)
-		if !ok {
+
+		// A value that cannot be rendered is an error. It used to be skipped,
+		// and a number set in Go (Rows as uint16) was skipped every time: the
+		// peer received an image with no Rows and no error on either side.
+		vr := ds.ResolveVR(t, elem, enclosing...)
+		data, err := dataelem.ValueBytes(vr, elem.GetValue())
+		if err != nil {
+			return nil, NewPDUErrorf("ENCODE_DS",
+				"element %s: %v; refusing to send the data set without it", t.String(), err)
+		}
+
+		// Only the top level: pixel data inside an item, such as an icon, is
+		// native whatever the syntax (PS3.5 A.4).
+		if enc.Encapsulated && t == pixelDataTag && enclosing == nil && len(data) > 0 {
+			if err := writeEncapsulated(&buf, enc, data); err != nil {
+				return nil, err
+			}
 			continue
 		}
-		if err := writeElement(&buf, enc, t, elem.GetVR(), data); err != nil {
+
+		if err := writeElement(&buf, enc, t, vr, data); err != nil {
 			return nil, err
 		}
 	}
@@ -533,18 +632,6 @@ func isLongFormVR(vr dataelem.VR) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-// elementValueBytes extracts an element's value as raw bytes.
-func elementValueBytes(elem *dataelem.DataElement) ([]byte, bool) {
-	switch v := elem.GetValue().(type) {
-	case []byte:
-		return v, true
-	case string:
-		return []byte(v), true
-	default:
-		return nil, false
 	}
 }
 

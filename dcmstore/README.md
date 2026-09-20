@@ -19,7 +19,9 @@ scp.SetSupportedAbstractSyntaxes(dcmstore.SupportedSOPClasses())
 log.Fatal(scp.ListenAndServe(ctx))
 ```
 
-That accepts C-STORE, answers C-FIND at all four levels, and serves C-GET and C-MOVE from what it has received. Verified over a real association in `integration_test.go`.
+That accepts C-STORE, answers C-FIND at all four levels, serves C-GET and C-MOVE from what it has received, and answers Storage Commitment. Verified over a real association in `integration_test.go`.
+
+A commitment is answered at once, from the store. An instance is committed only if the store holds it under the SOP Class the requestor named **and** its file is on disk: the index is a cache of the files, and committing on it alone would promise an instance whose file has gone. Anything else fails with the Failure Reason that says why: `0112H` not held, `0119H` held under another class, `0110H` file missing.
 
 ## Using the store directly
 
@@ -105,4 +107,4 @@ A retrieval returns instances whatever level it names — a C-GET at STUDY level
 
 Files and an index, no external dependency, not a database. The computed counts scan the index, so an archive of millions of instances wants real indexes behind it. `Handler` satisfies the network package's own interfaces, so replacing this with a database-backed store means implementing those.
 
-Instances are written as Explicit VR Little Endian whatever they arrived as. Pixel data is not recompressed — a compressed instance keeps its encapsulated bytes, and only the surrounding data set is re-encoded.
+Uncompressed instances are written as Explicit VR Little Endian whatever they arrived as. Compressed ones are written in the syntax they arrived in, which is the only record of their codec, and their pixel data is never decoded or recompressed.

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/amrshadid/go-dicom/charset"
 	"github.com/amrshadid/go-dicom/compress"
@@ -418,6 +419,23 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (*DataElem
 			if err := dfr.readExplicitLength(element); err != nil {
 				return nil, err
 			}
+
+			// An intermediary that does not know a tag re-encodes it as UN.
+			// PS3.5 6.2.2 Note 2 lets a receiver that does know it read the
+			// value as Implicit VR Little Endian, whatever the transfer syntax,
+			// and pydicom does so by default. Without this the typed accessors
+			// refuse the value and a UN-encoded sequence is never parsed:
+			// rtdose_rle.dcm has 35 such elements and its Referenced RT Plan
+			// Sequence stayed an opaque blob.
+			// Defined length only: an undefined length means items whatever the
+			// dictionary says (Note 5), and the branch below reads them.
+			if known := dictionaryVRForUN(element.VR, element.Tag, dfr.reader.GetByteOrder()); known != "" &&
+				element.Length != UndefinedLength {
+				element.VR = known
+				// Note 2 again: the value is implicit VR little endian, so
+				// anything nested inside it is too.
+				elementIsImplicit = true
+			}
 		}
 	} else {
 		length, err := dfr.reader.ReadUint32()
@@ -607,7 +625,35 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 			// Where the item tag started, which is 8 bytes back: 4 for the tag
 			// and 4 for the length that readItemHeader has already consumed.
 			itemStart := dfr.position - 8
-			item, err := dfr.readSequenceItem(explicitVR, depth, marker.length)
+
+			// An item whose declared body runs past the end of its sequence is
+			// still an item: its elements are all there, and only the length
+			// field is wrong. Dropping it loses real data — pydicom's
+			// DICOMDIR-nooffset declares 248 bytes for its last directory
+			// record with 224 left, and the record it holds is complete, so the
+			// file came back with 51 of its 52 records and an IMAGE missing
+			// (#122).
+			//
+			// The item is read to the end of the sequence instead. A header
+			// sitting exactly at that end has nothing to read and is not an
+			// item at all: recording one would invent a record the file does
+			// not contain.
+			length := marker.length
+			if !undefined && length != UndefinedLength {
+				remaining := int64(declaredLength) - (dfr.position - start)
+				if remaining <= 0 {
+					dfr.warn("sequence item header at the end of the sequence, "+
+						"declaring %d bytes with none left; ending the sequence", length)
+					return items, nil
+				}
+				if int64(length) > remaining {
+					dfr.warn("sequence item declares %d bytes with %d left in the sequence; "+
+						"keeping the complete elements it holds", length, remaining)
+					length = uint32(remaining)
+				}
+			}
+
+			item, err := dfr.readSequenceItem(explicitVR, depth, length)
 			if err != nil {
 				// A file cut short loses its last item, not the sequence. The
 				// items already read are complete and were parsed from bytes
@@ -944,7 +990,18 @@ type DICOMFile struct {
 // GetDataset converts the parsed file into a Dataset, recursively materializing
 // any nested sequences as sequence.Sequence values holding child Datasets.
 func (df *DICOMFile) GetDataset() *dataset.Dataset {
-	ds := elementsToDataset(df.DataElements, nil)
+	// Character set decisions are recorded on the file, not only logged: a
+	// caller writing the data set back is the one who needs to know a guess was
+	// made. GetDataset may be called more than once, so each is recorded once.
+	ds := elementsToDataset(df.DataElements, nil, func(warning string) {
+		for _, existing := range df.Warnings {
+			if existing == warning {
+				return
+			}
+		}
+		config.Logger.Warn("filereader: " + warning)
+		df.Warnings = append(df.Warnings, warning)
+	})
 
 	// The transfer syntax lives in the file meta header, which is not part of
 	// the data set. Carrying it across is what lets pixel access know whether
@@ -962,34 +1019,91 @@ func (df *DICOMFile) GetDataset() *dataset.Dataset {
 // item may override: PS3.5 allows Specific Character Set inside a sequence item,
 // and it applies to that item and anything below it. Passing nil at the top
 // level means "read it from these elements".
-func elementsToDataset(elements []*DataElementValue, inherited []string) *dataset.Dataset {
+//
+// warn records a decision the caller should know about; it may be nil.
+func elementsToDataset(elements []*DataElementValue, inherited []string, warn func(string)) *dataset.Dataset {
 	ds := dataset.NewDataset()
 
-	encodings := inherited
-	if declared := specificCharacterSetOf(elements); declared != nil {
-		encodings = declared
+	encodings, fellBack := encodingsFor(elements, inherited)
+
+	// Decode first, decide afterwards. Whether this data set may declare UTF-8
+	// depends on how the values came out, and the declaration has to be written
+	// in tag order, before the values it describes.
+	type decodedElement struct {
+		elem  *DataElementValue
+		value []byte
+	}
+	decoded := make([]decodedElement, 0, len(elements))
+	guessed, allUTF8 := false, true
+	for _, elem := range elements {
+		if elem.Items != nil || isSequenceVR(elem.VR) || elem.Tag == specificCharacterSetTag {
+			decoded = append(decoded, decodedElement{elem, elem.Value})
+			continue
+		}
+		value := decodeTextValue(dataelem.VR(elem.VR), elem.Value, encodings)
+		if dataelem.IsTextVR(dataelem.VR(elem.VR)) {
+			if fellBack && !isASCII(elem.Value) {
+				// Latin-1 is a guess: the file did not say, or named something
+				// this build does not know, and another single-byte set is
+				// possible. The caller is told rather than left to notice.
+				guessed = true
+			}
+			if !utf8.Valid(value) {
+				allUTF8 = false
+			}
+		}
+		decoded = append(decoded, decodedElement{elem, value})
 	}
 
-	for _, elem := range elements {
-		if elem.Items != nil || isSequenceVR(elem.VR) {
+	if guessed && warn != nil {
+		warn("text with no usable Specific Character Set (0008,0005) was decoded as ISO-8859-1, " +
+			"which is a guess; the default repertoire is ASCII (PS3.5 6.1.2.3)")
+	}
+	// Reached when a decoder returns an error and decodeTextValue keeps the
+	// bytes as they were found. The decoders here substitute U+FFFD for input
+	// they cannot map, so this is insurance rather than a path a corpus file
+	// takes today — and it is the difference between a data set that is wrong
+	// and one that lies about being right.
+	if !allUTF8 && warn != nil {
+		warn("keeping the declared Specific Character Set (0008,0005): some text did not decode, " +
+			"so the data set cannot claim ISO_IR 192 over it")
+	}
+
+	// A declaration is added when text was converted and the file had none.
+	// Without it, writing the data set back produces UTF-8 bytes that a reader
+	// decodes as the default repertoire — the same corruption, one file later.
+	addDeclaration := guessed && allUTF8 && !hasSpecificCharacterSet(elements)
+
+	for _, d := range decoded {
+		if addDeclaration && d.elem.Tag > specificCharacterSetTag {
+			_ = ds.Add(dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
+				[]byte(utf8CharacterSet)))
+			addDeclaration = false
+		}
+
+		if d.elem.Items != nil || isSequenceVR(d.elem.VR) {
 			seq := sequence.New()
-			for _, item := range elem.Items {
-				_ = seq.Append(elementsToDataset(item.Elements, encodings))
+			for _, item := range d.elem.Items {
+				_ = seq.Append(elementsToDataset(item.Elements, encodings, warn))
 			}
-			_ = ds.AddSequence(elem.Tag, seq)
+			_ = ds.AddSequence(d.elem.Tag, seq)
 			continue
 		}
 
-		value := elem.Value
-		if elem.Tag == specificCharacterSetTag {
+		value := d.value
+		if d.elem.Tag == specificCharacterSetTag && allUTF8 {
 			// The values below are UTF-8 now, so the attribute has to say so or
 			// the data set contradicts itself — and anything writing it back out
-			// would label UTF-8 bytes as something else.
+			// would label UTF-8 bytes as something else. Only when they really
+			// are UTF-8: this used to be unconditional, so a file whose text did
+			// not decode was labeled ISO_IR 192 over the bytes it came with.
 			value = []byte(utf8CharacterSet)
-		} else {
-			value = decodeTextValue(dataelem.VR(elem.VR), value, encodings)
 		}
-		_ = ds.Add(dataelem.NewDataElement(elem.Tag, dataelem.VR(elem.VR), value))
+		_ = ds.Add(dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), value))
+	}
+	if addDeclaration {
+		_ = ds.Add(dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
+			[]byte(utf8CharacterSet)))
 	}
 
 	return ds
@@ -1002,28 +1116,72 @@ const specificCharacterSetTag = tag.Tag(0x00080005)
 // declares.
 const utf8CharacterSet = "ISO_IR 192"
 
-// specificCharacterSetOf reads (0008,0005) from a flat element list, or nil when
-// it is absent.
-func specificCharacterSetOf(elements []*DataElementValue) []string {
+// isASCII reports whether every byte is in the default repertoire, which needs
+// no decoding whatever the declaration says.
+func isASCII(value []byte) bool {
+	for _, b := range value {
+		if b > 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
+// hasSpecificCharacterSet reports whether (0008,0005) is present at all.
+func hasSpecificCharacterSet(elements []*DataElementValue) bool {
+	for _, elem := range elements {
+		if elem.Tag == specificCharacterSetTag {
+			return true
+		}
+	}
+	return false
+}
+
+// encodingsFor settles the character set for a data set, and reports whether it
+// is a fallback rather than what the file asked for.
+//
+// PS3.5 6.1.2.3: an absent or empty Specific Character Set means the default
+// repertoire, which is ASCII. Files holding Latin-1 names under no declaration
+// are common from older equipment, and pydicom decodes them with iso8859 and
+// warns. Doing the same rescues the names; leaving the bytes alone and then
+// declaring ISO_IR 192 over them, which is what happened before, destroyed them
+// on the next write.
+func encodingsFor(elements []*DataElementValue, inherited []string) (encodings []string, fellBack bool) {
 	for _, elem := range elements {
 		if elem.Tag != specificCharacterSetTag {
 			continue
 		}
-		if strings.TrimSpace(string(elem.Value)) == "" {
-			return nil
-		}
-		// DecodeBytes works in Go's encoding names; the file names them the way
-		// DICOM does. Passing the DICOM name straight through finds no decoder,
-		// and the failure is silent — the bytes come back unchanged, which reads
-		// as "this text needed no decoding" rather than as an error.
 		declared := parseSpecificCharacterSetValue(strings.TrimSpace(string(elem.Value)))
-		converted, err := charset.ConvertEncodings(declared)
-		if err != nil {
-			return nil
+		if len(declared) == 0 {
+			return []string{charset.DefaultEncoding}, true
 		}
-		return converted
+		converted, err := charset.ConvertEncodings(declared)
+		if err != nil || len(converted) == 0 {
+			return []string{charset.DefaultEncoding}, true
+		}
+		return converted, isFallbackEncoding(declared, converted)
 	}
-	return nil
+	if inherited != nil {
+		return inherited, false
+	}
+	return []string{charset.DefaultEncoding}, true
+}
+
+// isFallbackEncoding reports whether the conversion gave the default because it
+// did not recognize what was declared, rather than because Latin-1 was asked
+// for. ISO_IR 999 decodes correctly today through this path; the caller is
+// still entitled to know a guess was made.
+func isFallbackEncoding(declared, converted []string) bool {
+	if len(converted) != 1 || converted[0] != charset.DefaultEncoding {
+		return false
+	}
+	for _, term := range declared {
+		switch strings.TrimSpace(term) {
+		case "", "ISO_IR 6", "ISO 2022 IR 6", "ISO_IR 100", "ISO 2022 IR 100":
+			return false
+		}
+	}
+	return true
 }
 
 // decodeTextValue converts a text value from its declared character set to
@@ -1063,6 +1221,13 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 	// Whether the encoding has to be worked out from the data set itself.
 	sniffed := false
+	// Bits Allocated as it is read, for the Pixel Data byte-order swap below.
+	bitsAllocated := 0
+	// How many warnings belonged to the meta header. Warnings recorded while the
+	// data set is parsed are appended after it, and were never copied to the
+	// file at all: the copy below happens before the data set is read, so a
+	// truncated or overrunning sequence warned into a slice nobody looked at.
+	metaWarningCount := 0
 
 	// A DICOM Part 10 file opens with a 128-byte preamble and the characters
 	// DICM. A raw DICOM stream — as produced by some modalities, and what
@@ -1083,6 +1248,7 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.FileMetaInfo = metaInfo
 		dicomFile.MetaElements = dfr.metaElements
 		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
+		metaWarningCount = len(dfr.metaWarnings)
 	} else {
 		// Without a meta header there is no stated transfer syntax. Implicit VR
 		// Little Endian is the DICOM default (PS3.5 Section 10.1), but the first
@@ -1173,7 +1339,12 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		// Big endian values are converted once here so that everything
 		// downstream can assume little endian; see normalizeByteOrder.
 		if !dicomFile.IsLittleEndian {
-			normalizeByteOrder(element)
+			normalizeByteOrder(element, bitsAllocated)
+		}
+		// Bits Allocated decides how wide a native Pixel Data sample is, and it
+		// precedes Pixel Data in every conforming file (group 0028 before 7FE0).
+		if element.Tag == bitsAllocatedTag && len(element.Value) >= 2 {
+			bitsAllocated = int(binary.LittleEndian.Uint16(element.Value))
 		}
 
 		if err := validateDataElement(element); err != nil {
@@ -1189,6 +1360,12 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		}
 
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
+	}
+
+	// The warnings recorded while the data set was parsed, which the copy above
+	// could not have seen.
+	if len(dfr.metaWarnings) > metaWarningCount {
+		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[metaWarningCount:]...)
 	}
 
 	return dicomFile, nil
@@ -1312,6 +1489,39 @@ func validateDataElement(elem *DataElementValue) error {
 	return nil
 }
 
+// dictionaryVRForUN gives the VR to read a UN element with, or "" to keep UN.
+//
+// Only a public tag the dictionary knows unambiguously: a private tag has no
+// entry to take a VR from, and an entry offering a choice ("US or SS") cannot be
+// settled without the attributes that decide it, which is the writer's job
+// (dataset.ResolveVR). Guessing either would describe bytes as something they
+// may not be.
+//
+// Little endian only. Note 2 says a UN value is little endian whatever the
+// transfer syntax, so in a big endian file a resolved value would be the one
+// value in the data set that must not be byte-swapped — and normalizeByteOrder
+// swaps by VR. Keeping UN there is correct rather than conservative: the bytes
+// stay as they are, which is what UN means.
+func dictionaryVRForUN(vr string, t tag.Tag, order filebase.ByteOrder) string {
+	if vr != "UN" || order == filebase.BigEndian {
+		return ""
+	}
+	if t.Group()%2 == 1 {
+		// A private creator is LO by definition — its value is the vendor's own
+		// name (PS3.5 7.8.1) — so it needs no dictionary. Every other private
+		// tag keeps UN: there is no entry to take a VR from.
+		if e := t.Element(); e >= 0x0010 && e <= 0x00FF {
+			return "LO"
+		}
+		return ""
+	}
+	known := t.GetVR()
+	if known == "" || known == "UN" || strings.Contains(known, " or ") {
+		return ""
+	}
+	return known
+}
+
 // isValidVRVariant checks if a VR is a valid variant of the expected VR.
 // Some DICOM tags allow multiple VR types, represented as "X or Y" in the dictionary.
 // This function validates that the actual VR matches one of the allowed variants.
@@ -1340,17 +1550,36 @@ func isValidVRVariant(actual, expected string) bool {
 // model — reads them as little endian. Rather than thread the file's byte order
 // through all of that, big endian values are normalised once here, so a data
 // set means the same thing regardless of how the file was encoded.
-func normalizeByteOrder(elem *DataElementValue) {
-	// Swap in place: the value was allocated by this reader and is not shared.
-	dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+func normalizeByteOrder(elem *DataElementValue, bitsAllocated int) {
+	// Native Pixel Data is reversed at its sample width, not at the width OW
+	// implies: at 32 or 64 bits the two-byte swap leaves each sample's halves
+	// transposed, which is #124. Encapsulated Pixel Data is fragments, not
+	// samples, and is never reversed.
+	if elem.Tag == pixelDataTag && !elem.UndefinedLength {
+		dataelem.SwapBytes(elem.Value, dataelem.PixelDataSwapWidth(dataelem.VR(elem.VR), bitsAllocated))
+	} else {
+		// Swap in place: the value was allocated by this reader and is not shared.
+		dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+	}
 
-	// Sequence items carry their own elements, encoded the same way.
+	// Sequence items carry their own elements, encoded the same way, and an
+	// item describing its own image — an icon — has its own Bits Allocated.
 	for _, item := range elem.Items {
+		itemBits := 0
 		for _, nested := range item.Elements {
-			normalizeByteOrder(nested)
+			normalizeByteOrder(nested, itemBits)
+			if nested.Tag == bitsAllocatedTag && len(nested.Value) >= 2 {
+				itemBits = int(binary.LittleEndian.Uint16(nested.Value))
+			}
 		}
 	}
 }
+
+// bitsAllocatedTag is (0028,0100) and pixelDataTag is (7FE0,0010).
+var (
+	bitsAllocatedTag = tag.New(0x0028, 0x0100)
+	pixelDataTag     = tag.New(0x7FE0, 0x0010)
+)
 
 // isPlausibleVR reports whether two bytes could be a Value Representation.
 //

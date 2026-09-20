@@ -57,7 +57,7 @@ It is worth reading before piping anything to a shell — it is about a hundred 
 curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
 less install.sh
 sh install.sh                          # the latest release
-sh install.sh v1.5.0                   # a specific one
+sh install.sh v1.6.0                   # a specific one
 PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
 ```
 
@@ -323,7 +323,8 @@ go build -o go-dicom .
 ./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
 
 # A storage and query/retrieve archive in one command: stores what it is
-# sent, indexes it, and answers C-FIND, C-MOVE and C-GET against it
+# sent, indexes it, answers C-FIND, C-MOVE and C-GET against it, and
+# commits what it holds (commitscu above works against it)
 ./go-dicom qrscp -port 11112 -output ./archive/
 
 # Get help — `help <command>` works for every command above
@@ -626,14 +627,14 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
-| JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Supply a decoder** | Yes |
+| JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
 `YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
 configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
 
-JPEG 2000 needs a decoder you supply — `examples/jpeg2000` is a working one that
-shells out to openjpeg, verified sample-for-sample against pydicom.
+JPEG 2000 decodes both wavelets at 1 to 16 bits, signed or unsigned, with any
+number of tiles and quality layers.
 JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
 JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
 in both line- and sample-interleaved modes.
@@ -643,17 +644,22 @@ parsing and converted back on write, so byte order never reaches code above
 `filereader`.
 
 **RLE Lossless decodes**, single- and multi-frame, grayscale and color, as does
-every JPEG syntax in the table above except JPEG 2000 — all in pure Go, with no
-codec to install and nothing to register. `Dataset.PixelArray()` decompresses
-them without being asked. Verified against pydicom on its own test corpus, and
-checked in CI on every push: of the 49 files in that corpus pydicom can decode,
-43 decode here to the same samples, compared whole rather than by their leading
-values. The six remaining are all JPEG 2000.
+every JPEG syntax in the table above — all in pure Go, with no codec to install
+and nothing to register. `Dataset.PixelArray()` decompresses them without being
+asked. Verified against pydicom on its own test corpus, and checked in CI on
+every push: **all 49** of the files in that corpus pydicom can decode decode
+here to the same samples, compared whole rather than by their leading values,
+with nothing skipped.
 
-**JPEG 2000 is the one syntax that does not decode.** `.90` and `.91` instances
-parse, store, and transfer with their pixel data intact as opaque bytes, but
-need a decoder you supply. See [CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data)
-for why, and `examples/jpeg2000` for a working one to copy.
+**JPEG 2000 decodes too**, as of this version: `.90` and `.91`, both the 5/3
+reversible and 9/7 irreversible wavelets, with the reversible and irreversible
+component transforms. A reversible codestream matches pydicom sample for sample;
+an irreversible one is held to a tolerance of one, because the 9/7 filter is
+defined in real arithmetic and ISO 15444-4 grades a decoder on how close it
+comes rather than on equality. Features it does not implement — subsampled
+components, custom precincts, the code-block style options — are refused by
+name rather than decoded wrongly. See
+[CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data).
 
 **Compressed frames can be extracted**, which is the step before decoding. For a
 compressed instance, `PixelData` holds the encapsulation exactly as it appears in
@@ -669,16 +675,16 @@ frame, err := ds.GetEncapsulatedFrame(0)      // one frame, still compressed
 Multi-frame compressed images split correctly; verified against pydicom on
 `SC_rgb_rle_2frame.dcm`.
 
-To decode JPEG 2000, register a decoder:
+To put your own decoder in place of a bundled one — a faster codec, a CGO
+binding, or one that accepts something this module refuses:
 
 ```go
 compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
 ```
 
-JPEG 2000 is not implemented in this module, and there is no hidden CGO path
-that enables it — the error messages used to name a C library and tell you to
-rebuild with `CGO_ENABLED=1`, which changed nothing because there was no CGO
-implementation to enable. They now say plainly that a decoder must be supplied.
+Every codec in the registry now has a pure-Go decoder, so registering is about
+substitution rather than filling a gap. Whatever is registered last is what
+`Dataset.PixelArray()` uses.
 
 Any type with `Decompress([]byte) ([]byte, error)` and `CanDecompress([]byte) bool`
 will do; `Dataset.PixelArray()` routes frames through it automatically once

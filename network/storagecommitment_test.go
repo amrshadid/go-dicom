@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -593,5 +594,70 @@ func TestReportStorageCommitmentNeedsAnAddress(t *testing.T) {
 	if err := server.ReportStorageCommitment(ctx, "UNKNOWN_AE",
 		&StorageCommitmentResult{Successful: instanceRefs("1.2.3.1")}); err == nil {
 		t.Error("reporting a result with no Transaction UID succeeded")
+	}
+}
+
+// TestFailureReasonsAreTheStandardsValues covers #114. Failure Reason
+// (0008,1197) has six defined values (PS3.3 C.14.1.1). The resource-limitation
+// constant was 0xA700, the DIMSE status "Refused: Out of Resources", so a
+// requestor was sent a Failure Reason the standard does not define. Two of the
+// six had no constant at all. The literals below are the standard's, not the
+// constants', so a constant with the wrong value cannot pass by agreeing with
+// itself.
+func TestFailureReasonsAreTheStandardsValues(t *testing.T) {
+	for name, tc := range map[string]struct{ got, want uint16 }{
+		"Processing failure":                 {StorageCommitmentFailureProcessingFailure, 0x0110},
+		"No such object instance":            {StorageCommitmentFailureNoSuchObject, 0x0112},
+		"Resource limitation":                {StorageCommitmentFailureResourceLimitation, 0x0213},
+		"Referenced SOP Class not supported": {StorageCommitmentFailureClassNotSupported, 0x0122},
+		"Class / Instance conflict":          {StorageCommitmentFailureClassInstanceConflict, 0x0119},
+		"Duplicate transaction UID":          {StorageCommitmentFailureDuplicateTransactionUID, 0x0131},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = 0x%04X, want 0x%04X", name, tc.got, tc.want)
+		}
+	}
+
+	// And on the wire: what BuildStorageCommitmentResult writes into each
+	// item's Failure Reason is the standard's value, and it parses back.
+	reasons := []uint16{0x0110, 0x0112, 0x0213, 0x0122, 0x0119, 0x0131}
+	result := &StorageCommitmentResult{TransactionUID: "1.2.3.114"}
+	for i, reason := range reasons {
+		result.Failed = append(result.Failed, StorageCommitmentFailure{
+			SOPInstanceReference: SOPInstanceReference{
+				SOPClassUID: "1.2.840.10008.5.1.4.1.1.2", SOPInstanceUID: fmt.Sprintf("1.2.3.%d", i),
+			},
+			Reason: reason,
+		})
+	}
+	ds, err := BuildStorageCommitmentResult(result)
+	if err != nil {
+		t.Fatalf("BuildStorageCommitmentResult: %v", err)
+	}
+	encoded, err := EncodeDataset(ds, ExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("EncodeDataset: %v", err)
+	}
+	decoded, err := DecodeDataset(encoded, ExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+	back, err := ParseStorageCommitmentResult(decoded)
+	if err != nil {
+		t.Fatalf("ParseStorageCommitmentResult: %v", err)
+	}
+	for i, failure := range back.Failed {
+		if failure.Reason != reasons[i] {
+			t.Errorf("failure %d reads back as 0x%04X, want 0x%04X", i, failure.Reason, reasons[i])
+		}
+	}
+}
+
+// TestStorageCommitmentResourceLimitationStatus: the status.go constant of the
+// same name carried the same wrong value.
+func TestStorageCommitmentResourceLimitationStatus(t *testing.T) {
+	if StatusStorageCommitmentResourceLimitation != 0x0213 {
+		t.Errorf("StatusStorageCommitmentResourceLimitation = 0x%04X, want 0x0213 (PS3.7 C.4.7)",
+			StatusStorageCommitmentResourceLimitation)
 	}
 }

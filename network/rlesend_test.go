@@ -84,7 +84,12 @@ func TestNativeInstanceIsCompressedForAnRLEContext(t *testing.T) {
 	}
 
 	// The receiver has to be able to decode it back to what was sent.
-	received.SetTransferSyntaxUID(network.RLELosslessUID)
+	// The decoder records the syntax the data set arrived in. It did not, and
+	// this line set it by hand, which is how a received compressed instance
+	// came to be stored as uncompressed (#126).
+	if got := received.TransferSyntaxUID(); got != network.RLELosslessUID {
+		t.Fatalf("the received data set records syntax %q, want %s", got, network.RLELosslessUID)
+	}
 	back, err := received.DecodedPixelData()
 	if err != nil {
 		t.Fatalf("the receiver could not decode what arrived: %v", err)
@@ -115,7 +120,12 @@ func TestCompressedInstanceIsRecodedForAnRLEContext(t *testing.T) {
 		t.Fatalf("DecodeDataset: %v", err)
 	}
 
-	decoded.SetTransferSyntaxUID(network.RLELosslessUID)
+	// The decoder records the syntax the data set arrived in. It did not, and
+	// this line set it by hand, which is how a received compressed instance
+	// came to be stored as uncompressed (#126).
+	if got := decoded.TransferSyntaxUID(); got != network.RLELosslessUID {
+		t.Fatalf("the received data set records syntax %q, want %s", got, network.RLELosslessUID)
+	}
 	back, err := decoded.DecodedPixelData()
 	if err != nil {
 		t.Fatalf("decoding the re-encoded pixel data: %v", err)
@@ -173,7 +183,12 @@ func TestNativeInstanceIsCompressedForAJPEGLSContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the original pixel data: %v", err)
 	}
-	decoded.SetTransferSyntaxUID(network.JPEGLSLosslessUID)
+	// The decoder records the syntax the data set arrived in. It did not, and
+	// this line set it by hand, which is how a received compressed instance
+	// came to be stored as uncompressed (#126).
+	if got := decoded.TransferSyntaxUID(); got != network.JPEGLSLosslessUID {
+		t.Fatalf("the received data set records syntax %q, want %s", got, network.JPEGLSLosslessUID)
+	}
 	roundTripped, err := decoded.DecodedPixelData()
 	if err != nil {
 		t.Fatalf("decoding the encoded pixel data: %v", err)

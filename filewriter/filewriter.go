@@ -3,8 +3,10 @@ package filewriter
 import (
 	"bytes"
 	"compress/flate"
+	"encoding/binary"
 	"fmt"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/filebase"
@@ -30,23 +32,14 @@ type FileMetaInfo struct {
 }
 
 // isEncapsulatedSyntax reports whether a transfer syntax carries pixel data as
-// fragments rather than as a contiguous value.
-//
-// Everything outside the four uncompressed syntaxes does. Listing those rather
-// than enumerating the compressed ones means a syntax added to the standard
-// later is treated as compressed, which is the safe direction: writing an
-// explicit length for encapsulated data produces a file strict parsers reject,
-// while undefined length for native data would be caught by any round trip.
+// fragments rather than as a contiguous value. compress.IsEncapsulated is the
+// one answer the file writer and the network encoder share.
 func isEncapsulatedSyntax(uid string) bool {
-	switch uid {
-	case "1.2.840.10008.1.2", // Implicit VR Little Endian
-		"1.2.840.10008.1.2.1",    // Explicit VR Little Endian
-		"1.2.840.10008.1.2.1.99", // Deflated Explicit VR Little Endian
-		"1.2.840.10008.1.2.2":    // Explicit VR Big Endian
-		return false
-	}
-	return uid != ""
+	return compress.IsEncapsulated(uid)
 }
+
+// bitsAllocatedTag is (0028,0100).
+var bitsAllocatedTag = tag.New(0x0028, 0x0100)
 
 // pixelDataTag is (7FE0,0010).
 var pixelDataTag = tag.New(0x7FE0, 0x0010)
@@ -129,6 +122,10 @@ type DCMFileWriter struct {
 	// encapsulated records that the target transfer syntax carries pixel data
 	// as fragments, which PS3.5 A.4 requires be written with undefined length.
 	encapsulated bool
+
+	// bitsAllocated is (0028,0100) as written, for the Pixel Data byte-order
+	// swap when the target syntax is big endian.
+	bitsAllocated int
 }
 
 // NewDCMFileWriter creates a new DICOM file writer.
@@ -317,13 +314,36 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		return dfw.writeSequence(elem, forceExplicitVR)
 	}
 
+	// Bits Allocated decides the width Pixel Data is byte-swapped in below, and
+	// precedes it in tag order. A nested writer has its own, so an icon inside a
+	// 32-bit image is not swapped at the parent's width.
+	if elem.Tag == bitsAllocatedTag && len(elem.Value) >= 2 {
+		dfw.bitsAllocated = int(binary.LittleEndian.Uint16(elem.Value))
+	}
+
+	// The VR field is exactly two bytes (PS3.5 6.2), and this writes elem.VR into
+	// it as given. A VR of any other length — a dictionary's "OB or OW", or none
+	// at all — shifts every byte after it, and the file reads as corrupt from
+	// that element on. ElementsFromDataset resolves the VR first; this is for a
+	// DataElement built by hand, which should produce a readable file whatever it
+	// holds. UN is what the standard says an element of unknown VR is.
+	if len(elem.VR) != 2 {
+		elem = &DataElement{Tag: elem.Tag, VR: "UN", Value: elem.Value, Length: elem.Length}
+	}
+
 	// Values are held little endian in memory, so numeric ones must be
 	// converted when the target syntax is big endian. Swap a copy: the caller's
 	// value must not be mutated by writing.
 	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(elem.VR)) {
 		swapped := make([]byte, len(elem.Value))
 		copy(swapped, elem.Value)
-		dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
+		if elem.Tag == pixelDataTag {
+			// At the sample width, not the width OW implies: a 32-bit sample
+			// reversed in two-byte units keeps its halves transposed (#124).
+			dataelem.SwapBytes(swapped, dataelem.PixelDataSwapWidth(dataelem.VR(elem.VR), dfw.bitsAllocated))
+		} else {
+			dataelem.SwapByteOrder(dataelem.VR(elem.VR), swapped)
+		}
 		elem = &DataElement{
 			Tag: elem.Tag, VR: elem.VR, Value: swapped, Length: uint32(len(swapped)),
 		}

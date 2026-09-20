@@ -2,10 +2,12 @@ package network
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -14,6 +16,19 @@ var (
 	tagPatientID   = tag.New(0x0010, 0x0020)
 	tagPixelData   = tag.New(0x7FE0, 0x0010)
 )
+
+// encapsulated frames fragments as encapsulated Pixel Data holds them: an empty
+// Basic Offset Table, then one item per fragment (PS3.5 A.4).
+func encapsulated(fragments ...[]byte) []byte {
+	var items bytes.Buffer
+	for _, fragment := range append([][]byte{{}}, fragments...) {
+		_ = binary.Write(&items, binary.LittleEndian, uint16(0xFFFE))
+		_ = binary.Write(&items, binary.LittleEndian, uint16(0xE000))
+		_ = binary.Write(&items, binary.LittleEndian, uint32(len(fragment)))
+		items.Write(fragment)
+	}
+	return items.Bytes()
+}
 
 func buildCodecTestDataset() *dataset.Dataset {
 	ds := dataset.NewDataset()
@@ -54,7 +69,15 @@ func TestDatasetCodecRoundTripAllTransferSyntaxes(t *testing.T) {
 
 	for _, ts := range syntaxes {
 		t.Run(ts.name, func(t *testing.T) {
-			encoded, err := EncodeDataset(buildCodecTestDataset(), ts.uid)
+			ds := buildCodecTestDataset()
+			wantPixels := []byte{0x01, 0x02, 0x03, 0x04}
+			if encodingForTransferSyntax(ts.uid).Encapsulated {
+				// A compressed syntax carries Pixel Data as fragments, never as
+				// the native bytes above.
+				wantPixels = encapsulated(wantPixels)
+				_ = ds.Add(dataelem.NewDataElement(tagPixelData, dataelem.OB, wantPixels))
+			}
+			encoded, err := EncodeDataset(ds, ts.uid)
 			if err != nil {
 				t.Fatalf("EncodeDataset: %v", err)
 			}
@@ -79,8 +102,8 @@ func TestDatasetCodecRoundTripAllTransferSyntaxes(t *testing.T) {
 			if !ok {
 				t.Fatal("pixel data missing after round trip")
 			}
-			if !bytes.Equal(pixels.GetValue().([]byte), []byte{0x01, 0x02, 0x03, 0x04}) {
-				t.Errorf("pixel data = % x, want 01 02 03 04", pixels.GetValue())
+			if !bytes.Equal(pixels.GetValue().([]byte), wantPixels) {
+				t.Errorf("pixel data = % x, want % x", pixels.GetValue(), wantPixels)
 			}
 		})
 	}
@@ -225,4 +248,253 @@ func trimPadding(b []byte) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// TestEncodeDatasetResolvesAmbiguousVRs covers a data set received or read as
+// Implicit VR and sent on as Explicit VR. It holds the dictionary's VRs, and the
+// ambiguous ones went out as UN: legal, but a peer storing what it was sent kept
+// the pixels as UN. Resolved, Pixel Data is OW, and a value in a signed image is
+// SS — inside a sequence item too, where the image's Pixel Representation
+// decides.
+func TestEncodeDatasetResolvesAmbiguousVRs(t *testing.T) {
+	item := dataset.NewDataset()
+	_ = item.Add(dataelem.NewDataElement(tag.New(0x0028, 0x3002), "US or SS", []byte{0, 16, 0, 0x80, 16, 0}))
+	lut := sequence.New()
+	_ = lut.Append(item)
+
+	// The sequence goes in with Add rather than AddSequence, as a reader's does,
+	// so no parent is recorded and the encoder has to carry the image down.
+	implicit := dataset.NewDataset()
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, []byte{16, 0}))
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0103), dataelem.US, []byte{1, 0}))
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0106), "US or SS", []byte{0xFB, 0xFF}))
+	_ = implicit.Add(dataelem.NewDataElement(tag.New(0x0028, 0x3000), dataelem.SQ, lut))
+	_ = implicit.Add(dataelem.NewDataElement(tagPixelData, "OB or OW", []byte{1, 0, 2, 0}))
+	if item.Parent() != nil {
+		t.Fatal("Add recorded a parent, so this does not test the encoder")
+	}
+
+	encoded, err := EncodeDataset(implicit, ExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("EncodeDataset: %v", err)
+	}
+	back, err := DecodeDataset(encoded, ExplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+
+	for tg, want := range map[tag.Tag]dataelem.VR{
+		tagPixelData:            dataelem.OW,
+		tag.New(0x0028, 0x0106): dataelem.SS,
+	} {
+		elem, ok := back.Get(tg)
+		if !ok {
+			t.Errorf("%s was lost", tg)
+			continue
+		}
+		if elem.GetVR() != want {
+			t.Errorf("%s went out as %q, want %s", tg, elem.GetVR(), want)
+		}
+	}
+
+	seq, err := back.GetSequence(tag.New(0x0028, 0x3000))
+	if err != nil || seq.Length() != 1 {
+		t.Fatalf("the sequence was lost: %v", err)
+	}
+	raw, _ := seq.Get(0)
+	descriptor, ok := raw.(*dataset.Dataset).Get(tag.New(0x0028, 0x3002))
+	if !ok {
+		t.Fatal("the item's LUT Descriptor was lost")
+	}
+	if descriptor.GetVR() != dataelem.SS {
+		t.Errorf("the item's LUT Descriptor went out as %q, want SS from the image", descriptor.GetVR())
+	}
+}
+
+// TestDecodeDatasetRecordsItsSyntax covers #126. Whether Pixel Data holds pixels
+// or fragments is a property of the syntax alone, so a data set that forgets it
+// looks uncompressed to every writer and encoder downstream.
+func TestDecodeDatasetRecordsItsSyntax(t *testing.T) {
+	// RLE's data set is encoded as Explicit VR Little Endian; only its pixel data
+	// differs, and the test data set's is encoded as it stands.
+	for syntax, body := range map[string]string{
+		ImplicitVRLittleEndianUID: ImplicitVRLittleEndianUID,
+		ExplicitVRLittleEndianUID: ExplicitVRLittleEndianUID,
+		RLELosslessUID:            ExplicitVRLittleEndianUID,
+	} {
+		encoded, err := EncodeDataset(buildCodecTestDataset(), body)
+		if err != nil {
+			t.Fatalf("EncodeDataset: %v", err)
+		}
+		ds, err := DecodeDataset(encoded, syntax)
+		if err != nil {
+			t.Fatalf("DecodeDataset %s: %v", syntax, err)
+		}
+		if got := ds.TransferSyntaxUID(); got != syntax {
+			t.Errorf("decoded as %s, the data set records %q", syntax, got)
+		}
+	}
+}
+
+// TestDecodeDatasetReadsEncapsulatedPixelData covers pixel data as a conforming
+// peer sends it: undefined length, items, a Sequence Delimitation Item. The
+// decoder took the rest of the data set as the value, so the delimiter came
+// with it — written to a file, the sequence was closed twice and dcmtk refused
+// it — and so did any element after Pixel Data.
+func TestDecodeDatasetReadsEncapsulatedPixelData(t *testing.T) {
+	le := binary.LittleEndian
+	var items bytes.Buffer
+	for _, fragment := range [][]byte{{}, {0xFF, 0xD8, 0xFF, 0xD9}} { // empty offset table, one fragment
+		_ = binary.Write(&items, le, uint16(0xFFFE))
+		_ = binary.Write(&items, le, uint16(0xE000))
+		_ = binary.Write(&items, le, uint32(len(fragment)))
+		items.Write(fragment)
+	}
+
+	var wire bytes.Buffer
+	_ = binary.Write(&wire, le, uint16(0x7FE0))
+	_ = binary.Write(&wire, le, uint16(0x0010))
+	wire.WriteString("OB")
+	wire.Write([]byte{0, 0})
+	_ = binary.Write(&wire, le, undefinedLength)
+	wire.Write(items.Bytes())
+	_ = binary.Write(&wire, le, uint16(0xFFFE))
+	_ = binary.Write(&wire, le, uint16(0xE0DD))
+	_ = binary.Write(&wire, le, uint32(0))
+	// Data Set Trailing Padding, after Pixel Data.
+	_ = binary.Write(&wire, le, uint16(0xFFFC))
+	_ = binary.Write(&wire, le, uint16(0xFFFC))
+	wire.WriteString("OB")
+	wire.Write([]byte{0, 0})
+	_ = binary.Write(&wire, le, uint32(2))
+	wire.Write([]byte{0, 0})
+
+	ds, err := DecodeDataset(wire.Bytes(), JPEGBaselineUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+	elem, ok := ds.Get(tagPixelData)
+	if !ok {
+		t.Fatal("Pixel Data was lost")
+	}
+	if got := elem.GetValue().([]byte); !bytes.Equal(got, items.Bytes()) {
+		t.Errorf("Pixel Data holds % x, want the items alone, % x", got, items.Bytes())
+	}
+	if _, ok := ds.Get(tag.New(0xFFFC, 0xFFFC)); !ok {
+		t.Error("the element after Pixel Data was swallowed")
+	}
+
+	// And a sequence that never closes is an error, not a value.
+	if _, err := DecodeDataset(wire.Bytes()[:12+items.Len()], JPEGBaselineUID); err == nil {
+		t.Error("encapsulated pixel data with no delimiter decoded without error")
+	}
+}
+
+// TestEncodeDatasetSendsEncapsulatedPixelDataUndefined covers #128. PS3.5 A.4
+// requires encapsulated Pixel Data to have undefined length and a closing
+// Sequence Delimitation Item. It was sent with its byte count, which pynetdicom
+// accepts and dcmtk refuses, aborting the association.
+func TestEncodeDatasetSendsEncapsulatedPixelDataUndefined(t *testing.T) {
+	items := encapsulated([]byte{0xFF, 0xD8, 0xFF, 0xD9})
+
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tagPatientID, dataelem.LO, []byte("P1")))
+	// An implicit VR reader leaves the dictionary's "OB or OW"; encapsulated
+	// pixel data is OB whatever the image's Bits Allocated says.
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, []byte{16, 0}))
+	_ = ds.Add(dataelem.NewDataElement(tagPixelData, "OB or OW", items))
+	ds.SetTransferSyntaxUID(JPEGBaselineUID)
+
+	encoded, err := EncodeDataset(ds, JPEGBaselineUID)
+	if err != nil {
+		t.Fatalf("EncodeDataset: %v", err)
+	}
+
+	header := []byte{0xE0, 0x7F, 0x10, 0x00, 'O', 'B', 0, 0, 0xFF, 0xFF, 0xFF, 0xFF}
+	at := bytes.Index(encoded, header[:4])
+	if at < 0 {
+		t.Fatal("Pixel Data is missing from the encoding")
+	}
+	if got := encoded[at : at+len(header)]; !bytes.Equal(got, header) {
+		t.Errorf("Pixel Data header is % x, want % x: OB, undefined length", got, header)
+	}
+	delimiter := []byte{0xFE, 0xFF, 0xDD, 0xE0, 0, 0, 0, 0}
+	if !bytes.HasSuffix(encoded, delimiter) {
+		t.Errorf("the encoding does not end with a Sequence Delimitation Item: % x", encoded[len(encoded)-8:])
+	}
+	if n := bytes.Count(encoded, delimiter); n != 1 {
+		t.Errorf("%d delimiters, want 1", n)
+	}
+
+	back, err := DecodeDataset(encoded, JPEGBaselineUID)
+	if err != nil {
+		t.Fatalf("DecodeDataset: %v", err)
+	}
+	elem, _ := back.Get(tagPixelData)
+	if got, _ := elem.GetValue().([]byte); !bytes.Equal(got, items) {
+		t.Errorf("the items did not survive: % x", got)
+	}
+}
+
+// TestEncodeDatasetRefusesNativePixelsUnderACompressedSyntax: bytes that are not
+// items cannot be sent as encapsulated, and sending them anyway would describe
+// pixels as fragments, which the receiver cannot detect.
+func TestEncodeDatasetRefusesNativePixelsUnderACompressedSyntax(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tagPixelData, dataelem.OW, []byte{1, 2, 3, 4}))
+	if _, err := EncodeDataset(ds, JPEGBaselineUID); err == nil {
+		t.Error("native pixel data was encoded under JPEG Baseline")
+	}
+}
+
+// TestEncodeDatasetSendsNumericValues covers #119. Rows set in Go as uint16(64)
+// went out as nothing: the element was skipped, EncodeDataset returned no error,
+// and the peer received an image with no Rows and no way to know.
+func TestEncodeDatasetSendsNumericValues(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, uint16(64)))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, 512))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0020, 0x0013), dataelem.IS, 7))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0030), dataelem.DS, []float64{0.5, 0.25}))
+
+	for _, syntax := range []string{ImplicitVRLittleEndianUID, ExplicitVRLittleEndianUID} {
+		encoded, err := EncodeDataset(ds, syntax)
+		if err != nil {
+			t.Fatalf("%s: EncodeDataset: %v", syntax, err)
+		}
+		back, err := DecodeDataset(encoded, syntax)
+		if err != nil {
+			t.Fatalf("%s: DecodeDataset: %v", syntax, err)
+		}
+		for tg, want := range map[tag.Tag][]byte{
+			tag.New(0x0028, 0x0010): {64, 0},
+			tag.New(0x0028, 0x0011): {0, 2},
+			tag.New(0x0020, 0x0013): []byte("7 "),
+			tag.New(0x0028, 0x0030): []byte(`0.5\0.25`), // even, so unpadded
+		} {
+			elem, ok := back.Get(tg)
+			if !ok {
+				t.Errorf("%s: %s was not sent", syntax, tg)
+				continue
+			}
+			if got := elem.GetValue().([]byte); !bytes.Equal(got, want) {
+				t.Errorf("%s: %s went out as % x, want % x", syntax, tg, got, want)
+			}
+		}
+	}
+}
+
+// TestEncodeDatasetRefusesAValueItCannotSend: the element is not left out.
+// Leaving it out sends a data set the peer takes as complete.
+func TestEncodeDatasetRefusesAValueItCannotSend(t *testing.T) {
+	for name, value := range map[string]any{
+		"a number too large for US": 70000,
+		"a type with no encoding":   struct{}{},
+	} {
+		ds := dataset.NewDataset()
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, value))
+		if _, err := EncodeDataset(ds, ExplicitVRLittleEndianUID); err == nil {
+			t.Errorf("%s: EncodeDataset returned no error", name)
+		}
+	}
 }

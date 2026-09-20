@@ -153,14 +153,15 @@
 //   - JPEG: JPEG baseline and extended (lossy, for photographic images)
 //   - JPEG_LOSSLESS: JPEG Lossless, .57 and .70, every predictor
 //   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless
+//   - JPEG_2000: JPEG 2000, .90 and .91, both wavelets, tiled and layered
 //
-// ## Formats needing a decoder you supply
+// ## Substituting your own decoder
 //
-//   - JPEG_2000: JPEG 2000, .90 and .91
-//
-// JPEG 2000 is the only codec here without a bundled decoder. Register one with
-// ExternalDecoderRegistry.RegisterExternalDecoder; examples/jpeg2000 is a working
-// decoder to copy, and CONFORMANCE.md section 8.1 explains why none is bundled.
+// Every codec here has a bundled decoder, so registering one is about
+// substitution rather than filling a gap: a faster codec, a CGO binding, or one
+// that accepts something this module refuses. Register it with
+// ExternalDecoderRegistry.RegisterExternalDecoder and it takes precedence;
+// CONFORMANCE.md section 8.1 says what the bundled decoders cover.
 //
 // GetImplementationGuide(compressionType) reports the current state of any of
 // them, and GetExternalCompressionStatus reports which have a decoder.

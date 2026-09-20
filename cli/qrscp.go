@@ -92,7 +92,8 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	}
 	scp.SetHandler(handler)
 
-	// Verification, every storage class, and the query/retrieve models. Worklist
+	// Verification, every storage class, the query/retrieve models and Storage
+	// Commitment, which the store answers. Worklist
 	// is added on top, since the store does not serve it but a caller may have
 	// their own handler for it on the same port.
 	abstractSyntaxes := dcmstore.SupportedSOPClasses()

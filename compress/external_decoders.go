@@ -125,11 +125,11 @@ func defaultJPEGLSDecoder() Decompressor {
 	return NewJPEGLSDecompressor()
 }
 
-// defaultJPEG2000Decoder returns nil: no JPEG 2000 decoder is bundled, and this
-// is the only codec in the registry for which that is still true. See
-// CONFORMANCE.md section 8.1 for why, and examples/jpeg2000 for one to copy.
+// defaultJPEG2000Decoder returns this package's pure-Go JPEG 2000 decoder,
+// covering .90 and .91. Substitutable for the same reasons as
+// defaultJPEGLSDecoder — OpenJPEG through CGO, or anything else.
 func defaultJPEG2000Decoder() Decompressor {
-	return nil
+	return NewJPEG2000Decompressor()
 }
 
 // defaultJPEGLosslessDecoder returns this package's pure-Go lossless JPEG
@@ -178,26 +178,26 @@ Dataset.PixelArray then routes frames through yours instead.
 		{
 			CompressionType: JPEG_2000,
 			IsAvailable:     registry.IsExternalDecoderAvailable(JPEG_2000),
-			RequiredLibrary: "libopenjp2 (OpenJPEG)",
+			RequiredLibrary: "none — bundled, pure Go",
 			InstallationSteps: `
-JPEG 2000 is not implemented in this module. Reading pixel data in this syntax
-reports that no decoder is registered until you supply one.
+JPEG 2000 is decoded by this module, in pure Go: .90 and .91, both wavelets,
+1 to 16 bits, signed or unsigned, any number of tiles and quality layers.
+Nothing to install and nothing to register — Dataset.PixelArray decodes these
+frames already.
 
-Supply a decoder:
+OpenJPEG (https://github.com/uclouvain/openjpeg) is the usual C library for this
+codec and is not needed here, which also means no CGO and none of its build and
+distribution consequences. If you would rather use it, or any other decoder,
+substitute yours:
 
   type myDecoder struct{}
 
   func (myDecoder) Decompress(frame []byte) ([]byte, error) { ... }
   func (myDecoder) CanDecompress(frame []byte) bool         { ... }
 
-  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG 2000, myDecoder{})
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder{})
 
-Dataset.PixelArray then routes frames through it automatically.
-
-What to wrap is your choice. OpenJPEG is the usual C library for this codec
-(https://github.com/uclouvain/openjpeg), which means CGO and its build and distribution consequences; a pure
-Go implementation avoids both. This module takes no position and bundles
-neither.
+Dataset.PixelArray then routes frames through yours instead.
 `,
 		},
 		{
@@ -330,39 +330,45 @@ type JPEG2000DecoderSkeleton struct {
 	// - Handle JP2 file format parsing and memory management
 }
 
-// JPEG2000ImplementationGuide describes how to decode JPEG 2000 pixel data.
+// JPEG2000ImplementationGuide describes how JPEG 2000 pixel data is decoded.
 //
-// Unlike the JPEG-LS and lossless JPEG guides, this one describes a real gap:
-// JPEG 2000 is the only codec in the registry with no bundled decoder.
+// It once described a real gap: JPEG 2000 was the only codec in the registry
+// with no bundled decoder. It is now decoded here, in pure Go, and the registry
+// has no gaps left.
 const JPEG2000ImplementationGuide = `
 JPEG 2000
 =========
 
-Not decoded by this package. This is the only codec in the registry for which
-that is still true.
+Decoded by this package, in pure Go. Nothing to install, nothing to register.
 
   Transfer syntaxes: 1.2.840.10008.1.2.4.90 (lossless)
                      1.2.840.10008.1.2.4.91 (lossy)
+  Wavelets:          5/3 reversible and 9/7 irreversible
+  Bit depths:        1 to 16, signed or unsigned
+  Components:        single or multi, with the reversible and irreversible
+                     component transforms
+  Tiles and layers:  any number of either
+  Entry point:       compress.NewJPEG2000Decompressor()
 
-Instances parse, store and transfer with their pixel data intact as opaque
-bytes; only decoding needs a decoder you supply. See CONFORMANCE.md section 8.1
-for why none is bundled.
+Dataset.PixelArray decodes these frames without being asked.
 
-Start from examples/jpeg2000 in this repository. It is a working decoder that
-shells out to OpenJPEG's opj_decompress, verified sample-for-sample against
-pydicom, and it is under 300 lines — copy it rather than starting from the
-C API:
+Verified against pydicom on its own corpus, whole frames rather than leading
+values, in TestPixelsAgainstWholePydicomCorpus. The reversible files match
+sample for sample; an irreversible one is held to a tolerance of one, because
+the 9/7 filter is defined in real arithmetic and ISO 15444-4 grades a decoder on
+how close it comes rather than on equality.
 
-  decoder, err := jpeg2000.NewDecoder() // errors if opj_decompress is not on PATH
-  if err != nil {
-      return err
-  }
-  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, decoder)
+What is refused, rather than guessed at, is a feature no decoder here
+implements: subsampled components, custom precinct sizes, the code-block style
+options (bypass, termall, vertical causal, reset, segmentation marks), packed
+packet headers and progression-order changes. Each is refused by name.
+
+To substitute your own decoder — OpenJPEG through CGO, or anything else:
+
+  compress.GetExternalRegistry().RegisterExternalDecoder(compress.JPEG_2000, myDecoder)
 
 Any type with Decompress([]byte) ([]byte, error) and CanDecompress([]byte) bool
-will do, so a CGO binding to OpenJPEG (https://github.com/uclouvain/openjpeg) or
-a pure-Go implementation fits the same interface. Dataset.PixelArray routes
-frames through whatever is registered.
+will do. Dataset.PixelArray then routes frames through yours instead.
 `
 
 // JPEGLosslessDecoderSkeleton was a placeholder for a CGO binding to

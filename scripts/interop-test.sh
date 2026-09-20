@@ -9,7 +9,7 @@
 # pydicom rather than with go-dicom's own reader.
 #
 # Environment:
-#   GODICOM       path to the go-dicom binary (default: ./dicom)
+#   GODICOM       path to the go-dicom binary (default: ./go-dicom)
 #   PYNETDICOM_BIN directory holding pynetdicom's console scripts
 #   DCMTK_BIN      directory holding dcmtk's tools (default: /usr/bin)
 #
@@ -19,12 +19,12 @@
 
 set -euo pipefail
 
-GODICOM="${GODICOM:-./dicom}"
+GODICOM="${GODICOM:-./go-dicom}"
 # Resolve to an absolute path: servers are started from a scratch directory, so
 # a relative path would not resolve there.
 if [ ! -x "$GODICOM" ]; then
   echo "go-dicom binary not found or not executable: $GODICOM" >&2
-  echo "Build it first (go build -o dicom .) or set GODICOM." >&2
+  echo "Build it first (go build -o go-dicom .) or set GODICOM." >&2
   exit 1
 fi
 GODICOM="$(cd "$(dirname "$GODICOM")" && pwd)/$(basename "$GODICOM")"
@@ -160,6 +160,49 @@ PY
   fi
 }
 
+# send_classes sends objects the library's default proposal leaves out — RT
+# Dose, RT Plan, a Structured Report and an ECG — in one storescu invocation,
+# and checks the peer holds all four. storescu proposed that default whatever
+# it was sending, so each of these failed with "not among the presentation
+# contexts proposed" (#116). It now proposes what the files hold.
+#
+# Usage: send_classes <aec> <port> <receive dir>
+send_classes() {
+  local aec=$1 port=$2 recv=$3 src="$WORKDIR/classes"
+  mkdir -p "$src"
+  python3 - "$src" <<'PY'
+import shutil, sys
+from pydicom.data import get_testdata_file
+for name in ("rtdose.dcm", "rtplan.dcm", "test-SR.dcm", "waveform_ecg.dcm"):
+    shutil.copy(get_testdata_file(name), sys.argv[1])
+PY
+  find "$recv" -type f -delete
+  if ! "$GODICOM" storescu -aec "$aec" "127.0.0.1:$port" "$src"/*.dcm >/dev/null 2>&1; then
+    fail "RT, SR and ECG in one storescu run — storescu reported failures"
+    return
+  fi
+  if python3 - "$src" "$recv" <<'PY'
+import glob, os, sys, pydicom
+sent = {pydicom.dcmread(f).SOPInstanceUID for f in glob.glob(os.path.join(sys.argv[1], "*.dcm"))}
+held = set()
+for root, _, names in os.walk(sys.argv[2]):
+    for n in names:
+        try:
+            held.add(pydicom.dcmread(os.path.join(root, n)).SOPInstanceUID)
+        except Exception:
+            pass
+missing = sent - held
+if missing:
+    print(f"      the peer holds {len(sent) - len(missing)} of {len(sent)}", file=sys.stderr)
+    sys.exit(1)
+PY
+  then
+    pass "RT Dose, RT Plan, SR and ECG in one storescu run — all four stored"
+  else
+    fail "RT, SR and ECG in one storescu run — not all were stored"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # pynetdicom
 # ---------------------------------------------------------------------------
@@ -220,6 +263,8 @@ if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/storescu" ]; then
     else
       fail "C-STORE"
     fi
+
+    send_classes PYSCP 11151 "$WORKDIR/py_recv"
   else
     fail "pynetdicom storescp did not start listening"
   fi
@@ -317,6 +362,63 @@ if [ -x "$DCMTK_BIN/storescu" ] && [ -x "$DCMTK_BIN/storescp" ]; then
     else
       fail "C-STORE"
     fi
+
+    # The same instance again, sent as Implicit VR Little Endian — DICOM's
+    # default, and what most modalities send. storescp writes Explicit VR, so
+    # this is the conversion that put "OB or OW" in the VR field and lost the
+    # pixel data (#118). The fixture is Explicit VR, so the check above never
+    # made it.
+    find "$WORKDIR/go_recv2" -type f -delete
+    if "$DCMTK_BIN/storescu" -xi -aec GODICOM 127.0.0.1 11153 "$FIXTURE" >/dev/null 2>&1; then
+      received=$(find "$WORKDIR/go_recv2" -type f | head -1)
+      if [ -n "$received" ]; then
+        verify_transfer "$received" "C-STORE as Implicit VR"
+      else
+        fail "C-STORE as Implicit VR — peer reported success but no file was written"
+      fi
+    else
+      fail "C-STORE as Implicit VR"
+    fi
+
+    # A compressed instance, sent in its own syntax as a modality storing
+    # natively would. storescp wrote every instance as Explicit VR Little Endian,
+    # so this one became a file declaring native pixels and holding JPEG
+    # fragments (#126). The comparison is of the encapsulated bytes and the
+    # declared syntax, so it needs no JPEG decoder.
+    find "$WORKDIR/go_recv2" -type f -delete
+    compressed="$WORKDIR/compressed.dcm"
+    python3 -c "
+from pydicom.data import get_testdata_file
+import shutil
+shutil.copy(get_testdata_file('SC_rgb_jpeg_gdcm.dcm'), '$compressed')
+"
+    if "$DCMTK_BIN/storescu" -xs -aec GODICOM 127.0.0.1 11153 "$compressed" >/dev/null 2>&1; then
+      received=$(find "$WORKDIR/go_recv2" -type f | head -1)
+      if [ -z "$received" ]; then
+        fail "C-STORE compressed — peer reported success but no file was written"
+      elif ! "$DCMTK_BIN/dcmdump" "$received" >/dev/null 2>&1; then
+        fail "C-STORE compressed — dcmtk cannot read the stored file"
+      elif python3 - "$compressed" "$received" <<'PY'
+import sys, pydicom
+sent, kept = pydicom.dcmread(sys.argv[1]), pydicom.dcmread(sys.argv[2])
+problems = []
+if kept.file_meta.TransferSyntaxUID != sent.file_meta.TransferSyntaxUID:
+    problems.append(f"stored as {kept.file_meta.TransferSyntaxUID.name}, "
+                    f"sent as {sent.file_meta.TransferSyntaxUID.name}")
+if kept.PixelData != sent.PixelData:
+    problems.append("the encapsulated pixel data differs")
+if problems:
+    print("      " + "\n      ".join(problems), file=sys.stderr)
+    sys.exit(1)
+PY
+      then
+        pass "C-STORE compressed — stored in the syntax it was sent in, fragments intact"
+      else
+        fail "C-STORE compressed — the stored file does not match what was sent"
+      fi
+    else
+      fail "C-STORE compressed"
+    fi
   else
     fail "go-dicom storescp did not start listening"
   fi
@@ -344,10 +446,57 @@ if [ -x "$DCMTK_BIN/storescu" ] && [ -x "$DCMTK_BIN/storescp" ]; then
     else
       fail "C-STORE"
     fi
+
+    send_classes DCMTKSCP 11154 "$WORKDIR/dcmtk_recv"
   else
     fail "dcmtk storescp did not start listening"
   fi
   stop_server "$dcmtk_scp_pid"
+
+  # go-dicom sending compressed pixel data, which is where #128 was: PS3.5 A.4
+  # requires undefined length, and dcmtk aborts the association on anything
+  # else. pynetdicom accepts both, so the checks above never saw it. qrscp
+  # serves the instance it stored, so dcmtk supplies both ends.
+  if [ -x "$DCMTK_BIN/getscu" ]; then
+    note "C-GET compressed: dcmtk getscu <- go-dicom qrscp"
+    mkdir -p "$WORKDIR/qr_jpeg" "$WORKDIR/dcmtk_got"
+    compressed="$WORKDIR/compressed_get.dcm"
+    python3 -c "
+from pydicom.data import get_testdata_file
+import shutil
+shutil.copy(get_testdata_file('SC_rgb_jpeg_gdcm.dcm'), '$compressed')
+"
+    patient_id=$(python3 -c "import pydicom, sys; print(pydicom.dcmread(sys.argv[1]).PatientID)" "$compressed")
+    start_server "$WORKDIR" "$WORKDIR/qr_jpeg.log" \
+      "$GODICOM" qrscp -port 11157 -aet GOQRJ -output "$WORKDIR/qr_jpeg"
+    qr_jpeg_pid=$SERVER_PID
+    if wait_for_port 11157 &&
+      "$DCMTK_BIN/storescu" -xs -aec GOQRJ 127.0.0.1 11157 "$compressed" >/dev/null 2>&1; then
+      ( cd "$WORKDIR/dcmtk_got" && "$DCMTK_BIN/getscu" +xs -aec GOQRJ -P \
+          -k QueryRetrieveLevel=PATIENT -k PatientID="$patient_id" \
+          127.0.0.1 11157 >"$WORKDIR/dcmtk_getscu.log" 2>&1 ) || true
+      received=$(find "$WORKDIR/dcmtk_got" -type f | head -1)
+      if [ -z "$received" ]; then
+        fail "C-GET compressed — dcmtk retrieved nothing"
+        grep -E '^E:' "$WORKDIR/dcmtk_getscu.log" | head -3 >&2
+      elif python3 - "$compressed" "$received" <<'PY'
+import sys, pydicom
+sent, got = pydicom.dcmread(sys.argv[1]), pydicom.dcmread(sys.argv[2])
+if got.file_meta.TransferSyntaxUID != sent.file_meta.TransferSyntaxUID or got.PixelData != sent.PixelData:
+    print(f"      retrieved as {got.file_meta.TransferSyntaxUID.name}; fragments "
+          f"{'identical' if got.PixelData == sent.PixelData else 'differ'}", file=sys.stderr)
+    sys.exit(1)
+PY
+      then
+        pass "C-GET compressed — dcmtk retrieved the JPEG instance, fragments intact"
+      else
+        fail "C-GET compressed — the retrieved instance does not match what was stored"
+      fi
+    else
+      fail "C-GET compressed — could not store the instance in qrscp"
+    fi
+    stop_server "$qr_jpeg_pid"
+  fi
 else
   skip "dcmtk not available (set DCMTK_BIN)"
 fi
@@ -453,12 +602,92 @@ PYEOF
         sed -n '1,20p' "$WORKDIR/commit_scp.log" >&2
       fi
     else
-      skip "go-dicom has no commitscu command; skipping the storage commitment check"
+      # commitscu ships with go-dicom. A failure here is a failure: this used to
+      # report a skip, which read as "not applicable" whatever went wrong.
+      fail "commitscu could not send the storage commitment request"
+      sed -n '1,20p' "$WORKDIR/commit_scu.log" >&2
     fi
   else
     fail "pynetdicom storage commitment SCP did not start listening"
   fi
   stop_server "$commit_pid"
+
+  # The other direction: pynetdicom asks go-dicom's archive to commit what it
+  # holds. qrscp refused the Push Model context until #113, so commitscu, which
+  # ships here, had no go-dicom peer. One instance was stored, one never was.
+  note "Storage Commitment: pynetdicom -> go-dicom qrscp"
+  commit_req_py="$WORKDIR/commit_req.py"
+  cat > "$commit_req_py" <<'PYEOF'
+import sys, threading
+import pydicom
+from pydicom.dataset import Dataset
+from pynetdicom import AE, evt
+from pynetdicom.sop_class import StorageCommitmentPushModel
+
+port, fixture = int(sys.argv[1]), sys.argv[2]
+stored = pydicom.dcmread(fixture, stop_before_pixels=True)
+done, report = threading.Event(), {}
+
+def handle_report(event):
+    info = event.event_information
+    report["type"] = event.event_type
+    report["transaction"] = info.TransactionUID
+    report["committed"] = [i.ReferencedSOPInstanceUID for i in info.get("ReferencedSOPSequence", [])]
+    report["failed"] = [(i.ReferencedSOPInstanceUID, i.FailureReason) for i in info.get("FailedSOPSequence", [])]
+    done.set()
+    return 0x0000, None
+
+ae = AE(ae_title="PYREQ")
+ae.add_requested_context(StorageCommitmentPushModel)
+assoc = ae.associate("127.0.0.1", port, ae_title="GOQRC",
+                     evt_handlers=[(evt.EVT_N_EVENT_REPORT, handle_report)])
+if not assoc.is_established:
+    sys.exit("no association")
+
+req = Dataset()
+req.TransactionUID = "1.2.826.0.1.3680043.8.498.113"
+req.ReferencedSOPSequence = []
+for inst in (stored.SOPInstanceUID, "1.2.3.404"):
+    item = Dataset()
+    item.ReferencedSOPClassUID = stored.SOPClassUID
+    item.ReferencedSOPInstanceUID = inst
+    req.ReferencedSOPSequence.append(item)
+
+status, _ = assoc.send_n_action(req, 1, StorageCommitmentPushModel, "1.2.840.10008.1.20.1.1")
+done.wait(10)
+assoc.release()
+
+problems = []
+if not status or status.Status != 0x0000:
+    problems.append(f"N-ACTION status {status.Status if status else None}")
+if report.get("type") != 2:
+    problems.append(f"event type {report.get('type')}, want 2 (one failure)")
+if report.get("transaction") != req.TransactionUID:
+    problems.append(f"transaction {report.get('transaction')}")
+if report.get("committed") != [stored.SOPInstanceUID]:
+    problems.append(f"committed {report.get('committed')}")
+if report.get("failed") != [("1.2.3.404", 0x0112)]:
+    problems.append(f"failed {report.get('failed')}")
+if problems:
+    sys.exit("; ".join(problems))
+PYEOF
+
+  mkdir -p "$WORKDIR/qr_commit"
+  start_server "$WORKDIR" "$WORKDIR/qr_commit.log" \
+    "$GODICOM" qrscp -port 11703 -aet GOQRC -output "$WORKDIR/qr_commit"
+  qr_commit_pid=$SERVER_PID
+  if wait_for_port 11703 &&
+    "$GODICOM" storescu -aec GOQRC 127.0.0.1:11703 "$FIXTURE" >/dev/null 2>&1; then
+    if "$PYNETDICOM_BIN/python" "$commit_req_py" 11703 "$FIXTURE" > "$WORKDIR/commit_req.log" 2>&1; then
+      pass "Storage Commitment — qrscp committed what it held and failed the unknown instance with 0112H"
+    else
+      fail "Storage Commitment — pynetdicom's request to qrscp was not answered correctly"
+      grep -v '^[IW]:' "$WORKDIR/commit_req.log" | sed -n '1,5p' >&2
+    fi
+  else
+    fail "Storage Commitment — could not store the fixture in qrscp"
+  fi
+  stop_server "$qr_commit_pid"
 fi
 
 # ---------------------------------------------------------------------------
@@ -567,6 +796,75 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG 2000: OpenJPEG encodes, pydicom supplies the answer.
+#
+# dcmtk's JPEG 2000 encoder is not in the free distribution, so the encoder here
+# is OpenJPEG's opj_compress, driven directly and wrapped into a data set by
+# pydicom. That is the point of the exercise either way: this library's decoder
+# was written from ISO 15444-1, and a fixture it encoded itself would only show
+# the two halves of one implementation agreeing.
+#
+# The ground truth is pydicom's reading of the *uncompressed* original, which
+# needs no plugin — asking pydicom to decode the compressed fixture would test
+# whichever of pylibjpeg or gdcm happened to be installed, or fail on a machine
+# with neither while appearing to say the pixels disagree.
+if command -v opj_compress >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  note "JPEG 2000: OpenJPEG encoder, pydicom ground truth"
+
+  j2k_dir="$WORKDIR/jpeg2000"
+  mkdir -p "$j2k_dir"
+
+  if python3 - "$j2k_dir" <<'PYEOF' 2>"$WORKDIR/j2k-fixture.log"
+import os, subprocess, sys
+
+import pydicom, pydicom.data
+from pydicom.encaps import encapsulate
+from pydicom.uid import JPEG2000Lossless
+
+out = sys.argv[1]
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+ds = pydicom.dcmread(os.path.join(corpus, "MR_small.dcm"))
+arr = ds.pixel_array
+height, width = arr.shape
+signed = int(ds.PixelRepresentation) == 1
+
+# PGX is the one raw format opj_compress reads that carries signed samples,
+# which a 16-bit MR needs.
+pgx = os.path.join(out, "orig.pgx")
+j2k = os.path.join(out, "orig.j2k")
+with open(pgx, "wb") as fh:
+    fh.write(f"PG ML {'-' if signed else '+'} {ds.BitsStored} {width} {height}\n".encode())
+    fh.write(arr.astype(">i2" if signed else ">u2").tobytes())
+subprocess.run(["opj_compress", "-i", pgx, "-o", j2k, "-r", "1"],
+               capture_output=True, check=True)
+
+with open(os.path.join(out, "orig.pixels"), "wb") as fh:
+    fh.write(ds.PixelData)
+
+ds.file_meta.TransferSyntaxUID = JPEG2000Lossless
+ds.PixelData = encapsulate([open(j2k, "rb").read()])
+ds["PixelData"].is_undefined_length = True
+ds.save_as(os.path.join(out, "openjpeg.dcm"))
+
+# Leave only the data set behind, so the checker sees one fixture.
+os.remove(pgx)
+os.remove(j2k)
+PYEOF
+  then
+    if go run ./scripts/jpeglossless-check "$j2k_dir" "$j2k_dir/orig.pixels" > "$WORKDIR/j2k.log" 2>&1; then
+      pass "JPEG 2000 — an OpenJPEG-encoded frame decodes to the original pixels"
+      RAN_ANY=1
+    else
+      fail "go-dicom did not reproduce the original pixels from JPEG 2000"
+      sed -n '1,20p' "$WORKDIR/j2k.log" >&2
+    fi
+  else
+    skip "could not build the JPEG 2000 fixture with opj_compress"
+    sed -n '1,10p' "$WORKDIR/j2k-fixture.log" >&2
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Round trip: go-dicom writes, dcmtk judges.
 #
 # Writing was only ever checked by reading the output back with this library,
@@ -594,25 +892,32 @@ raise SystemExit(0 if copied else 1)
 PYEOF
   then
     if go run ./scripts/roundtrip-check "$rt_src" "$rt_out" > "$WORKDIR/rt.log" 2>&1; then
+      # Each file is judged against its own source: one dcmtk reads as supplied
+      # and not as written is a regression, whatever the rest do. This used to
+      # tolerate two rejections, on the grounds that two fixtures are malformed.
+      # dcmtk reads one of the two, meta_missing_tsyntax.dcm, as supplied. Its
+      # rewrite was refused because the writer put "OB or OW" in its VR field
+      # (#118).
       rt_total=0
-      rt_bad=0
+      rt_regressed=0
+      rt_malformed=0
       for written in "$rt_out"/*.dcm; do
         [ -f "$written" ] || continue
         rt_total=$((rt_total + 1))
-        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>&1; then
-          rt_bad=$((rt_bad + 1))
-          echo "   dcmtk rejects $(basename "$written")" >&2
+        "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>&1 && continue
+        if "$DCMTK_BIN/dcmdump" "$rt_src/$(basename "$written")" >/dev/null 2>&1; then
+          rt_regressed=$((rt_regressed + 1))
+          echo "   dcmtk reads $(basename "$written") as supplied, and rejects it as written" >&2
+        else
+          rt_malformed=$((rt_malformed + 1))
         fi
       done
 
-      # Two of pydicom's fixtures are themselves non-conformant — one holds
-      # implicit VR inside a file declaring explicit, the other has no transfer
-      # syntax at all — and dcmtk refuses them however they are written.
-      if [ "$rt_bad" -le 2 ]; then
-        pass "round trip — dcmtk reads $((rt_total - rt_bad)) of $rt_total files this writer produced"
+      if [ "$rt_regressed" -eq 0 ]; then
+        pass "round trip — dcmtk reads $((rt_total - rt_malformed)) of $rt_total files this writer produced, and rejects none it reads as supplied"
         RAN_ANY=1
       else
-        fail "dcmtk rejects $rt_bad of $rt_total files this writer produced"
+        fail "dcmtk rejects $rt_regressed files this writer produced that it reads as supplied"
       fi
     else
       fail "the round trip harness failed"

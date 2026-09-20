@@ -42,21 +42,36 @@ const (
 	StorageCommitmentSOPInstanceUID = "1.2.840.10008.1.20.1.1"
 )
 
-// Failure reasons for an instance that could not be committed (PS3.4 §J.3.3).
+// Failure reasons for an instance that could not be committed: the values of
+// Failure Reason (0008,1197), PS3.3 C.14.1.1, as PS3.4 J.3.3 uses them.
+//
+// Failure Reason is not a DIMSE status, though some values coincide with
+// status codes. Resource limitation was 0xA700, the C-service status "Refused:
+// Out of Resources", which is not a Failure Reason at all, so a requestor was
+// told the instance failed for a reason the standard does not define (#114).
 const (
-	// StorageCommitmentFailureNoSuchObject means the SCP holds no such instance.
-	StorageCommitmentFailureNoSuchObject uint16 = 0x0112
-
-	// StorageCommitmentFailureClassNotSupported means the SCP does not commit
-	// instances of that SOP Class.
-	StorageCommitmentFailureClassNotSupported uint16 = 0x0122
-
-	// StorageCommitmentFailureProcessingFailure is the general failure.
+	// StorageCommitmentFailureProcessingFailure is the general failure (0110H).
 	StorageCommitmentFailureProcessingFailure uint16 = 0x0110
 
+	// StorageCommitmentFailureNoSuchObject means the SCP holds no such instance
+	// (0112H).
+	StorageCommitmentFailureNoSuchObject uint16 = 0x0112
+
 	// StorageCommitmentFailureResourceLimitation means the SCP cannot take
-	// responsibility now, though the instance is otherwise acceptable.
-	StorageCommitmentFailureResourceLimitation uint16 = 0xA700
+	// responsibility now, though the instance is otherwise acceptable (0213H).
+	StorageCommitmentFailureResourceLimitation uint16 = 0x0213
+
+	// StorageCommitmentFailureClassNotSupported means the SCP does not commit
+	// instances of that SOP Class (0122H).
+	StorageCommitmentFailureClassNotSupported uint16 = 0x0122
+
+	// StorageCommitmentFailureClassInstanceConflict means the SCP holds the
+	// instance under a different SOP Class than the one named (0119H).
+	StorageCommitmentFailureClassInstanceConflict uint16 = 0x0119
+
+	// StorageCommitmentFailureDuplicateTransactionUID means the Transaction UID
+	// is already in use for another request (0131H).
+	StorageCommitmentFailureDuplicateTransactionUID uint16 = 0x0131
 )
 
 // Tags carrying the commitment request and result (PS3.3 §C.14).

@@ -5,7 +5,18 @@ package network
 
 // --- General Status Codes (all services) ---
 const (
-	StatusRefusedOutOfResources       uint16 = 0x0112
+	// StatusNoSuchSOPInstance is 0112H. PS3.7 Annex C gives that code to "No
+	// Such SOP Instance"; "Refused: Out of Resources" is a C-service status in
+	// the A7xxH range, and this constant carried that name (#137). A handler
+	// reporting exhaustion with it told the peer the instance did not exist,
+	// and a peer that retries on a resource failure would not retry.
+	StatusNoSuchSOPInstance uint16 = 0x0112
+
+	// Deprecated: 0x0112 is No Such SOP Instance. Use StatusNoSuchSOPInstance
+	// for that, StatusOutOfResources (0xA700) for a C-service that is out of
+	// resources, or StatusResourceLimitation (0x0213) for an N-service.
+	StatusRefusedOutOfResources = StatusNoSuchSOPInstance
+
 	StatusRefusedSOPClassNotSupported uint16 = 0x0122
 	StatusRefusedNotAuthorized        uint16 = 0x0124
 	StatusInvalidArgumentValue        uint16 = 0x0115
@@ -133,7 +144,7 @@ const (
 const (
 	StatusStorageCommitmentRefused            uint16 = 0x0110
 	StatusStorageCommitmentNoSuchObject       uint16 = 0x0112
-	StatusStorageCommitmentResourceLimitation uint16 = 0xA700
+	StatusStorageCommitmentResourceLimitation uint16 = 0x0213 // not 0xA700, a C-service status (#114)
 )
 
 // StatusCategory represents the category of a DICOM status code.

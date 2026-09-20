@@ -176,12 +176,14 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 		return ds, nil
 	}
 
-	sourceCompressed := compress.IsCompressed(source)
-	targetCompressed := compress.IsCompressed(targetSyntax)
+	// Encapsulated, not compressed: Deflated compresses the data set and leaves
+	// Pixel Data native, so it needs no pixel encoder or decoder (#132).
+	sourceCompressed := compress.IsEncapsulated(source)
+	targetCompressed := compress.IsEncapsulated(targetSyntax)
 
 	if !sourceCompressed && !targetCompressed {
-		// Both uncompressed: the codec handles byte order and deflating on its
-		// own, so the data set travels as it is.
+		// Both native: the codec handles byte order and deflating on its own, so
+		// the data set travels as it is.
 		return ds, nil
 	}
 

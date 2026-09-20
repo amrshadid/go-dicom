@@ -126,6 +126,12 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 //   - For 16-bit: returns [][][]uint16 (frames, rows, cols) for grayscale
 //   - For 32-bit: returns [][][]uint32 (frames, rows, cols) for grayscale
 //
+// The type follows Bits Allocated alone. (0028,0103) Pixel Representation is
+// not consulted, so a signed image comes back in an unsigned type and a sample
+// of -2016 reads as 63520. The values are the stored bits and are not wrong;
+// the type does not say how to read them. PixelArrayInterpreted applies Pixel
+// Representation and returns a signed array for a signed data set.
+//
 // For single-frame images, the first dimension is 1.
 // Returns error if pixel data is not present or cannot be parsed.
 // Leverages the pixels module for efficient data access when appropriate.
@@ -184,7 +190,7 @@ func (ds *Dataset) PixelArrayWithAccessor() (*pixels.Accessor, error) {
 	pd.HighBit = uint16(info.HighBit)
 	pd.NumberOfFrames = uint32(info.NumberOfFrames)
 	pd.SamplesPerPixel = uint16(info.SamplesPerPixel)
-	pd.PixelRepresentation = 0 // unsigned by default
+	pd.PixelRepresentation = uint16(info.PixelRepresentation)
 	pd.PhotometricInterpretation = info.PhotometricInterpretation
 	pd.LittleEndian = true // DICOM default
 
@@ -367,7 +373,7 @@ func (ds *Dataset) GetPixelStatistics() (*pixels.Statistics, error) {
 	pd.HighBit = uint16(info.HighBit)
 	pd.NumberOfFrames = uint32(info.NumberOfFrames)
 	pd.SamplesPerPixel = uint16(info.SamplesPerPixel)
-	pd.PixelRepresentation = 0 // unsigned by default
+	pd.PixelRepresentation = uint16(info.PixelRepresentation)
 	pd.PhotometricInterpretation = info.PhotometricInterpretation
 	pd.LittleEndian = true // DICOM default
 
@@ -407,7 +413,7 @@ func (ds *Dataset) GetPixelStatisticsSampled(sampleRate float64) (*pixels.Statis
 	pd.HighBit = uint16(info.HighBit)
 	pd.NumberOfFrames = uint32(info.NumberOfFrames)
 	pd.SamplesPerPixel = uint16(info.SamplesPerPixel)
-	pd.PixelRepresentation = 0 // unsigned by default
+	pd.PixelRepresentation = uint16(info.PixelRepresentation)
 	pd.PhotometricInterpretation = info.PhotometricInterpretation
 	pd.LittleEndian = true // DICOM default
 
@@ -674,7 +680,7 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 		// corrections belong here. Encapsulated data does not: a decoder's output
 		// convention governs it, and the ones in this package already produce
 		// pixel-interleaved little-endian samples.
-		return normalizeNativePixelBytes(pixelBytes, info, ds.TransferSyntaxUID()), nil
+		return normalizeNativePixelBytes(pixelBytes, info), nil
 	}
 
 	encData, err := ds.ExtractEncapsulatedFrames()
@@ -699,8 +705,12 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 
 // normalizeNativePixelBytes puts native pixel data into the layout every
 // accessor above assumes: samples pixel-interleaved, little endian.
-func normalizeNativePixelBytes(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
-	pixelBytes = fixWideBigEndianSamples(pixelBytes, info, transferSyntax)
+//
+// Byte order is not its business: the reader converts a big endian file once,
+// at the sample width, so the data set holds little endian samples whatever the
+// file was (#124). This used to re-swap wide samples here, which fixed the
+// accessor and left the data set itself wrong.
+func normalizeNativePixelBytes(pixelBytes []byte, info *PixelDataInfo) []byte {
 	pixelBytes = upsampleYBR422(pixelBytes, info)
 	return deinterleavePlanes(pixelBytes, info)
 }
@@ -743,39 +753,6 @@ func upsampleYBR422(pixelBytes []byte, info *PixelDataInfo) []byte {
 		i := pair * 6
 		out[i], out[i+1], out[i+2] = y1, cb, cr
 		out[i+3], out[i+4], out[i+5] = y2, cb, cr
-	}
-	return out
-}
-
-// fixWideBigEndianSamples repairs samples wider than the VR they arrived in.
-//
-// Explicit VR Big Endian is byte-swapped on read according to the VR, and pixel
-// data is OW — two-byte words. That is right until BitsAllocated is 32 or 64, at
-// which point each sample has had its 16-bit halves swapped but not its whole
-// width, and every value comes out scrambled. RT Dose is the common case: a dose
-// of 1249000 reads back as 250085395.
-//
-// Swapping the 16-bit words within each sample completes the reversal. pydicom
-// reaches the same values by interpreting the raw bytes at the sample width,
-// which is what archives expect regardless of what the VR alone would imply.
-func fixWideBigEndianSamples(pixelBytes []byte, info *PixelDataInfo, transferSyntax string) []byte {
-	const explicitVRBigEndian = "1.2.840.10008.1.2.2"
-	if transferSyntax != explicitVRBigEndian {
-		return pixelBytes
-	}
-	width := info.BitsAllocated / 8
-	if width <= 2 {
-		return pixelBytes
-	}
-
-	out := make([]byte, len(pixelBytes))
-	copy(out, pixelBytes)
-	for start := 0; start+width <= len(out); start += width {
-		sample := out[start : start+width]
-		for i, j := 0, len(sample)-2; i < j; i, j = i+2, j-2 {
-			sample[i], sample[j] = sample[j], sample[i]
-			sample[i+1], sample[j+1] = sample[j+1], sample[i+1]
-		}
 	}
 	return out
 }
@@ -893,20 +870,34 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 			Decompress(fragment)
 	}
 
-	// Everything else goes through the registry. JPEG-LS and JPEG Lossless are
-	// registered there at init by this module's own pure-Go decoders, so they
-	// resolve without the caller doing anything; JPEG 2000 has no bundled
-	// decoder and resolves only if the caller registered one.
+	// Everything else goes through the registry. JPEG-LS, JPEG Lossless and
+	// JPEG 2000 are registered there at init by this module's own pure-Go
+	// decoders, so they resolve without the caller doing anything.
 	decoder, err := compress.GetExternalRegistry().GetExternalDecoder(compression)
 	if err != nil {
 		return nil, fmt.Errorf("no decoder available for %s; supply one with "+
 			"compress.GetExternalRegistry().RegisterExternalDecoder: %w", compression, err)
+	}
+
+	// JPEG 2000 needs the layout for the same reason RLE does, and for one
+	// more. A codestream carries its own sample depth and its own signedness,
+	// and DICOM's Bits Allocated and Pixel Representation may differ from both:
+	// Bits Allocated decides how wide each sample is written, and where the two
+	// disagree about sign the data set is the authority. A decoder the caller
+	// registered gets the plain call, since only this one knows what to do with
+	// the extra arguments.
+	if bundled, ok := decoder.(*compress.JPEG2000Decompressor); ok {
+		return bundled.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored,
+			info.PixelRepresentation)
 	}
 	return decoder.Decompress(fragment)
 }
 
 // PixelArrayBySample returns pixel data with color samples in their own
 // dimension, matching the shape PixelDataShape reports.
+//
+// Like PixelArray, its type follows Bits Allocated and not Pixel
+// Representation; see PixelArrayInterpreted for signed samples.
 //
 // For multi-sample data the result is [frames][rows][columns][samples]; for
 // single-sample data it is [frames][rows][columns], the same as PixelArray.
