@@ -39,5 +39,23 @@ func FuzzParseCodestream(f *testing.F) {
 				t.Fatalf("component depth %d", comp.Depth)
 			}
 		}
+
+		// And the packets, which is where the lengths a file controls turn into
+		// slices: a segment length, a pass count, a tag tree value. Any error is
+		// fine; a panic or a claim on bytes that are not there is not.
+		for tile := 0; tile < c.NumTiles() && tile < 4; tile++ {
+			data, err := jpeg2000.ReadTilePacketsForTest(c, tile)
+			if err != nil {
+				continue
+			}
+			used := 0
+			for _, block := range data.Blocks {
+				used += len(block.Data)
+			}
+			if used > data.TileBytes {
+				t.Fatalf("tile %d: code-blocks claim %d bytes of a %d byte tile",
+					tile, used, data.TileBytes)
+			}
+		}
 	})
 }
