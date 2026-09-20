@@ -124,15 +124,15 @@ type Codestream struct {
 	// quantization for its own tile, for every component or for one, and the
 	// corpus does: SC_rgb_gdcm_KY carries a COC per component per tile.
 	TileCoding          map[int]CodingStyle
-	TileComponentCoding map[TileComponent]CodingStyle
+	TileComponentCoding map[TileComponentKey]CodingStyle
 	TileQuant           map[int]Quantization
-	TileComponentQuant  map[TileComponent]Quantization
+	TileComponentQuant  map[TileComponentKey]Quantization
 
 	TileParts []TilePart
 }
 
-// TileComponent names one component of one tile, for the override maps.
-type TileComponent struct {
+// TileComponentKey names one component of one tile, for the override maps.
+type TileComponentKey struct {
 	Tile      int
 	Component int
 }
@@ -152,7 +152,7 @@ func (c *Codestream) NumTiles() int {
 // CodingForTile returns the coding style in force for a component of a tile,
 // which is the component override, then the tile's, then the main header's.
 func (c *Codestream) CodingForTile(tile, component int) CodingStyle {
-	if style, ok := c.TileComponentCoding[TileComponent{Tile: tile, Component: component}]; ok {
+	if style, ok := c.TileComponentCoding[TileComponentKey{Tile: tile, Component: component}]; ok {
 		return style
 	}
 	if style, ok := c.TileCoding[tile]; ok {
@@ -163,7 +163,7 @@ func (c *Codestream) CodingForTile(tile, component int) CodingStyle {
 
 // QuantForTile returns the quantization in force for a component of a tile.
 func (c *Codestream) QuantForTile(tile, component int) Quantization {
-	if q, ok := c.TileComponentQuant[TileComponent{Tile: tile, Component: component}]; ok {
+	if q, ok := c.TileComponentQuant[TileComponentKey{Tile: tile, Component: component}]; ok {
 		return q
 	}
 	if q, ok := c.TileQuant[tile]; ok {
@@ -228,9 +228,9 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		ComponentCoding:     map[int]CodingStyle{},
 		ComponentQuant:      map[int]Quantization{},
 		TileCoding:          map[int]CodingStyle{},
-		TileComponentCoding: map[TileComponent]CodingStyle{},
+		TileComponentCoding: map[TileComponentKey]CodingStyle{},
 		TileQuant:           map[int]Quantization{},
-		TileComponentQuant:  map[TileComponent]Quantization{},
+		TileComponentQuant:  map[TileComponentKey]Quantization{},
 	}
 	pos := 2
 	seenSIZ, seenCOD, seenQCD := false, false, false
@@ -445,7 +445,7 @@ func parseTileCOC(c *Codestream, tile int, s []byte) error {
 	if err := parseCodingParameters(&style, rest[1:]); err != nil {
 		return err
 	}
-	c.TileComponentCoding[TileComponent{Tile: tile, Component: index}] = style
+	c.TileComponentCoding[TileComponentKey{Tile: tile, Component: index}] = style
 	return nil
 }
 
@@ -459,7 +459,7 @@ func parseTileQCC(c *Codestream, tile int, s []byte) error {
 	if err != nil {
 		return err
 	}
-	c.TileComponentQuant[TileComponent{Tile: tile, Component: index}] = q
+	c.TileComponentQuant[TileComponentKey{Tile: tile, Component: index}] = q
 	return nil
 }
 
@@ -682,6 +682,11 @@ func validate(c *Codestream, seenSIZ, seenCOD, seenQCD bool) error {
 			len(c.Components))
 	}
 	return nil
+}
+
+// errorf builds a package error with the package's prefix.
+func errorf(format string, args ...any) error {
+	return fmt.Errorf("jpeg2000: "+format, args...)
 }
 
 func be16(b []byte) int {
