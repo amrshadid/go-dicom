@@ -1221,6 +1221,8 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 	// Whether the encoding has to be worked out from the data set itself.
 	sniffed := false
+	// Bits Allocated as it is read, for the Pixel Data byte-order swap below.
+	bitsAllocated := 0
 	// How many warnings belonged to the meta header. Warnings recorded while the
 	// data set is parsed are appended after it, and were never copied to the
 	// file at all: the copy below happens before the data set is read, so a
@@ -1337,7 +1339,12 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		// Big endian values are converted once here so that everything
 		// downstream can assume little endian; see normalizeByteOrder.
 		if !dicomFile.IsLittleEndian {
-			normalizeByteOrder(element)
+			normalizeByteOrder(element, bitsAllocated)
+		}
+		// Bits Allocated decides how wide a native Pixel Data sample is, and it
+		// precedes Pixel Data in every conforming file (group 0028 before 7FE0).
+		if element.Tag == bitsAllocatedTag && len(element.Value) >= 2 {
+			bitsAllocated = int(binary.LittleEndian.Uint16(element.Value))
 		}
 
 		if err := validateDataElement(element); err != nil {
@@ -1543,17 +1550,36 @@ func isValidVRVariant(actual, expected string) bool {
 // model — reads them as little endian. Rather than thread the file's byte order
 // through all of that, big endian values are normalised once here, so a data
 // set means the same thing regardless of how the file was encoded.
-func normalizeByteOrder(elem *DataElementValue) {
-	// Swap in place: the value was allocated by this reader and is not shared.
-	dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+func normalizeByteOrder(elem *DataElementValue, bitsAllocated int) {
+	// Native Pixel Data is reversed at its sample width, not at the width OW
+	// implies: at 32 or 64 bits the two-byte swap leaves each sample's halves
+	// transposed, which is #124. Encapsulated Pixel Data is fragments, not
+	// samples, and is never reversed.
+	if elem.Tag == pixelDataTag && !elem.UndefinedLength {
+		dataelem.SwapBytes(elem.Value, dataelem.PixelDataSwapWidth(dataelem.VR(elem.VR), bitsAllocated))
+	} else {
+		// Swap in place: the value was allocated by this reader and is not shared.
+		dataelem.SwapByteOrder(dataelem.VR(elem.VR), elem.Value)
+	}
 
-	// Sequence items carry their own elements, encoded the same way.
+	// Sequence items carry their own elements, encoded the same way, and an
+	// item describing its own image — an icon — has its own Bits Allocated.
 	for _, item := range elem.Items {
+		itemBits := 0
 		for _, nested := range item.Elements {
-			normalizeByteOrder(nested)
+			normalizeByteOrder(nested, itemBits)
+			if nested.Tag == bitsAllocatedTag && len(nested.Value) >= 2 {
+				itemBits = int(binary.LittleEndian.Uint16(nested.Value))
+			}
 		}
 	}
 }
+
+// bitsAllocatedTag is (0028,0100) and pixelDataTag is (7FE0,0010).
+var (
+	bitsAllocatedTag = tag.New(0x0028, 0x0100)
+	pixelDataTag     = tag.New(0x7FE0, 0x0010)
+)
 
 // isPlausibleVR reports whether two bytes could be a Value Representation.
 //
