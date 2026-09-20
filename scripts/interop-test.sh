@@ -796,6 +796,75 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG 2000: OpenJPEG encodes, pydicom supplies the answer.
+#
+# dcmtk's JPEG 2000 encoder is not in the free distribution, so the encoder here
+# is OpenJPEG's opj_compress, driven directly and wrapped into a data set by
+# pydicom. That is the point of the exercise either way: this library's decoder
+# was written from ISO 15444-1, and a fixture it encoded itself would only show
+# the two halves of one implementation agreeing.
+#
+# The ground truth is pydicom's reading of the *uncompressed* original, which
+# needs no plugin — asking pydicom to decode the compressed fixture would test
+# whichever of pylibjpeg or gdcm happened to be installed, or fail on a machine
+# with neither while appearing to say the pixels disagree.
+if command -v opj_compress >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+  note "JPEG 2000: OpenJPEG encoder, pydicom ground truth"
+
+  j2k_dir="$WORKDIR/jpeg2000"
+  mkdir -p "$j2k_dir"
+
+  if python3 - "$j2k_dir" <<'PYEOF' 2>"$WORKDIR/j2k-fixture.log"
+import os, subprocess, sys
+
+import pydicom, pydicom.data
+from pydicom.encaps import encapsulate
+from pydicom.uid import JPEG2000Lossless
+
+out = sys.argv[1]
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+ds = pydicom.dcmread(os.path.join(corpus, "MR_small.dcm"))
+arr = ds.pixel_array
+height, width = arr.shape
+signed = int(ds.PixelRepresentation) == 1
+
+# PGX is the one raw format opj_compress reads that carries signed samples,
+# which a 16-bit MR needs.
+pgx = os.path.join(out, "orig.pgx")
+j2k = os.path.join(out, "orig.j2k")
+with open(pgx, "wb") as fh:
+    fh.write(f"PG ML {'-' if signed else '+'} {ds.BitsStored} {width} {height}\n".encode())
+    fh.write(arr.astype(">i2" if signed else ">u2").tobytes())
+subprocess.run(["opj_compress", "-i", pgx, "-o", j2k, "-r", "1"],
+               capture_output=True, check=True)
+
+with open(os.path.join(out, "orig.pixels"), "wb") as fh:
+    fh.write(ds.PixelData)
+
+ds.file_meta.TransferSyntaxUID = JPEG2000Lossless
+ds.PixelData = encapsulate([open(j2k, "rb").read()])
+ds["PixelData"].is_undefined_length = True
+ds.save_as(os.path.join(out, "openjpeg.dcm"))
+
+# Leave only the data set behind, so the checker sees one fixture.
+os.remove(pgx)
+os.remove(j2k)
+PYEOF
+  then
+    if go run ./scripts/jpeglossless-check "$j2k_dir" "$j2k_dir/orig.pixels" > "$WORKDIR/j2k.log" 2>&1; then
+      pass "JPEG 2000 — an OpenJPEG-encoded frame decodes to the original pixels"
+      RAN_ANY=1
+    else
+      fail "go-dicom did not reproduce the original pixels from JPEG 2000"
+      sed -n '1,20p' "$WORKDIR/j2k.log" >&2
+    fi
+  else
+    skip "could not build the JPEG 2000 fixture with opj_compress"
+    sed -n '1,10p' "$WORKDIR/j2k-fixture.log" >&2
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Round trip: go-dicom writes, dcmtk judges.
 #
 # Writing was only ever checked by reading the output back with this library,
