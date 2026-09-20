@@ -625,7 +625,35 @@ func (dfr *DCMFileReader) readSequenceItems(explicitVR bool, depth int, declared
 			// Where the item tag started, which is 8 bytes back: 4 for the tag
 			// and 4 for the length that readItemHeader has already consumed.
 			itemStart := dfr.position - 8
-			item, err := dfr.readSequenceItem(explicitVR, depth, marker.length)
+
+			// An item whose declared body runs past the end of its sequence is
+			// still an item: its elements are all there, and only the length
+			// field is wrong. Dropping it loses real data — pydicom's
+			// DICOMDIR-nooffset declares 248 bytes for its last directory
+			// record with 224 left, and the record it holds is complete, so the
+			// file came back with 51 of its 52 records and an IMAGE missing
+			// (#122).
+			//
+			// The item is read to the end of the sequence instead. A header
+			// sitting exactly at that end has nothing to read and is not an
+			// item at all: recording one would invent a record the file does
+			// not contain.
+			length := marker.length
+			if !undefined && length != UndefinedLength {
+				remaining := int64(declaredLength) - (dfr.position - start)
+				if remaining <= 0 {
+					dfr.warn("sequence item header at the end of the sequence, "+
+						"declaring %d bytes with none left; ending the sequence", length)
+					return items, nil
+				}
+				if int64(length) > remaining {
+					dfr.warn("sequence item declares %d bytes with %d left in the sequence; "+
+						"keeping the complete elements it holds", length, remaining)
+					length = uint32(remaining)
+				}
+			}
+
+			item, err := dfr.readSequenceItem(explicitVR, depth, length)
 			if err != nil {
 				// A file cut short loses its last item, not the sequence. The
 				// items already read are complete and were parsed from bytes
@@ -1193,6 +1221,11 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	}
 	// Whether the encoding has to be worked out from the data set itself.
 	sniffed := false
+	// How many warnings belonged to the meta header. Warnings recorded while the
+	// data set is parsed are appended after it, and were never copied to the
+	// file at all: the copy below happens before the data set is read, so a
+	// truncated or overrunning sequence warned into a slice nobody looked at.
+	metaWarningCount := 0
 
 	// A DICOM Part 10 file opens with a 128-byte preamble and the characters
 	// DICM. A raw DICOM stream — as produced by some modalities, and what
@@ -1213,6 +1246,7 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		dicomFile.FileMetaInfo = metaInfo
 		dicomFile.MetaElements = dfr.metaElements
 		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings...)
+		metaWarningCount = len(dfr.metaWarnings)
 	} else {
 		// Without a meta header there is no stated transfer syntax. Implicit VR
 		// Little Endian is the DICOM default (PS3.5 Section 10.1), but the first
@@ -1319,6 +1353,12 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 		}
 
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
+	}
+
+	// The warnings recorded while the data set was parsed, which the copy above
+	// could not have seen.
+	if len(dfr.metaWarnings) > metaWarningCount {
+		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[metaWarningCount:]...)
 	}
 
 	return dicomFile, nil
