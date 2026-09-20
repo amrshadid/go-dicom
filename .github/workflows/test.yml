@@ -1,11 +1,18 @@
 name: Tests and Quality Checks
 
 
+# Pushes are only worth building on the two branches that keep history; a
+# feature branch is covered by its pull request.
+#
+# Pull requests are built whatever they target. Restricting this to main and
+# develop meant a pull request based on another feature branch got no checks at
+# all, so a stack of them could only be reviewed by pointing every one at
+# develop and reading four overlapping diffs. One stage per pull request is
+# worth more than the runner minutes.
 on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main, develop ]
 
 permissions:
   contents: read
