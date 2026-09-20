@@ -220,7 +220,7 @@ func TestGeometryOfEveryFixture(t *testing.T) {
 }
 
 // fixtureFrames maps each JPEG 2000 fixture in the corpus to its first frame.
-func fixtureFrames(t *testing.T, dir string) map[string][]byte {
+func fixtureFrames(t testing.TB, dir string) map[string][]byte {
 	t.Helper()
 
 	names := []string{
@@ -257,7 +257,7 @@ func fixtureFrames(t *testing.T, dir string) map[string][]byte {
 }
 
 // fixtureCodestream parses one fixture's first frame.
-func fixtureCodestream(t *testing.T, dir, name string) *Codestream {
+func fixtureCodestream(t testing.TB, dir, name string) *Codestream {
 	t.Helper()
 
 	frame := fixtureFrames(t, dir)[name]
