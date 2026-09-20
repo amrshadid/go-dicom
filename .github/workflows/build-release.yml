@@ -106,9 +106,20 @@ jobs:
           find binaries -type f -exec cp {} release/ \;
           ls -la release/
 
+      # A hyphen in the version is what semver uses to mark a pre-release
+      # (1.6.0-rc.1), and it is the only signal a tag carries. Without this
+      # every tag was published as a normal release, so a release candidate cut
+      # from develop for testing would have been marked Latest and offered to
+      # everyone as the current version.
       - name: Get version
         id: version
-        run: echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+        run: |
+          TAG="${{ github.ref_name }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          case "${TAG#v}" in
+            *-*) echo "prerelease=true" >> $GITHUB_OUTPUT ;;
+            *)   echo "prerelease=false" >> $GITHUB_OUTPUT ;;
+          esac
 
       # CHANGELOG.md headings are unprefixed ("## [1.2.0]") while tags carry a
       # leading v ("v1.2.0"), so the tag name must be stripped before matching.
@@ -124,6 +135,22 @@ jobs:
           # The range always begins with the section heading, so '1d' removes it;
           # '/./,$!d' then drops the blank lines it left at the top.
           NOTES=$(sed -n "/^## \[$VERSION\]/,/^## \[/p" CHANGELOG.md | sed '$d' | sed '1d' | sed '/./,$!d')
+          # A pre-release rarely has a section of its own: 1.6.0-rc.1 is a
+          # candidate for what CHANGELOG.md calls [1.6.0], and before that is
+          # written it is what the file calls [Unreleased]. Falling straight
+          # through to the generic message would publish a test build with no
+          # notes at all, which is the one kind of release people most need to
+          # know the contents of.
+          if [ -z "$NOTES" ] && [ "${{ steps.version.outputs.prerelease }}" = "true" ]; then
+            BASE="${VERSION%%-*}"
+            NOTES=$(sed -n "/^## \[$BASE\]/,/^## \[/p" CHANGELOG.md | sed '$d' | sed '1d' | sed '/./,$!d')
+            if [ -z "$NOTES" ]; then
+              NOTES=$(sed -n "/^## \[Unreleased\]/,/^## \[/p" CHANGELOG.md | sed '$d' | sed '1d' | sed '/./,$!d')
+            fi
+            if [ -n "$NOTES" ]; then
+              NOTES=$(printf '> This is a pre-release of %s, built for testing. It is not the current release.\n\n%s' "$BASE" "$NOTES")
+            fi
+          fi
           if [ -z "$NOTES" ]; then
             echo "::warning::no CHANGELOG.md section found for [$VERSION]; using the generic fallback"
             NOTES="See [CHANGELOG.md](https://github.com/amrshadid/go-dicom/blob/main/CHANGELOG.md) for details."
@@ -146,6 +173,8 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.version.outputs.prerelease != 'true' }}
           body: |
             ${{ steps.changelog.outputs.notes }}
 
