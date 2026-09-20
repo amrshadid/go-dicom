@@ -516,6 +516,16 @@
 //	func (ds *Dataset) PixelArray() (interface{}, error)
 //
 // Returns decompressed pixel array (may return [][][]uint16 or [][][]uint8).
+// The type follows Bits Allocated, not Pixel Representation, so a signed image
+// arrives in an unsigned type.
+//
+// ### PixelArrayInterpreted
+//
+//	func (ds *Dataset) PixelArrayInterpreted() (interface{}, error)
+//
+// The same data with (0028,0103) Pixel Representation applied: a signed data
+// set yields [][][]int8, [][][]int16 or [][][]int32, an unsigned one yields
+// exactly what PixelArray returns. Sign extension is from Bits Stored.
 //
 // ### GetWindowingParameters
 //
