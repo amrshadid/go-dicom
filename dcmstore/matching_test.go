@@ -331,3 +331,24 @@ func TestWildcardMatchingDoesNotBlowUp(t *testing.T) {
 			"c", "a")
 	}
 }
+
+// TestWildcardQuestionMarkIsOneCharacter: "?" matches any single character
+// (PS3.4 C.2.2.2.4), and a character is not a byte. It matched one byte, so
+// "M?ller" missed "Müller", whose ü is two bytes in UTF-8 (#191).
+func TestWildcardQuestionMarkIsOneCharacter(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, value string
+		want           bool
+	}{
+		{"M?ller^Hans", "Müller^Hans", true},
+		{"M??ller^Hans", "Müller^Hans", false},
+		{"*ü*", "Müller^Hans", true},
+		{"?", "ü", true},
+		{"??", "ü", false},
+		{"山?^太郎", "山田^太郎", true},
+	} {
+		if got := matchValue(dataelem.PN, tc.pattern, tc.value); got != tc.want {
+			t.Errorf("%q against %q: %v, want %v", tc.pattern, tc.value, got, tc.want)
+		}
+	}
+}

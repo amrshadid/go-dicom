@@ -343,6 +343,7 @@ func GetVRInfo(vr VR) *VRInfo {
 		SL: {VR: SL, Name: "Signed Long", ByteLength: 4, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
 		SQ: {VR: SQ, Name: "Sequence of Items", ByteLength: -1, PadValue: 0, IsText: false, IsNumeric: false, SupportsVM: false, IsStandard: true},
 		SS: {VR: SS, Name: "Signed Short", ByteLength: 2, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
+		US: {VR: US, Name: "Unsigned Short", ByteLength: 2, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
 		SV: {VR: SV, Name: "Signed 64-bit Very Long", ByteLength: 8, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
 		UV: {VR: UV, Name: "Unsigned 64-bit Very Long", ByteLength: 8, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
 		OV: {VR: OV, Name: "Other 64-bit Very Long", ByteLength: -1, PadValue: 0, IsText: false, IsNumeric: false, SupportsVM: false, IsStandard: true},
@@ -394,8 +395,9 @@ func IsNumericVR(vr VR) bool {
 func AllVRs() []VR {
 	return []VR{
 		AE, AS, AT, CS, DA, DS, DT, FD, FL, IS,
-		LO, LT, OB, OD, OF, OL, OW, PN, SH, SL,
-		SQ, SS, ST, TM, UC, UI, UL, UN, UR, UT,
+		LO, LT, OB, OD, OF, OL, OV, OW, PN, SH,
+		SL, SQ, SS, ST, SV, TM, UC, UI, UL, UN,
+		UR, US, UT, UV,
 	}
 }
 

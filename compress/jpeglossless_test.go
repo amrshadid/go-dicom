@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -20,6 +21,10 @@ import (
 //
 // sc_rgb.jpgls is pydicom's own SC_rgb_jpeg_gdcm.dcm, an 8-bit RGB frame with
 // three color components, against pydicom's decode of it.
+//
+// restart_sv1.jpgls has a restart marker every two rows, which neither dcmtk
+// nor the corpus provides. scripts/jpeglossless-restart-fixture.py encodes it
+// from T.81 and writes it only once libjpeg decodes it to restart_expected.raw.
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
@@ -166,5 +171,43 @@ func TestJPEGLosslessDecoderIsRegistered(t *testing.T) {
 	}
 	if _, err := decoder.Decompress(readFixture(t, "mr_small_sv1.jpgls")); err != nil {
 		t.Errorf("the registered decoder failed on a valid frame: %v", err)
+	}
+}
+
+// TestJPEGLosslessRestartIntervals decodes frames with a restart marker every
+// two rows. At each restart the prediction resets to its default and the first
+// line is predicted as a first line (T.81 H.1.2.1). Only the reset at the start
+// of the scan was applied, so every interval after the first came out offset;
+// selection value 7, which looks up, also shows the first-line rule (#174).
+func TestJPEGLosslessRestartIntervals(t *testing.T) {
+	want := readFixture(t, "restart_expected.raw")
+	for _, name := range []string{"restart_sv1.jpgls", "restart_sv7.jpgls"} {
+		t.Run(name, func(t *testing.T) {
+			got, err := compress.NewJPEGLosslessDecompressor().Decompress(readFixture(t, name))
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !bytes.Equal(got, want) {
+				for i := range want {
+					if i >= len(got) || got[i] != want[i] {
+						t.Fatalf("first difference at row %d column %d of %d bytes", i/16, i%16, len(want))
+					}
+				}
+				t.Fatalf("decoded %d bytes, libjpeg %d", len(got), len(want))
+			}
+		})
+	}
+}
+
+// TestJPEGLosslessRefusesARestartIntervalOffARow: a lossless restart interval
+// is a whole number of rows (T.81 H.2), and the first-line rule has no meaning
+// for one that starts mid-row.
+func TestJPEGLosslessRefusesARestartIntervalOffARow(t *testing.T) {
+	data := readFixture(t, "restart_sv1.jpgls")
+	dri := bytes.Index(data, []byte{0xFF, 0xDD, 0x00, 0x04})
+	binary.BigEndian.PutUint16(data[dri+4:], 24) // one and a half rows of 16
+	_, err := compress.NewJPEGLosslessDecompressor().Decompress(data)
+	if err == nil || !strings.Contains(err.Error(), "restart interval") {
+		t.Fatalf("error %v, want one naming the restart interval", err)
 	}
 }

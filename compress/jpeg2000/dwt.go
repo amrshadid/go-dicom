@@ -126,11 +126,11 @@ func synthesize2D(g *subbandGrid, reversible bool) {
 		return
 	}
 
-	row := make([]float32, w)
+	// One scratch buffer for every row and column of the pass: allocating it
+	// per line was the decoder's largest source of garbage.
+	var s scratch
 	for y := 0; y < h; y++ {
-		copy(row, g.values[y*w:(y+1)*w])
-		synthesize1D(row, g.x0, g.x1, reversible)
-		copy(g.values[y*w:(y+1)*w], row)
+		synthesize1D(g.values[y*w:(y+1)*w], g.x0, g.x1, reversible, &s)
 	}
 
 	column := make([]float32, h)
@@ -138,16 +138,22 @@ func synthesize2D(g *subbandGrid, reversible bool) {
 		for y := 0; y < h; y++ {
 			column[y] = g.values[y*w+x]
 		}
-		synthesize1D(column, g.y0, g.y1, reversible)
+		synthesize1D(column, g.y0, g.y1, reversible, &s)
 		for y := 0; y < h; y++ {
 			g.values[y*w+x] = column[y]
 		}
 	}
 }
 
+// scratch holds the padded working copies the 1-D syntheses lift in place.
+type scratch struct {
+	i []int32
+	f []float64
+}
+
 // synthesize1D is 1D_SR (F.3.4): one row or column of interleaved coefficients
 // filtered back into samples, in place. y[0] is the sample at coordinate i0.
-func synthesize1D(y []float32, i0, i1 int, reversible bool) {
+func synthesize1D(y []float32, i0, i1 int, reversible bool, s *scratch) {
 	if i1-i0 == 1 {
 		// A single sample is its own reconstruction if it is a low-pass one,
 		// and a high-pass sample alone carries twice its value (F.3.7).
@@ -161,10 +167,10 @@ func synthesize1D(y []float32, i0, i1 int, reversible bool) {
 	}
 
 	if reversible {
-		synthesize53(y, i0, i1)
+		synthesize53(y, i0, i1, s)
 		return
 	}
-	synthesize97(y, i0, i1)
+	synthesize97(y, i0, i1, s)
 }
 
 // extended reads the signal at any coordinate, mirroring at both ends.
@@ -192,12 +198,21 @@ func extended(y []float32, i0, i1, i int) float32 {
 // JPEG 2000's claim to be lossless. It is integer arithmetic on values that
 // are whole numbers, and the two shifts round towards negative infinity, which
 // is what the standard's division bars mean and what Go's / would not do.
-func synthesize53(y []float32, i0, i1 int) {
+func synthesize53(y []float32, i0, i1 int, s *scratch) {
 	n := i1 - i0
 	const pad = 2
-	buf := make([]int32, n+2*pad)
-	for k := range buf {
+	if cap(s.i) < n+2*pad {
+		s.i = make([]int32, n+2*pad)
+	}
+	buf := s.i[:n+2*pad]
+	// Only the padding needs the symmetric extension; inside the signal it is
+	// the identity.
+	for k := 0; k < pad; k++ {
 		buf[k] = int32(extended(y, i0, i1, i0-pad+k))
+		buf[pad+n+k] = int32(extended(y, i0, i1, i1+k))
+	}
+	for k, v := range y[:n] {
+		buf[pad+k] = int32(v)
 	}
 	at := func(x int) int { return x - i0 + pad }
 
@@ -226,16 +241,23 @@ func synthesize53(y []float32, i0, i1 int) {
 // synthesize97 is the irreversible 9/7 filter (F.3.8.2): the two scalings the
 // forward transform ended with, undone first, then its four lifting steps
 // undone in reverse order.
-func synthesize97(y []float32, i0, i1 int) {
+func synthesize97(y []float32, i0, i1 int, s *scratch) {
 	n := i1 - i0
 	// A copy padded by four at each end. Each lifting step can then read its
 	// neighbors with no bounds test, and each step narrows the region that is
 	// still correct by one on each side — four steps, four of padding, and the
 	// signal itself is what is left.
 	const pad = 4
-	buf := make([]float64, n+2*pad)
-	for k := range buf {
+	if cap(s.f) < n+2*pad {
+		s.f = make([]float64, n+2*pad)
+	}
+	buf := s.f[:n+2*pad]
+	for k := 0; k < pad; k++ {
 		buf[k] = float64(extended(y, i0, i1, i0-pad+k))
+		buf[pad+n+k] = float64(extended(y, i0, i1, i1+k))
+	}
+	for k, v := range y[:n] {
+		buf[pad+k] = float64(v)
 	}
 	at := func(x int) int { return x - i0 + pad }
 	lo, hi := i0-pad, i1+pad
