@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`FromDICOMJSON` keeps the values it is given** (#193). Four kinds changed on
+  the way in, so this library's own JSON did not survive being read back. A null
+  number became 0; it is now no value, and a null among binary numbers, which
+  have no empty component, drops that element with a warning rather than
+  inventing a number, as a truncated element is dropped. UV and SV were read
+  through float64 and lost precision above 2^53; numbers are now decoded
+  exactly. An empty sequence came back as no value; it is now a sequence with no
+  items. And text was kept under whatever (0008,0005) the JSON declared, though
+  DICOM JSON text is UTF-8: a Latin-1 name was written back as "JÃ©rÃ´me". The
+  declaration now says ISO_IR 192 wherever the text needs it. pydicom's JSON for
+  every file in its corpus now reads back with no other difference.
 
 ## [1.6.0] - 2026-09-20
 
