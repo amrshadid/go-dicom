@@ -86,9 +86,7 @@ func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 // ListenAndServe starts the SCP server, listening for incoming associations.
 // It blocks until the context is canceled.
 func (s *SCP) ListenAndServe(ctx context.Context) error {
-	addr := fmt.Sprintf("%s:%d", s.config.BindAddress, s.config.Port)
-
-	ln, err := Listen(addr)
+	ln, err := listen(fmt.Sprintf("%s:%d", s.config.BindAddress, s.config.Port), s.config.TLS)
 	if err != nil {
 		return err
 	}
@@ -141,6 +139,14 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 			s.handleConnection(ctx, transport)
 		}()
 	}
+}
+
+// listen opens a plain listener, or a TLS one when tlsCfg is set.
+func listen(addr string, tlsCfg *TLSConfig) (*Listener, error) {
+	if tlsCfg != nil {
+		return ListenTLS(addr, tlsCfg)
+	}
+	return Listen(addr)
 }
 
 // Addr returns the listener address, or empty string if not listening.

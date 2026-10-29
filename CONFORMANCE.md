@@ -269,10 +269,15 @@ selection, and user identity negotiation. The window defaults to one.
 
 - **Physical media:** not applicable; this is a network and file library.
 - **Transport:** TCP/IP. DICOM Upper Layer Protocol per PS3.8.
-- **TLS:** available through `network.DialTLS` and `network.ListenTLS`. A
+- **TLS:** `SCUConfig.TLS` puts an SCU's associations on TLS, `SCPConfig.TLS`
+  an SCP's, and `-tls` does the same for every network command. A
   `TLSConfig.CAFile` makes each side authenticate the other: a server requires
   a client certificate issued by that CA, and a client verifies the server
-  against it. Plain DICOM over TCP is neither authenticated nor encrypted, and
+  against it. The associations an SCP opens itself (C-MOVE sub-operations,
+  storage commitment results, UPS event reports) use `SCPConfig.OutboundTLS`,
+  plain TCP when it is unset, since a peer the SCP calls need not be reached
+  the way the SCP is; its certificate must then allow client authentication.
+  Verified against pynetdicom over TLS in both directions. Plain DICOM over TCP is neither authenticated nor encrypted, and
   checking a called AE title is a naming convention rather than authentication.
 
 ---

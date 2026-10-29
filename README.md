@@ -327,6 +327,13 @@ go build -o go-dicom .
 # commits what it holds (commitscu above works against it)
 ./go-dicom qrscp -port 11112 -output ./archive/
 
+# Any network command over TLS. With -tls-ca a server requires a client
+# certificate from that CA and a client verifies the server against it
+./go-dicom storescp -port 2762 -output ./received/ \
+    -tls -tls-cert node.crt -tls-key node.key -tls-ca ca.crt
+./go-dicom storescu -tls -tls-cert node.crt -tls-key node.key -tls-ca ca.crt \
+    pacs:2762 image.dcm
+
 # Get help — `help <command>` works for every command above
 ./go-dicom -h
 ./go-dicom help qrscp
@@ -412,7 +419,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | N-DELETE | Yes | Yes | |
 | SCU (Client) | Yes | Yes | `network.NewSCU()` |
 | SCP (Server) | Yes | Yes | `network.NewSCP()` with goroutine-per-association |
-| TLS Encryption | Yes | Yes | `network.DialTLS()` / `network.ListenTLS()` |
+| TLS Encryption | Yes | Yes | `SCUConfig.TLS` / `SCPConfig.TLS`, and `-tls` on every network command |
 | Association Negotiation | Yes | Yes | Full A-ASSOCIATE-RQ/AC/RJ state machine |
 | Presentation Context Negotiation | Yes | Yes | Abstract + Transfer Syntax negotiation |
 | Extended Negotiation | Yes | Yes | Async ops, SCP/SCU role selection, user identity — negotiated on the wire |

@@ -133,12 +133,18 @@ func ListenTLS(address string, tlsCfg *TLSConfig) (*Listener, error) {
 }
 
 // SCUConfigTLS extends SCUConfig with TLS settings.
+//
+// Deprecated: nothing reads this type, so a TLS setting placed here has no
+// effect. Set SCUConfig.TLS.
 type SCUConfigTLS struct {
 	SCUConfig
 	TLS *TLSConfig
 }
 
 // SCPConfigTLS extends SCPConfig with TLS settings.
+//
+// Deprecated: nothing reads this type, so a TLS setting placed here has no
+// effect. Set SCPConfig.TLS.
 type SCPConfigTLS struct {
 	SCPConfig
 	TLS *TLSConfig
