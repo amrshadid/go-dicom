@@ -24,7 +24,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **DICOM networking** — SCU/SCP with C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET, and all N-DIMSE services
 - **Thread-safe dataset operations** for concurrent processing
 - **5,000+ standard DICOM tags** with O(1) lookup
-- **Private tags kept exactly as received**: a private creator is LO, and a private attribute whose VR the file does not state is written as UN, byte for byte
+- **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
 - **De-identification / anonymization** per DICOM PS3.15 Annex E
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
@@ -584,7 +584,7 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
 | DICOM PS3.15 - Security (TLS, de-identification) | Supported — the Basic Profile covers every attribute in Table E.1-1, verified to leave none of them unchanged across pydicom's corpus |
-| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. A private attribute whose VR the file does not state is UN, with its value as InlineBinary |
+| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. A private attribute whose VR the file does not state takes GDCM's, resolved through the file's own private creator, and is UN with its value as InlineBinary when that is unknown or does not fit |
 | ISO 2022 - Character set escape sequences | Supported |
 
 ### Performance

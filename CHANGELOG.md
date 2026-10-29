@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A private dictionary taken from vendor documentation** (#188). The one it
+  replaces was generated, with VRs given in rotation and invented names, and
+  #186 had to stop trusting it. This one is GDCM's, by way of pydicom, generated
+  by `scripts/private-dictionary.py`: 8,858 attributes under 423 private
+  creators. An implicit private attribute takes its VR from it again where the
+  VR is unambiguous and the value is a whole number of values of it, and is UN
+  otherwise, so a wrong entry cannot write a file pydicom refuses. Across
+  pydicom's corpus every private attribute now gets the VR pydicom gives it.
+  GDCM's BSD license and pydicom's MIT license are in `THIRD_PARTY_NOTICES`,
+  which is published with each release.
+
 ### Changed
 
 - **JPEG 2000 decodes up to four times faster** (#184). Code-blocks are coded
