@@ -32,15 +32,11 @@ func Decode(c *Codestream) (*Image, error) {
 	if c == nil {
 		return nil, errorf("no codestream")
 	}
+	if err := checkImageSize(c); err != nil {
+		return nil, err
+	}
 	width := int(c.Width) - int(c.XOffset)
 	height := int(c.Height) - int(c.YOffset)
-	if width <= 0 || height <= 0 {
-		return nil, errorf("an image of %dx%d samples", width, height)
-	}
-	if width > 1<<16 || height > 1<<16 || width*height > 1<<28 {
-		return nil, errorf("an image of %dx%d samples is larger than this decoder accepts",
-			width, height)
-	}
 
 	img := &Image{Width: width, Height: height}
 	for _, comp := range c.Components {
@@ -55,6 +51,22 @@ func Decode(c *Codestream) (*Image, error) {
 		}
 	}
 	return img, nil
+}
+
+// checkImageSize refuses an image too large to decode. The parser applies it
+// as well as Decode, because the packet reader sizes its precincts from the
+// same dimensions.
+func checkImageSize(c *Codestream) error {
+	width := int(c.Width) - int(c.XOffset)
+	height := int(c.Height) - int(c.YOffset)
+	if width <= 0 || height <= 0 {
+		return errorf("an image of %dx%d samples", width, height)
+	}
+	if width > 1<<16 || height > 1<<16 || width*height > 1<<28 {
+		return errorf("an image of %dx%d samples is larger than this decoder accepts",
+			width, height)
+	}
+	return nil
 }
 
 // decodeTile decodes one tile and writes its samples into the image.

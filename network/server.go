@@ -86,33 +86,7 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 			scp.mu.Unlock()
 		}()
 
-		for {
-			transport, err := ln.Accept(serverCtx)
-			if err != nil {
-				select {
-				case <-serverCtx.Done():
-					return
-				default:
-					s.Logger.Error("Accept error: %v", err)
-					continue
-				}
-			}
-
-			s.Events.Emit(&Event{
-				Type:       EVTConnOpen,
-				RemoteAddr: transport.RemoteAddr().String(),
-			})
-
-			scp.wg.Add(1)
-			go func() {
-				defer scp.wg.Done()
-				scp.handleConnection(serverCtx, transport)
-				s.Events.Emit(&Event{
-					Type:       EVTConnClose,
-					RemoteAddr: transport.RemoteAddr().String(),
-				})
-			}()
-		}
+		_ = scp.serve(serverCtx, ln, s.Logger, s.Events)
 	}()
 
 	return s, nil
@@ -159,24 +133,7 @@ func StartServerTLS(ctx context.Context, config SCPConfig, handler Handler, tlsC
 			scp.mu.Unlock()
 		}()
 
-		for {
-			transport, err := ln.Accept(serverCtx)
-			if err != nil {
-				select {
-				case <-serverCtx.Done():
-					return
-				default:
-					s.Logger.Error("TLS Accept error: %v", err)
-					continue
-				}
-			}
-
-			scp.wg.Add(1)
-			go func() {
-				defer scp.wg.Done()
-				scp.handleConnection(serverCtx, transport)
-			}()
-		}
+		_ = scp.serve(serverCtx, ln, s.Logger, s.Events)
 	}()
 
 	return s, nil
