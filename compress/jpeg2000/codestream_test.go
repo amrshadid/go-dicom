@@ -194,14 +194,15 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 // file, and every tile, band and code-block is sized from it. A grid that does
 // not cover the image, or one no tile-part could address, is refused by the
 // parser. The first case is the fuzzer's: a 32x32 image whose grid starts at
-// row 0xB7B7B700 asked the decoder for 144 TB, which is a fatal error in Go and
-// not a panic anything could recover from.
+// (47031, 3070230528) asked the decoder for 144 TB, which is a fatal error in
+// Go and not a panic anything could recover from.
 func TestParseCodestreamRejectsAnImpossibleTileGrid(t *testing.T) {
 	// SIZ offsets in buildCodestream's segment: Xsiz 6, Ysiz 10, XOsiz 14,
 	// YOsiz 18, XTsiz 22, YTsiz 26, XTOsiz 30, YTOsiz 34.
 	tests := map[string]func(siz []byte){
-		"grid origin below the image": func(siz []byte) {
-			binary.BigEndian.PutUint32(siz[34:], 0xB7B7B700)
+		"grid origin past the image": func(siz []byte) {
+			binary.BigEndian.PutUint32(siz[30:], 0xB7B7)
+			binary.BigEndian.PutUint32(siz[34:], 0xB7000000)
 		},
 		"grid origin right of the image": func(siz []byte) {
 			binary.BigEndian.PutUint32(siz[14:], 16)
