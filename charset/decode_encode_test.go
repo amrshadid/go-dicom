@@ -536,3 +536,35 @@ func TestGB2312EscapeIsNotText(t *testing.T) {
 		t.Errorf("decoded as %q, want %q", got, want)
 	}
 }
+
+// TestEncodedEscapesNameTheDeclaredSet: the escape written before a code
+// extension must be the one for the set declared. Going through the
+// multi-part path, ISO-2022-JP text got IR 159's ESC $ ( D prepended to the
+// ESC $ B its own encoder writes, and pydicom then reported an unknown escape
+// and read the name as Latin-1 (#197).
+func TestEncodedEscapesNameTheDeclaredSet(t *testing.T) {
+	for _, tc := range []struct {
+		declared []string
+		value    string
+		want     []byte
+		never    []byte
+	}{
+		{[]string{"", "ISO 2022 IR 87"}, "Yamada^Tarou=山田^太郎", []byte{0x1B, '$', 'B'}, []byte{0x1B, '$', '(', 'D'}},
+		{[]string{"", "ISO 2022 IR 58"}, "Wang^XiaoDong=王^小东", []byte{0x1B, '$', ')', 'A'}, nil},
+	} {
+		encodings, err := charset.ConvertEncodings(tc.declared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := charset.EncodeString(tc.value, encodings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, tc.want) || tc.never != nil && bytes.Contains(encoded, tc.never) {
+			t.Errorf("%v: encoded as % X, want % X and never % X", tc.declared, encoded, tc.want, tc.never)
+		}
+		if decoded, err := charset.DecodeBytes(encoded, encodings, charset.PersonNameDelimiters); err != nil || decoded != tc.value {
+			t.Errorf("%v: decoded back as %q (%v), want %q", tc.declared, decoded, err, tc.value)
+		}
+	}
+}

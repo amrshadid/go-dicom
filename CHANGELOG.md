@@ -18,6 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interpret it, and stayed in the text; it is now stripped as Korean's is, and
   `EncodeString` writes it, as PS3.5 Annex K requires.
 
+- **`charset.EncodeString` writes code extensions as the standard has them**
+  (#197). An empty first value of (0008,0005) was dropped, so
+  `\ISO 2022 IR 149` made EUC-KR the base set and Korean was written with no
+  `ESC $ ) C`; it now means the default repertoire, as PS3.5 6.1.2.5.3 says.
+  Text needing a second set was cut in bytes where it had been measured in
+  characters, failed, and came back as raw UTF-8 with no error; Latin-1 with Greek or Cyrillic is
+  now encoded with `ESC - F` or `ESC - L`. Each component between delimiters is
+  encoded from the initial designation, since a reader resets at `^`, `=` and
+  the line separators, and an encoder that writes its own escapes no longer has
+  another put in front: Japanese had IR 159's `ESC $ ( D` before its `ESC $ B`.
+  pydicom decodes all of it to the original text. The library's own writing
+  path writes UTF-8 and did not use this.
+
 - **A JPEG 2000 tile grid that does not cover the image is refused** (#164). The
   SIZ parser checked where the image starts but not where the tile grid does, and
   ISO 15444-1 A.5.1 requires the grid to start at or before the image. Every
