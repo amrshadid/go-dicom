@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **US is a valid VR** (#201). The VR table had no US entry, so
+  `IsValidVR(US)` was false and `GetVRInfo(US)` nil, and `AllVRs` also left out
+  OV, SV and UV. Callers fell back quietly, which is why it went unseen, but a
+  check built on the table skipped every US. All 34 VRs of PS3.5 Table 6.2-1
+  are there now.
+
 - **A JPEG 2000 tile grid that does not cover the image is refused** (#164). The
   SIZ parser checked where the image starts but not where the tile grid does, and
   ISO 15444-1 A.5.1 requires the grid to start at or before the image. Every
