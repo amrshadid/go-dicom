@@ -196,9 +196,13 @@ func NeedsEscapeSequence(encoding string, isFirst bool, isPythonHandled bool) bo
 }
 
 // IsPythonHandledEncoding returns true if the encoding's decoder handles escape sequences.
+//
+// Only ISO-2022-JP's does. ISO-2022-CN was listed too, after pydicom, but it is
+// decoded with GB18030, which knows nothing of escapes, so ESC $ ) A stayed in
+// the decoded text; it is stripped like Korean's instead (#195).
 func IsPythonHandledEncoding(encoding string) bool {
 	switch encoding {
-	case "ISO-2022-JP", "ISO-2022-CN":
+	case "ISO-2022-JP":
 		return true
 	default:
 		return false

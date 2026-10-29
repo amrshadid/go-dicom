@@ -24,7 +24,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **DICOM networking** — SCU/SCP with C-ECHO, C-STORE, C-FIND, C-MOVE, C-GET, and all N-DIMSE services
 - **Thread-safe dataset operations** for concurrent processing
 - **5,000+ standard DICOM tags** with O(1) lookup
-- **10,500+ private vendor tags** (GE, Siemens, Philips, Toshiba, and more)
+- **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
 - **De-identification / anonymization** per DICOM PS3.15 Annex E
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
@@ -352,7 +352,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 |---------|-------------|
 | [dataset](./dataset/) | Thread-safe in-memory dataset with rich query API |
 | [dataelem](./dataelem/) | Data element representation with all 28+ VRs |
-| [tag](./tag/) | Tag definitions, dictionary (5,000+ standard + 10,500+ private) |
+| [tag](./tag/) | Tag definitions, dictionary (5,000+ standard tags) |
 | [element](./element/) | Value encoding, decoding, and conversion |
 | [sequence](./sequence/) | Thread-safe ordered sequence container |
 | [uid](./uid/) | UID management, validation, and classification |
@@ -584,7 +584,7 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
 | DICOM PS3.15 - Security (TLS, de-identification) | Supported — the Basic Profile covers every attribute in Table E.1-1, verified to leave none of them unchanged across pydicom's corpus |
-| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. Private attributes take their VR from the shipped vendor dictionary, resolved through the file's own private creator |
+| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. A private attribute whose VR the file does not state takes GDCM's, resolved through the file's own private creator, and is UN with its value as InlineBinary when that is unknown or does not fit |
 | ISO 2022 - Character set escape sequences | Supported |
 
 ### Performance

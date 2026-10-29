@@ -117,7 +117,7 @@ func TestReversibleFilterIsExact(t *testing.T) {
 					"so the round trip below proves nothing", length, i0)
 			}
 
-			synthesize1D(coefficients, i0, i1, true)
+			synthesize1D(coefficients, i0, i1, true, &scratch{})
 
 			for i := range original {
 				if coefficients[i] != original[i] {
