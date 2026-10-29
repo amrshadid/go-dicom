@@ -482,6 +482,14 @@ because Note 2's little endian value must not be byte-swapped with the rest of
 the data set. An undefined length means items whatever the dictionary says
 (Note 5), and they are parsed as a sequence.
 
+On writing, a private attribute read without a VR, as every attribute of an
+implicit VR file is, is written as UN with its value unchanged, which PS3.5
+6.2.2 provides for. The library ships a private dictionary, but most of it was
+generated rather than taken from any vendor, so it does not decide a VR: an
+implicit Siemens MR written through it had text relabeled as numbers (#186).
+Converting UN back to a vendor's VR is left to a reader with a dictionary it
+trusts; pydicom does it with its own.
+
 Where the dictionary gives an attribute two VRs, the one written is the one the
 data set calls for, resolved as pydicom resolves it. `US or SS` follows Pixel
 Representation (PS3.3 C.7.6.3), which a sequence item takes from the image
