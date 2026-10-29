@@ -567,7 +567,7 @@ func hasNonASCIIText(ds *Dataset) bool {
 			continue
 		}
 		raw, ok := elem.GetValue().([]byte)
-		if !ok || !charsetAffected[elem.GetVR()] {
+		if !ok || !dataelem.IsCharacterSetVR(elem.GetVR()) {
 			continue
 		}
 		for _, b := range raw {
@@ -583,12 +583,6 @@ func hasNonASCIIText(ds *Dataset) bool {
 var specificCharacterSet = tag.New(0x0008, 0x0005)
 
 const utf8CharacterSet = "ISO_IR 192"
-
-// charsetAffected are the VRs (0008,0005) applies to (PS3.5 6.1.2.3).
-var charsetAffected = map[dataelem.VR]bool{
-	dataelem.SH: true, dataelem.LO: true, dataelem.UC: true, dataelem.ST: true,
-	dataelem.LT: true, dataelem.UT: true, dataelem.PN: true,
-}
 
 // parseDICOMJSONKey reads the eight-hex-digit member name.
 func parseDICOMJSONKey(key string) (tag.Tag, error) {
