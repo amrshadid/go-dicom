@@ -190,6 +190,66 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 	}
 }
 
+// TestParseCodestreamRejectsAnImpossibleTileGrid: every tile, band and
+// code-block is sized from the tile grid, so a grid that does not cover the
+// image, or one no tile-part could address, is refused by the parser (#164).
+func TestParseCodestreamRejectsAnImpossibleTileGrid(t *testing.T) {
+	// SIZ offsets in buildCodestream's segment: Xsiz 6, Ysiz 10, XOsiz 14,
+	// YOsiz 18, XTsiz 22, YTsiz 26, XTOsiz 30, YTOsiz 34.
+	tests := map[string]func(siz []byte){
+		"grid origin past the image": func(siz []byte) {
+			binary.BigEndian.PutUint32(siz[30:], 0xB7B7)
+			binary.BigEndian.PutUint32(siz[34:], 0xB7000000)
+		},
+		"grid origin right of the image": func(siz []byte) {
+			binary.BigEndian.PutUint32(siz[14:], 16)
+			binary.BigEndian.PutUint32(siz[30:], 32)
+		},
+		"first tile ends before the image": func(siz []byte) {
+			binary.BigEndian.PutUint32(siz[14:], 48)
+			binary.BigEndian.PutUint32(siz[22:], 16)
+		},
+		"more tiles than a tile-part can name": func(siz []byte) {
+			binary.BigEndian.PutUint32(siz[6:], 1024)
+			binary.BigEndian.PutUint32(siz[10:], 1024)
+			binary.BigEndian.PutUint32(siz[22:], 1)
+			binary.BigEndian.PutUint32(siz[26:], 1)
+		},
+		"wider than the decoder accepts": func(siz []byte) {
+			binary.BigEndian.PutUint32(siz[6:], 285212704)
+			binary.BigEndian.PutUint32(siz[22:], 301989920)
+		},
+	}
+	for name, patch := range tests {
+		t.Run(name, func(t *testing.T) {
+			data := buildCodestream(t, func(_, siz []byte) { patch(siz) })
+			if c, err := jpeg2000.ParseCodestream(data); err == nil {
+				t.Fatalf("parsed a %dx%d image with %d tiles", c.Width, c.Height, c.NumTiles())
+			}
+		})
+	}
+}
+
+// TestNumTilesDoesNotWrap: counting tiles adds two 32-bit values, so a single
+// tile wider than 2^31 must still count as one.
+func TestNumTilesDoesNotWrap(t *testing.T) {
+	data := buildCodestream(t, func(_, siz []byte) {
+		binary.BigEndian.PutUint32(siz[6:], 0xFFFFFFF0)  // Xsiz
+		binary.BigEndian.PutUint32(siz[14:], 0xFFFFFFB0) // XOsiz: 64 samples wide
+		binary.BigEndian.PutUint32(siz[22:], 0xFFFFFFFF) // XTsiz
+	})
+	c, err := jpeg2000.ParseCodestream(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := c.NumTiles(); got != 1 {
+		t.Errorf("NumTiles = %d, want 1", got)
+	}
+	if got := c.TilesAcross(); got != 1 {
+		t.Errorf("TilesAcross = %d, want 1", got)
+	}
+}
+
 // TestParseCodestreamRejectsTruncatedInput: every length in a codestream comes
 // from the file, so each is checked before it is used.
 func TestParseCodestreamRejectsTruncatedInput(t *testing.T) {

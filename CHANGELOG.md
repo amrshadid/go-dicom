@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A JPEG 2000 tile grid that does not cover the image is refused** (#164). The
+  SIZ parser checked where the image starts but not where the tile grid does, and
+  ISO 15444-1 A.5.1 requires the grid to start at or before the image. Every
+  tile's bounds are computed unsigned, so a grid starting past the image wrapped
+  the subtraction, and a 32×32 codestream asked the decoder for 144 TB. Running
+  out of memory is a fatal error in Go rather than a panic: no `recover` catches
+  it, and `Dataset.PixelArray` on such a file took the whole process with it.
+  OpenJPEG refuses the same file for an illegal tile offset.
+
+  Fuzzing past that found two more of the same kind. The image-size limit was
+  applied by `Decode` alone, so `ParseCodestream` and `ReadTilePackets` sized
+  their precincts from a 285212704×32 image and reached 6.2 GB first; the parser
+  now applies it too. And the tile count was a 32-bit ceiling division, which
+  counted a single tile wider than 2^31 as none. A grid of more tiles than a
+  tile-part can name, 65535, is refused as well.
+
 - **An 8-bit JPEG frame with no samples is an error** (#165). 8-bit frames are
   decoded by the standard library, which takes a frame header of zero columns,
   or of zero rows with the count left to a DNL marker it does not read, as an
