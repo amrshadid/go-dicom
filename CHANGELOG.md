@@ -9,6 +9,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **US is a valid VR** (#201). The VR table had no US entry, so
+  `IsValidVR(US)` was false and `GetVRInfo(US)` nil, and `AllVRs` also left out
+  OV, SV and UV. Callers fell back quietly, which is why it went unseen, but a
+  check built on the table skipped every US. All 34 VRs of PS3.5 Table 6.2-1
+  are there now.
+
+- **A JPEG 2000 tile grid that does not cover the image is refused** (#164). The
+  SIZ parser checked where the image starts but not where the tile grid does, and
+  ISO 15444-1 A.5.1 requires the grid to start at or before the image. Every
+  tile's bounds are computed unsigned, so a grid starting past the image wrapped
+  the subtraction, and a 32×32 codestream asked the decoder for 144 TB. Running
+  out of memory is a fatal error in Go rather than a panic: no `recover` catches
+  it, and `Dataset.PixelArray` on such a file took the whole process with it.
+  OpenJPEG refuses the same file for an illegal tile offset.
+
+  Fuzzing past that found two more of the same kind. The image-size limit was
+  applied by `Decode` alone, so `ParseCodestream` and `ReadTilePackets` sized
+  their precincts from a 285212704×32 image and reached 6.2 GB first; the parser
+  now applies it too. And the tile count was a 32-bit ceiling division, which
+  counted a single tile wider than 2^31 as none. A grid of more tiles than a
+  tile-part can name, 65535, is refused as well.
+
+- **An 8-bit JPEG frame with no samples is an error** (#165). 8-bit frames are
+  decoded by the standard library, which takes a frame header of zero columns,
+  or of zero rows with the count left to a DNL marker it does not read, as an
+  empty image and says nothing. `JPEGDecompressor` passed that on as a
+  successful decode of no bytes, leaving every caller to notice the buffer was
+  empty. The 12-bit path already refused the same header, and libjpeg refuses it
+  too: "Empty JPEG image (DNL not supported)". `FuzzJPEGExtendedDecompress`
+  found it within three seconds of running past its seeds.
+
+- **Every way of starting a server applies `MaxAssociations`** (#170). An SCP
+  accepted associations in three loops, `SCP.ListenAndServe`, `StartServer` and
+  `StartServerTLS`, and only the first consulted the limit: with
+  `MaxAssociations: 1`, `StartServer` accepted three associations held open at
+  once. All three also retried a failed accept immediately and forever, so after
+  `SCP.Close()`, which closes the listener without canceling the context,
+  `ListenAndServe` never returned and logged a million lines in two seconds.
+
+  There is one loop now. A closed listener ends it, and `ListenAndServe`
+  returns nil after `Close`. Any other accept error is retried after a pause
+  that doubles from 5 ms to a second, as `net/http` does. `StartServerTLS`
+  emits the connection events `StartServer` always did.
+
+- **Lossless JPEG prediction resets at every restart marker** (#174). T.81
+  H.1.2.1 starts each restart interval afresh: its first sample takes the
+  default prediction, and its first line is predicted from the left, as the
+  image's first line is. The decoder did that at the start of the scan only, so
+  in a frame with restart markers every interval after the first was predicted
+  from the row before it and came out offset from the right values, with no
+  error. Neither dcmtk nor pydicom's corpus has such a file, which is how it went
+  unseen; `scripts/jpeglossless-restart-fixture.py` now writes two, at selection
+  values 1 and 7, and keeps them only once libjpeg decodes them to the original
+  samples. A restart interval that is not a whole number of rows, which T.81 H.2
+  does not allow in a lossless frame, is refused by name.
+
 - **An implicit private attribute is written as UN, not with an invented VR**
   (#186). `ResolveVR`, which the file writer and the network encoder use, took
   the VR of an element read without one from the private dictionary. Most of
