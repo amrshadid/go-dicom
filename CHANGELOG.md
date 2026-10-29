@@ -149,6 +149,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declaration now says ISO_IR 192 wherever the text needs it. pydicom's JSON for
   every file in its corpus now reads back with no other difference.
 
+- **Only the text VRs a character set covers are decoded with it** (#198).
+  (0008,0005) applies to SH, LO, UC, ST, LT, UT and PN (PS3.5 6.1.2.3), and
+  every text VR was decoded with it, so a CS of bytes E9 58 under ISO_IR 144 read
+  "щX" where pydicom reads "éX". The others are now decoded in the default
+  repertoire, which changes nothing for the ASCII they should hold.
+  `dataelem.IsCharacterSetVR` names the seven.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
