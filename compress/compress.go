@@ -1072,6 +1072,12 @@ func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode JPEG: %w", err)
 	}
+	// image/jpeg returns an empty image, not an error, for a frame of zero
+	// columns, or of zero rows with the count in a DNL marker it does not read.
+	if bounds := img.Bounds(); bounds.Empty() {
+		return nil, fmt.Errorf("failed to decode JPEG: the frame is %dx%d",
+			bounds.Dx(), bounds.Dy())
+	}
 
 	return samplesFromImage(img, d.KeepYCbCr), nil
 }
