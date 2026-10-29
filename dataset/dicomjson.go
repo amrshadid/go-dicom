@@ -238,55 +238,21 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement, enclosin
 	return ds.ResolveVR(t, elem, enclosing...)
 }
 
-// privateVR resolves a private tag through the private dictionary.
+// privateVR is the VR a private tag has whatever file it is in: LO for a
+// private creator, which PS3.5 7.8.1 makes it by definition, and nothing for a
+// private data element, which callers then write as UN.
 //
-// Private tags cannot be looked up by their stored tag, because the block they
-// sit in is assigned per file. PS3.5 7.8.1 gives a vendor a group and lets it
-// claim any block from 0x10 to 0xFF within it; the block is named by a private
-// creator at (gggg,00xx), and the vendor's attributes then live at (gggg,xxee).
-// The same attribute is (0019,1002) in one file and (0019,4302) in the next.
-//
-// So the creator is read to learn the vendor, and the tag is normalized to the
-// block the dictionary stores it under before the lookup. Without that step a
-// dictionary of 6883 private attributes answers nothing except for files that
-// happen to have chosen block 0x10.
+// The private dictionary is not consulted. Most of it is generated, with VRs
+// given in rotation rather than taken from any vendor, so trusting it
+// relabeled real data: an implicit Siemens MR came out of storescp with the
+// CS at (0019,1008) labeled SL and the US at (0019,100A) labeled FL (#186).
+// UN keeps the value exactly, which PS3.5 6.2.2 provides it for.
 func (ds *Dataset) privateVR(t tag.Tag) dataelem.VR {
 	if t.Group()%2 == 0 {
 		return ""
 	}
-
-	element := t.Element()
-
-	// A private creator is LO by definition — its value is the vendor's own
-	// name, so no dictionary is needed or possible.
-	if element >= 0x0010 && element <= 0x00FF {
+	if element := t.Element(); element >= 0x0010 && element <= 0x00FF {
 		return dataelem.LO
-	}
-
-	block := element >> 8
-	if block < 0x10 {
-		return "" // not a private data element of any block
-	}
-	creator, ok := ds.Get(tag.New(t.Group(), block))
-	if !ok {
-		return "" // the block was never claimed, so nothing can say what this is
-	}
-	raw, ok := creator.GetValue().([]byte)
-	if !ok {
-		return ""
-	}
-	vendor := strings.TrimRight(string(raw), " \x00")
-	if vendor == "" {
-		return ""
-	}
-
-	canonical := tag.New(t.Group(), 0x1000|(element&0x00FF))
-	if info := canonical.GetPrivateTagInfo(vendor); info != nil {
-		if known := dataelem.VR(info.VR); known != "" && known != dataelem.UN &&
-			known != dataelem.SQ && !jsonBinaryVRs[known] &&
-			!strings.Contains(string(known), " or ") {
-			return known
-		}
 	}
 	return ""
 }

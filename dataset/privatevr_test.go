@@ -8,17 +8,17 @@ import (
 	"github.com/amrshadid/go-dicom/tag"
 )
 
-// This library ships a private dictionary of 6883 attributes across the
-// vendors, and nothing consulted it. A private attribute went into the JSON
-// model as UN with its value base64-encoded, whatever the dictionary knew.
+// A private attribute's VR cannot be taken from this library's private
+// dictionary. Most of it is generated: tag/gen_private_dict_tool.go gives the
+// attributes of a vendor VRs in rotation, so (0019,1008) under SIEMENS MR
+// HEADER, a CS in real files, is listed as SL, and (0019,100A), a US, as FL.
+// Trusting it relabeled the attributes of every implicit VR file the library
+// wrote out: storescp stored a Siemens MR whose text read back as numbers, and
+// whose 2-byte value was labeled with a 4-byte VR pydicom refuses (#186).
 //
-// Looking one up is not a lookup by tag. PS3.5 7.8.1 gives a vendor a group and
-// lets it claim any block from 0x10 to 0xFF within it: the block is named by a
-// private creator at (gggg,00xx), and the vendor's attributes then live at
-// (gggg,xxee). The same attribute is (0043,1001) in a file that claimed block
-// 0x10 and (0043,4301) in one that claimed 0x43. A dictionary keyed on the
-// canonical block answers nothing for the second file unless the tag is
-// normalized first.
+// An implicit private attribute is therefore UN, which PS3.5 6.2.2 provides
+// for exactly this: a value whose VR the writer does not know, kept byte for
+// byte. A private creator is still LO, which PS3.5 7.8.1 makes it by definition.
 
 // privateDataSet builds a data set with one private block and one attribute in
 // it, at whichever block the caller wants to pretend the file claimed.
@@ -55,30 +55,55 @@ func vrOfElement(t *testing.T, ds *dataset.Dataset, key string) string {
 	return elem.VR
 }
 
-// TestPrivateAttributeVRComesFromTheDictionary covers the canonical block.
-//
-// GEMS_PARM_01 owns (0043,1001), Bitmap of Prescan Options, which the
-// dictionary gives VR SS.
-func TestPrivateAttributeVRComesFromTheDictionary(t *testing.T) {
-	ds := privateDataSet(t, 0x10, "GEMS_PARM_01", dataelem.UN, "\x01\x00")
-
-	if got := vrOfElement(t, ds, "00431001"); got != "SS" {
-		t.Errorf("the private attribute's VR is %q, want SS from the GEMS_PARM_01 "+
-			"dictionary", got)
+// TestPrivateAttributeVRIsNotGuessed: whatever the dictionary lists for the
+// vendor and whichever block the file claimed, an attribute read without a VR
+// stays UN in DICOM JSON, with its bytes intact.
+func TestPrivateAttributeVRIsNotGuessed(t *testing.T) {
+	for _, tc := range []struct {
+		vendor string
+		block  uint16
+		key    string
+	}{
+		{"GEMS_PARM_01", 0x10, "00431001"},
+		{"GEMS_PARM_01", 0x43, "00434301"},
+	} {
+		ds := privateDataSet(t, tc.block, tc.vendor, dataelem.UN, "IMAGE NUM 4 ")
+		m, err := ds.ToDICOMJSON()
+		if err != nil {
+			t.Fatalf("%s: ToDICOMJSON: %v", tc.vendor, err)
+		}
+		elem := m[tc.key]
+		if elem.VR != "UN" {
+			t.Errorf("%s at %s: VR %q, want UN", tc.vendor, tc.key, elem.VR)
+		}
+		if got := elem.InlineBinary; got != "SU1BR0UgTlVNIDQg" {
+			t.Errorf("%s at %s: InlineBinary %q, want the original bytes", tc.vendor, tc.key, got)
+		}
 	}
 }
 
-// TestPrivateAttributeVRSurvivesADifferentBlock is the case a plain lookup gets
-// wrong.
-//
-// The same attribute, in a file that claimed block 0x43 instead of 0x10, is
-// stored at (0043,4301). Looking that tag up in the dictionary finds nothing.
-func TestPrivateAttributeVRSurvivesADifferentBlock(t *testing.T) {
-	ds := privateDataSet(t, 0x43, "GEMS_PARM_01", dataelem.UN, "\x01\x00")
+// TestImplicitPrivateAttributeIsWrittenAsUN: ResolveVR is what the file writer
+// and the network encoder ask, so an implicit private attribute must come out
+// of it as UN rather than as whatever the dictionary lists.
+func TestImplicitPrivateAttributeIsWrittenAsUN(t *testing.T) {
+	// Where real Siemens MR files hold it: (0019,1008), a CS the generated
+	// dictionary lists as SL.
+	ds := dataset.NewDataset()
+	creatorTag, attribute := tag.New(0x0019, 0x0010), tag.New(0x0019, 0x1008)
+	if err := ds.Add(dataelem.NewDataElement(creatorTag, "", []byte("SIEMENS MR HEADER "))); err != nil {
+		t.Fatal(err)
+	}
+	if err := ds.Add(dataelem.NewDataElement(attribute, "", []byte("IMAGE NUM 4 "))); err != nil {
+		t.Fatal(err)
+	}
 
-	if got := vrOfElement(t, ds, "00434301"); got != "SS" {
-		t.Errorf("the private attribute's VR is %q, want SS; the block the file "+
-			"claimed is not the block the dictionary stores it under", got)
+	elem, _ := ds.Get(attribute)
+	if got := ds.ResolveVR(attribute, elem); got != dataelem.UN {
+		t.Errorf("ResolveVR gave %q for an implicit private attribute, want UN", got)
+	}
+	creator, _ := ds.Get(creatorTag)
+	if got := ds.ResolveVR(creatorTag, creator); got != dataelem.LO {
+		t.Errorf("ResolveVR gave %q for the private creator, want LO", got)
 	}
 }
 
