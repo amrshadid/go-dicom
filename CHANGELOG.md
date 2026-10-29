@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples. A restart interval that is not a whole number of rows, which T.81 H.2
   does not allow in a lossless frame, is refused by name.
 
+- **A lossless JPEG scan that runs out before its frame does is an error**
+  (#175). The bit reader counted the bytes it invented past the end of the
+  entropy-coded data, but a scan ends at a marker, EOI at the latest, and zeros
+  fed at a marker were not counted. A scan cut short and followed by any marker
+  decoded to a full frame, its missing part decoded from zeros, which is what
+  `maxLosslessPixels` says must not happen. Decoding now stops at the row where
+  the data ran out, counted per restart interval. A scan with fewer than one bit
+  per sample is refused before its samples are allocated, so 4396 bytes
+  declaring 5792×5792 no longer allocate 319 MB to produce 67 MB of invented
+  samples. A component that no scan covers is refused rather than returned as
+  zeros.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
