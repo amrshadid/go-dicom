@@ -3,8 +3,11 @@ package network
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -17,7 +20,9 @@ type TLSConfig struct {
 	// KeyFile is the path to the TLS private key file (PEM format).
 	KeyFile string
 
-	// CAFile is the path to the CA certificate file for client verification.
+	// CAFile is the path to a PEM file of CA certificates. A server requires a
+	// client certificate and verifies it against them; a client verifies the
+	// server against them instead of the system roots.
 	CAFile string
 
 	// InsecureSkipVerify disables certificate verification (for testing only).
@@ -34,8 +39,12 @@ type TLSConfig struct {
 	Config *tls.Config
 }
 
-// buildTLSConfig creates a *tls.Config from TLSConfig settings.
-func (t *TLSConfig) buildTLSConfig() (*tls.Config, error) {
+// buildTLSConfig creates a *tls.Config from TLSConfig settings, for the server
+// side of a connection or the client side.
+func (t *TLSConfig) buildTLSConfig(server bool) (*tls.Config, error) {
+	if t == nil {
+		return nil, errors.New("tls: no TLS configuration")
+	}
 	if t.Config != nil {
 		return t.Config, nil
 	}
@@ -50,12 +59,35 @@ func (t *TLSConfig) buildTLSConfig() (*tls.Config, error) {
 		tlsConfig.MinVersion = tls.VersionTLS12
 	}
 
-	if t.CertFile != "" && t.KeyFile != "" {
+	// Half a key pair was ignored, and the side it was meant for ran with no
+	// certificate at all.
+	if (t.CertFile == "") != (t.KeyFile == "") {
+		return nil, errors.New("tls: CertFile and KeyFile must be given together")
+	}
+	if t.CertFile != "" {
 		cert, err := tls.LoadX509KeyPair(t.CertFile, t.KeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load TLS certificate: %w", err)
 		}
 		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	if t.CAFile != "" {
+		data, err := os.ReadFile(t.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read TLS CA file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(data) {
+			return nil, fmt.Errorf("tls: %s holds no PEM certificate", t.CAFile)
+		}
+		// PS3.15 B.1 has each side authenticate the other.
+		if server {
+			tlsConfig.ClientCAs = pool
+			tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		} else {
+			tlsConfig.RootCAs = pool
+		}
 	}
 
 	return tlsConfig, nil
@@ -67,7 +99,7 @@ func DialTLS(ctx context.Context, address string, timeout time.Duration, tlsCfg 
 		timeout = DefaultNetworkTimeout
 	}
 
-	config, err := tlsCfg.buildTLSConfig()
+	config, err := tlsCfg.buildTLSConfig(false)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +119,7 @@ func DialTLS(ctx context.Context, address string, timeout time.Duration, tlsCfg 
 
 // ListenTLS creates a TLS-encrypted TCP listener.
 func ListenTLS(address string, tlsCfg *TLSConfig) (*Listener, error) {
-	config, err := tlsCfg.buildTLSConfig()
+	config, err := tlsCfg.buildTLSConfig(true)
 	if err != nil {
 		return nil, err
 	}
