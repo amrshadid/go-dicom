@@ -269,9 +269,16 @@ selection, and user identity negotiation. The window defaults to one.
 
 - **Physical media:** not applicable; this is a network and file library.
 - **Transport:** TCP/IP. DICOM Upper Layer Protocol per PS3.8.
-- **TLS:** available through `network.DialTLS` and `network.ListenTLS`. Plain
-  DICOM over TCP is neither authenticated nor encrypted, and checking a called AE
-  title is a naming convention rather than authentication.
+- **TLS:** `SCUConfig.TLS` puts an SCU's associations on TLS, `SCPConfig.TLS`
+  an SCP's, and `-tls` does the same for every network command. A
+  `TLSConfig.CAFile` makes each side authenticate the other: a server requires
+  a client certificate issued by that CA, and a client verifies the server
+  against it. The associations an SCP opens itself (C-MOVE sub-operations,
+  storage commitment results, UPS event reports) use `SCPConfig.OutboundTLS`,
+  plain TCP when it is unset, since a peer the SCP calls need not be reached
+  the way the SCP is; its certificate must then allow client authentication.
+  Verified against pynetdicom over TLS in both directions. Plain DICOM over TCP is neither authenticated nor encrypted, and
+  checking a called AE title is a naming convention rather than authentication.
 
 ---
 
@@ -481,6 +488,16 @@ dictionary entry keeps UN, and a UN element in a big endian file keeps UN,
 because Note 2's little endian value must not be byte-swapped with the rest of
 the data set. An undefined length means items whatever the dictionary says
 (Note 5), and they are parsed as a sequence.
+
+On writing, a private attribute read without a VR, as every attribute of an
+implicit VR file is, takes the VR GDCM's private dictionary gives it, looked up
+through the file's own private creator. Where the dictionary does not know the
+attribute, lists more than one VR, or lists a fixed-size VR its value is not a
+whole number of, it is written as UN with its value unchanged, which PS3.5
+6.2.2 provides for. Across pydicom's corpus every private attribute gets the VR
+pydicom gives it. The dictionary this replaced was generated, with VRs in
+rotation, and an implicit Siemens MR written through it had text relabeled as
+numbers (#186, #188).
 
 Where the dictionary gives an attribute two VRs, the one written is the one the
 data set calls for, resolved as pydicom resolves it. `US or SS` follows Pixel

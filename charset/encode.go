@@ -1,8 +1,10 @@
 package charset
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/errors"
@@ -44,7 +46,7 @@ func EncodeStringWithContext(ctx context.Context, value string, encodings []stri
 
 	// If single encoding failed and we have multiple encodings, try multi-part encoding
 	if len(encodings) > 1 {
-		result, err = encodeStringParts(ctx, value, encodings, validationMode)
+		result, err = encodeDelimited(ctx, value, encodings, validationMode)
 		if err == nil {
 			return result, nil
 		}
@@ -69,6 +71,44 @@ func encodeSimple(ctx context.Context, value string, encoding string, validation
 	return result, nil
 }
 
+// codeExtensionDelimiters are where PS3.5 6.1.2.5.3 returns the code element
+// designations to their initial state: the PN component separators and the
+// value and line separators of text. EncodeString is not told the VR, so it
+// resets at all of them; a reset a VR does not call for only repeats an escape.
+const codeExtensionDelimiters = "^=\\\r\n\t\f"
+
+// encodeDelimited encodes each run between delimiters from the initial state,
+// so a set other than the first is introduced by its escape in every
+// component that uses it. Encoding the value as one run put a single escape at
+// its start, and a reader resetting at "=" as the standard says read the
+// Korean after it as the default set (#197).
+func encodeDelimited(ctx context.Context, value string, encodings []string, validationMode config.ValidationMode) ([]byte, error) {
+	var result []byte
+	for value != "" {
+		end := strings.IndexAny(value, codeExtensionDelimiters)
+		piece := value
+		if end >= 0 {
+			piece = value[:end]
+		}
+		if piece != "" {
+			encoded, err := encodeSimple(ctx, piece, encodings[0], validationMode)
+			if err != nil {
+				if encoded, err = encodeStringParts(ctx, piece, encodings, validationMode); err != nil {
+					return nil, err
+				}
+			}
+			result = append(result, encoded...)
+		}
+		if end < 0 {
+			break
+		}
+		// The delimiters are ASCII in every set DICOM allows here.
+		result = append(result, value[end])
+		value = value[end+1:]
+	}
+	return result, nil
+}
+
 // encodeStringParts encodes a string using multiple encodings, trying each
 // encoding in sequence and automatically inserting escape sequences.
 func encodeStringParts(ctx context.Context, value string, encodings []string, validationMode config.ValidationMode) ([]byte, error) {
@@ -84,11 +124,13 @@ func encodeStringParts(ctx context.Context, value string, encodings []string, va
 			return nil, fmt.Errorf("cannot encode character at position %d", len(value)-len(remaining))
 		}
 
-		// Add escape sequence if switching encodings
+		// Add escape sequence if switching encodings. Not for an encoder that
+		// writes its own: ISO-2022-JP's already begins with ESC $ B, and the
+		// table maps both IR 87 and IR 159 to it, so what was prepended could
+		// be IR 159's ESC $ ( D in front of IR 87 text (#197).
 		if usedEncoding != currentEncoding {
-			escSeq := GetEscapeSequenceForEncoding(usedEncoding, encoded)
-			if len(escSeq) > 0 {
-				result = append(result, escSeq...)
+			if !IsPythonHandledEncoding(usedEncoding) {
+				result = append(result, GetEscapeSequenceForEncoding(usedEncoding, encoded)...)
 			}
 			currentEncoding = usedEncoding
 		}
@@ -96,12 +138,14 @@ func encodeStringParts(ctx context.Context, value string, encodings []string, va
 		// Add the encoded data
 		result = append(result, encoded...)
 
-		// Move to next part
-		remaining = remaining[consumed:]
+		// Move to next part. consumed counts runes, as findLongestEncodable
+		// does; cutting that many bytes split a UTF-8 character, the next
+		// encode failed, and the value fell back to raw UTF-8 (#197).
+		remaining = string([]rune(remaining)[consumed:])
 	}
 
-	// Add tail escape if the last encoding requires it
-	if RequiresTailEscape(currentEncoding) {
+	// Add tail escape if the last encoding requires it and has not already.
+	if RequiresTailEscape(currentEncoding) && !bytes.HasSuffix(result, GetReturnToASCIIEscape()) {
 		result = append(result, GetReturnToASCIIEscape()...)
 	}
 
@@ -219,8 +263,9 @@ func getEncoder(encodingName string) *encoding.Encoder {
 
 	// Thai
 	case "ISO-8859-11":
-		// Note: Go's charmap doesn't have ISO-8859-11, fallback to UTF-8
-		enc = unicode.UTF8
+		// Windows-874, as for decoding: the same table as TIS 620-2533 for
+		// every Thai character (#195).
+		enc = charmap.Windows874
 
 	// Japanese
 	case "Shift_JIS":

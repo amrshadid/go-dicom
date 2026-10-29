@@ -140,3 +140,31 @@ func hasWarning(warnings []string, substring string) bool {
 	}
 	return false
 }
+
+// TestOnlyTextVRsTakeTheDeclaredCharacterSet: (0008,0005) applies to SH, LO,
+// UC, ST, LT, UT and PN (PS3.5 6.1.2.3, Table 6.2-1). Every text VR was decoded
+// with it, so a CS of bytes E9 58 under ISO_IR 144 read "щX", where pydicom,
+// decoding it in the default repertoire, reads "éX" (#198). The PN beside it,
+// which the declaration does cover, is still Cyrillic.
+func TestOnlyTextVRsTakeTheDeclaredCharacterSet(t *testing.T) {
+	cyrillic := []byte{0xBB, 0xEE, 0xDA, 0x5E, 0xB8, 0xD2, 0xD0, 0xDD} // Люк^Иван in ISO-8859-5
+	var ds bytes.Buffer
+	ds.Write(explicitElement(0x0008, 0x0005, "CS", []byte("ISO_IR 144")))
+	ds.Write(explicitElement(0x0008, 0x0060, "CS", []byte{0xE9, 'X'}))
+	ds.Write(explicitElement(0x0010, 0x0010, "PN", cyrillic))
+
+	got := readFile(t, buildFile("1.2.840.10008.1.2.1", ds.Bytes(), false)).GetDataset()
+
+	modality, _ := got.Get(tag.New(0x0008, 0x0060))
+	if v, _ := modality.GetValue().([]byte); string(v) != "éX" {
+		t.Errorf("the CS reads %q, want %q in the default repertoire", v, "éX")
+	}
+	name, err := got.GetPersonName(tag.New(0x0010, 0x0010))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Люк^Иван"; strings.TrimSpace(name.String()) != want {
+		t.Errorf("the PN reads %q, want %q", name.String(), want)
+	}
+	assertDeclarationMatchesBytes(t, got)
+}

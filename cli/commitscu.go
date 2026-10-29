@@ -13,6 +13,7 @@ import (
 // CommitSCUCommand implements the commitscu CLI command: it asks a peer to take
 // storage responsibility for instances already sent to it (PS3.4 Annex J).
 type CommitSCUCommand struct {
+	tls            tlsFlags
 	callingAE      string
 	calledAE       string
 	transactionUID string
@@ -47,6 +48,7 @@ func (c *CommitSCUCommand) Description() string {
 }
 
 func (c *CommitSCUCommand) AddFlags(fs *flag.FlagSet) {
+	addClientTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.callingAE, "aet", "COMMITSCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.StringVar(&c.transactionUID, "transaction", "", "Transaction UID (generated if empty)")
@@ -59,6 +61,10 @@ func (c *CommitSCUCommand) Execute(args []string) error {
 	fs := flag.NewFlagSet("commitscu", flag.ExitOnError)
 	c.AddFlags(fs)
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
 		return err
 	}
 
@@ -76,6 +82,7 @@ func (c *CommitSCUCommand) Execute(args []string) error {
 
 	address := fs.Arg(0)
 	scu := network.NewSCU(network.SCUConfig{
+		TLS:       tlsCfg,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,

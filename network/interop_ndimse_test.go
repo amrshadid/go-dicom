@@ -3,6 +3,7 @@ package network_test
 import (
 	"bufio"
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -210,16 +211,14 @@ func TestMPPSSCPAgainstPynetdicom(t *testing.T) {
 	events := make(chan mppsEvent, 4)
 
 	scp := network.NewSCP(network.SCPConfig{
-		AETitle: "GO_MPPS_SCP", Port: 0, BindAddress: "127.0.0.1",
+		AETitle: "GO_MPPS_SCP", Port: freePort(t), BindAddress: "127.0.0.1",
 	})
 	scp.SetHandler(&mppsRecorder{events: events})
 	scp.SetSupportedAbstractSyntaxes([]string{network.ModalityPerformedProcedureStepUID})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = scp.ListenAndServe(ctx) }()
-
-	addr := waitForSCP(t, scp)
+	addr := serveSCP(ctx, t, scp)
 
 	runPynetdicomSCU(t, `
 import sys
@@ -421,18 +420,38 @@ func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
-// waitForSCP blocks until the SCP has bound a port and returns its address.
-func waitForSCP(t *testing.T, scp *network.SCP) string {
+// serveSCP runs the SCP until ctx is canceled and returns its address once it
+// is listening. If ListenAndServe fails first, the test fails with its error.
+func serveSCP(ctx context.Context, t *testing.T, scp *network.SCP) string {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if addr := scp.Addr(); addr != "" && !strings.HasSuffix(addr, ":0") {
+	failed := make(chan error, 1)
+	go func() { failed <- scp.ListenAndServe(ctx) }()
+
+	deadline := time.After(10 * time.Second)
+	for {
+		if addr := scp.Addr(); addr != "" {
 			return addr
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case err := <-failed:
+			t.Fatalf("go-dicom SCP did not start: %v", err)
+		case <-deadline:
+			t.Fatal("go-dicom SCP never bound a port")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
-	t.Fatal("go-dicom SCP never bound a port")
-	return ""
+}
+
+// freePort returns a port that was free a moment ago. NewSCP reads a Port of 0
+// as DefaultPort, not as any free port (#172).
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("finding a free port: %v", err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 // runPynetdicomSCU runs a python SCU script to completion and fails the test if
@@ -461,16 +480,14 @@ func runPynetdicomSCU(t *testing.T, source string) {
 func TestUPSAgainstPynetdicom(t *testing.T) {
 	store := newMemoryUPSStore()
 	scp := network.NewSCP(network.SCPConfig{
-		AETitle: "GO_UPS_SCP", Port: 0, BindAddress: "127.0.0.1",
+		AETitle: "GO_UPS_SCP", Port: freePort(t), BindAddress: "127.0.0.1",
 	})
 	scp.SetHandler(&network.UPSHandler{Store: store})
 	scp.SetSupportedAbstractSyntaxes([]string{network.UnifiedProcedureStepPushUID})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = scp.ListenAndServe(ctx) }()
-
-	addr := waitForSCP(t, scp)
+	addr := serveSCP(ctx, t, scp)
 	host, port := splitHostPort(t, addr)
 
 	runPynetdicomSCU(t, `

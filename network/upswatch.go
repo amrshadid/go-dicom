@@ -441,6 +441,7 @@ func (s *SCP) ReportUPSEvent(ctx context.Context, receivingAE string, event *UPS
 		CalledAE:  receivingAE,
 		Address:   address,
 		Network:   s.config.Network,
+		TLS:       s.config.OutboundTLS,
 	})
 
 	if err := subscriber.Associate(ctx, UnifiedProcedureStepPresentationContexts()); err != nil {

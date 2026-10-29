@@ -13,6 +13,7 @@ import (
 
 // EchoSCPCommand implements the echoscp CLI command.
 type EchoSCPCommand struct {
+	tls     tlsFlags
 	aeTitle string
 	port    int
 }
@@ -21,6 +22,7 @@ func (c *EchoSCPCommand) Name() string        { return "echoscp" }
 func (c *EchoSCPCommand) Description() string { return "DICOM Echo SCP (verification server)" }
 
 func (c *EchoSCPCommand) AddFlags(fs *flag.FlagSet) {
+	addServerTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.aeTitle, "aet", "ECHOSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 }
@@ -31,8 +33,13 @@ func (c *EchoSCPCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
 
 	scp := network.NewSCP(network.SCPConfig{
+		TLS:     tlsCfg,
 		AETitle: c.aeTitle,
 		Port:    c.port,
 	})

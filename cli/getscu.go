@@ -16,6 +16,7 @@ import (
 
 // GetSCUCommand implements the getscu CLI command.
 type GetSCUCommand struct {
+	tls       tlsFlags
 	callingAE string
 	calledAE  string
 	timeout   int
@@ -29,6 +30,7 @@ func (c *GetSCUCommand) Name() string        { return "getscu" }
 func (c *GetSCUCommand) Description() string { return "DICOM Get SCU (retrieve on same association)" }
 
 func (c *GetSCUCommand) AddFlags(fs *flag.FlagSet) {
+	addClientTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.callingAE, "aet", "GETSCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 120, "Connection timeout in seconds")
@@ -44,6 +46,10 @@ func (c *GetSCUCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: getscu [options] host:port")
@@ -57,6 +63,7 @@ func (c *GetSCUCommand) Execute(args []string) error {
 
 	received := 0
 	scu := network.NewSCU(network.SCUConfig{
+		TLS:       tlsCfg,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,
