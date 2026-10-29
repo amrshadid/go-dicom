@@ -1201,6 +1201,13 @@ func decodeTextValue(vr dataelem.VR, value []byte, encodings []string) []byte {
 	if vr == dataelem.PN {
 		delimiters = charset.PersonNameDelimiters
 	}
+	// The declaration covers only some text VRs. A CS, UI or DA is in the
+	// default repertoire whatever it says, so decoding one with the declared
+	// set read the bytes E9 58 as "щX" under ISO_IR 144, where pydicom reads
+	// "éX" (#198).
+	if !dataelem.IsCharacterSetVR(vr) {
+		encodings = []string{charset.DefaultEncoding}
+	}
 
 	decoded, err := charset.DecodeBytes(value, encodings, delimiters)
 	if err != nil {
