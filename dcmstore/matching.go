@@ -144,7 +144,11 @@ func hasWildcard(query string) bool {
 // metacharacter in a patient name — "." and "(" occur in real ones — either has
 // to be escaped correctly or becomes an injection. Matching is linear here, with
 // no backtracking blow-up to worry about either.
-func matchWildcard(pattern, value string) bool {
+func matchWildcard(patternText, valueText string) bool {
+	// By character, not by byte: "?" is one character (PS3.4 C.2.2.2.4), and
+	// in UTF-8 the "ü" of "Müller" is two bytes.
+	pattern, value := []rune(patternText), []rune(valueText)
+
 	// p and v walk the pattern and value. star remembers where the last "*" was
 	// seen so the match can resume after it, which is what makes this linear.
 	var p, v int
