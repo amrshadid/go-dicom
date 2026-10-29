@@ -190,12 +190,9 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 	}
 }
 
-// TestParseCodestreamRejectsAnImpossibleTileGrid: the tile grid comes from the
-// file, and every tile, band and code-block is sized from it. A grid that does
-// not cover the image, or one no tile-part could address, is refused by the
-// parser. The first case is the fuzzer's: a 32x32 image whose grid starts at
-// (47031, 3070230528) asked the decoder for 144 TB, which is a fatal error in
-// Go and not a panic anything could recover from.
+// TestParseCodestreamRejectsAnImpossibleTileGrid: every tile, band and
+// code-block is sized from the tile grid, so a grid that does not cover the
+// image, or one no tile-part could address, is refused by the parser (#164).
 func TestParseCodestreamRejectsAnImpossibleTileGrid(t *testing.T) {
 	// SIZ offsets in buildCodestream's segment: Xsiz 6, Ysiz 10, XOsiz 14,
 	// YOsiz 18, XTsiz 22, YTsiz 26, XTOsiz 30, YTOsiz 34.
@@ -218,8 +215,6 @@ func TestParseCodestreamRejectsAnImpossibleTileGrid(t *testing.T) {
 			binary.BigEndian.PutUint32(siz[22:], 1)
 			binary.BigEndian.PutUint32(siz[26:], 1)
 		},
-		// The decoder refused this size; the parser did not, and the packet
-		// reader sized its precincts from it before anything asked Decode.
 		"wider than the decoder accepts": func(siz []byte) {
 			binary.BigEndian.PutUint32(siz[6:], 285212704)
 			binary.BigEndian.PutUint32(siz[22:], 301989920)
@@ -235,9 +230,8 @@ func TestParseCodestreamRejectsAnImpossibleTileGrid(t *testing.T) {
 	}
 }
 
-// TestNumTilesDoesNotWrap: Xsiz and XTsiz are both 32-bit, and the ceiling
-// division that counts tiles adds them. Done in 32 bits, a single tile wider
-// than 2^31 counted as zero tiles.
+// TestNumTilesDoesNotWrap: counting tiles adds two 32-bit values, so a single
+// tile wider than 2^31 must still count as one.
 func TestNumTilesDoesNotWrap(t *testing.T) {
 	data := buildCodestream(t, func(_, siz []byte) {
 		binary.BigEndian.PutUint32(siz[6:], 0xFFFFFFF0)  // Xsiz

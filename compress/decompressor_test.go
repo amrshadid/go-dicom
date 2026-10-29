@@ -190,11 +190,8 @@ func TestJPEGCanDecompress(t *testing.T) {
 	}
 }
 
-// TestJPEGFrameWithNoSamplesIsAnError: the standard library decodes a frame
-// header declaring zero columns or zero rows as an empty image, without
-// complaint, and that was returned as a successful decode of no bytes. The
-// caller is owed an error rather than a buffer it has to notice is empty.
-// FuzzJPEGExtendedDecompress found it.
+// TestJPEGFrameWithNoSamplesIsAnError: a frame of zero columns or rows is an
+// error, not a successful decode of no bytes (#165).
 func TestJPEGFrameWithNoSamplesIsAnError(t *testing.T) {
 	var encoded bytes.Buffer
 	if err := jpeg.Encode(&encoded, image.NewGray(image.Rect(0, 0, 8, 8)), nil); err != nil {
