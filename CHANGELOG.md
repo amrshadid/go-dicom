@@ -7,7 +7,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **JPEG 2000 decodes up to four times faster** (#184). Code-blocks are coded
+  independently (ISO 15444-1 B.7), and the decoder now decodes a
+  tile-component's blocks in parallel rather than one at a time. The inverse
+  wavelet reuses one scratch buffer per pass instead of allocating one for every
+  row and column, and computes the symmetric extension only where it applies.
+  A 512×512 lossless frame took 48.8 ms and now takes 12.0 ms, and allocates a
+  third less; a 400×400 RGB frame of 16 tiles goes from 22.0 to 13.1 ms. On one
+  CPU it is no slower. The samples are unchanged: all 49 decodable files in
+  pydicom's corpus still match it sample for sample.
+
 ### Fixed
+
+- **A JPEG 2000 tile grid that does not cover the image is refused** (#164). The
+  SIZ parser checked where the image starts but not where the tile grid does, and
+  ISO 15444-1 A.5.1 requires the grid to start at or before the image. Every
+  tile's bounds are computed unsigned, so a grid starting past the image wrapped
+  the subtraction, and a 32×32 codestream asked the decoder for 144 TB. Running
+  out of memory is a fatal error in Go rather than a panic: no `recover` catches
+  it, and `Dataset.PixelArray` on such a file took the whole process with it.
+  OpenJPEG refuses the same file for an illegal tile offset.
+
+  Fuzzing past that found two more of the same kind. The image-size limit was
+  applied by `Decode` alone, so `ParseCodestream` and `ReadTilePackets` sized
+  their precincts from a 285212704×32 image and reached 6.2 GB first; the parser
+  now applies it too. And the tile count was a 32-bit ceiling division, which
+  counted a single tile wider than 2^31 as none. A grid of more tiles than a
+  tile-part can name, 65535, is refused as well.
+
+- **An 8-bit JPEG frame with no samples is an error** (#165). 8-bit frames are
+  decoded by the standard library, which takes a frame header of zero columns,
+  or of zero rows with the count left to a DNL marker it does not read, as an
+  empty image and says nothing. `JPEGDecompressor` passed that on as a
+  successful decode of no bytes, leaving every caller to notice the buffer was
+  empty. The 12-bit path already refused the same header, and libjpeg refuses it
+  too: "Empty JPEG image (DNL not supported)". `FuzzJPEGExtendedDecompress`
+  found it within three seconds of running past its seeds.
+
+- **Every way of starting a server applies `MaxAssociations`** (#170). An SCP
+  accepted associations in three loops, `SCP.ListenAndServe`, `StartServer` and
+  `StartServerTLS`, and only the first consulted the limit: with
+  `MaxAssociations: 1`, `StartServer` accepted three associations held open at
+  once. All three also retried a failed accept immediately and forever, so after
+  `SCP.Close()`, which closes the listener without canceling the context,
+  `ListenAndServe` never returned and logged a million lines in two seconds.
+
+  There is one loop now. A closed listener ends it, and `ListenAndServe`
+  returns nil after `Close`. Any other accept error is retried after a pause
+  that doubles from 5 ms to a second, as `net/http` does. `StartServerTLS`
+  emits the connection events `StartServer` always did.
+
+- **Lossless JPEG prediction resets at every restart marker** (#174). T.81
+  H.1.2.1 starts each restart interval afresh: its first sample takes the
+  default prediction, and its first line is predicted from the left, as the
+  image's first line is. The decoder did that at the start of the scan only, so
+  in a frame with restart markers every interval after the first was predicted
+  from the row before it and came out offset from the right values, with no
+  error. Neither dcmtk nor pydicom's corpus has such a file, which is how it went
+  unseen; `scripts/jpeglossless-restart-fixture.py` now writes two, at selection
+  values 1 and 7, and keeps them only once libjpeg decodes them to the original
+  samples. A restart interval that is not a whole number of rows, which T.81 H.2
+  does not allow in a lossless frame, is refused by name.
+
+- **`TLSConfig.CAFile` verifies the peer** (#180). It was documented as the CA
+  that client certificates are verified against, and nothing read it. A server
+  given a `CAFile` asked for no client certificate and accepted any client, so a
+  deployment set up for mutual TLS had none; a client given one verified the
+  server against the system roots, so a PACS certificate from a private CA
+  failed. A server with a `CAFile` now requires a client certificate and
+  verifies it against that CA, and a client verifies the server against it.
+  Half a key pair, or a CA file with no certificate in it, is an error rather
+  than ignored. OpenSSL's `s_client` is refused without a certificate and
+  accepted with one from the CA.
+
+- **An implicit private attribute is written as UN, not with an invented VR**
+  (#186). `ResolveVR`, which the file writer and the network encoder use, took
+  the VR of an element read without one from the private dictionary. Most of
+  that dictionary was generated: `gen_private_dict_tool.go` gives a vendor's
+  attributes VRs in rotation and names from a list, so `SIEMENS MR HEADER`
+  (0019,1008), a CS, is listed as SL, and (0019,100A), a US, as FL. An implicit
+  VR Siemens MR sent to `storescp` was stored with its text as three numbers and
+  a 2-byte value labeled with a 4-byte VR, which pydicom refuses to read, and
+  `ToDICOMJSON` failed on the same file. The dictionary is no longer consulted
+  for a VR: a private creator is LO and any other private attribute without a
+  VR is UN, its bytes unchanged, which pydicom and dcmtk both read. The README no
+  longer advertises the dictionary's size, and replacing it with one taken from
+  real vendor documentation is left to a later release.
+
+- **`dcmstore` no longer loses or tears instances it acknowledged** (#189).
+  Instances were written into their final path with `os.Create`, which truncates
+  first, so a store killed midway left an empty or partial file where the good
+  copy had been, still indexed and served. Two stores of one SOP Instance UID at
+  once left a file that was neither copy: 172 of 200 trials. The saved index
+  could be an older snapshot renamed in after a newer one, losing an instance
+  across a restart; an instance stored again under another study or series left
+  its old file, which `Rebuild` brought back after a `Remove`; and `Rebuild`
+  dropped instances stored while it ran, 24 of 50, with a data race besides.
+
+  Files are now written beside their final path, synced, and renamed into
+  place, so a reader, a rebuild or a crash sees a whole copy or the previous
+  one. Writers of one UID are serialized, a moved instance's old file is
+  removed, the index snapshot and its rename happen under one lock, and
+  `Rebuild` runs with stores held off. It also clears what an interrupted
+  write leaves behind, and keeps the newer file where an older version of the
+  store left two for one UID.
 
 - **`dcmstore` matches Modalities in Study, and `?` matches a character**
   (#191). Modalities in Study was skipped with the computed keys, so a STUDY
