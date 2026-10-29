@@ -82,6 +82,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than ignored. OpenSSL's `s_client` is refused without a certificate and
   accepted with one from the CA.
 
+- **An implicit private attribute is written as UN, not with an invented VR**
+  (#186). `ResolveVR`, which the file writer and the network encoder use, took
+  the VR of an element read without one from the private dictionary. Most of
+  that dictionary was generated: `gen_private_dict_tool.go` gives a vendor's
+  attributes VRs in rotation and names from a list, so `SIEMENS MR HEADER`
+  (0019,1008), a CS, is listed as SL, and (0019,100A), a US, as FL. An implicit
+  VR Siemens MR sent to `storescp` was stored with its text as three numbers and
+  a 2-byte value labeled with a 4-byte VR, which pydicom refuses to read, and
+  `ToDICOMJSON` failed on the same file. The dictionary is no longer consulted
+  for a VR: a private creator is LO and any other private attribute without a
+  VR is UN, its bytes unchanged, which pydicom and dcmtk both read. The README no
+  longer advertises the dictionary's size, and replacing it with one taken from
+  real vendor documentation is left to a later release.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
