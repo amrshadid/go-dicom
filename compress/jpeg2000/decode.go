@@ -1,6 +1,10 @@
 package jpeg2000
 
-import "math"
+import (
+	"math"
+	"runtime"
+	"sync"
+)
 
 // Decoding a codestream to samples, PS 15444-1 Annexes E and G.
 //
@@ -134,61 +138,94 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 		}
 	}
 
-	reversible := style.Wavelet == Wavelet53Reversible
+	var mine []CodeBlockData
 	for _, block := range blocks {
-		if block.Component != comp {
-			continue
+		if block.Component == comp {
+			mine = append(mine, block)
 		}
-		if block.Resolution >= len(tc.Resolutions) {
-			return nil, errorf("a code-block at resolution %d of %d",
-				block.Resolution, len(tc.Resolutions))
-		}
-		res := tc.Resolutions[block.Resolution]
-		band := Band{}
-		for _, candidate := range res.Bands {
-			if candidate.Type == block.BandType {
-				band = candidate
-			}
-		}
+	}
 
-		magnitudeBits, err := MagnitudeBits(quant, band, block.Resolution, style.Levels)
+	// Code-blocks are coded independently (B.7), so they decode in parallel.
+	// Each writes its own rectangle of its band, which the decoder computes
+	// from the header rather than taking from the file, and the errors are
+	// read back in block order, so the result does not depend on scheduling.
+	errs := make([]error, len(mine))
+	next := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < min(runtime.GOMAXPROCS(0), len(mine)); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				errs[i] = c.decodeBlockInto(bands, tc, quant, style, comp, mine[i])
+			}
+		}()
+	}
+	for i := range mine {
+		next <- i
+	}
+	close(next)
+	wg.Wait()
+	for _, err := range errs {
 		if err != nil {
 			return nil, err
-		}
-		coefficients, err := DecodeBlock(block, magnitudeBits)
-		if err != nil {
-			return nil, err
-		}
-
-		step, err := stepSize(quant, band, block.Resolution, style.Levels,
-			c.Components[comp].Depth)
-		if err != nil {
-			return nil, err
-		}
-
-		grid := bands[block.Resolution][block.BandType]
-		if grid == nil {
-			return nil, errorf("a code-block in a band the resolution does not have")
-		}
-		bw := block.Block.Width()
-		for y := 0; y < block.Block.Height(); y++ {
-			row := block.Block.Y0 + y
-			if row < grid.y0 || row >= grid.y1 {
-				continue
-			}
-			for x := 0; x < bw; x++ {
-				col := block.Block.X0 + x
-				if col < grid.x0 || col >= grid.x1 {
-					continue
-				}
-				// The coefficients arrive in halves; the step carries the
-				// factor of two that turns them back into whole ones.
-				grid.values[(row-grid.y0)*grid.width()+(col-grid.x0)] =
-					scaleCoefficient(coefficients[y*bw+x], step, reversible)
-			}
 		}
 	}
 	return bands, nil
+}
+
+// decodeBlockInto decodes one code-block and writes its dequantized
+// coefficients into the band it belongs to.
+func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc TileComponent,
+	quant Quantization, style CodingStyle, comp int, block CodeBlockData) error {
+
+	if block.Resolution >= len(tc.Resolutions) {
+		return errorf("a code-block at resolution %d of %d", block.Resolution, len(tc.Resolutions))
+	}
+	res := tc.Resolutions[block.Resolution]
+	band := Band{}
+	for _, candidate := range res.Bands {
+		if candidate.Type == block.BandType {
+			band = candidate
+		}
+	}
+
+	magnitudeBits, err := MagnitudeBits(quant, band, block.Resolution, style.Levels)
+	if err != nil {
+		return err
+	}
+	coefficients, err := DecodeBlock(block, magnitudeBits)
+	if err != nil {
+		return err
+	}
+	step, err := stepSize(quant, band, block.Resolution, style.Levels, c.Components[comp].Depth)
+	if err != nil {
+		return err
+	}
+
+	grid := bands[block.Resolution][block.BandType]
+	if grid == nil {
+		return errorf("a code-block in a band the resolution does not have")
+	}
+	reversible := style.Wavelet == Wavelet53Reversible
+	bw := block.Block.Width()
+	for y := 0; y < block.Block.Height(); y++ {
+		row := block.Block.Y0 + y
+		if row < grid.y0 || row >= grid.y1 {
+			continue
+		}
+		for x := 0; x < bw; x++ {
+			col := block.Block.X0 + x
+			if col < grid.x0 || col >= grid.x1 {
+				continue
+			}
+			// The coefficients arrive in halves; the step carries the factor
+			// of two that turns them back into whole ones.
+			grid.values[(row-grid.y0)*grid.width()+(col-grid.x0)] =
+				scaleCoefficient(coefficients[y*bw+x], step, reversible)
+		}
+	}
+	return nil
 }
 
 // scaleCoefficient turns one code-block value, which is in halves, into the

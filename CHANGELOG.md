@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **JPEG 2000 decodes up to four times faster** (#184). Code-blocks are coded
+  independently (ISO 15444-1 B.7), and the decoder now decodes a
+  tile-component's blocks in parallel rather than one at a time. The inverse
+  wavelet reuses one scratch buffer per pass instead of allocating one for every
+  row and column, and computes the symmetric extension only where it applies.
+  A 512×512 lossless frame took 48.8 ms and now takes 12.0 ms, and allocates a
+  third less; a 400×400 RGB frame of 16 tiles goes from 22.0 to 13.1 ms. On one
+  CPU it is no slower. The samples are unchanged: all 49 decodable files in
+  pydicom's corpus still match it sample for sample.
 
 ## [1.6.0] - 2026-09-20
 
