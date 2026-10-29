@@ -59,6 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples. A restart interval that is not a whole number of rows, which T.81 H.2
   does not allow in a lossless frame, is refused by name.
 
+- **`TLSConfig.CAFile` verifies the peer** (#180). It was documented as the CA
+  that client certificates are verified against, and nothing read it. A server
+  given a `CAFile` asked for no client certificate and accepted any client, so a
+  deployment set up for mutual TLS had none; a client given one verified the
+  server against the system roots, so a PACS certificate from a private CA
+  failed. A server with a `CAFile` now requires a client certificate and
+  verifies it against that CA, and a client verifies the server against it.
+  Half a key pair, or a CA file with no certificate in it, is an error rather
+  than ignored. OpenSSL's `s_client` is refused without a certificate and
+  accepted with one from the CA.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
