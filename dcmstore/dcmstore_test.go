@@ -571,3 +571,39 @@ func valueOf(elem *dataelem.DataElement) string {
 		return ""
 	}
 }
+
+// TestModalitiesInStudyIsMatched: Modalities in Study is a matching key at the
+// STUDY level (PS3.4 C.6.2.1), multi-valued, met when any value names a
+// modality the study holds. It was skipped as a computed key, so a query for
+// MR returned the CT study too, with "CT" in the very attribute that asked for
+// MR (#191).
+func TestModalitiesInStudyIsMatched(t *testing.T) {
+	store := openWithCorpus(t) // study 1.2.1 is CT, study 1.2.2 is MR
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		value string
+		want  []string
+	}{
+		{"MR", []string{"1.2.2"}},
+		{"CT", []string{"1.2.1"}},
+		{`US\MR`, []string{"1.2.2"}},
+		{"PT", nil},
+		{"", []string{"1.2.1", "1.2.2"}},
+	} {
+		results, err := store.Query(ctx, query("STUDY", map[tag.Tag]string{
+			tag.New(0x0020, 0x000D): "", tag.New(0x0008, 0x0061): tc.value,
+		}))
+		if err != nil {
+			t.Fatalf("%q: %v", tc.value, err)
+		}
+		var got []string
+		for _, r := range results {
+			elem, _ := r.Get(tag.New(0x0020, 0x000D))
+			got = append(got, valueOf(elem))
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("ModalitiesInStudy=%q matched studies %v, want %v", tc.value, got, tc.want)
+		}
+	}
+}

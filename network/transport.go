@@ -236,6 +236,13 @@ func (l *Listener) Close() error {
 	return l.listener.Close()
 }
 
+// isClosed reports whether Close has been called.
+func (l *Listener) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
+}
+
 // Addr returns the listener's address.
 func (l *Listener) Addr() net.Addr {
 	return l.listener.Addr()

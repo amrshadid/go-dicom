@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sort"
@@ -69,6 +70,25 @@ type Store struct {
 
 	mu        sync.RWMutex
 	instances map[string]*Instance // by SOP Instance UID
+
+	// ops is held shared by Store and Remove and exclusively by Rebuild, which
+	// replaces the index with what it read from disk and so cannot have
+	// either change the store under it.
+	ops sync.RWMutex
+	// uidLocks serialize the writers of one SOP Instance UID, so its file and
+	// its index entry are always the same copy.
+	uidLocks [64]sync.Mutex
+	// saving serializes saveIndex, whose snapshot must be the one renamed in.
+	saving sync.Mutex
+}
+
+// lockUID locks the writers of one SOP Instance UID and returns the unlock.
+func (s *Store) lockUID(uid string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(uid))
+	m := &s.uidLocks[h.Sum32()%uint32(len(s.uidLocks))]
+	m.Lock()
+	return m.Unlock
 }
 
 // Open returns the store rooted at dir, creating the directory if it does not
@@ -131,6 +151,10 @@ func (s *Store) Store(ctx context.Context, ds *dataset.Dataset) (*Instance, erro
 		return nil, fmt.Errorf("the data set has no SOP Instance UID (0008,0018)")
 	}
 
+	s.ops.RLock()
+	defer s.ops.RUnlock()
+	defer s.lockUID(sopInstanceUID)()
+
 	// The UID names a file, and it came from a peer. fileutil.InstanceFilePath
 	// refuses anything that is not dotted decimal, so a UID carrying "../" cannot
 	// place the file outside the store.
@@ -164,8 +188,19 @@ func (s *Store) Store(ctx context.Context, ds *dataset.Dataset) (*Instance, erro
 	}
 
 	s.mu.Lock()
+	previous := s.instances[sopInstanceUID]
 	s.instances[sopInstanceUID] = inst
 	s.mu.Unlock()
+
+	// Stored again under another study or series, the instance has a new path.
+	// The old file would otherwise stay, and Rebuild would find it: a removed
+	// instance came back that way, as did an older copy of a replaced one.
+	if previous != nil && previous.Path != inst.Path {
+		old := filepath.Join(s.root, filepath.FromSlash(previous.Path))
+		if err := os.Remove(old); err != nil && !os.IsNotExist(err) {
+			storeLogger.Warn("dcmstore: could not remove the replaced copy %s: %v", old, err)
+		}
+	}
 
 	// A failure to save the index is not a failure to store: the instance is on
 	// disk and Rebuild will find it. Reporting it would have the SCP refuse an
@@ -255,6 +290,10 @@ func (s *Store) Load(ctx context.Context, inst *Instance) (*dataset.Dataset, err
 
 // Remove deletes an instance from the store and its index.
 func (s *Store) Remove(sopInstanceUID string) error {
+	s.ops.RLock()
+	defer s.ops.RUnlock()
+	defer s.lockUID(sopInstanceUID)()
+
 	s.mu.Lock()
 	inst, ok := s.instances[sopInstanceUID]
 	if ok {
@@ -283,7 +322,11 @@ func (s *Store) Remove(sopInstanceUID string) error {
 // rebuild: one corrupt instance should not make the rest of an archive
 // unqueryable.
 func (s *Store) Rebuild(ctx context.Context) error {
+	s.ops.Lock()
+	defer s.ops.Unlock()
+
 	rebuilt := make(map[string]*Instance)
+	modified := make(map[string]int64) // by SOP Instance UID, for duplicates
 	skipped := 0
 
 	err := filepath.WalkDir(s.root, func(path string, entry os.DirEntry, err error) error {
@@ -293,7 +336,18 @@ func (s *Store) Rebuild(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".dcm") {
+		if entry.IsDir() {
+			return nil
+		}
+		// What a store interrupted mid-write leaves beside the file it was
+		// replacing. Rebuild holds the store exclusively, so none is in use.
+		if name := entry.Name(); strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp") {
+			if err := os.Remove(path); err != nil {
+				storeLogger.Warn("dcmstore: could not remove the interrupted write %s: %v", path, err)
+			}
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(path), ".dcm") {
 			return nil
 		}
 
@@ -303,20 +357,36 @@ func (s *Store) Rebuild(ctx context.Context) error {
 			storeLogger.Warn("dcmstore: skipping %s during the rebuild: %v", path, readErr)
 			return nil
 		}
+		// Two files for one UID can only be left by a version that did not
+		// remove the old copy when an instance moved. The newer is the one the
+		// last C-STORE wrote.
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			return infoErr
+		}
+		stamp := info.ModTime().UnixNano()
+		if _, seen := rebuilt[inst.SOPInstanceUID]; seen {
+			storeLogger.Warn("dcmstore: %s has more than one file; keeping the newer", inst.SOPInstanceUID)
+			if stamp < modified[inst.SOPInstanceUID] {
+				return nil
+			}
+		}
 		rebuilt[inst.SOPInstanceUID] = inst
+		modified[inst.SOPInstanceUID] = stamp
 		return nil
 	})
 	if err != nil {
 		return err
 	}
 
+	count := len(rebuilt)
 	s.mu.Lock()
 	s.instances = rebuilt
 	s.mu.Unlock()
 
 	if skipped > 0 {
 		storeLogger.Warn("dcmstore: rebuilt the index of %s with %d instances, skipping %d unreadable file(s)",
-			s.root, len(rebuilt), skipped)
+			s.root, count, skipped)
 	}
 
 	return s.saveIndex()
@@ -394,6 +464,12 @@ func (s *Store) loadIndex() error {
 // back as a shorter archive, which is worse than no index at all — that at least
 // triggers a rebuild.
 func (s *Store) saveIndex() error {
+	// The snapshot and the rename happen under one lock. Taken apart, an older
+	// snapshot could be renamed in after a newer one, and the index on disk
+	// would lack an instance the C-STORE had acknowledged.
+	s.saving.Lock()
+	defer s.saving.Unlock()
+
 	s.mu.RLock()
 	data, err := json.MarshalIndent(s.instances, "", "  ")
 	s.mu.RUnlock()
@@ -432,11 +508,32 @@ func (s *Store) saveIndex() error {
 // data is never recompressed or decoded on the way in. Every instance was
 // written as Explicit VR Little Endian once, compressed ones included, and those
 // files hold fragments no reader can decode.
+//
+// The file is written beside its final path and renamed into place once it is
+// complete, so a reader, Rebuild, or a crash never sees part of one. Writing
+// into the final path truncated the previous copy first: a store killed midway
+// left an empty or partial file where a good one had been.
 func writeInstance(path, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) error {
-	file, err := os.Create(path)
+	// Not ending in .dcm, so Rebuild passes over one a crash leaves behind.
+	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("creating %q: %w", path, err)
+		return fmt.Errorf("creating a file beside %q: %w", path, err)
 	}
+	temporary := file.Name()
+	if err := writePart10(file, temporary, sopClassUID, sopInstanceUID, ds); err != nil {
+		_ = os.Remove(temporary)
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("moving %q into place: %w", path, err)
+	}
+	return nil
+}
+
+// writePart10 writes the file and syncs it, so the rename that follows never
+// puts a file in place whose contents are not yet on disk.
+func writePart10(file *os.File, path, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) error {
 
 	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(file))
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
@@ -450,16 +547,17 @@ func writeInstance(path, sopClassUID, sopInstanceUID string, ds *dataset.Dataset
 	for _, elem := range filewriter.ElementsFromDataset(ds) {
 		if err := w.AddDataElement(elem); err != nil {
 			_ = w.Close()
-			_ = os.Remove(path)
 			return fmt.Errorf("adding %s: %w", elem.Tag, err)
 		}
 	}
 
 	if err := w.Write(); err != nil {
 		_ = w.Close()
-		// A half-written file would be found by Rebuild and read as an instance.
-		_ = os.Remove(path)
 		return fmt.Errorf("writing %q: %w", path, err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("syncing %q: %w", path, err)
 	}
 	return w.Close()
 }

@@ -25,15 +25,13 @@ func TestCGetCancelFromPynetdicom(t *testing.T) {
 	handler := &interopStreamHandler{total: total}
 
 	scp := network.NewSCP(network.SCPConfig{
-		AETitle: "GO_CANCEL_SCP", Port: 0, BindAddress: "127.0.0.1",
+		AETitle: "GO_CANCEL_SCP", Port: freePort(t), BindAddress: "127.0.0.1",
 	})
 	scp.SetHandler(handler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _ = scp.ListenAndServe(ctx) }()
-
-	addr := waitForSCP(t, scp)
+	addr := serveSCP(ctx, t, scp)
 	host, port := splitHostPort(t, addr)
 
 	runPynetdicomSCU(t, `

@@ -102,7 +102,8 @@ type SCPConfig struct {
 	// AETitle is the AE title of this SCP.
 	AETitle string
 
-	// Port is the TCP port to listen on.
+	// Port is the TCP port to listen on. NewSCP reads 0 as DefaultPort;
+	// StartServer and StartServerTLS read it as any free port.
 	Port int
 
 	// BindAddress is the address to bind to. Empty string means all interfaces.

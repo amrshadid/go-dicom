@@ -2,6 +2,7 @@ package compress
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -23,6 +24,10 @@ const maxLosslessPixels = 1 << 25
 // covers the window; anything beyond it means samples were decoded from bits
 // that were never written.
 const maxTrailingSlack = 4
+
+// errScanRanOut is a scan whose entropy-coded data ended before its samples did.
+var errScanRanOut = errors.New("jpeglossless: entropy-coded data ends before the frame does; " +
+	"the frame is truncated and the samples past that point would be invented")
 
 // decodeLosslessJPEG parses a lossless JPEG stream and decodes its scans.
 func decodeLosslessJPEG(data []byte) (*losslessImage, error) {
@@ -114,6 +119,12 @@ func decodeLosslessJPEG(data []byte) (*losslessImage, error) {
 	if decodedScans == 0 {
 		return nil, fmt.Errorf("jpeglossless: frame carries no scan")
 	}
+	for _, comp := range img.components {
+		if comp.samples == nil {
+			return nil, fmt.Errorf("jpeglossless: component %d is in no scan, so the frame has no samples for it",
+				comp.id)
+		}
+	}
 	return img, nil
 }
 
@@ -163,7 +174,6 @@ func parseLosslessFrameHeader(body []byte) (*losslessImage, error) {
 			v:        v,
 			rowWidth: width,
 			rows:     height,
-			samples:  make([]int, width*height),
 		})
 	}
 	return img, nil
@@ -270,6 +280,19 @@ func decodeLosslessScan(img *losslessImage, header, entropy []byte,
 			pointTransform, img.precision)
 	}
 
+	// Every sample costs at least one bit, its Huffman code, so a scan cannot
+	// hold more samples than eight per byte of what follows it. Checked before
+	// the samples are allocated.
+	if samples := img.width * img.height * ns; samples > 8*(len(entropy)+maxTrailingSlack) {
+		return 0, fmt.Errorf("jpeglossless: a scan of %d samples cannot fit in the %d bytes that follow it",
+			samples, len(entropy))
+	}
+	for _, comp := range scanComps {
+		if comp.samples == nil {
+			comp.samples = make([]int, img.width*img.height)
+		}
+	}
+
 	reader := &bitReader{data: entropy}
 	if err := decodeLosslessSamples(img, scanComps, tables, reader,
 		predictor, pointTransform, restart); err != nil {
@@ -279,10 +302,8 @@ func decodeLosslessScan(img *losslessImage, header, entropy []byte,
 	// A frame that needed more bytes than it carried was truncated. A few bytes
 	// of slack is normal — the encoder stops once the last sample is
 	// unambiguous, and the reader looks ahead of what it strictly needs.
-	if reader.overrun > maxTrailingSlack {
-		return 0, fmt.Errorf("jpeglossless: entropy-coded data ends %d bytes early; "+
-			"the frame is truncated and the samples past that point would be invented",
-			reader.overrun)
+	if reader.ranOutOfData() {
+		return 0, errScanRanOut
 	}
 	return reader.pos, nil
 }
@@ -301,6 +322,12 @@ func decodeLosslessSamples(img *losslessImage, comps []*losslessComponent,
 	defaultPrediction := 1 << (img.precision - pointTransform - 1)
 
 	width, height := img.width, img.height
+	// H.2: a lossless restart interval is a whole number of rows, which is what
+	// lets each interval begin with a first line.
+	if restart > 0 && restart%width != 0 {
+		return fmt.Errorf("jpeglossless: restart interval of %d samples is not a whole number of %d-sample rows",
+			restart, width)
+	}
 	sinceRestart := 0
 
 	for y := 0; y < height; y++ {
@@ -311,7 +338,9 @@ func decodeLosslessSamples(img *losslessImage, comps []*losslessComponent,
 					return fmt.Errorf("at sample (%d,%d) of component %d: %w", x, y, comp.id, err)
 				}
 
-				prediction := predictSample(comp, x, y, width, predictor, defaultPrediction, sinceRestart == 0)
+				firstLine := y == 0 || (restart > 0 && sinceRestart < width)
+				prediction := predictSample(comp, x, y, width, predictor, defaultPrediction,
+					sinceRestart == 0, firstLine)
 
 				// T.81 H.1.2.1: the sum is taken modulo 2^16 regardless of the
 				// declared precision, so an encoder that lets a difference wrap
@@ -326,6 +355,11 @@ func decodeLosslessSamples(img *losslessImage, comps []*losslessComponent,
 				r.reset()
 				sinceRestart = 0
 			}
+		}
+		// Stop at the row where the data ran out, rather than decode the rest
+		// of the frame from zeros only to refuse it.
+		if r.ranOutOfData() {
+			return fmt.Errorf("at row %d: %w", y, errScanRanOut)
 		}
 	}
 	return nil
@@ -353,20 +387,17 @@ func decodeDifference(r *bitReader, table *huffTable) (int32, error) {
 // predictSample computes the prediction for one sample.
 //
 // The edges are special-cased before the selection value is consulted, per
-// T.81 H.1.2.1: the first sample of the scan has no neighbors at all, the rest
-// of the first row can only look left, and the first sample of each later row
-// can only look up.
+// T.81 H.1.2.1: the first sample of the scan and of each restart interval takes
+// the default, the rest of its first line can only look left, and the first
+// sample of each later line can only look up.
 func predictSample(comp *losslessComponent, x, y, width, predictor, defaultPrediction int,
-	atRestart bool) int {
+	intervalStart, firstLine bool) int {
 
-	if atRestart && x == 0 && y == 0 {
+	if intervalStart {
 		return defaultPrediction
 	}
-	if y == 0 {
-		if x == 0 {
-			return defaultPrediction
-		}
-		return comp.samples[x-1] // Ra
+	if firstLine {
+		return comp.samples[y*width+x-1] // Ra
 	}
 	if x == 0 {
 		return comp.samples[(y-1)*width] // Rb

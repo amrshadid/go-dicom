@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/amrshadid/go-dicom/dataset"
 )
@@ -84,7 +85,8 @@ func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 }
 
 // ListenAndServe starts the SCP server, listening for incoming associations.
-// It blocks until the context is canceled.
+// It blocks until the context is canceled, returning the context's error, or
+// until Close is called, returning nil.
 func (s *SCP) ListenAndServe(ctx context.Context) error {
 	ln, err := listen(fmt.Sprintf("%s:%d", s.config.BindAddress, s.config.Port), s.config.TLS)
 	if err != nil {
@@ -104,17 +106,50 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 		s.wg.Wait()
 	}()
 
+	return s.serve(ctx, ln, DefaultLogger, nil)
+}
+
+// The pause before retrying a failed accept doubles from acceptRetryMin to
+// acceptRetryMax, as in net/http.
+const (
+	acceptRetryMin = 5 * time.Millisecond
+	acceptRetryMax = time.Second
+)
+
+// serve accepts associations on ln until ctx is canceled or ln is closed. It
+// is the one accept loop, shared by ListenAndServe, StartServer and
+// StartServerTLS, so the association limit and connection events apply to
+// every way of starting a server (#170).
+//
+// events may be nil. Connections turned away at the limit emit no events.
+func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *EventManager) error {
+	var delay time.Duration
 	for {
 		transport, err := ln.Accept(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			// Close closes the listener without canceling ctx, so Accept fails
+			// at once and keeps failing: that is a stop, not an error to retry.
+			if ln.isClosed() {
+				return nil
+			}
+			// Anything else, such as running out of descriptors, may pass.
+			if delay == 0 {
+				delay = acceptRetryMin
+			} else {
+				delay = min(2*delay, acceptRetryMax)
+			}
+			logger.Error("accept error, retrying in %v: %v", delay, err)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			default:
-				DefaultLogger.Error("accept error: %v", err)
-				continue
+			case <-time.After(delay):
 			}
+			continue
 		}
+		delay = 0
 
 		// Bound concurrent associations when configured. Rejecting at the
 		// transport level keeps an unbounded number of peers from each
@@ -123,13 +158,17 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 			select {
 			case s.assocSlots <- struct{}{}:
 			default:
-				DefaultLogger.Warn("association limit (%d) reached, rejecting %s",
+				logger.Warn("association limit (%d) reached, rejecting %s",
 					s.config.MaxAssociations, transport.RemoteAddr())
 				s.rejectOverLimit(ctx, transport)
 				continue
 			}
 		}
 
+		remote := transport.RemoteAddr().String()
+		if events != nil {
+			events.Emit(&Event{Type: EVTConnOpen, RemoteAddr: remote})
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -137,6 +176,9 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 				defer func() { <-s.assocSlots }()
 			}
 			s.handleConnection(ctx, transport)
+			if events != nil {
+				events.Emit(&Event{Type: EVTConnClose, RemoteAddr: remote})
+			}
 		}()
 	}
 }
