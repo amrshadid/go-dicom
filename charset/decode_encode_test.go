@@ -399,7 +399,8 @@ func TestIsPythonHandledEncoding(t *testing.T) {
 		want     bool
 	}{
 		{"ISO-2022-JP is handled", "ISO-2022-JP", true},
-		{"ISO-2022-CN is handled", "ISO-2022-CN", true},
+		// Decoded with GB18030, which does not interpret escapes (#195).
+		{"ISO-2022-CN is not handled", "ISO-2022-CN", false},
 		{"UTF-8 is not handled", "UTF-8", false},
 		{"ISO-8859-1 is not handled", "ISO-8859-1", false},
 		{"EUC-KR is not handled", "EUC-KR", false},
@@ -422,5 +423,60 @@ func TestGetReturnToASCIIEscape(t *testing.T) {
 	}
 	if escape[0] != 0x1B || escape[1] != '(' || escape[2] != 'B' {
 		t.Errorf("GetReturnToASCIIEscape() = %v, want [0x1B '(' 'B']", escape)
+	}
+}
+
+// TestThaiIsDecoded: ISO_IR 166 is TIS 620-2533 (PS3.3 C.12.1.1.2). The
+// decoder had no table for it and read the bytes as UTF-8, so every Thai
+// character became U+FFFD, and the data set then declared ISO_IR 192 over the
+// replacement characters (#195). pydicom reads these bytes as ไทย^สมชาย.
+func TestThaiIsDecoded(t *testing.T) {
+	tis620 := []byte{0xE4, 0xB7, 0xC2, '^', 0xCA, 0xC1, 0xAA, 0xD2, 0xC2}
+	for _, declared := range [][]string{{"ISO_IR 166"}, {"ISO 2022 IR 166"}} {
+		encodings, err := charset.ConvertEncodings(declared)
+		if err != nil {
+			t.Fatalf("%v: %v", declared, err)
+		}
+		got, err := charset.DecodeBytes(tis620, encodings, charset.PersonNameDelimiters)
+		if err != nil {
+			t.Fatalf("%v: %v", declared, err)
+		}
+		if got != "ไทย^สมชาย" {
+			t.Errorf("%v: decoded as %q, want %q", declared, got, "ไทย^สมชาย")
+		}
+	}
+
+	encoded, err := charset.EncodeString("ไทย^สมชาย", []string{"ISO-8859-11"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != string(tis620) {
+		t.Errorf("encoded as % X, want % X", encoded, tis620)
+	}
+}
+
+// TestGB2312EscapeIsNotText: under ISO 2022 IR 58 the GB2312 characters are
+// introduced by ESC $ ) A (PS3.5 Annex K), a code extension control rather
+// than part of the value. The escape was left for a decoder that was supposed
+// to interpret it and does not, so it stayed inside the decoded text (#195).
+func TestGB2312EscapeIsNotText(t *testing.T) {
+	escape := []byte{0x1B, '$', ')', 'A'}
+	var value []byte
+	value = append(value, "Zhang^XiaoDong="...)
+	value = append(value, escape...)
+	value = append(value, 0xD5, 0xC5, '^')
+	value = append(value, escape...)
+	value = append(value, 0xD0, 0xA1, 0xB6, 0xAB)
+
+	encodings, err := charset.ConvertEncodings([]string{"", "ISO 2022 IR 58"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := charset.DecodeBytes(value, encodings, charset.PersonNameDelimiters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "Zhang^XiaoDong=张^小东"; got != want {
+		t.Errorf("decoded as %q, want %q", got, want)
 	}
 }

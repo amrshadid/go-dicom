@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Thai text is decoded, and Chinese text loses its escape sequences** (#195).
+  ISO_IR 166 and ISO 2022 IR 166 fell back to UTF-8 because `x/text` has no
+  ISO-8859-11, so every Thai character became U+FFFD and the data set then
+  declared ISO_IR 192 over them; Windows-874, the same table for every Thai
+  character, now decodes and encodes them, and pydicom's reading matches. Under
+  ISO 2022 IR 58 the escape `ESC $ ) A` was left for a decoder assumed to
+  interpret it, and stayed in the text; it is now stripped as Korean's is, and
+  `EncodeString` writes it, as PS3.5 Annex K requires.
 
 ## [1.6.0] - 2026-09-20
 
