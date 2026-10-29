@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`dcmstore` matches Modalities in Study, and `?` matches a character**
+  (#191). Modalities in Study was skipped with the computed keys, so a STUDY
+  query for MR returned every study, some answering "CT" in the attribute that
+  asked for MR. It is now matched as PS3.4 C.6.2.1 has it: a study matches when
+  any value asked for, wildcards allowed, names a modality it holds. And `?`
+  matched one byte, so `M?ller` missed `Müller`, whose `ü` is two bytes in
+  UTF-8; it now matches one character, as C.2.2.2.4 says.
 
 ## [1.6.0] - 2026-09-20
 
