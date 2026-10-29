@@ -491,6 +491,7 @@ func (s *SCP) ReportStorageCommitment(ctx context.Context, requestorAE string,
 		CalledAE:  requestorAE,
 		Address:   address,
 		Network:   s.config.Network,
+		TLS:       s.config.OutboundTLS,
 	})
 
 	if err := requestor.Associate(ctx, StorageCommitmentPresentationContexts()); err != nil {

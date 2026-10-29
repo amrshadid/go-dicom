@@ -161,7 +161,13 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 		return NewAssociationError("ALREADY_ASSOCIATED", "already associated")
 	}
 
-	transport, err := Dial(ctx, s.config.Address, s.config.Network.NetworkTimeout)
+	var transport *Transport
+	var err error
+	if s.config.TLS != nil {
+		transport, err = DialTLS(ctx, s.config.Address, s.config.Network.NetworkTimeout, s.config.TLS)
+	} else {
+		transport, err = Dial(ctx, s.config.Address, s.config.Network.NetworkTimeout)
+	}
 	if err != nil {
 		return err
 	}

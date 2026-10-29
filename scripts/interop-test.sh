@@ -1242,6 +1242,116 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# TLS, both directions. Until SCUConfig.TLS an SCU could not associate over TLS
+# at all, and TLSConfig.CAFile was never read, so a server that was meant to
+# require client certificates accepted anyone (#180, #182). The PKI is made by
+# OpenSSL rather than by this library, and the peer is Python's ssl module.
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ] && command -v openssl >/dev/null; then
+  note "TLS: pynetdicom <-> go-dicom, mutual authentication"
+
+  pki="$WORKDIR/pki"
+  mkdir -p "$pki"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+    -keyout "$pki/ca.key" -out "$pki/ca.crt" -subj /CN=interop-ca 2>/dev/null
+  openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+    -keyout "$pki/node.key" -out "$pki/node.csr" -subj /CN=node 2>/dev/null
+  printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n' > "$pki/node.ext"
+  openssl x509 -req -in "$pki/node.csr" -CA "$pki/ca.crt" -CAkey "$pki/ca.key" -CAcreateserial \
+    -days 1 -extfile "$pki/node.ext" -out "$pki/node.crt" 2>/dev/null
+  go_tls=(-tls -tls-cert "$pki/node.crt" -tls-key "$pki/node.key" -tls-ca "$pki/ca.crt")
+
+  tls_client_py="$WORKDIR/tls_client.py"
+  cat > "$tls_client_py" <<'PYEOF'
+import ssl, sys
+from pydicom import dcmread
+from pynetdicom import AE
+from pynetdicom.sop_class import CTImageStorage
+pki, port, fixture, with_cert = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4] == "1"
+ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=pki + "/ca.crt")
+if with_cert:
+    ctx.load_cert_chain(pki + "/node.crt", pki + "/node.key")
+ae = AE(ae_title="PYTLS")
+ae.add_requested_context(CTImageStorage)
+assoc = ae.associate("127.0.0.1", port, ae_title="STORESCP", tls_args=(ctx, "127.0.0.1"))
+if not assoc.is_established:
+    print("NOT ASSOCIATED", flush=True)
+    sys.exit(2)
+status = assoc.send_c_store(dcmread(fixture))
+assoc.release()
+print("STATUS 0x%04X" % status.Status, flush=True)
+sys.exit(0 if status.Status == 0 else 1)
+PYEOF
+
+  tls_dir="$WORKDIR/tls_in"
+  mkdir -p "$tls_dir"
+  start_server "$tls_dir" "$WORKDIR/tls_storescp.log" "$GODICOM" storescp -port 11720 -output "$tls_dir" "${go_tls[@]}"
+  tls_scp=$SERVER_PID
+  if wait_for_port 11720; then
+    if "$PYNETDICOM_BIN/python" "$tls_client_py" "$pki" 11720 "$FIXTURE" 1 > "$WORKDIR/tls_client.log" 2>&1; then
+      received=$(find "$tls_dir" -name '*.dcm' | head -1)
+      if [ -n "$received" ]; then
+        verify_transfer "$received" "TLS C-STORE, pynetdicom -> go-dicom storescp -tls"
+        RAN_ANY=1
+      else
+        fail "go-dicom storescp -tls accepted the C-STORE but wrote nothing"
+      fi
+    else
+      fail "pynetdicom could not store to go-dicom storescp -tls"
+      sed -n '1,20p' "$WORKDIR/tls_client.log" "$WORKDIR/tls_storescp.log" >&2
+    fi
+    if "$PYNETDICOM_BIN/python" "$tls_client_py" "$pki" 11720 "$FIXTURE" 0 > "$WORKDIR/tls_anon.log" 2>&1; then
+      fail "go-dicom storescp -tls -tls-ca accepted a client with no certificate"
+    else
+      pass "TLS — go-dicom storescp -tls-ca refuses a pynetdicom client with no certificate"
+    fi
+  else
+    fail "go-dicom storescp -tls did not start listening"
+  fi
+  stop_server "$tls_scp"
+
+  tls_scp_py="$WORKDIR/tls_scp.py"
+  cat > "$tls_scp_py" <<'PYEOF'
+import os, ssl, sys
+from pynetdicom import AE, evt, AllStoragePresentationContexts
+pki, port, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH, cafile=pki + "/ca.crt")
+ctx.load_cert_chain(pki + "/node.crt", pki + "/node.key")
+ctx.verify_mode = ssl.CERT_REQUIRED
+def on_store(event):
+    with open(os.path.join(out, event.request.AffectedSOPInstanceUID + ".dcm"), "wb") as f:
+        f.write(event.encoded_dataset())
+    return 0
+ae = AE(ae_title="PYTLSSCP")
+ae.supported_contexts = AllStoragePresentationContexts
+ae.start_server(("127.0.0.1", port), ssl_context=ctx, evt_handlers=[(evt.EVT_C_STORE, on_store)])
+PYEOF
+  py_tls_dir="$WORKDIR/tls_py"
+  mkdir -p "$py_tls_dir"
+  "$PYNETDICOM_BIN/python" "$tls_scp_py" "$pki" 11721 "$py_tls_dir" > "$WORKDIR/tls_scp.log" 2>&1 &
+  py_tls_pid=$!
+  PIDS+=("$py_tls_pid")
+  if wait_for_port 11721; then
+    if "$GODICOM" storescu -aec PYTLSSCP "${go_tls[@]}" 127.0.0.1:11721 "$FIXTURE" > "$WORKDIR/tls_storescu.log" 2>&1; then
+      received=$(find "$py_tls_dir" -name '*.dcm' | head -1)
+      if [ -n "$received" ]; then
+        verify_transfer "$received" "TLS C-STORE, go-dicom storescu -tls -> pynetdicom"
+        RAN_ANY=1
+      else
+        fail "pynetdicom accepted go-dicom's TLS association but holds no file"
+      fi
+    else
+      fail "go-dicom storescu -tls could not store to pynetdicom"
+      sed -n '1,20p' "$WORKDIR/tls_storescu.log" "$WORKDIR/tls_scp.log" >&2
+    fi
+  else
+    fail "the pynetdicom TLS SCP did not start listening"
+  fi
+  stop_server "$py_tls_pid"
+else
+  skip "TLS needs pynetdicom and openssl"
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2

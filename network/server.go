@@ -61,7 +61,7 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 
 	// Start listening first (so we can return errors immediately)
 	addr := fmt.Sprintf("%s:%d", config.BindAddress, listenPort)
-	ln, err := Listen(addr)
+	ln, err := listen(addr, config.TLS)
 	if err != nil {
 		cancel()
 		return nil, err

@@ -80,6 +80,9 @@ type SCUConfig struct {
 	// identity (username/password, Kerberos, SAML, JWT). Nil proposes none.
 	ExtendedNegotiation *ExtendedNegotiation
 
+	// TLS, when set, makes Associate connect over TLS.
+	TLS *TLSConfig
+
 	// OnCStore receives instances the peer sends as C-STORE sub-operations
 	// during a C-GET. Return a DIMSE status; StatusSuccess accepts the
 	// instance.
@@ -111,6 +114,16 @@ type SCPConfig struct {
 
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
 	MaxAssociations int
+
+	// TLS, when set, makes ListenAndServe and StartServer accept associations
+	// over TLS only.
+	TLS *TLSConfig
+
+	// OutboundTLS, when set, is used for the associations the SCP opens
+	// itself: C-MOVE sub-operations, storage commitment results and UPS event
+	// reports. It is separate from TLS because a peer the SCP calls need not
+	// be reached the way the SCP is.
+	OutboundTLS *TLSConfig
 
 	// MoveDestinations maps a destination AE title to its "host:port" address,
 	// for resolving the Move Destination of a C-MOVE request.

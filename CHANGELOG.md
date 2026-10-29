@@ -20,6 +20,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GDCM's BSD license and pydicom's MIT license are in `THIRD_PARTY_NOTICES`,
   which is published with each release.
 
+- **TLS for every association, and on every network command** (#182). The
+  README listed TLS as supported, but only `DialTLS` and `ListenTLS` had it, and
+  neither reached an `SCU`, whose `Associate` always dialed plain TCP, or
+  `ListenAndServe`. `SCUConfig.TLS` and `SCPConfig.TLS` now put an SCU's
+  associations and an SCP's on TLS, through `Associate`, `ListenAndServe` and
+  `StartServer`. `SCPConfig.OutboundTLS` covers the associations an SCP opens
+  itself: C-MOVE sub-operations, storage commitment results and UPS event
+  reports. It is plain TCP when unset, since a peer the SCP calls need not be
+  reached the way the SCP is.
+
+  All nine network commands take `-tls`, `-tls-cert`, `-tls-key` and
+  `-tls-ca`, and the clients also take `-tls-server-name` and `-tls-insecure`;
+  `qrscp -tls-outbound` puts its C-MOVE and commitment associations on TLS too.
+  A `-tls-*` option given without `-tls` is an error rather than a command that
+  quietly connects in the clear. `SCUConfigTLS` and `SCPConfigTLS`, which nothing
+  ever read, are deprecated.
+
+  `scripts/interop-test.sh` checks it against pynetdicom in both directions,
+  with an OpenSSL-made PKI and mutual authentication: a C-STORE each way arrives
+  intact, and a client without a certificate is refused.
+
 ### Changed
 
 - **JPEG 2000 decodes up to four times faster** (#184). Code-blocks are coded

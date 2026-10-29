@@ -17,6 +17,7 @@ import (
 
 // StoreSCPCommand implements the storescp CLI command.
 type StoreSCPCommand struct {
+	tls       tlsFlags
 	aeTitle   string
 	port      int
 	outputDir string
@@ -26,6 +27,7 @@ func (c *StoreSCPCommand) Name() string        { return "storescp" }
 func (c *StoreSCPCommand) Description() string { return "DICOM Store SCP (receive files)" }
 
 func (c *StoreSCPCommand) AddFlags(fs *flag.FlagSet) {
+	addServerTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.aeTitle, "aet", "STORESCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 	fs.StringVar(&c.outputDir, "output", ".", "Output directory for received files")
@@ -37,6 +39,10 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
 
 	// Ensure output directory exists
 	if err := os.MkdirAll(c.outputDir, 0755); err != nil {
@@ -44,6 +50,7 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 	}
 
 	scp := network.NewSCP(network.SCPConfig{
+		TLS:     tlsCfg,
 		AETitle: c.aeTitle,
 		Port:    c.port,
 	})
