@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that doubles from 5 ms to a second, as `net/http` does. `StartServerTLS`
   emits the connection events `StartServer` always did.
 
+- **The pynetdicom interop tests listen on a free port** (#172). Three of them
+  asked `NewSCP` for port 0, which it reads as `DefaultPort`, so they bound
+  11112 and failed with "never bound a port" whenever anything else held it,
+  another test run included, or talked to whatever was listening there. They now
+  pick a free port, and report `ListenAndServe`'s own error if it fails.
+  `SCPConfig.Port` documents that 0 means `DefaultPort` to `NewSCP` and any free
+  port to `StartServer`.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
