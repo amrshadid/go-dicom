@@ -301,6 +301,12 @@ func decodeLosslessSamples(img *losslessImage, comps []*losslessComponent,
 	defaultPrediction := 1 << (img.precision - pointTransform - 1)
 
 	width, height := img.width, img.height
+	// H.2: a lossless restart interval is a whole number of rows, which is what
+	// lets each interval begin with a first line.
+	if restart > 0 && restart%width != 0 {
+		return fmt.Errorf("jpeglossless: restart interval of %d samples is not a whole number of %d-sample rows",
+			restart, width)
+	}
 	sinceRestart := 0
 
 	for y := 0; y < height; y++ {
@@ -311,7 +317,9 @@ func decodeLosslessSamples(img *losslessImage, comps []*losslessComponent,
 					return fmt.Errorf("at sample (%d,%d) of component %d: %w", x, y, comp.id, err)
 				}
 
-				prediction := predictSample(comp, x, y, width, predictor, defaultPrediction, sinceRestart == 0)
+				firstLine := y == 0 || (restart > 0 && sinceRestart < width)
+				prediction := predictSample(comp, x, y, width, predictor, defaultPrediction,
+					sinceRestart == 0, firstLine)
 
 				// T.81 H.1.2.1: the sum is taken modulo 2^16 regardless of the
 				// declared precision, so an encoder that lets a difference wrap
@@ -353,20 +361,17 @@ func decodeDifference(r *bitReader, table *huffTable) (int32, error) {
 // predictSample computes the prediction for one sample.
 //
 // The edges are special-cased before the selection value is consulted, per
-// T.81 H.1.2.1: the first sample of the scan has no neighbors at all, the rest
-// of the first row can only look left, and the first sample of each later row
-// can only look up.
+// T.81 H.1.2.1: the first sample of the scan and of each restart interval takes
+// the default, the rest of its first line can only look left, and the first
+// sample of each later line can only look up.
 func predictSample(comp *losslessComponent, x, y, width, predictor, defaultPrediction int,
-	atRestart bool) int {
+	intervalStart, firstLine bool) int {
 
-	if atRestart && x == 0 && y == 0 {
+	if intervalStart {
 		return defaultPrediction
 	}
-	if y == 0 {
-		if x == 0 {
-			return defaultPrediction
-		}
-		return comp.samples[x-1] // Ra
+	if firstLine {
+		return comp.samples[y*width+x-1] // Ra
 	}
 	if x == 0 {
 		return comp.samples[(y-1)*width] // Rb
