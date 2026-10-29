@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GDCM's BSD license and pydicom's MIT license are in `THIRD_PARTY_NOTICES`,
   which is published with each release.
 
+### Changed
+
+- **JPEG 2000 decodes up to four times faster** (#184). Code-blocks are coded
+  independently (ISO 15444-1 B.7), and the decoder now decodes a
+  tile-component's blocks in parallel rather than one at a time. The inverse
+  wavelet reuses one scratch buffer per pass instead of allocating one for every
+  row and column, and computes the symmetric extension only where it applies.
+  A 512×512 lossless frame took 48.8 ms and now takes 12.0 ms, and allocates a
+  third less; a 400×400 RGB frame of 16 tiles goes from 22.0 to 13.1 ms. On one
+  CPU it is no slower. The samples are unchanged: all 49 decodable files in
+  pydicom's corpus still match it sample for sample.
+
 ### Fixed
 
 - **US is a valid VR** (#201). The VR table had no US entry, so
@@ -78,6 +90,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples. A restart interval that is not a whole number of rows, which T.81 H.2
   does not allow in a lossless frame, is refused by name.
 
+- **`TLSConfig.CAFile` verifies the peer** (#180). It was documented as the CA
+  that client certificates are verified against, and nothing read it. A server
+  given a `CAFile` asked for no client certificate and accepted any client, so a
+  deployment set up for mutual TLS had none; a client given one verified the
+  server against the system roots, so a PACS certificate from a private CA
+  failed. A server with a `CAFile` now requires a client certificate and
+  verifies it against that CA, and a client verifies the server against it.
+  Half a key pair, or a CA file with no certificate in it, is an error rather
+  than ignored. OpenSSL's `s_client` is refused without a certificate and
+  accepted with one from the CA.
+
 - **An implicit private attribute is written as UN, not with an invented VR**
   (#186). `ResolveVR`, which the file writer and the network encoder use, took
   the VR of an element read without one from the private dictionary. Most of
@@ -91,6 +114,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   VR is UN, its bytes unchanged, which pydicom and dcmtk both read. The README no
   longer advertises the dictionary's size, and replacing it with one taken from
   real vendor documentation is left to a later release.
+
+- **`dcmstore` no longer loses or tears instances it acknowledged** (#189).
+  Instances were written into their final path with `os.Create`, which truncates
+  first, so a store killed midway left an empty or partial file where the good
+  copy had been, still indexed and served. Two stores of one SOP Instance UID at
+  once left a file that was neither copy: 172 of 200 trials. The saved index
+  could be an older snapshot renamed in after a newer one, losing an instance
+  across a restart; an instance stored again under another study or series left
+  its old file, which `Rebuild` brought back after a `Remove`; and `Rebuild`
+  dropped instances stored while it ran, 24 of 50, with a data race besides.
+
+  Files are now written beside their final path, synced, and renamed into
+  place, so a reader, a rebuild or a crash sees a whole copy or the previous
+  one. Writers of one UID are serialized, a moved instance's old file is
+  removed, the index snapshot and its rename happen under one lock, and
+  `Rebuild` runs with stores held off. It also clears what an interrupted
+  write leaves behind, and keeps the newer file where an older version of the
+  store left two for one UID.
+
+- **`dcmstore` matches Modalities in Study, and `?` matches a character**
+  (#191). Modalities in Study was skipped with the computed keys, so a STUDY
+  query for MR returned every study, some answering "CT" in the attribute that
+  asked for MR. It is now matched as PS3.4 C.6.2.1 has it: a study matches when
+  any value asked for, wildcards allowed, names a modality it holds. And `?`
+  matched one byte, so `M?ller` missed `Müller`, whose `ü` is two bytes in
+  UTF-8; it now matches one character, as C.2.2.2.4 says.
+
+- **Thai text is decoded, and Chinese text loses its escape sequences** (#195).
+  ISO_IR 166 and ISO 2022 IR 166 fell back to UTF-8 because `x/text` has no
+  ISO-8859-11, so every Thai character became U+FFFD and the data set then
+  declared ISO_IR 192 over them; Windows-874, the same table for every Thai
+  character, now decodes and encodes them, and pydicom's reading matches. Under
+  ISO 2022 IR 58 the escape `ESC $ ) A` was left for a decoder assumed to
+  interpret it, and stayed in the text; it is now stripped as Korean's is, and
+  `EncodeString` writes it, as PS3.5 Annex K requires.
+
+- **`FromDICOMJSON` keeps the values it is given** (#193). Four kinds changed on
+  the way in, so this library's own JSON did not survive being read back. A null
+  number became 0; it is now no value, and a null among binary numbers, which
+  have no empty component, drops that element with a warning rather than
+  inventing a number, as a truncated element is dropped. UV and SV were read
+  through float64 and lost precision above 2^53; numbers are now decoded
+  exactly. An empty sequence came back as no value; it is now a sequence with no
+  items. And text was kept under whatever (0008,0005) the JSON declared, though
+  DICOM JSON text is UTF-8: a Latin-1 name was written back as "JÃ©rÃ´me". The
+  declaration now says ISO_IR 192 wherever the text needs it. pydicom's JSON for
+  every file in its corpus now reads back with no other difference.
+
+- **Only the text VRs a character set covers are decoded with it** (#198).
+  (0008,0005) applies to SH, LO, UC, ST, LT, UT and PN (PS3.5 6.1.2.3), and
+  every text VR was decoded with it, so a CS of bytes E9 58 under ISO_IR 144 read
+  "щX" where pydicom reads "éX". The others are now decoded in the default
+  repertoire, which changes nothing for the ASCII they should hold.
+  `dataelem.IsCharacterSetVR` names the seven.
+
+- **`charset.EncodeString` writes code extensions as the standard has them**
+  (#197). An empty first value of (0008,0005) was dropped, so
+  `\ISO 2022 IR 149` made EUC-KR the base set and Korean was written with no
+  `ESC $ ) C`; it now means the default repertoire, as PS3.5 6.1.2.5.3 says.
+  Text needing a second set was cut in bytes where it had been measured in
+  characters, failed, and came back as raw UTF-8 with no error; Latin-1 with Greek or Cyrillic is
+  now encoded with `ESC - F` or `ESC - L`. Each component between delimiters is
+  encoded from the initial designation, since a reader resets at `^`, `=` and
+  the line separators, and an encoder that writes its own escapes no longer has
+  another put in front: Japanese had IR 159's `ESC $ ( D` before its `ESC $ B`.
+  pydicom decodes all of it to the original text. The library's own writing
+  path writes UTF-8 and did not use this.
 
 ## [1.6.0] - 2026-09-20
 
