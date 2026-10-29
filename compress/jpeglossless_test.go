@@ -211,3 +211,59 @@ func TestJPEGLosslessRefusesARestartIntervalOffARow(t *testing.T) {
 		t.Fatalf("error %v, want one naming the restart interval", err)
 	}
 }
+
+// TestJPEGLosslessRefusesAScanThatRunsOut: a scan whose entropy-coded data ends
+// before its samples do is truncated, and what the decoder would produce past
+// that point is invented. A scan ends at a marker, EOI at the latest, and zeros
+// fed at a marker were not counted against it, so a 4 KB file declaring a
+// 5792x5792 frame decoded to 67 MB of samples without an error (#175).
+func TestJPEGLosslessRefusesAScanThatRunsOut(t *testing.T) {
+	valid := readFixture(t, "mr_small_sv1.jpgls")
+	restart := readFixture(t, "restart_sv1.jpgls")
+	eoi := []byte{0xFF, 0xD9}
+
+	enlarged := bytes.Clone(valid)
+	sof := bytes.Index(enlarged, []byte{0xFF, 0xC3})
+	binary.BigEndian.PutUint16(enlarged[sof+5:], 1024) // Y
+	binary.BigEndian.PutUint16(enlarged[sof+7:], 1024) // X
+
+	// The third interval of the restart fixture, cut to half its length.
+	rst1 := bytes.Index(restart, []byte{0xFF, 0xD1})
+	rst2 := bytes.Index(restart, []byte{0xFF, 0xD2})
+	shortInterval := append(bytes.Clone(restart[:rst1+2+(rst2-rst1-2)/2]), restart[rst2:]...)
+
+	for name, data := range map[string][]byte{
+		"frame larger than its data":       enlarged,
+		"cut mid-scan, then EOI":           append(bytes.Clone(valid[:len(valid)/2]), eoi...),
+		"one restart interval cut in half": shortInterval,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := compress.NewJPEGLosslessDecompressor().Decompress(data)
+			if err == nil {
+				t.Fatalf("decoded %d bytes from a scan that ran out", len(got))
+			}
+		})
+	}
+}
+
+// TestJPEGLosslessRefusesAComponentNoScanCovers: a frame declaring two
+// components with a scan for one has no samples for the other, and returning
+// zeros for it would be as invented as samples decoded past the end.
+func TestJPEGLosslessRefusesAComponentNoScanCovers(t *testing.T) {
+	valid := readFixture(t, "mr_small_sv1.jpgls")
+	sof := bytes.Index(valid, []byte{0xFF, 0xC3})
+	length := int(binary.BigEndian.Uint16(valid[sof+2:]))
+
+	// Rewrite the SOF3 with a second component, id 2, that no scan names.
+	body := append(bytes.Clone(valid[sof+4:sof+2+length]), 2, 0x11, 0)
+	body[5] = 2
+	var data []byte
+	data = append(data, valid[:sof]...)
+	data = append(data, 0xFF, 0xC3, byte((len(body)+2)>>8), byte(len(body)+2))
+	data = append(data, body...)
+	data = append(data, valid[sof+2+length:]...)
+
+	if got, err := compress.NewJPEGLosslessDecompressor().Decompress(data); err == nil {
+		t.Fatalf("decoded %d bytes for a frame with a component no scan covers", len(got))
+	}
+}

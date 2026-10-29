@@ -195,8 +195,17 @@ type bitReader struct {
 	// marker holds a marker met while filling, so the scan loop can see a
 	// restart or EOI without the bit reader having to interpret it.
 	marker byte
-	// overrun counts bytes fabricated past the end of the data.
+	// overrun counts bytes fabricated past the end of the data, or past a
+	// marker, in the current restart interval. ranOut records an interval that
+	// fabricated more than maxTrailingSlack, since reset clears the count.
 	overrun int
+	ranOut  bool
+}
+
+// ranOutOfData reports whether samples have been decoded from bytes the scan
+// never carried.
+func (b *bitReader) ranOutOfData() bool {
+	return b.ranOut || b.overrun > maxTrailingSlack
 }
 
 func (b *bitReader) fill() {
@@ -215,9 +224,12 @@ func (b *bitReader) fill() {
 				if next == 0x00 {
 					b.pos++ // stuffed byte: the 0xFF is data
 				} else {
-					// A marker. Leave it for the scan loop and feed zeros.
+					// A marker. Leave it for the scan loop and feed zeros, which
+					// count against the scan as bytes past its end do: a scan
+					// ends at a marker, EOI at the latest (#175).
 					b.marker = next
 					b.pos--
+					b.overrun++
 					b.bits |= 0 << (24 - b.n)
 					b.n += 8
 					continue
@@ -250,6 +262,12 @@ func (b *bitReader) readBits(count int) int32 {
 // reset discards buffered bits and skips a restart marker, as required at each
 // restart interval.
 func (b *bitReader) reset() {
+	// Each interval reads a little past its own end, so the slack is judged
+	// per interval rather than summed over the scan.
+	if b.overrun > maxTrailingSlack {
+		b.ranOut = true
+	}
+	b.overrun = 0
 	b.bits = 0
 	b.n = 0
 	b.marker = 0
