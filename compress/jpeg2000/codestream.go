@@ -137,9 +137,9 @@ type TileComponentKey struct {
 	Component int
 }
 
-// TilesAcross and TilesDown give the tile grid (Annex B.3).
+// TilesAcross is how many columns the tile grid has (Annex B.3).
 func (c *Codestream) TilesAcross() int {
-	return int((c.Width+c.TileXOffset-c.TileXOffset)+c.TileWidth-1-c.TileXOffset) / int(c.TileWidth)
+	return ceilDiv(c.Width-c.TileXOffset, c.TileWidth)
 }
 
 // NumTiles is how many tiles the image is divided into.
@@ -192,7 +192,8 @@ func ceilDiv(a, b uint32) int {
 	if b == 0 {
 		return 0
 	}
-	return int((a + b - 1) / b)
+	// In 64 bits: a and b both come from the file, and a+b-1 can pass 2^32.
+	return int((uint64(a) + uint64(b) - 1) / uint64(b))
 }
 
 // ErrUnsupported reports a codestream feature this decoder does not implement.
@@ -354,6 +355,25 @@ func parseSIZ(c *Codestream, s []byte) error {
 	}
 	if c.TileWidth == 0 || c.TileHeight == 0 {
 		return fmt.Errorf("jpeg2000: SIZ declares a zero-sized tile")
+	}
+	// A.5.1: the tile grid starts at or before the image, and its first tile
+	// reaches into it. Every tile's bounds are computed from these, unsigned,
+	// so a grid origin past the image wraps the subtraction in NumTiles and
+	// turns a 32x32 image into a band the size of the address space.
+	if c.TileXOffset > c.XOffset || c.TileYOffset > c.YOffset ||
+		uint64(c.TileXOffset)+uint64(c.TileWidth) <= uint64(c.XOffset) ||
+		uint64(c.TileYOffset)+uint64(c.TileHeight) <= uint64(c.YOffset) {
+		return fmt.Errorf("jpeg2000: SIZ tile grid at (%d,%d) of %dx%d does not cover an image at (%d,%d)",
+			c.TileXOffset, c.TileYOffset, c.TileWidth, c.TileHeight, c.XOffset, c.YOffset)
+	}
+	if err := checkImageSize(c); err != nil {
+		return err
+	}
+	// A tile-part names its tile in 16 bits (A.4.2), so a grid of more tiles
+	// than that cannot be a codestream, and the decoder would walk every one.
+	if tiles := c.NumTiles(); tiles > maxTiles {
+		return fmt.Errorf("jpeg2000: SIZ divides the image into %d tiles, more than %d",
+			tiles, maxTiles)
 	}
 	if count == 0 || len(s) < 36+count*3 {
 		return fmt.Errorf("jpeg2000: SIZ declares %d components, segment holds %d bytes",
