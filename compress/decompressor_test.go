@@ -3,6 +3,8 @@ package compress_test
 import (
 	"bytes"
 	"compress/zlib"
+	"image"
+	"image/jpeg"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -185,5 +187,39 @@ func TestJPEGCanDecompress(t *testing.T) {
 				t.Errorf("CanDecompress mismatch: got %v, want %v", result, test.expected)
 			}
 		})
+	}
+}
+
+// TestJPEGFrameWithNoSamplesIsAnError: a frame of zero columns or rows is an
+// error, not a successful decode of no bytes (#165).
+func TestJPEGFrameWithNoSamplesIsAnError(t *testing.T) {
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, image.NewGray(image.Rect(0, 0, 8, 8)), nil); err != nil {
+		t.Fatal(err)
+	}
+	sof := bytes.Index(encoded.Bytes(), []byte{0xFF, 0xC0})
+	if sof < 0 {
+		t.Fatal("the encoder wrote no SOF0")
+	}
+
+	// SOF0: marker(2) Lf(2) P(1) Y(2) X(2).
+	for name, offset := range map[string]int{"no columns": 7, "no rows": 5} {
+		t.Run(name, func(t *testing.T) {
+			data := bytes.Clone(encoded.Bytes())
+			data[sof+offset], data[sof+offset+1] = 0, 0
+			out, err := compress.NewJPEGDecompressor().Decompress(data)
+			if err == nil {
+				t.Fatalf("decoded a frame with no samples to %d bytes and no error", len(out))
+			}
+		})
+	}
+
+	// And the unpatched frame decodes, so the errors above are about the size.
+	out, err := compress.NewJPEGDecompressor().Decompress(encoded.Bytes())
+	if err != nil {
+		t.Fatalf("the unpatched frame did not decode: %v", err)
+	}
+	if len(out) != 64 {
+		t.Errorf("the unpatched frame decoded to %d bytes, want 64", len(out))
 	}
 }
