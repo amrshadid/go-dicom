@@ -269,9 +269,11 @@ selection, and user identity negotiation. The window defaults to one.
 
 - **Physical media:** not applicable; this is a network and file library.
 - **Transport:** TCP/IP. DICOM Upper Layer Protocol per PS3.8.
-- **TLS:** available through `network.DialTLS` and `network.ListenTLS`. Plain
-  DICOM over TCP is neither authenticated nor encrypted, and checking a called AE
-  title is a naming convention rather than authentication.
+- **TLS:** available through `network.DialTLS` and `network.ListenTLS`. A
+  `TLSConfig.CAFile` makes each side authenticate the other: a server requires
+  a client certificate issued by that CA, and a client verifies the server
+  against it. Plain DICOM over TCP is neither authenticated nor encrypted, and
+  checking a called AE title is a naming convention rather than authentication.
 
 ---
 
