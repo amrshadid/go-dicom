@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **`dcmstore` no longer loses or tears instances it acknowledged** (#189).
+  Instances were written into their final path with `os.Create`, which truncates
+  first, so a store killed midway left an empty or partial file where the good
+  copy had been, still indexed and served. Two stores of one SOP Instance UID at
+  once left a file that was neither copy: 172 of 200 trials. The saved index
+  could be an older snapshot renamed in after a newer one, losing an instance
+  across a restart; an instance stored again under another study or series left
+  its old file, which `Rebuild` brought back after a `Remove`; and `Rebuild`
+  dropped instances stored while it ran, 24 of 50, with a data race besides.
+
+  Files are now written beside their final path, synced, and renamed into
+  place, so a reader, a rebuild or a crash sees a whole copy or the previous
+  one. Writers of one UID are serialized, a moved instance's old file is
+  removed, the index snapshot and its rename happen under one lock, and
+  `Rebuild` runs with stores held off. It also clears what an interrupted
+  write leaves behind, and keeps the newer file where an older version of the
+  store left two for one UID.
 
 ## [1.6.0] - 2026-09-20
 
