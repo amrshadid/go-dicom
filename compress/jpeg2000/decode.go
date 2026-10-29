@@ -54,10 +54,8 @@ func Decode(c *Codestream) (*Image, error) {
 }
 
 // checkImageSize refuses an image too large to decode. The parser applies it
-// too, because every structure built from a codestream, down to the packet
-// reader's precincts, is sized from these dimensions: a 285212704x32 image
-// passed the parser and drove the packet reader to six gigabytes before
-// Decode, which alone held this check, could refuse it.
+// as well as Decode, because the packet reader sizes its precincts from the
+// same dimensions.
 func checkImageSize(c *Codestream) error {
 	width := int(c.Width) - int(c.XOffset)
 	height := int(c.Height) - int(c.YOffset)
