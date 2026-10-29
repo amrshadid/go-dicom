@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Lossless JPEG prediction resets at every restart marker** (#174). T.81
+  H.1.2.1 starts each restart interval afresh: its first sample takes the
+  default prediction, and its first line is predicted from the left, as the
+  image's first line is. The decoder did that at the start of the scan only, so
+  in a frame with restart markers every interval after the first was predicted
+  from the row before it and came out offset from the right values, with no
+  error. Neither dcmtk nor pydicom's corpus has such a file, which is how it went
+  unseen; `scripts/jpeglossless-restart-fixture.py` now writes two, at selection
+  values 1 and 7, and keeps them only once libjpeg decodes them to the original
+  samples. A restart interval that is not a whole number of rows, which T.81 H.2
+  does not allow in a lossless frame, is refused by name.
 
 ## [1.6.0] - 2026-09-20
 
