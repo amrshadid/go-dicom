@@ -115,28 +115,21 @@ jobs:
       - name: Fuzz each target briefly
         env:
           GOMEMLIMIT: 1GiB
+        # Every target in the module is found rather than listed. The list this
+        # replaced named six of nine, and a target that is not listed is run on
+        # its seeds alone: the JPEG 2000 parser and the JPEG Extended decoder
+        # each failed within seconds of running past theirs (#164, #165). Each
+        # of these reads lengths and offsets out of the bytes it then indexes
+        # with, which is the shape of input fuzzing finds panics in.
         run: |
           set -e
-          for target in FuzzDecodePDU FuzzDecodeDataset FuzzDecodeCommandDataset; do
-            echo "::group::$target"
-            go test ./network/ -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2
-            echo "::endgroup::"
+          for pkg in $(go list ./...); do
+            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+              echo "::group::$target"
+              go test "$pkg" -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2
+              echo "::endgroup::"
+            done
           done
-          echo "::group::FuzzReadDICOMFile"
-          go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=30s -parallel=2
-          echo "::endgroup::"
-          # The lossless JPEG parser reads offsets and lengths out of the same
-          # attacker-controlled bytes it then indexes with; fuzzing it found two
-          # panics within a minute.
-          echo "::group::FuzzJPEGLosslessDecompress"
-          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLosslessDecompress$' -fuzztime=30s -parallel=2
-          echo "::endgroup::"
-          # JPEG-LS has more attacker-reachable arithmetic than the others: the
-          # coding parameters come from the frame header and an optional preset
-          # segment, and they feed shift counts and loop bounds.
-          echo "::group::FuzzJPEGLSDecompress"
-          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLSDecompress$' -fuzztime=30s -parallel=2
-          echo "::endgroup::"
 
       # A crash writes its input to testdata/fuzz; keep it so the failure can be
       # reproduced from the artifact rather than by re-fuzzing.

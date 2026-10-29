@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   too: "Empty JPEG image (DNL not supported)". `FuzzJPEGExtendedDecompress`
   found it within three seconds of running past its seeds.
 
+- **CI fuzzes every target, not six of nine** (#168). The fuzz job named its
+  targets by hand, and the JPEG 2000 parser, its MQ decoder and the JPEG
+  Extended decoder were not among them, so they ran on their seeds alone. Both
+  defects above were found within seconds of running past those seeds. The job
+  now finds its targets with `go test -list`, so a new one cannot be left out.
+  The JPEG 2000 fuzzer is seeded with whole codestreams, where before every seed
+  stopped in the main header, and RLE, which had no fuzz target, has one.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added

@@ -1,6 +1,8 @@
 package jpeg2000_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/compress/jpeg2000"
@@ -17,6 +19,17 @@ func FuzzParseCodestream(f *testing.F) {
 	f.Add([]byte{0xFF, 0x4F, 0xFF, 0x51, 0x00, 0x29})             // SOC, a SIZ that stops
 	f.Add([]byte{0xFF, 0x4F, 0xFF, 0x90, 0x00, 0x0A, 0, 0, 0xFF}) // a tile-part that stops
 	f.Add([]byte{0x00, 0x00, 0x00, 0x0C, 0x6A, 0x50, 0x20, 0x20}) // a JP2 signature box
+
+	// And whole codestreams. The seeds above all stop in the main header, so
+	// the fuzzer had to invent a valid one before it could reach a tile, and in
+	// practice it never did: seeded with these, it found a fatal out-of-memory
+	// in the tile geometry within a second (#164).
+	paths, _ := filepath.Glob("testdata/*.j2k")
+	for _, path := range paths {
+		if data, err := os.ReadFile(path); err == nil {
+			f.Add(data)
+		}
+	}
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		c, err := jpeg2000.ParseCodestream(data)
