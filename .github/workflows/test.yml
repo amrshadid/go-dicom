@@ -115,12 +115,8 @@ jobs:
       - name: Fuzz each target briefly
         env:
           GOMEMLIMIT: 1GiB
-        # Every target in the module is found rather than listed. The list this
-        # replaced named six of nine, and a target that is not listed is run on
-        # its seeds alone: the JPEG 2000 parser and the JPEG Extended decoder
-        # each failed within seconds of running past theirs (#164, #165). Each
-        # of these reads lengths and offsets out of the bytes it then indexes
-        # with, which is the shape of input fuzzing finds panics in.
+        # Targets are found rather than listed, so a new one cannot be left
+        # out: a hand-kept list named six of nine (#168).
         run: |
           set -e
           for pkg in $(go list ./...); do

@@ -20,10 +20,8 @@ func FuzzParseCodestream(f *testing.F) {
 	f.Add([]byte{0xFF, 0x4F, 0xFF, 0x90, 0x00, 0x0A, 0, 0, 0xFF}) // a tile-part that stops
 	f.Add([]byte{0x00, 0x00, 0x00, 0x0C, 0x6A, 0x50, 0x20, 0x20}) // a JP2 signature box
 
-	// And whole codestreams. The seeds above all stop in the main header, so
-	// the fuzzer had to invent a valid one before it could reach a tile, and in
-	// practice it never did: seeded with these, it found a fatal out-of-memory
-	// in the tile geometry within a second (#164).
+	// And whole codestreams: the seeds above all stop in the main header, so
+	// without these the fuzzer rarely reaches a tile.
 	paths, _ := filepath.Glob("testdata/*.j2k")
 	for _, path := range paths {
 		if data, err := os.ReadFile(path); err == nil {

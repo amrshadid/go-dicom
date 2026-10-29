@@ -9,11 +9,9 @@ import (
 
 // FuzzRLEDecompress fuzzes the RLE frame decoder.
 //
-// The header's segment count and offsets come from the file, and each segment
-// is PackBits whose control bytes say how much to copy and from where. It was
-// the one decoder of pixel data with no fuzz target. A malformed frame must
-// produce an error, never a panic, and a frame that decodes must hold a whole
-// number of pixels for the layout it was decoded as.
+// The segment count, the offsets and every PackBits control byte come from the
+// file. A malformed frame must produce an error, never a panic, and a frame
+// that decodes must hold a whole number of pixels for its layout.
 func FuzzRLEDecompress(f *testing.F) {
 	encoder := compress.NewRLECompressor()
 	for _, layout := range []struct{ samples, bits int }{{1, 8}, {1, 16}, {3, 8}, {1, 32}} {
