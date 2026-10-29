@@ -263,8 +263,9 @@ func getEncoder(encodingName string) *encoding.Encoder {
 
 	// Thai
 	case "ISO-8859-11":
-		// Note: Go's charmap doesn't have ISO-8859-11, fallback to UTF-8
-		enc = unicode.UTF8
+		// Windows-874, as for decoding: the same table as TIS 620-2533 for
+		// every Thai character (#195).
+		enc = charmap.Windows874
 
 	// Japanese
 	case "Shift_JIS":
