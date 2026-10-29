@@ -469,3 +469,91 @@ func TestPaddingOnlyTextHasNoValue(t *testing.T) {
 		}
 	}
 }
+
+// roundTripJSON reads DICOM JSON into a data set and writes it out again.
+func roundTripJSON(t *testing.T, in string) (*dataset.Dataset, string) {
+	t.Helper()
+	ds := dataset.NewDataset()
+	if err := ds.FromDICOMJSONString(in); err != nil {
+		t.Fatalf("FromDICOMJSONString(%s): %v", in, err)
+	}
+	out, err := ds.ToDICOMJSONString()
+	if err != nil {
+		t.Fatalf("ToDICOMJSONString: %v", err)
+	}
+	return ds, out
+}
+
+// TestDICOMJSONInputKeepsTheValues: four ways FromDICOMJSON changed a value on
+// the way in (#193). A null became 0, which invents a value: PS3.18 F.2.5 uses
+// null for an empty one, and pydicom reads [null] as no value. UV and SV were
+// read through float64, which holds integers exactly only to 2^53, so this
+// library's own output of a larger one did not survive being read back. And an
+// empty sequence was stored as empty bytes rather than as a sequence with no
+// items, so it came back as no value at all.
+func TestDICOMJSONInputKeepsTheValues(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`{"00280010":{"vr":"US","Value":[null]}}`, `{"00280010":{"vr":"US"}}`},
+		{`{"0072000A":{"vr":"UV","Value":[9007199254740993]}}`, `{"0072000A":{"Value":[9007199254740993],"vr":"UV"}}`},
+		{`{"0072000A":{"vr":"UV","Value":[18446744073709551615]}}`, `{"0072000A":{"Value":[18446744073709551615],"vr":"UV"}}`},
+		{`{"00720082":{"vr":"SV","Value":[-9007199254740993]}}`, `{"00720082":{"Value":[-9007199254740993],"vr":"SV"}}`},
+		{`{"00081111":{"vr":"SQ","Value":[]}}`, `{"00081111":{"Value":[],"vr":"SQ"}}`},
+		{`{"00081111":{"vr":"SQ","Value":[{"0072000A":{"vr":"UV","Value":[9007199254740993]}}]}}`,
+			`{"00081111":{"Value":[{"0072000A":{"Value":[9007199254740993],"vr":"UV"}}],"vr":"SQ"}}`},
+	} {
+		if _, got := roundTripJSON(t, tc.in); got != tc.want {
+			t.Errorf("%s\n  came back as %s\n  want         %s", tc.in, got, tc.want)
+		}
+	}
+
+	// A null among binary numbers cannot be kept, since the value has no empty
+	// component, and 0 or closing the gap would change the others. The element
+	// is dropped and the rest of the document kept, as pydicom's test1.json,
+	// which has one, needs.
+	ds, _ := roundTripJSON(t, `{"00181310":{"vr":"US","Value":[128,0,0,32,null]},"00280010":{"vr":"US","Value":[64]}}`)
+	if _, ok := ds.Get(tag.New(0x0018, 0x1310)); ok {
+		t.Error("a US value with a null in it was kept")
+	}
+	if _, ok := ds.Get(tag.New(0x0028, 0x0010)); !ok {
+		t.Error("the rest of the document was dropped with the element")
+	}
+}
+
+// TestDICOMJSONTextIsDeclaredUTF8: DICOM JSON text is UTF-8 (PS3.18 F.2), so a
+// data set read from it holds UTF-8, whatever (0008,0005) the JSON carries.
+// The declaration was kept, so a name from an ISO_IR 100 file was written back
+// as UTF-8 bytes labeled Latin-1 and read by everyone as "JÃ©rÃ´me" (#193).
+func TestDICOMJSONTextIsDeclaredUTF8(t *testing.T) {
+	for _, in := range []string{
+		`{"00080005":{"vr":"CS","Value":["ISO_IR 100"]},"00100010":{"vr":"PN","Value":[{"Alphabetic":"Buc^Jérôme"}]}}`,
+		`{"00100010":{"vr":"PN","Value":[{"Alphabetic":"Buc^Jérôme"}]}}`,
+	} {
+		ds, _ := roundTripJSON(t, in)
+		elem, ok := ds.Get(tag.New(0x0008, 0x0005))
+		if !ok {
+			t.Errorf("%s: no Specific Character Set over UTF-8 text", in)
+			continue
+		}
+		if got := strings.TrimSpace(string(elem.GetValue().([]byte))); got != "ISO_IR 192" {
+			t.Errorf("%s: Specific Character Set %q over UTF-8 text, want ISO_IR 192", in, got)
+		}
+	}
+
+	// Non-ASCII text only inside an item: the top level declares UTF-8 for
+	// the whole data set, and the item, which inherits it, is left alone.
+	nested, _ := roundTripJSON(t, `{"00081111":{"vr":"SQ","Value":[{"00100010":{"vr":"PN","Value":[{"Alphabetic":"Müller"}]}}]}}`)
+	if elem, ok := nested.Get(tag.New(0x0008, 0x0005)); !ok || strings.TrimSpace(string(elem.GetValue().([]byte))) != "ISO_IR 192" {
+		t.Error("non-ASCII text in an item left the data set without ISO_IR 192")
+	}
+	seqElem, _ := nested.Get(tag.New(0x0008, 0x1111))
+	item, _ := seqElem.GetValue().(*sequence.Sequence).Get(0)
+	if _, ok := item.(*dataset.Dataset).Get(tag.New(0x0008, 0x0005)); ok {
+		t.Error("a declaration was added to an item that inherits one")
+	}
+
+	// ASCII needs no declaration, and none is added.
+	ds, _ := roundTripJSON(t, `{"00100010":{"vr":"PN","Value":[{"Alphabetic":"Doe^John"}]}}`)
+	if _, ok := ds.Get(tag.New(0x0008, 0x0005)); ok {
+		t.Error("a declaration was added over ASCII text")
+	}
+}

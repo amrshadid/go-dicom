@@ -207,6 +207,18 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 	}
 	var criteria []criterion
 
+	// Modalities in Study is computed, so no instance carries it to compare,
+	// but it is still a matching key (PS3.4 C.6.2.1): a study matches when any
+	// value asked for names a modality the study holds.
+	var modalitiesWanted []string
+	if elem, ok := query.Get(tagModalitiesInStudy); ok {
+		for _, value := range strings.Split(elementString(elem), `\`) {
+			if value = trimPadding(value); value != "" {
+				modalitiesWanted = append(modalitiesWanted, value)
+			}
+		}
+	}
+
 	// Sequence keys are matched separately: the criteria live inside an item
 	// rather than in a value, so they cannot be reduced to a string comparison.
 	var sequenceKeys []*dataelem.DataElement
@@ -253,8 +265,18 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 
 	s.mu.RLock()
 	candidates := make([]*Instance, 0, len(s.instances))
+	studyModalities := map[string]map[string]bool{}
 	for _, inst := range s.instances {
 		candidates = append(candidates, inst)
+		if len(modalitiesWanted) > 0 {
+			study := inst.value(tagStudyInstanceUID)
+			if studyModalities[study] == nil {
+				studyModalities[study] = map[string]bool{}
+			}
+			if modality := trimPadding(inst.value(tagModality)); modality != "" {
+				studyModalities[study][modality] = true
+			}
+		}
 	}
 	s.mu.RUnlock()
 
@@ -264,8 +286,12 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 			return nil, err
 		}
 
-		keep := true
+		keep := len(modalitiesWanted) == 0 ||
+			studyHoldsAny(studyModalities[inst.value(tagStudyInstanceUID)], modalitiesWanted)
 		for _, c := range criteria {
+			if !keep {
+				break
+			}
 			if !matchValue(c.vr, c.value, inst.value(c.tag)) {
 				keep = false
 				break
@@ -296,6 +322,19 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 
 	_ = level
 	return matched, nil
+}
+
+// studyHoldsAny reports whether any modality asked for, which may carry
+// wildcards, matches one the study holds.
+func studyHoldsAny(held map[string]bool, wanted []string) bool {
+	for _, want := range wanted {
+		for modality := range held {
+			if matchValue(dataelem.CS, want, modality) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // instanceOrder is the sort key giving results a stable, hierarchical order.

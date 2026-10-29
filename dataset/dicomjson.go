@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
@@ -236,55 +238,21 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement, enclosin
 	return ds.ResolveVR(t, elem, enclosing...)
 }
 
-// privateVR resolves a private tag through the private dictionary.
+// privateVR is the VR a private tag has whatever file it is in: LO for a
+// private creator, which PS3.5 7.8.1 makes it by definition, and nothing for a
+// private data element, which callers then write as UN.
 //
-// Private tags cannot be looked up by their stored tag, because the block they
-// sit in is assigned per file. PS3.5 7.8.1 gives a vendor a group and lets it
-// claim any block from 0x10 to 0xFF within it; the block is named by a private
-// creator at (gggg,00xx), and the vendor's attributes then live at (gggg,xxee).
-// The same attribute is (0019,1002) in one file and (0019,4302) in the next.
-//
-// So the creator is read to learn the vendor, and the tag is normalized to the
-// block the dictionary stores it under before the lookup. Without that step a
-// dictionary of 6883 private attributes answers nothing except for files that
-// happen to have chosen block 0x10.
+// The private dictionary is not consulted. Most of it is generated, with VRs
+// given in rotation rather than taken from any vendor, so trusting it
+// relabeled real data: an implicit Siemens MR came out of storescp with the
+// CS at (0019,1008) labeled SL and the US at (0019,100A) labeled FL (#186).
+// UN keeps the value exactly, which PS3.5 6.2.2 provides it for.
 func (ds *Dataset) privateVR(t tag.Tag) dataelem.VR {
 	if t.Group()%2 == 0 {
 		return ""
 	}
-
-	element := t.Element()
-
-	// A private creator is LO by definition — its value is the vendor's own
-	// name, so no dictionary is needed or possible.
-	if element >= 0x0010 && element <= 0x00FF {
+	if element := t.Element(); element >= 0x0010 && element <= 0x00FF {
 		return dataelem.LO
-	}
-
-	block := element >> 8
-	if block < 0x10 {
-		return "" // not a private data element of any block
-	}
-	creator, ok := ds.Get(tag.New(t.Group(), block))
-	if !ok {
-		return "" // the block was never claimed, so nothing can say what this is
-	}
-	raw, ok := creator.GetValue().([]byte)
-	if !ok {
-		return ""
-	}
-	vendor := strings.TrimRight(string(raw), " \x00")
-	if vendor == "" {
-		return ""
-	}
-
-	canonical := tag.New(t.Group(), 0x1000|(element&0x00FF))
-	if info := canonical.GetPrivateTagInfo(vendor); info != nil {
-		if known := dataelem.VR(info.VR); known != "" && known != dataelem.UN &&
-			known != dataelem.SQ && !jsonBinaryVRs[known] &&
-			!strings.Contains(string(known), " or ") {
-			return known
-		}
 	}
 	return ""
 }
@@ -463,7 +431,20 @@ func personNameJSON(value string) map[string]string {
 }
 
 // FromDICOMJSON replaces the data set's contents with a DICOM JSON Model object.
+//
+// Numbers decoded with json.Decoder.UseNumber keep their exact value, which an
+// SV or UV above 2^53 needs; FromDICOMJSONString decodes that way.
 func (ds *Dataset) FromDICOMJSON(m map[string]DICOMJSONElement) error {
+	if err := ds.fromDICOMJSON(m); err != nil {
+		return err
+	}
+	ds.declareUTF8(true)
+	return nil
+}
+
+// fromDICOMJSON reads the members of one data set, top level or item, and
+// relabels a declaration the item carries; only the top level adds one.
+func (ds *Dataset) fromDICOMJSON(m map[string]DICOMJSONElement) error {
 	for key, elem := range m {
 		t, err := parseDICOMJSONKey(key)
 		if err != nil {
@@ -473,16 +454,87 @@ func (ds *Dataset) FromDICOMJSON(m map[string]DICOMJSONElement) error {
 			return err
 		}
 	}
+	ds.declareUTF8(false)
 	return nil
 }
 
 // FromDICOMJSONString parses DICOM JSON Model text into the data set.
 func (ds *Dataset) FromDICOMJSONString(s string) error {
-	var m map[string]DICOMJSONElement
-	if err := json.Unmarshal([]byte(s), &m); err != nil {
+	m, err := decodeDICOMJSON([]byte(s))
+	if err != nil {
 		return fmt.Errorf("dataset: parsing DICOM JSON: %w", err)
 	}
 	return ds.FromDICOMJSON(m)
+}
+
+// decodeDICOMJSON decodes with UseNumber: through float64, an integer above
+// 2^53 is no longer the integer that was written.
+func decodeDICOMJSON(data []byte) (map[string]DICOMJSONElement, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var m map[string]DICOMJSONElement
+	if err := decoder.Decode(&m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// declareUTF8 makes (0008,0005) say what DICOM JSON text is: UTF-8 (PS3.18
+// F.2), whatever the JSON declared. Keeping its declaration labeled UTF-8
+// bytes as, say, ISO_IR 100, and every reader of the file written from it saw
+// "JÃ©rÃ´me". Text that is all ASCII is the same in every set and needs nothing.
+//
+// An item inherits its parent's declaration, so only the top level adds one,
+// when non-ASCII text appears anywhere in it; an item only has its own relabeled.
+func (ds *Dataset) declareUTF8(topLevel bool) {
+	if elem, declared := ds.Get(specificCharacterSet); declared {
+		// An empty declaration over ASCII text is already true: it names the
+		// default repertoire, which ASCII is.
+		raw, _ := elem.GetValue().([]byte)
+		if strings.TrimSpace(string(raw)) != "" || hasNonASCIIText(ds) {
+			_ = ds.Add(dataelem.NewDataElement(specificCharacterSet, dataelem.CS, []byte(utf8CharacterSet)))
+		}
+		return
+	}
+	if topLevel && hasNonASCIIText(ds) {
+		_ = ds.Add(dataelem.NewDataElement(specificCharacterSet, dataelem.CS, []byte(utf8CharacterSet)))
+	}
+}
+
+// hasNonASCIIText reports whether any text the character set applies to, in the
+// data set or its items, is outside ASCII.
+func hasNonASCIIText(ds *Dataset) bool {
+	for _, elem := range ds.GetAll() {
+		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
+			for _, item := range seq.Items() {
+				if inner, ok := item.(*Dataset); ok && hasNonASCIIText(inner) {
+					return true
+				}
+			}
+			continue
+		}
+		raw, ok := elem.GetValue().([]byte)
+		if !ok || !charsetAffected[elem.GetVR()] {
+			continue
+		}
+		for _, b := range raw {
+			if b > 0x7F {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// specificCharacterSet is (0008,0005), and utf8CharacterSet its term for UTF-8.
+var specificCharacterSet = tag.New(0x0008, 0x0005)
+
+const utf8CharacterSet = "ISO_IR 192"
+
+// charsetAffected are the VRs (0008,0005) applies to (PS3.5 6.1.2.3).
+var charsetAffected = map[dataelem.VR]bool{
+	dataelem.SH: true, dataelem.LO: true, dataelem.UC: true, dataelem.ST: true,
+	dataelem.LT: true, dataelem.UT: true, dataelem.PN: true,
 }
 
 // parseDICOMJSONKey reads the eight-hex-digit member name.
@@ -514,7 +566,11 @@ func (ds *Dataset) setFromDICOMJSON(t tag.Tag, elem DICOMJSONElement) error {
 		// known without fetching.
 		return ds.Add(dataelem.NewDataElement(t, vr, []byte{}))
 	}
-	if len(elem.Value) == 0 {
+	// A sequence present with no items is a sequence, not an absent value.
+	if vr == dataelem.SQ && elem.Value != nil && len(elem.Value) == 0 {
+		return ds.Add(dataelem.NewDataElement(t, dataelem.SQ, sequence.New()))
+	}
+	if len(elem.Value) == 0 || allNull(elem.Value) {
 		return ds.Add(dataelem.NewDataElement(t, vr, []byte{}))
 	}
 
@@ -530,7 +586,7 @@ func (ds *Dataset) setFromDICOMJSON(t tag.Tag, elem DICOMJSONElement) error {
 			if err != nil {
 				return err
 			}
-			if err := inner.FromDICOMJSON(nested); err != nil {
+			if err := inner.fromDICOMJSON(nested); err != nil {
 				return err
 			}
 			if err := seq.Append(inner); err != nil {
@@ -540,11 +596,37 @@ func (ds *Dataset) setFromDICOMJSON(t tag.Tag, elem DICOMJSONElement) error {
 		return ds.Add(dataelem.NewDataElement(t, dataelem.SQ, seq))
 	}
 
+	// A null among binary numbers cannot be kept: the value has no empty
+	// component, and 0, or closing the gap, would change what was sent. The
+	// element is dropped with a warning and the rest kept, as a truncated
+	// element is (CONFORMANCE §8.4). pydicom's own test1.json has one.
+	if binaryNumberVRs[vr] && !allNull(elem.Value) && anyNull(elem.Value) {
+		config.Logger.Warn("dataset: dropping a DICOM JSON element with a null among binary numbers",
+			"tag", dicomJSONKey(t), "vr", string(vr))
+		return nil
+	}
+
 	raw, err := dicomJSONToBytes(vr, elem.Value)
 	if err != nil {
 		return fmt.Errorf("dataset: %s %s: %w", dicomJSONKey(t), vr, err)
 	}
 	return ds.Add(dataelem.NewDataElement(t, vr, raw))
+}
+
+// binaryNumberVRs hold numbers in binary, with no way to write an empty one.
+var binaryNumberVRs = map[dataelem.VR]bool{
+	dataelem.US: true, dataelem.SS: true, dataelem.UL: true, dataelem.SL: true,
+	dataelem.UV: true, dataelem.SV: true, dataelem.FL: true, dataelem.FD: true,
+}
+
+// anyNull reports whether any value is null.
+func anyNull(values []any) bool {
+	for _, v := range values {
+		if v == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // reencodeJSONItem converts a decoded sequence item back into typed elements.
@@ -556,6 +638,9 @@ func reencodeJSONItem(raw map[string]any) (map[string]DICOMJSONElement, error) {
 	b, err := json.Marshal(raw)
 	if err != nil {
 		return nil, fmt.Errorf("dataset: re-encoding a sequence item: %w", err)
+	}
+	if out, err := decodeDICOMJSON(b); err == nil {
+		return out, nil
 	}
 	var out map[string]DICOMJSONElement
 	if err := json.Unmarshal(b, &out); err != nil {
@@ -584,6 +669,28 @@ func dicomJSONToBytes(vr dataelem.VR, values []any) ([]byte, error) {
 		dataelem.SV, dataelem.UV, dataelem.FL, dataelem.FD:
 		var buf []byte
 		for _, v := range values {
+			// A binary value has no empty component, so a null among numbers
+			// cannot be kept, and 0 would be a value nobody sent.
+			if v == nil {
+				return nil, fmt.Errorf("a null among %s values, which have no empty component", vr)
+			}
+			// SV and UV go up to 2^64, past what a float64 holds exactly.
+			if n, ok := v.(json.Number); ok && (vr == dataelem.UV || vr == dataelem.SV) {
+				if vr == dataelem.UV {
+					u, err := strconv.ParseUint(n.String(), 10, 64)
+					if err != nil {
+						return nil, fmt.Errorf("%s is not a UV value", n)
+					}
+					buf = binary.LittleEndian.AppendUint64(buf, u)
+				} else {
+					i, err := strconv.ParseInt(n.String(), 10, 64)
+					if err != nil {
+						return nil, fmt.Errorf("%s is not an SV value", n)
+					}
+					buf = binary.LittleEndian.AppendUint64(buf, uint64(i))
+				}
+				continue
+			}
 			f, ok := jsonNumber(v)
 			if !ok {
 				return nil, fmt.Errorf("%v is not a number", v)
@@ -619,6 +726,13 @@ func dicomJSONToBytes(vr dataelem.VR, values []any) ([]byte, error) {
 			parts = append(parts, value)
 		case float64:
 			parts = append(parts, formatJSONNumber(value))
+		case json.Number:
+			// As written, where IS and DS allow it: the text is the value.
+			if f, err := value.Float64(); err == nil && strings.ContainsAny(value.String(), "eE") {
+				parts = append(parts, formatJSONNumber(f))
+			} else {
+				parts = append(parts, value.String())
+			}
 		case map[string]any:
 			// A person name, back into its "=" separated groups. Trailing empty
 			// groups are dropped, which is how a stored name spells them.
@@ -673,10 +787,18 @@ func jsonNumber(v any) (float64, bool) {
 		}
 		f, err := strconv.ParseFloat(value, 64)
 		return f, err == nil
-	case nil:
-		return 0, true
 	}
 	return 0, false
+}
+
+// allNull reports whether every value is null, which is an empty element.
+func allNull(values []any) bool {
+	for _, v := range values {
+		if v != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // formatJSONNumber renders a number back into DS or IS text without the
