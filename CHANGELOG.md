@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The JPEG 2000 fuzzer is seeded with whole codestreams, where before every seed
   stopped in the main header, and RLE, which had no fuzz target, has one.
 
+- **The fuzz job no longer fails at random** (#177). Go's fuzz coordinator stops
+  when `-fuzztime` expires and can keep that expiry as the run's error, because
+  it checks it against the workers' context a moment before that context is
+  canceled too. A target that fuzzed its whole budget without finding anything
+  was then reported as `context deadline exceeded`, with no input written, and
+  passed on a re-run. Exactly that outcome is now a warning; a crash, a hang, or
+  an expiry that wrote an input still fails the job.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added

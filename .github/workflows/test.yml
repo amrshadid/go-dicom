@@ -117,12 +117,26 @@ jobs:
           GOMEMLIMIT: 1GiB
         # Targets are found rather than listed, so a new one cannot be left
         # out: a hand-kept list named six of nine (#168).
+        #
+        # A run that spends its whole -fuzztime is a pass, but Go's coordinator
+        # can report the expiry itself as a failure: it stops on ctx.Done() and
+        # suppresses ctx.Err() only once the workers' child context is canceled
+        # too, which happens just after (#177). That failure is the bare line
+        # "context deadline exceeded" with no input written; anything else, a
+        # crash included, still fails the job.
         run: |
           set -e
+          log="$RUNNER_TEMP/fuzz.log"
           for pkg in $(go list ./...); do
             for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
               echo "::group::$target"
-              go test "$pkg" -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2
+              if ! go test "$pkg" -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2 2>&1 | tee "$log"; then
+                if grep -qx '    context deadline exceeded' "$log" && ! grep -q 'Failing input written' "$log"; then
+                  echo "::warning::$target ran its full fuzz time; Go reported the expiry as a failure (#177)"
+                else
+                  exit 1
+                fi
+              fi
               echo "::endgroup::"
             done
           done
