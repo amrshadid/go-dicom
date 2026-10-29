@@ -1,6 +1,7 @@
 package charset_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/charset"
@@ -426,6 +427,61 @@ func TestGetReturnToASCIIEscape(t *testing.T) {
 	}
 }
 
+// TestEmptyFirstCharacterSetIsTheDefault: a multi-valued (0008,0005) with an
+// empty first value names the default repertoire as G0 (PS3.5 6.1.2.5.3), and
+// every other set must then be introduced by its escape. The empty value was
+// skipped, so "\ISO 2022 IR 149" became EUC-KR alone, and Korean was written
+// with no ESC $ ) C for any other reader to switch on (#197).
+func TestEmptyFirstCharacterSetIsTheDefault(t *testing.T) {
+	encodings, err := charset.ConvertEncodings([]string{"", "ISO 2022 IR 149"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encodings) != 2 || encodings[0] != charset.DefaultEncoding || encodings[1] != "EUC-KR" {
+		t.Fatalf("ConvertEncodings gave %q, want [%s EUC-KR]", encodings, charset.DefaultEncoding)
+	}
+
+	name := "Hong^Gildong=洪^吉洞=홍^길동"
+	encoded, err := charset.EncodeString(name, encodings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escape := []byte{0x1B, '$', ')', 'C'}
+	at := bytes.Index(encoded, escape)
+	if at < 0 || at != bytes.IndexByte(encoded, '=')+1 {
+		t.Fatalf("encoded as % X; the Korean should start with ESC $ ) C after the first '='", encoded)
+	}
+	if decoded, err := charset.DecodeBytes(encoded, encodings, charset.PersonNameDelimiters); err != nil || decoded != name {
+		t.Errorf("decoded back as %q (%v), want %q", decoded, err, name)
+	}
+}
+
+// TestTextNeedingACodeExtensionIsEncoded: Latin-1 with Greek or Cyrillic as a
+// code extension. The encoder counted the encodable prefix in runes and cut
+// the remainder in bytes, splitting a UTF-8 character, so the encoding failed
+// and the value came back as raw UTF-8 with no error (#197).
+func TestTextNeedingACodeExtensionIsEncoded(t *testing.T) {
+	for _, tc := range []struct {
+		value     string
+		encodings []string
+		escape    []byte
+	}{
+		{"Muller Διονυσιος", []string{"ISO-8859-1", "ISO-8859-7"}, []byte{0x1B, '-', 'F'}},
+		{"Ivanov Люк", []string{"ISO-8859-1", "ISO-8859-5"}, []byte{0x1B, '-', 'L'}},
+	} {
+		encoded, err := charset.EncodeString(tc.value, tc.encodings)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.value, err)
+		}
+		if !bytes.Contains(encoded, tc.escape) {
+			t.Errorf("%q encoded as % X, want the extension introduced by % X", tc.value, encoded, tc.escape)
+		}
+		if decoded, err := charset.DecodeBytes(encoded, tc.encodings, charset.DefaultTextDelimiters); err != nil || decoded != tc.value {
+			t.Errorf("%q decoded back as %q (%v)", tc.value, decoded, err)
+		}
+	}
+}
+
 // TestThaiIsDecoded: ISO_IR 166 is TIS 620-2533 (PS3.3 C.12.1.1.2). The
 // decoder had no table for it and read the bytes as UTF-8, so every Thai
 // character became U+FFFD, and the data set then declared ISO_IR 192 over the
@@ -478,5 +534,37 @@ func TestGB2312EscapeIsNotText(t *testing.T) {
 	}
 	if want := "Zhang^XiaoDong=张^小东"; got != want {
 		t.Errorf("decoded as %q, want %q", got, want)
+	}
+}
+
+// TestEncodedEscapesNameTheDeclaredSet: the escape written before a code
+// extension must be the one for the set declared. Going through the
+// multi-part path, ISO-2022-JP text got IR 159's ESC $ ( D prepended to the
+// ESC $ B its own encoder writes, and pydicom then reported an unknown escape
+// and read the name as Latin-1 (#197).
+func TestEncodedEscapesNameTheDeclaredSet(t *testing.T) {
+	for _, tc := range []struct {
+		declared []string
+		value    string
+		want     []byte
+		never    []byte
+	}{
+		{[]string{"", "ISO 2022 IR 87"}, "Yamada^Tarou=山田^太郎", []byte{0x1B, '$', 'B'}, []byte{0x1B, '$', '(', 'D'}},
+		{[]string{"", "ISO 2022 IR 58"}, "Wang^XiaoDong=王^小东", []byte{0x1B, '$', ')', 'A'}, nil},
+	} {
+		encodings, err := charset.ConvertEncodings(tc.declared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := charset.EncodeString(tc.value, encodings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(encoded, tc.want) || tc.never != nil && bytes.Contains(encoded, tc.never) {
+			t.Errorf("%v: encoded as % X, want % X and never % X", tc.declared, encoded, tc.want, tc.never)
+		}
+		if decoded, err := charset.DecodeBytes(encoded, encodings, charset.PersonNameDelimiters); err != nil || decoded != tc.value {
+			t.Errorf("%v: decoded back as %q (%v), want %q", tc.declared, decoded, err, tc.value)
+		}
 	}
 }
