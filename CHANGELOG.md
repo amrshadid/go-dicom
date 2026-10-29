@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **An 8-bit JPEG frame with no samples is an error** (#165). 8-bit frames are
+  decoded by the standard library, which takes a frame header of zero columns,
+  or of zero rows with the count left to a DNL marker it does not read, as an
+  empty image and says nothing. `JPEGDecompressor` passed that on as a
+  successful decode of no bytes, leaving every caller to notice the buffer was
+  empty. The 12-bit path already refused the same header, and libjpeg refuses it
+  too: "Empty JPEG image (DNL not supported)". `FuzzJPEGExtendedDecompress`
+  found it within three seconds of running past its seeds.
 
 ## [1.6.0] - 2026-09-20
 
