@@ -26,10 +26,21 @@ func ConvertEncodingsWithContext(ctx context.Context, values []string) ([]string
 
 	validationMode := config.ReadingValidationModeFromContext(ctx)
 	encodings := make([]string, 0, len(values))
+	// used holds the value each encoding came from, so the two stay aligned
+	// for validateStandAloneEncodings, which indexes one by the other.
+	used := make([]string, 0, len(values))
 
-	for _, val := range values {
+	for i, val := range values {
 		val = strings.TrimSpace(val)
 		if val == "" {
+			// An empty first value is the default repertoire as G0 (PS3.5
+			// 6.1.2.5.3), and the sets after it are code extensions that need
+			// their escapes. Skipping it made the next set the base, so Korean
+			// under "\ISO 2022 IR 149" was written with no ESC $ ) C (#197).
+			if i == 0 {
+				encodings = append(encodings, DefaultEncoding)
+				used = append(used, val)
+			}
 			continue
 		}
 
@@ -39,13 +50,14 @@ func ConvertEncodingsWithContext(ctx context.Context, values []string) ([]string
 		}
 
 		encodings = append(encodings, encoding)
+		used = append(used, val)
 	}
 
 	if len(encodings) == 0 {
 		return []string{DefaultEncoding}, nil
 	}
 
-	encodings, err := validateStandAloneEncodings(ctx, values, encodings, validationMode)
+	encodings, err := validateStandAloneEncodings(ctx, used, encodings, validationMode)
 	if err != nil {
 		return nil, err
 	}
