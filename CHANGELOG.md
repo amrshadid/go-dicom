@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **Every way of starting a server applies `MaxAssociations`** (#170). An SCP
+  accepted associations in three loops, `SCP.ListenAndServe`, `StartServer` and
+  `StartServerTLS`, and only the first consulted the limit: with
+  `MaxAssociations: 1`, `StartServer` accepted three associations held open at
+  once. All three also retried a failed accept immediately and forever, so after
+  `SCP.Close()`, which closes the listener without canceling the context,
+  `ListenAndServe` never returned and logged a million lines in two seconds.
+
+  There is one loop now. A closed listener ends it, and `ListenAndServe`
+  returns nil after `Close`. Any other accept error is retried after a pause
+  that doubles from 5 ms to a second, as `net/http` does. `StartServerTLS`
+  emits the connection events `StartServer` always did.
 
 ## [1.6.0] - 2026-09-20
 
