@@ -353,7 +353,7 @@ func GetVRInfo(vr VR) *VRInfo {
 		UI: {VR: UI, Name: "Unique Identifier", ByteLength: -1, PadValue: '\x00', IsText: true, IsNumeric: false, SupportsVM: true, IsStandard: true},
 		UL: {VR: UL, Name: "Unsigned Long", ByteLength: 4, PadValue: 0, IsText: false, IsNumeric: true, SupportsVM: true, IsStandard: true},
 		UN: {VR: UN, Name: "Unknown", ByteLength: -1, PadValue: 0, IsText: false, IsNumeric: false, SupportsVM: false, IsStandard: true},
-		UR: {VR: UR, Name: "Universal Resource Identifier", ByteLength: -1, PadValue: '\x00', IsText: true, IsNumeric: false, SupportsVM: false, IsStandard: true},
+		UR: {VR: UR, Name: "Universal Resource Identifier", ByteLength: -1, PadValue: ' ', IsText: true, IsNumeric: false, SupportsVM: false, IsStandard: true},
 		UT: {VR: UT, Name: "Unlimited Text", ByteLength: -1, PadValue: ' ', IsText: true, IsNumeric: false, SupportsVM: false, IsStandard: true},
 	}
 
