@@ -248,6 +248,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed on a re-run. Exactly that outcome is now a warning; a crash, a hang, or
   an expiry that wrote an input still fails the job.
 
+- **A de-identified UID keeps nothing of the original** (#211). The
+  anonymizer built a replacement by keeping the original's first three
+  components as a root and appending a random number, so a UID of three
+  components or fewer, every `2.25` UID among them, survived whole inside its
+  replacement: the original could be read off the de-identified data. The cut
+  to 64 characters then returned a 64-character original unchanged and a
+  63-character one ending in a dot. A replacement is now a fresh UUID-derived
+  UID (`2.25.` and a random 128-bit number, PS3.5 B.2). The generator moved to
+  `uid.Generate`, which `network.GenerateUID` now calls.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
