@@ -55,15 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A de-identified UID keeps nothing of the original** (#211). The
-  anonymizer built a replacement by keeping the original's first three
-  components as a root and appending a random number, so a UID of three
-  components or fewer, every `2.25` UID among them, survived whole inside its
-  replacement: the original could be read off the de-identified data. The cut
-  to 64 characters then returned a 64-character original unchanged and a
-  63-character one ending in a dot. A replacement is now a fresh UUID-derived
-  UID (`2.25.` and a random 128-bit number, PS3.5 B.2). The generator moved to
-  `uid.Generate`, which `network.GenerateUID` now calls.
+- **A request whose data set does not decode is refused, not answered
+  Success** (#207). A C-STORE whose data set failed to decode was handed to the
+  handler as an empty data set and answered 0x0000, so the sender believed an
+  instance was stored that never was. A C-FIND whose identifier failed got no
+  response at all, and C-GET, C-MOVE and the N-services went on with whatever
+  the decoder returned. Every one of them now answers without calling the
+  handler: 0xC000, cannot understand, for the C-services (PS3.4), and 0x0110,
+  processing failure, for the N-services.
 
 - **US is a valid VR** (#201). The VR table had no US entry, so
   `IsValidVR(US)` was false and `GetVRInfo(US)` nil, and `AllVRs` also left out
@@ -248,6 +247,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was then reported as `context deadline exceeded`, with no input written, and
   passed on a re-run. Exactly that outcome is now a warning; a crash, a hang, or
   an expiry that wrote an input still fails the job.
+
+- **A de-identified UID keeps nothing of the original** (#211). The
+  anonymizer built a replacement by keeping the original's first three
+  components as a root and appending a random number, so a UID of three
+  components or fewer, every `2.25` UID among them, survived whole inside its
+  replacement: the original could be read off the de-identified data. The cut
+  to 64 characters then returned a 64-character original unchanged and a
+  63-character one ending in a dot. A replacement is now a fresh UUID-derived
+  UID (`2.25.` and a random 128-bit number, PS3.5 B.2). The generator moved to
+  `uid.Generate`, which `network.GenerateUID` now calls.
 
 ## [1.6.0] - 2026-09-20
 
