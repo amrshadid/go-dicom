@@ -93,12 +93,8 @@ func TestWriteSRFileSuccess(t *testing.T) {
 	report.PatientName = "Test^Patient"
 	report.PatientID = "TEST001"
 
-	err := sr.WriteSRFile(tmpFile, report)
-
-	// Note: This may fail due to missing filewriter implementation details
-	// but we're testing the API interface
-	if err != nil {
-		t.Logf("WriteSRFile encountered expected implementation limitation: %v", err)
+	if err := sr.WriteSRFile(tmpFile, report); err != nil {
+		t.Fatalf("WriteSRFile: %v", err)
 	}
 }
 
@@ -151,7 +147,7 @@ func TestValidateAndWriteSRFileWithValidator(t *testing.T) {
 	}
 
 	if err != nil {
-		t.Logf("ValidateAndWriteSRFile encountered expected implementation limitation: %v", err)
+		t.Fatalf("ValidateAndWriteSRFile: %v", err)
 	}
 }
 
