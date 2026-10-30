@@ -11,6 +11,7 @@ import (
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
+	"github.com/amrshadid/go-dicom/uid"
 )
 
 // Profile represents a DICOM de-identification profile as defined in PS3.15 Annex E.
@@ -447,41 +448,14 @@ func (a *Anonymizer) generateNewUID(originalUID string) string {
 		return newUID
 	}
 
-	// Generate a new UID preserving the DICOM UID root prefix.
-	// Use the standard "2.25." prefix followed by a random UUID-derived number
-	// as recommended by DICOM for implementation-generated UIDs.
-	prefix := "2.25."
-
-	// If the original UID has a recognizable root, try to preserve it
-	parts := strings.SplitN(originalUID, ".", 4)
-	if len(parts) >= 3 {
-		prefix = parts[0] + "." + parts[1] + "." + parts[2] + "."
-	}
-
-	// Generate random suffix using crypto/rand
-	suffix := generateUIDSuffix()
-	newUID := prefix + suffix
-
-	// Ensure UID does not exceed 64 characters (DICOM max)
-	if len(newUID) > 64 {
-		newUID = newUID[:64]
-	}
+	// A UID under the UUID-derived arc, with nothing taken from the original.
+	// Keeping the original's first three components as a "root" kept every
+	// UID of three components or fewer whole, 2.25 ones included, so the
+	// original could be read off its replacement (#211).
+	newUID := uid.Generate()
 
 	a.uidMap[originalUID] = newUID
 	return newUID
-}
-
-// generateUIDSuffix generates a random numeric suffix for UID generation.
-func generateUIDSuffix() string {
-	// Generate a large random number for the suffix
-	max := new(big.Int)
-	max.SetString("999999999999999999", 10)
-	n, err := rand.Int(rand.Reader, max)
-	if err != nil {
-		// Fallback to timestamp
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return n.String()
 }
 
 // Template represents a reusable de-identification template that defines
