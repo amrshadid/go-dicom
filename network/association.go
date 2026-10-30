@@ -84,6 +84,10 @@ type Association struct {
 	// maxDataSetSize bounds the data set of one message being assembled.
 	// Zero is no bound.
 	maxDataSetSize int64
+
+	// requestor is true on the side that sent the A-ASSOCIATE-RQ, which
+	// decides who answers first when both sides release at once (PS3.8 9.2.7).
+	requestor bool
 }
 
 // maxCommandSetSize bounds a command set being assembled. A command set holds
@@ -92,6 +96,8 @@ const maxCommandSetSize = 1 << 20
 
 // A-ABORT reasons from the service provider (PS3.8 Table 9-26).
 const (
+	abortUnrecognizedPDU        byte = 1
+	abortUnexpectedPDU          byte = 2
 	abortUnexpectedPDUParameter byte = 5
 	abortInvalidPDUParameter    byte = 6
 )
@@ -298,6 +304,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 	a.callingAE = callingAE
 	a.calledAE = calledAE
 	a.requestedContexts = contexts
+	a.requestor = true
 	a.state = StateAwaitingAssocResponse
 	a.mu.Unlock()
 
@@ -480,27 +487,72 @@ func (a *Association) Release(ctx context.Context) error {
 		return fmt.Errorf("failed to send A-RELEASE-RQ: %w", err)
 	}
 
-	pdu, err := a.transport.ReadPDU(ctx)
-	if err != nil {
+	a.mu.RLock()
+	requestor := a.requestor
+	a.mu.RUnlock()
+	defer func() {
 		a.mu.Lock()
 		a.state = StateIdle
 		a.mu.Unlock()
-		return fmt.Errorf("failed to read release response: %w", err)
+	}()
+
+	for {
+		pdu, err := a.transport.ReadPDU(ctx)
+		if err != nil {
+			a.transport.Close()
+			return fmt.Errorf("failed to read release response: %w", err)
+		}
+
+		switch pdu.(type) {
+		case *ReleaseRP:
+			return a.transport.Close()
+		case *ReleaseRQ:
+			// Both sides released at once (PS3.8 9.2.7). The requestor answers
+			// first and then waits for its own A-RELEASE-RP (AR-8, AR-9); the
+			// acceptor waits for that reply and answers after it (AR-10, AR-4).
+			// Failing here left the peer waiting for a reply it never got.
+			if requestor {
+				if err := a.transport.WritePDU(ctx, &ReleaseRP{}); err != nil {
+					a.transport.Close()
+					return fmt.Errorf("failed to answer a release collision: %w", err)
+				}
+				continue
+			}
+			if err := a.awaitReleaseRP(ctx); err != nil {
+				return err
+			}
+			_ = a.transport.WritePDU(ctx, &ReleaseRP{})
+			return a.transport.Close()
+		case *PDataTF:
+			// The peer may still be sending what it sent before it read the
+			// A-RELEASE-RQ (PS3.8 Table 9-10, Sta7); nobody is waiting for it.
+			continue
+		case *AbortPDU:
+			a.transport.Close()
+			return NewAssociationError("ABORTED", "association aborted during release")
+		default:
+			_ = a.Abort(ctx, AbortSourceServiceProvider, abortUnexpectedPDU)
+			return NewAssociationError("UNEXPECTED_PDU", fmt.Sprintf("unexpected PDU during release: %T", pdu))
+		}
 	}
+}
 
-	a.mu.Lock()
-	a.state = StateIdle
-	a.mu.Unlock()
-
-	switch pdu.(type) {
-	case *ReleaseRP:
-		return a.transport.Close()
-	case *AbortPDU:
-		a.transport.Close()
-		return NewAssociationError("ABORTED", "association aborted during release")
-	default:
-		a.transport.Close()
-		return NewAssociationError("UNEXPECTED_PDU", fmt.Sprintf("unexpected PDU during release: %T", pdu))
+// awaitReleaseRP reads until the peer's A-RELEASE-RP, for the acceptor side
+// of a release collision.
+func (a *Association) awaitReleaseRP(ctx context.Context) error {
+	for {
+		pdu, err := a.transport.ReadPDU(ctx)
+		if err != nil {
+			a.transport.Close()
+			return fmt.Errorf("failed to read release response: %w", err)
+		}
+		switch pdu.(type) {
+		case *ReleaseRP:
+			return nil
+		case *AbortPDU:
+			a.transport.Close()
+			return NewAssociationError("ABORTED", "association aborted during release")
+		}
 	}
 }
 
@@ -606,6 +658,11 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 			if errors.As(err, &pduErr) && pduErr.Code == errPDUOverMaxLength {
 				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter, err.Error())
 			}
+			// An unrecognized PDU is answered with an A-ABORT, not a closed
+			// connection (PS3.8 Table 9-10, AA-8).
+			if errors.As(err, &pduErr) && pduErr.Code == "UNKNOWN_TYPE" {
+				return 0, nil, false, a.abortReceive(ctx, abortUnrecognizedPDU, err.Error())
+			}
 			return 0, nil, false, err
 		}
 
@@ -627,7 +684,9 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 				a.mu.Unlock()
 				return 0, nil, false, NewAssociationError("RELEASED", "peer released association")
 			default:
-				return 0, nil, false, NewAssociationError("UNEXPECTED_PDU",
+				// A second A-ASSOCIATE-RQ, an AC or an RJ on an established
+				// association: AA-8, an A-ABORT naming an unexpected PDU (#209).
+				return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDU,
 					fmt.Sprintf("expected P-DATA-TF, got %T", pdu))
 			}
 		}
@@ -640,11 +699,21 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 				return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDUParameter,
 					"a fragment changed presentation context or kind partway through a message")
 			}
-			contextID = pdv.PresentationContextID
-			isCommand = pdv.IsCommand
 			if assembled == nil {
+				// P-DATA on a context that was never accepted has no transfer
+				// syntax to decode it with, and was decoded as Implicit VR
+				// Little Endian; PS3.8 9.3.5 calls for an A-ABORT (#209).
+				a.mu.RLock()
+				_, accepted := a.acceptedContexts[pdv.PresentationContextID]
+				a.mu.RUnlock()
+				if !accepted {
+					return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDUParameter,
+						fmt.Sprintf("P-DATA on presentation context %d, which was not accepted", pdv.PresentationContextID))
+				}
 				assembled = []byte{}
 			}
+			contextID = pdv.PresentationContextID
+			isCommand = pdv.IsCommand
 			assembled = append(assembled, pdv.Data...)
 
 			// Fragments are appended until one is marked last, so without a
