@@ -62,6 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed Associate closes the connection it opened** (#210). A rejected,
+  aborted or timed-out request left its socket to the garbage collector, so
+  200 rejected calls held 200 descriptors open with `GOGC=off`, and a client
+  retrying against a peer that refused it could run out. It now holds none.
+
 - **ARTIMTimeout and DIMSETimeout are applied** (#206). Both were documented
   and defaulted, and nothing read them, so a peer that connected and sent
   nothing held an association slot for good. A connection that arrived while
