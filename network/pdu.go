@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/amrshadid/go-dicom/uid"
 )
 
 // PDU type constants (DICOM Part 8, Section 9.3).
@@ -62,12 +64,13 @@ const (
 // DefaultApplicationContextUID is the DICOM Application Context Name.
 const DefaultApplicationContextUID = "1.2.840.10008.3.1.1.1"
 
-// DefaultImplementationClassUID is a placeholder implementation class UID.
-const DefaultImplementationClassUID = "1.2.826.0.1.3680043.10.511"
+// DefaultImplementationClassUID identifies this implementation to peers in the
+// A-ASSOCIATE User Information item.
+const DefaultImplementationClassUID = uid.ImplementationClassUID
 
 // DefaultImplementationVersionName identifies this implementation to peers in
 // the A-ASSOCIATE User Information item. Limited to 16 characters by PS3.7 D.3.3.2.
-const DefaultImplementationVersionName = "GO-DICOM-1.6.0"
+const DefaultImplementationVersionName = uid.ImplementationVersionName
 
 // PDU is the interface for all Protocol Data Units.
 type PDU interface {

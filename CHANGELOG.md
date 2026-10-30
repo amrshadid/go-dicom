@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CPU it is no slower. The samples are unchanged: all 49 decodable files in
   pydicom's corpus still match it sample for sample.
 
+- **A DICOMDIR refuses a path that is not a valid File ID** (#215). PS3.10
+  8.5 allows at most 8 components of at most 8 characters from A–Z, 0–9 and
+  `_`. A name such as `ct.dcm` was written into the index as it was, which
+  no media reader has to accept. `WriteDICOMDIR` and `GenerateDICOMDIR` now
+  return an error naming the file. `DICOMDIROptions.AllowNonConformantFileIDs`
+  indexes such names anyway, for a local directory.
+
 ### Fixed
 
 - **Data sets are written in ascending tag order** (#214). The file writer
@@ -281,6 +288,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Model Name (3004,007F), the one Table E.1-1 row the package was missing, is
   removed. The values left in the corpus after de-identification fall from 745
   to 453, and none is identifying.
+
+- **Written files are conformant in three more places** (#215).
+  - UR was padded with NUL, so pydicom read the NUL back as part of the URI.
+    PS3.5 6.2 pads it with a space, and both writers now do.
+  - Implementation Class UID (0002,0012), Type 1 in PS3.10, was written only
+    when the caller set one. A meta that does not name one now gets this
+    library's, `uid.ImplementationClassUID`, with its version name. The
+    network's `DefaultImplementationClassUID` and
+    `DefaultImplementationVersionName` are now the same constants.
+  - DICOMDIR records carried no Specific Character Set, so a Japanese name
+    read as mojibake, and every instance was an IMAGE record. Each record now
+    copies its instance's character set. SR documents, RT plans, doses,
+    structure sets and treatment records, presentation states, waveforms,
+    key object documents, encapsulated documents and the rest of pydicom's
+    list get their own record type (PS3.3 F.5), with that type's keys,
+    sequences included.
+  - `scripts/roundtrip-check` keeps the source's implementation fields, since
+    a DICOMDIR's record offsets count from the start of the file and a meta of
+    another length moves every record.
 
 ## [1.6.0] - 2026-09-20
 
