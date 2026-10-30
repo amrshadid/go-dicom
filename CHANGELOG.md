@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A request whose data set does not decode is refused, not answered
+  Success** (#207). A C-STORE whose data set failed to decode was handed to the
+  handler as an empty data set and answered 0x0000, so the sender believed an
+  instance was stored that never was. A C-FIND whose identifier failed got no
+  response at all, and C-GET, C-MOVE and the N-services went on with whatever
+  the decoder returned. Every one of them now answers without calling the
+  handler: 0xC000, cannot understand, for the C-services (PS3.4), and 0x0110,
+  processing failure, for the N-services.
+
 - **US is a valid VR** (#201). The VR table had no US entry, so
   `IsValidVR(US)` was false and `GetVRInfo(US)` nil, and `AllVRs` also left out
   OV, SV and UV. Callers fell back quietly, which is why it went unseen, but a
