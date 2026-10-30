@@ -174,7 +174,7 @@ func (a *Anonymizer) anonymizeDataset(ds *dataset.Dataset, depth int) error {
 			// into any other, kept the free text of an SR Content Sequence in
 			// every profile (#212). Clean Structured Content cleans that one
 			// rather than emptying it: the column says C, not D.
-			if action == ActionDummy && !(t == contentSequence && a.profile == CleanStructuredContentProfile) {
+			if action == ActionDummy && (t != contentSequence || a.profile != CleanStructuredContentProfile) {
 				action = ActionEmpty
 			}
 			switch action {
