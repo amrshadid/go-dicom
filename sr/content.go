@@ -269,6 +269,10 @@ func readContentItem(ds *dataset.Dataset, depth int) (*ContentItem, error) {
 
 // WriteContentTree writes a content tree into a data set.
 //
+// It does not yet write the attributes the tree does not model, such as
+// GraphicData and ObservationDateTime, or what ContentItem.Dataset holds
+// (#216).
+//
 // The root's own attributes go directly into the data set, as PS3.3 C.17.3
 // requires, and its children become the Content Sequence.
 func WriteContentTree(ds *dataset.Dataset, root *ContentItem) error {

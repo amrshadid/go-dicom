@@ -479,7 +479,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
 
 ### 8.3 Writing
 
-Files this library writes are read by dcmtk and pydicom. Encapsulated pixel data
+Files this library writes are read by dcmtk and pydicom, except structured
+reports written by the `sr` package. `WriteSRFile` writes files dcmtk refuses,
+and `WriteContentTree` drops the attributes the content tree does not model
+(#216). Encapsulated pixel data
 is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
 requires, both to a file and on the network. Native pixel data is never sent under
 a compressed syntax: the send fails rather than describe pixels as fragments.
