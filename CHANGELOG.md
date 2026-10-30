@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.7.0] - 2026-10-30
+
 ### Added
 
 - **A private dictionary taken from vendor documentation** (#188). The one it
@@ -52,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   third less; a 400×400 RGB frame of 16 tiles goes from 22.0 to 13.1 ms. On one
   CPU it is no slower. The samples are unchanged: all 49 decodable files in
   pydicom's corpus still match it sample for sample.
+
+- **The network timeouts are enforced** (#206). `ARTIMTimeout` (30 s) and
+  `DIMSETimeout` (60 s) were accepted and ignored. They now apply, so an SCP
+  aborts an association that sends nothing for `DIMSETimeout`, and an SCU
+  operation fails if no PDU of the response arrives within it, a C-MOVE whose
+  sub-operations each take longer included. Raise `DIMSETimeout` for such
+  peers, or set it below zero to turn it off. The entry under Fixed has the
+  details.
 
 - **A DICOMDIR refuses a path that is not a valid File ID** (#215). PS3.10
   8.5 allows at most 8 components of at most 8 characters from A–Z, 0–9 and
@@ -1883,7 +1895,9 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0
