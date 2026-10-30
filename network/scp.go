@@ -422,8 +422,9 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 		}
 		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
-			DefaultLogger.Error("failed to decode C-STORE dataset: %v", err)
-			ds = dataset.NewDataset()
+			s.refuse(ctx, assoc, ctxID, "C-STORE", err,
+				BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
+			return
 		}
 	}
 
@@ -454,6 +455,22 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
 }
 
+// refuse answers a request whose data set did not decode with the failure
+// response the caller built. The handler is not called: handing it an empty or
+// partial data set answered Success for a C-STORE that stored nothing, and a
+// C-FIND whose identifier did not decode got no response at all (#207).
+func (s *SCP) refuse(ctx context.Context, assoc *Association, ctxID byte, service string,
+	err error, rsp *dataset.Dataset) {
+
+	DefaultLogger.Error("refusing a %s whose data set does not decode: %v", service, err)
+	encoded, encErr := EncodeCommandDataset(rsp)
+	if encErr != nil {
+		DefaultLogger.Error("failed to encode the %s refusal: %v", service, encErr)
+		return
+	}
+	_ = assoc.SendPData(ctx, ctxID, encoded, true)
+}
+
 func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handler,
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
@@ -473,7 +490,8 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 		}
 		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
-			DefaultLogger.Error("failed to decode C-FIND query: %v", err)
+			s.refuse(ctx, assoc, ctxID, "C-FIND", err,
+				BuildCFindRSP(messageID, sopClassUID, StatusUnableToProcess, false))
 			return
 		}
 	}
@@ -548,6 +566,8 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 		}
 		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
+			s.refuse(ctx, assoc, ctxID, "C-MOVE", err,
+				BuildCMoveRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0))
 			return
 		}
 	}
@@ -753,7 +773,11 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 		if isCmd {
 			return
 		}
-		queryDS, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		if queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); err != nil {
+			s.refuse(ctx, assoc, ctxID, "C-GET", err,
+				BuildCGetRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0))
+			return
+		}
 	}
 
 	req := &CGetRequest{
@@ -943,7 +967,12 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		var decodeErr error
+		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+			s.refuse(ctx, assoc, ctxID, "N-EVENT-REPORT", decodeErr,
+				BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, StatusProcessingFailure))
+			return
+		}
 	}
 
 	req := &NEventReportRequest{
@@ -1035,7 +1064,12 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		var decodeErr error
+		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+			s.refuse(ctx, assoc, ctxID, "N-SET", decodeErr,
+				BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure))
+			return
+		}
 	}
 
 	req := &NSetRequest{
@@ -1071,7 +1105,12 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		var decodeErr error
+		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+			s.refuse(ctx, assoc, ctxID, "N-ACTION", decodeErr,
+				BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, StatusProcessingFailure))
+			return
+		}
 	}
 
 	req := &NActionRequest{
@@ -1232,7 +1271,12 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 		if err != nil || isCmd {
 			return
 		}
-		ds, _ = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		var decodeErr error
+		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+			s.refuse(ctx, assoc, ctxID, "N-CREATE", decodeErr,
+				BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure))
+			return
+		}
 	}
 
 	req := &NCreateRequest{
