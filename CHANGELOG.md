@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ARTIMTimeout and DIMSETimeout are applied** (#206). Both were documented
+  and defaulted, and nothing read them, so a peer that connected and sent
+  nothing held an association slot for good. A connection that arrived while
+  the server was full was read inline in the accept loop, so one silent peer
+  stopped the server from accepting anything. An SCU waited on a silent peer
+  until its context ended, which with `context.Background` was never. ARTIM
+  now bounds the wait for the A-ASSOCIATE-RQ, A-ASSOCIATE-AC and
+  A-RELEASE-RP (PS3.8 9.1.5). `DIMSETimeout` bounds each PDU after that, and
+  an SCP aborts an association idle for longer. An over-limit connection is
+  answered off the accept loop. A negative value turns either timeout off.
+
 - **Data sets are written in ascending tag order** (#214). The file writer
   and the network encoder wrote elements in the order they were added, so an
   attribute added to a file read from disk landed after its Pixel Data. PS3.5
@@ -320,6 +331,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `scripts/roundtrip-check` keeps the source's implementation fields, since
     a DICOMDIR's record offsets count from the start of the file and a meta of
     another length moves every record.
+
+- **What a peer sends is bounded** (#208). A P-DATA-TF longer than the
+  Maximum Length this side advertised was accepted, though PS3.8 D.1 makes
+  that the bound, and the fragments of a message were appended until one was
+  marked last, so a peer that never marked one grew the buffer without limit.
+  Such a PDU is now refused before its body is read, and the association
+  aborted. So is a command set over 1 MiB, a message whose fragments switch
+  presentation context or kind, and a data set over
+  `NetworkConfig.MaxDataSetSize`, a new setting with no limit by default.
 
 ## [1.6.0] - 2026-09-20
 

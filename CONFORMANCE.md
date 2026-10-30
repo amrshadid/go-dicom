@@ -290,7 +290,7 @@ selection, and user identity negotiation. The window defaults to one.
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations` |
-| Timeouts | `NetworkConfig` |
+| Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
@@ -353,6 +353,10 @@ advisory.
 | Limit | Value | Guards against |
 |---|---|---|
 | `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
+| The Maximum Length advertised in the A-ASSOCIATE-RQ or -AC | `NetworkConfig.MaxPDUSize` | A P-DATA-TF longer than the receiver agreed to; aborted (PS3.8 D.1) |
+| Command set being assembled | 1 MiB | Command fragments never marked last; aborted |
+| `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory; aborted |
+| `NetworkConfig.ARTIMTimeout` / `DIMSETimeout` | 30 s / 60 s | A peer that connects and sends nothing, or stops partway through a PDU |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |

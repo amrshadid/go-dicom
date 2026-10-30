@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -79,6 +80,34 @@ type Association struct {
 	// stream is impossible once read. It is queued here and returned by the
 	// next ReceivePData, so reading ahead is transparent to whoever reads next.
 	pending []pendingMessage
+
+	// maxDataSetSize bounds the data set of one message being assembled.
+	// Zero is no bound.
+	maxDataSetSize int64
+}
+
+// maxCommandSetSize bounds a command set being assembled. A command set holds
+// group 0000 alone, a few hundred bytes in practice.
+const maxCommandSetSize = 1 << 20
+
+// A-ABORT reasons from the service provider (PS3.8 Table 9-26).
+const (
+	abortUnexpectedPDUParameter byte = 5
+	abortInvalidPDUParameter    byte = 6
+)
+
+// setMaxDataSetSize bounds the data set of each message received.
+func (a *Association) setMaxDataSetSize(n int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.maxDataSetSize = n
+}
+
+// abortReceive aborts an association whose peer broke a bound or the framing
+// of a message, and returns the error to report.
+func (a *Association) abortReceive(ctx context.Context, reason byte, why string) error {
+	_ = a.Abort(ctx, AbortSourceServiceProvider, reason)
+	return NewAssociationError("PROTOCOL_VIOLATION", "aborted the association: "+why)
 }
 
 // pendingMessage is a message read before its recipient asked for it.
@@ -322,6 +351,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 			a.maxPDUSize = maxPDUSize
 		}
 		a.transport.SetMaxPDUSize(a.maxPDUSize)
+		a.transport.SetReceiveLimit(maxPDUSize)
 
 		// Build accepted contexts map
 		a.acceptedContexts, a.refusedContexts = BuildContextMaps(contexts, resp.PresentationContexts)
@@ -409,6 +439,7 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 	a.state = StateAssociated
 	a.maxPDUSize = negotiatedPDU
 	a.transport.SetMaxPDUSize(negotiatedPDU)
+	a.transport.SetReceiveLimit(maxPDUSize)
 	a.acceptedContexts = BuildAcceptedContextMap(rq.PresentationContexts, results)
 	a.peerUserInfo = rq.UserInformation
 	a.mu.Unlock()
@@ -553,6 +584,7 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 		a.mu.Unlock()
 		return 0, nil, false, NewAssociationError("INVALID_STATE", fmt.Sprintf("cannot receive data in state %s", a.state))
 	}
+	maxDataSet := a.maxDataSetSize
 	// Anything read ahead is delivered before touching the connection, so a
 	// message queued by a cancel watcher reaches its real recipient in order.
 	if len(a.pending) > 0 {
@@ -570,6 +602,10 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 	for {
 		pdu, err := a.transport.ReadPDU(ctx)
 		if err != nil {
+			var pduErr *PDUError
+			if errors.As(err, &pduErr) && pduErr.Code == errPDUOverMaxLength {
+				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter, err.Error())
+			}
 			return 0, nil, false, err
 		}
 
@@ -597,9 +633,30 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 		}
 
 		for _, pdv := range dataTF.PDVItems {
+			// The fragments of one message share its context and its kind
+			// (PS3.8 E.2). One that switches is not a fragment of this message,
+			// and switching would let a command grow past its bound as data.
+			if assembled != nil && (pdv.PresentationContextID != contextID || pdv.IsCommand != isCommand) {
+				return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDUParameter,
+					"a fragment changed presentation context or kind partway through a message")
+			}
 			contextID = pdv.PresentationContextID
 			isCommand = pdv.IsCommand
+			if assembled == nil {
+				assembled = []byte{}
+			}
 			assembled = append(assembled, pdv.Data...)
+
+			// Fragments are appended until one is marked last, so without a
+			// bound a peer that never marks one holds the buffer growing (#208).
+			if isCommand && len(assembled) > maxCommandSetSize {
+				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter,
+					fmt.Sprintf("command set over %d bytes", maxCommandSetSize))
+			}
+			if !isCommand && maxDataSet > 0 && int64(len(assembled)) > maxDataSet {
+				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter,
+					fmt.Sprintf("data set over the %d bytes MaxDataSetSize allows", maxDataSet))
+			}
 
 			if pdv.IsLast {
 				return contextID, assembled, isCommand, nil
