@@ -141,6 +141,25 @@ func (ds *Dataset) Remove(t tag.Tag) bool {
 	return true
 }
 
+// ElementsInTagOrder returns all data elements in ascending tag order, the
+// order PS3.5 7.1 requires a data set to be encoded in. Whatever writes or
+// sends a data set uses it: GetAll's insertion order put an attribute added
+// to a file read from disk after its Pixel Data (#214).
+func (ds *Dataset) ElementsInTagOrder() []*dataelem.DataElement {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+
+	order := make([]uint32, len(ds.order))
+	copy(order, ds.order)
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+
+	result := make([]*dataelem.DataElement, 0, len(order))
+	for _, tagVal := range order {
+		result = append(result, ds.elements[tagVal])
+	}
+	return result
+}
+
 // GetAll returns all data elements in insertion order.
 func (ds *Dataset) GetAll() []*dataelem.DataElement {
 	ds.mu.RLock()
