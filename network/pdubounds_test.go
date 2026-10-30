@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -50,13 +51,22 @@ func sendPDVs(ctx context.Context, scu *SCU, pdvs ...PDVItem) {
 
 // expectAbort reads until the SCP's A-ABORT, failing if anything else, or
 // nothing, arrives first.
+//
+// A connection the SCP closed counts too. Where the peer is still sending, the
+// SCP closes with unread data in its receive buffer, and TCP answers that with
+// a reset, which on Windows can arrive before the A-ABORT is read. Only
+// silence, the SCP still waiting, is the failure.
 func expectAbort(ctx context.Context, t *testing.T, scu *SCU, why string) {
 	t.Helper()
 	readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	pdu, err := scu.Association().transport.ReadPDU(readCtx)
 	if err != nil {
-		t.Fatalf("%s: no A-ABORT from the SCP: %v", why, err)
+		var timeout *TimeoutError
+		if errors.As(err, &timeout) || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s: no A-ABORT from the SCP: %v", why, err)
+		}
+		return
 	}
 	if _, ok := pdu.(*AbortPDU); !ok {
 		t.Fatalf("%s: the SCP sent %T, want an A-ABORT", why, pdu)
