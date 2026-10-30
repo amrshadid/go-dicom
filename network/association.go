@@ -294,7 +294,7 @@ func (a *Association) RequestAssociation(ctx context.Context, callingAE, calledA
 // this AE initiated — notably for C-GET, where the peer sends C-STORE
 // sub-operations back over the same association.
 func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, callingAE, calledAE string,
-	contexts []PresentationContextItem, maxPDUSize uint32, ext *ExtendedNegotiation) error {
+	contexts []PresentationContextItem, maxPDUSize uint32, ext *ExtendedNegotiation) (err error) {
 
 	a.mu.Lock()
 	if a.state != StateIdle {
@@ -307,6 +307,14 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 	a.requestor = true
 	a.state = StateAwaitingAssocResponse
 	a.mu.Unlock()
+
+	// A request that fails leaves no association to release, so nothing else
+	// will close the connection; it was left to the garbage collector (#210).
+	defer func() {
+		if err != nil {
+			_ = a.transport.Close()
+		}
+	}()
 
 	userInfo := UserInformationItem{
 		MaxPDULength:           maxPDUSize,
