@@ -40,7 +40,10 @@ func elementsFromDataset(ds *dataset.Dataset, enclosing []*dataset.Dataset) []*D
 	}
 
 	out := make([]*DataElement, 0, ds.Length())
-	for _, elem := range ds.GetAll() {
+	// In tag order, which PS3.5 7.1 requires; it also puts Bits Allocated
+	// ahead of Pixel Data, which a big endian write needs to swap at the
+	// right width (#214).
+	for _, elem := range ds.ElementsInTagOrder() {
 		t, ok := elem.Tag()
 		if !ok {
 			config.Logger.Warn("filewriter: dropping an element with an unreadable tag",

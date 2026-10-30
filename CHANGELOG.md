@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Data sets are written in ascending tag order** (#214). The file writer
+  and the network encoder wrote elements in the order they were added, so an
+  attribute added to a file read from disk landed after its Pixel Data. PS3.5
+  7.1 requires ascending order, and dcmtk warns on such a file. Out of order,
+  a big endian write could also reach Pixel Data before Bits Allocated and
+  swap 32-bit pixels as 16-bit ones, so pydicom read other values. Both now
+  write in tag order, at every level of nesting, through the new
+  `Dataset.ElementsInTagOrder`. `GetAll` keeps insertion order.
+
 - **A request whose data set does not decode is refused, not answered
   Success** (#207). A C-STORE whose data set failed to decode was handed to the
   handler as an empty data set and answered 0x0000, so the sender believed an
