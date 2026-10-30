@@ -2,6 +2,14 @@
 
 DICOM Structured Report creation, validation, and management with template-based construction, standardized medical coding (SNOMED-CT, LOINC, DCM), fluent builders, and file I/O.
 
+> **Writing is not yet conformant** ([#216](https://github.com/amrshadid/go-dicom/issues/216)).
+> `WriteSRFile` writes files that dcmtk's dsrdump refuses: group 0002 inside the
+> data set, Concept Name Code Sequence as IS, and sequences written empty.
+> `WriteContentTree` drops every attribute the tree does not model, such as
+> GraphicData and ObservationDateTime, so a document read and written back is
+> not the same document. Reading is unaffected. Until #216 is fixed, do not
+> write SR files with this package for use outside it.
+
 ## Quick Start
 
 ```go

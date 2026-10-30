@@ -11,6 +11,11 @@
 // They combine the semantic richness of coded concepts with the flexibility of
 // structured templates.
 //
+// Writing is not yet conformant (#216). [WriteSRFile] writes files dcmtk
+// refuses, and [WriteContentTree] drops the attributes the content tree does
+// not model, so a document read and written back is not the same document.
+// Reading is unaffected.
+//
 // # Key Features
 //
 //   - **Basic SR Support**: Create and manage structured reports with findings,

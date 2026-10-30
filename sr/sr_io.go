@@ -54,6 +54,10 @@ func ReadSRFile(filename string) (*StructuredReport, error) {
 }
 
 // WriteSRFile writes a StructuredReport to a DICOM file.
+//
+// The file is not yet conformant, and dcmtk refuses it (#216): group 0002 is
+// written inside the data set, Concept Name Code Sequence as IS, and
+// sequences empty.
 func WriteSRFile(filename string, report *StructuredReport) error {
 	if filename == "" {
 		return fmt.Errorf("filename is empty")
