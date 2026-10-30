@@ -290,7 +290,7 @@ selection, and user identity negotiation. The window defaults to one.
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations` |
-| Timeouts | `NetworkConfig` |
+| Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |

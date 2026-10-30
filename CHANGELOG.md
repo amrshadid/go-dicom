@@ -55,6 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ARTIMTimeout and DIMSETimeout are applied** (#206). Both were documented
+  and defaulted, and nothing read them, so a peer that connected and sent
+  nothing held an association slot for good. A connection that arrived while
+  the server was full was read inline in the accept loop, so one silent peer
+  stopped the server from accepting anything. An SCU waited on a silent peer
+  until its context ended, which with `context.Background` was never. ARTIM
+  now bounds the wait for the A-ASSOCIATE-RQ, A-ASSOCIATE-AC and
+  A-RELEASE-RP (PS3.8 9.1.5). `DIMSETimeout` bounds each PDU after that, and
+  an SCP aborts an association idle for longer. An over-limit connection is
+  answered off the accept loop. A negative value turns either timeout off.
+
 - **Data sets are written in ascending tag order** (#214). The file writer
   and the network encoder wrote elements in the order they were added, so an
   attribute added to a file read from disk landed after its Pixel Data. PS3.5
