@@ -55,6 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A de-identified UID keeps nothing of the original** (#211). The
+  anonymizer built a replacement by keeping the original's first three
+  components as a root and appending a random number, so a UID of three
+  components or fewer, every `2.25` UID among them, survived whole inside its
+  replacement: the original could be read off the de-identified data. The cut
+  to 64 characters then returned a 64-character original unchanged and a
+  63-character one ending in a dot. A replacement is now a fresh UUID-derived
+  UID (`2.25.` and a random 128-bit number, PS3.5 B.2). The generator moved to
+  `uid.Generate`, which `network.GenerateUID` now calls.
+
 - **US is a valid VR** (#201). The VR table had no US entry, so
   `IsValidVR(US)` was false and `GetVRInfo(US)` nil, and `AllVRs` also left out
   OV, SV and UV. Callers fell back quietly, which is why it went unseen, but a
