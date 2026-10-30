@@ -346,6 +346,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   presentation context or kind, and a data set over
   `NetworkConfig.MaxDataSetSize`, a new setting with no limit by default.
 
+- **The association state machine aborts and answers as PS3.8 requires**
+  (#209). P-DATA on a presentation context that was never accepted reached
+  the handler, decoded as Implicit VR Little Endian; it is now aborted (PS3.8
+  9.3.5). An A-ASSOCIATE-RQ, AC or RJ on an established association, or a PDU
+  of an unknown type, closed the connection without saying why; it now gets
+  an A-ABORT naming an unexpected or unrecognized PDU (Table 9-10, AA-8).
+  When the peer released as the SCU did, `Release` failed and the peer never
+  got its A-RELEASE-RP. The collision is now answered as PS3.8 9.2.7 orders
+  it, and P-DATA still arriving during a release is set aside. A message
+  whose fragments switch context or kind was already aborted by #208.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
