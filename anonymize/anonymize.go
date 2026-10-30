@@ -11,6 +11,7 @@ import (
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
+	"github.com/amrshadid/go-dicom/uid"
 )
 
 // Profile represents a DICOM de-identification profile as defined in PS3.15 Annex E.
@@ -168,7 +169,16 @@ func (a *Anonymizer) anonymizeDataset(ds *dataset.Dataset, depth int) error {
 			// value types it knew, and returned. Every referenced UID inside
 			// survived, in 18 of pydicom's 69 files, each one linking the
 			// de-identified object straight back to the instance it came from.
-			switch a.getDefaultAction(t) {
+			action := a.getDefaultAction(t)
+			// D on a sequence replaces what it holds with nothing identifying,
+			// which for a sequence is no items. Walking into it instead, as
+			// into any other, kept the free text of an SR Content Sequence in
+			// every profile (#212). Clean Structured Content cleans that one
+			// rather than emptying it: the column says C, not D.
+			if action == ActionDummy && (t != contentSequence || a.profile != CleanStructuredContentProfile) {
+				action = ActionEmpty
+			}
+			switch action {
 			case ActionRemove:
 				ds.Remove(t)
 			case ActionEmpty:
@@ -201,8 +211,12 @@ func (a *Anonymizer) anonymizeDataset(ds *dataset.Dataset, depth int) error {
 	}
 
 	// Private tags carry whatever their vendor put there, which the profile
-	// cannot describe and cannot vouch for.
-	if a.profile != RetainSafePrivateProfile {
+	// cannot describe and cannot vouch for. Retain Safe Private keeps only those
+	// PS3.15 Table E.3.10-1 lists; keeping every one, as it did, kept a vendor
+	// field holding the patient's name and ID (#212).
+	if a.profile == RetainSafePrivateProfile {
+		removeUnsafePrivate(ds)
+	} else {
 		for _, t := range ds.Tags() {
 			if t.IsPrivate() {
 				ds.Remove(t)
@@ -259,6 +273,12 @@ func (a *Anonymizer) getDefaultAction(t tag.Tag) Action {
 			tag.New(0x0018, 0x1020), // SoftwareVersions
 			tag.New(0x0008, 0x1010): // StationName
 			return ActionKeep
+		}
+	case CleanStructuredContentProfile:
+		// The content item attributes that carry free values rather than
+		// codes: what Clean Structured Content cleans (PS3.15 E.3.6).
+		if contentFreeValues[t] {
+			return ActionEmpty
 		}
 	case CleanDescriptorsProfile:
 		// Clean description fields instead of removing them
@@ -428,41 +448,14 @@ func (a *Anonymizer) generateNewUID(originalUID string) string {
 		return newUID
 	}
 
-	// Generate a new UID preserving the DICOM UID root prefix.
-	// Use the standard "2.25." prefix followed by a random UUID-derived number
-	// as recommended by DICOM for implementation-generated UIDs.
-	prefix := "2.25."
-
-	// If the original UID has a recognizable root, try to preserve it
-	parts := strings.SplitN(originalUID, ".", 4)
-	if len(parts) >= 3 {
-		prefix = parts[0] + "." + parts[1] + "." + parts[2] + "."
-	}
-
-	// Generate random suffix using crypto/rand
-	suffix := generateUIDSuffix()
-	newUID := prefix + suffix
-
-	// Ensure UID does not exceed 64 characters (DICOM max)
-	if len(newUID) > 64 {
-		newUID = newUID[:64]
-	}
+	// A UID under the UUID-derived arc, with nothing taken from the original.
+	// Keeping the original's first three components as a "root" kept every
+	// UID of three components or fewer whole, 2.25 ones included, so the
+	// original could be read off its replacement (#211).
+	newUID := uid.Generate()
 
 	a.uidMap[originalUID] = newUID
 	return newUID
-}
-
-// generateUIDSuffix generates a random numeric suffix for UID generation.
-func generateUIDSuffix() string {
-	// Generate a large random number for the suffix
-	max := new(big.Int)
-	max.SetString("999999999999999999", 10)
-	n, err := rand.Int(rand.Reader, max)
-	if err != nil {
-		// Fallback to timestamp
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return n.String()
 }
 
 // Template represents a reusable de-identification template that defines
