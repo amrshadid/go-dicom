@@ -55,6 +55,11 @@ type NetworkConfig struct {
 
 	// NetworkTimeout is the timeout for establishing TCP connections.
 	NetworkTimeout time.Duration
+
+	// MaxDataSetSize bounds the data set of one message, which is held in
+	// memory whole while it arrives. A peer sending more is aborted. Zero is
+	// no limit.
+	MaxDataSetSize int64
 }
 
 // DefaultNetworkConfig returns a NetworkConfig with sensible defaults.

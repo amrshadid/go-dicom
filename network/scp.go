@@ -291,6 +291,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 		return
 	}
 
+	assoc.setMaxDataSetSize(s.config.Network.MaxDataSetSize)
 	// Each PDU of the association has DIMSETimeout to arrive, so a peer that
 	// goes quiet, or stops partway through a PDU, gives up its slot.
 	transport.SetReadTimeout(s.config.Network.DIMSETimeout)

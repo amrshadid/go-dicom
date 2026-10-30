@@ -332,6 +332,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     a DICOMDIR's record offsets count from the start of the file and a meta of
     another length moves every record.
 
+- **What a peer sends is bounded** (#208). A P-DATA-TF longer than the
+  Maximum Length this side advertised was accepted, though PS3.8 D.1 makes
+  that the bound, and the fragments of a message were appended until one was
+  marked last, so a peer that never marked one grew the buffer without limit.
+  Such a PDU is now refused before its body is read, and the association
+  aborted. So is a command set over 1 MiB, a message whose fragments switch
+  presentation context or kind, and a data set over
+  `NetworkConfig.MaxDataSetSize`, a new setting with no limit by default.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
