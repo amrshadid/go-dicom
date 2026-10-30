@@ -15,6 +15,10 @@ type Transport struct {
 	mu         sync.Mutex
 	maxPDUSize uint32
 	closed     bool
+
+	// receiveLimit is the Maximum Length this side advertised, which bounds
+	// each P-DATA-TF it reads (#208). Zero is no bound.
+	receiveLimit uint32
 }
 
 // NewTransport creates a new Transport wrapping an existing connection.
@@ -110,7 +114,10 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 		defer stop()
 	}
 
-	pdu, err := DecodePDU(t.conn)
+	t.mu.Lock()
+	limit := t.receiveLimit
+	t.mu.Unlock()
+	pdu, err := decodePDU(t.conn, limit)
 	if err != nil {
 		// errors.As, not a type assertion: DecodePDU wraps the network error in
 		// its own, so asserting on the returned value never matched and no read
@@ -131,6 +138,14 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	}
 
 	return pdu, nil
+}
+
+// SetReceiveLimit sets the Maximum Length this side advertised. A P-DATA-TF
+// longer than it is refused before its body is read.
+func (t *Transport) SetReceiveLimit(maxLength uint32) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.receiveLimit = maxLength
 }
 
 // SetMaxPDUSize updates the maximum PDU size (typically after negotiation).

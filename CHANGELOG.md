@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **What a peer sends is bounded** (#208). A P-DATA-TF longer than the
+  Maximum Length this side advertised was accepted, though PS3.8 D.1 makes
+  that the bound, and the fragments of a message were appended until one was
+  marked last, so a peer that never marked one grew the buffer without limit.
+  Such a PDU is now refused before its body is read, and the association
+  aborted. So is a command set over 1 MiB, a message whose fragments switch
+  presentation context or kind, and a data set over
+  `NetworkConfig.MaxDataSetSize`, a new setting with no limit by default.
+
 - **Data sets are written in ascending tag order** (#214). The file writer
   and the network encoder wrote elements in the order they were added, so an
   attribute added to a file read from disk landed after its Pixel Data. PS3.5

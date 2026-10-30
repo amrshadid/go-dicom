@@ -416,6 +416,16 @@ const MaxPDULengthLimit uint32 = 128 << 20
 
 // DecodePDU reads and decodes a PDU from a reader.
 func DecodePDU(r io.Reader) (PDU, error) {
+	return decodePDU(r, 0)
+}
+
+// errPDUOverMaxLength is the code of the error for a P-DATA-TF longer than
+// the Maximum Length this side advertised.
+const errPDUOverMaxLength = "OVER_MAX_LENGTH"
+
+// decodePDU reads one PDU, refusing a P-DATA-TF whose length exceeds
+// maxDataTF before reading its body. Zero is no bound but MaxPDULengthLimit.
+func decodePDU(r io.Reader, maxDataTF uint32) (PDU, error) {
 	// Read PDU header: type (1 byte) + reserved (1 byte) + length (4 bytes)
 	header := make([]byte, 6)
 	if _, err := io.ReadFull(r, header); err != nil {
@@ -428,6 +438,12 @@ func DecodePDU(r io.Reader) (PDU, error) {
 	if pduLength > MaxPDULengthLimit {
 		return nil, NewPDUErrorf("TOO_LARGE",
 			"PDU length %d exceeds maximum allowed %d", pduLength, MaxPDULengthLimit)
+	}
+	// PS3.8 D.1: the Maximum Length a receiver advertised bounds the variable
+	// field of each P-DATA-TF it is sent, which the PDU length is.
+	if pduType == PDUTypeDataTF && maxDataTF > 0 && pduLength > maxDataTF {
+		return nil, NewPDUErrorf(errPDUOverMaxLength,
+			"P-DATA-TF length %d exceeds the advertised maximum %d", pduLength, maxDataTF)
 	}
 
 	// Read PDU data. io.ReadFull fails if the peer declared more than it sends,

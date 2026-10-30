@@ -281,7 +281,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 		return
 	}
 
-	// Handle DIMSE messages
+	assoc.setMaxDataSetSize(s.config.Network.MaxDataSetSize)
 	s.handleAssociation(ctx, assoc, handler, transport, rq)
 }
 

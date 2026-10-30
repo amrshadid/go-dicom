@@ -195,6 +195,7 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 		window = agreed.MaxOperationsInvoked
 	}
 	s.slots = newOperationSlots(window)
+	s.association.setMaxDataSetSize(s.config.Network.MaxDataSetSize)
 
 	return nil
 }
