@@ -224,11 +224,15 @@ func (dfw *DCMFileWriter) WriteFileMetaInfo(metaInfo *FileMetaInfo) error {
 	if metaInfo.TransferSyntaxUID != "" {
 		addMeta(0x0010, "UI", metaInfo.TransferSyntaxUID)
 	}
-	if metaInfo.ImplementationClassUID != "" {
-		addMeta(0x0012, "UI", metaInfo.ImplementationClassUID)
+	// Implementation Class UID is Type 1 (PS3.10 Table 7.1-1), so a meta
+	// that does not name one gets this library's, with its version name.
+	classUID, versionName := metaInfo.ImplementationClassUID, metaInfo.ImplementationVersionName
+	if classUID == "" {
+		classUID, versionName = uid.ImplementationClassUID, uid.ImplementationVersionName
 	}
-	if metaInfo.ImplementationVersionName != "" {
-		addMeta(0x0013, "SH", metaInfo.ImplementationVersionName)
+	addMeta(0x0012, "UI", classUID)
+	if versionName != "" {
+		addMeta(0x0013, "SH", versionName)
 	}
 	if metaInfo.SourceApplicationEntityTitle != "" {
 		addMeta(0x0016, "AE", metaInfo.SourceApplicationEntityTitle)

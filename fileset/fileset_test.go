@@ -253,7 +253,7 @@ func TestGenerateDICOMDIR(t *testing.T) {
 	// This used to append two empty data sets and assert the result was not
 	// nil, which an empty data set satisfies — so a GenerateDICOMDIR that
 	// produced nothing at all passed.
-	for _, name := range []string{"test1.dcm", "test2.dcm"} {
+	for _, name := range []string{"TEST1", "TEST2"} {
 		path := filepath.Join(tmpDir, name)
 		writeMinimalDICOM(t, path)
 		if err := fs.AddFile(path); err != nil {

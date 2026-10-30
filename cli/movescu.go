@@ -14,6 +14,7 @@ import (
 
 // MoveSCUCommand implements the movescu CLI command.
 type MoveSCUCommand struct {
+	tls       tlsFlags
 	callingAE string
 	calledAE  string
 	moveDest  string
@@ -27,6 +28,7 @@ func (c *MoveSCUCommand) Name() string        { return "movescu" }
 func (c *MoveSCUCommand) Description() string { return "DICOM Move SCU (retrieve)" }
 
 func (c *MoveSCUCommand) AddFlags(fs *flag.FlagSet) {
+	addClientTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.callingAE, "aet", "MOVESCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.StringVar(&c.moveDest, "dest", "", "Move destination AE title (required)")
@@ -42,6 +44,10 @@ func (c *MoveSCUCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: movescu [options] host:port")
@@ -54,6 +60,7 @@ func (c *MoveSCUCommand) Execute(args []string) error {
 	address := fs.Arg(0)
 
 	scu := network.NewSCU(network.SCUConfig{
+		TLS:       tlsCfg,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,

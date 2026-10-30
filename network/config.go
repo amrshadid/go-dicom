@@ -41,14 +41,25 @@ type NetworkConfig struct {
 	// MaxPDUSize is the maximum PDU size to propose during association negotiation.
 	MaxPDUSize uint32
 
-	// ARTIMTimeout is the timeout for the ARTIM timer.
+	// ARTIMTimeout is the ARTIM timer (PS3.8 9.1.5): how long an SCP waits
+	// for the A-ASSOCIATE-RQ on a connection it accepted, and an SCU for the
+	// A-ASSOCIATE-AC or A-RELEASE-RP. Zero is the default; less than zero is
+	// no limit.
 	ARTIMTimeout time.Duration
 
-	// DIMSETimeout is the timeout for DIMSE operations.
+	// DIMSETimeout is how long each PDU of an established association has to
+	// arrive: an SCU waiting for a response, or an SCP waiting for the next
+	// request. An SCP aborts an association that is idle for longer. Zero is
+	// the default; less than zero is no limit.
 	DIMSETimeout time.Duration
 
 	// NetworkTimeout is the timeout for establishing TCP connections.
 	NetworkTimeout time.Duration
+
+	// MaxDataSetSize bounds the data set of one message, which is held in
+	// memory whole while it arrives. A peer sending more is aborted. Zero is
+	// no limit.
+	MaxDataSetSize int64
 }
 
 // DefaultNetworkConfig returns a NetworkConfig with sensible defaults.
@@ -80,6 +91,9 @@ type SCUConfig struct {
 	// identity (username/password, Kerberos, SAML, JWT). Nil proposes none.
 	ExtendedNegotiation *ExtendedNegotiation
 
+	// TLS, when set, makes Associate connect over TLS.
+	TLS *TLSConfig
+
 	// OnCStore receives instances the peer sends as C-STORE sub-operations
 	// during a C-GET. Return a DIMSE status; StatusSuccess accepts the
 	// instance.
@@ -99,7 +113,8 @@ type SCPConfig struct {
 	// AETitle is the AE title of this SCP.
 	AETitle string
 
-	// Port is the TCP port to listen on.
+	// Port is the TCP port to listen on. NewSCP reads 0 as DefaultPort;
+	// StartServer and StartServerTLS read it as any free port.
 	Port int
 
 	// BindAddress is the address to bind to. Empty string means all interfaces.
@@ -110,6 +125,16 @@ type SCPConfig struct {
 
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
 	MaxAssociations int
+
+	// TLS, when set, makes ListenAndServe and StartServer accept associations
+	// over TLS only.
+	TLS *TLSConfig
+
+	// OutboundTLS, when set, is used for the associations the SCP opens
+	// itself: C-MOVE sub-operations, storage commitment results and UPS event
+	// reports. It is separate from TLS because a peer the SCP calls need not
+	// be reached the way the SCP is.
+	OutboundTLS *TLSConfig
 
 	// MoveDestinations maps a destination AE title to its "host:port" address,
 	// for resolving the Move Destination of a C-MOVE request.

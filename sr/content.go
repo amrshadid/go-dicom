@@ -218,6 +218,19 @@ func readContentItem(ds *dataset.Dataset, depth int) (*ContentItem, error) {
 		return nil, fmt.Errorf("sr: content items nest deeper than %d levels", maxContentDepth)
 	}
 
+	item := readItemFields(ds)
+	for _, child := range items(ds, tagContentSequence) {
+		read, err := readContentItem(child, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		item.Children = append(item.Children, read)
+	}
+	return item, nil
+}
+
+// readItemFields reads one item's own fields, not its children.
+func readItemFields(ds *dataset.Dataset) *ContentItem {
 	item := &ContentItem{
 		ValueType:           srString(ds, tagValueType),
 		RelationshipType:    srString(ds, tagRelationshipType),
@@ -256,21 +269,22 @@ func readContentItem(ds *dataset.Dataset, depth int) (*ContentItem, error) {
 			SOPInstanceUID: srString(ref, tagReferencedSOPInst),
 		}
 	}
-
-	for _, child := range items(ds, tagContentSequence) {
-		read, err := readContentItem(child, depth+1)
-		if err != nil {
-			return nil, err
-		}
-		item.Children = append(item.Children, read)
-	}
-	return item, nil
+	return item
 }
 
 // WriteContentTree writes a content tree into a data set.
 //
 // The root's own attributes go directly into the data set, as PS3.3 C.17.3
 // requires, and its children become the Content Sequence.
+//
+// An item read from a document keeps what it was read with: an attribute the
+// fields do not model, such as GraphicData or ObservationDateTime, is written
+// from ContentItem.Dataset as it was, and a modeled value left unchanged is
+// written as the element it was read from, so a code keeps its Coding Scheme
+// UID and a reference its frame numbers. Only a value that was changed is
+// written from the fields. An item given another value type is written from
+// its fields alone. Without this a tree read and written back lost what it did
+// not model, and dcmtk refused the result (#216).
 func WriteContentTree(ds *dataset.Dataset, root *ContentItem) error {
 	if ds == nil || root == nil {
 		return fmt.Errorf("sr: a data set and a root item are both required")
@@ -371,6 +385,10 @@ func writeContentItem(item *ContentItem, depth int) (*dataset.Dataset, error) {
 				return nil, err
 			}
 		}
+	}
+
+	if item.Dataset != nil {
+		keepWhatWasRead(ds, item, depth == 0)
 	}
 
 	if len(item.Children) > 0 {
@@ -525,4 +543,120 @@ func srString(ds *dataset.Dataset, t tag.Tag) string {
 		return ""
 	}
 	return strings.TrimRight(string(raw), " \x00")
+}
+
+// modeledTags are the attributes ContentItem's fields stand for. The fields
+// decide them; anything else in an item's Dataset is carried over as read.
+var modeledTags = map[tag.Tag]bool{
+	tagRelationshipType: true, tagValueType: true, tagConceptNameCodeSeq: true,
+	tagContinuityOfContent: true, tagTextValue: true, tagPersonName: true, tagUIDValue: true,
+	tagDateValue: true, tagTimeValue: true, tagDateTimeValue: true, tagConceptCodeSeq: true,
+	tagMeasuredValueSeq: true, tagReferencedSOPSeq: true, tagReferencedContentID: true,
+	tagContentSequence: true,
+}
+
+// rootContentTags are the attributes of the SR Document Content Module that
+// belong to the root item but not to ContentItem's fields. The root's Dataset
+// is the whole document, so only these are carried over from it; the
+// patient, study and series attributes beside them are the caller's.
+var rootContentTags = []tag.Tag{
+	tag.New(0x0040, 0xA032), // Observation DateTime
+	tag.New(0x0040, 0xA171), // Observation UID
+	tag.New(0x0040, 0xA504), // Content Template Sequence
+}
+
+// keepWhatWasRead brings what item was read with into ds, its rendering.
+//
+// A modeled value equal to the one read from item.Dataset is replaced by the
+// element it was read from, which may hold more than the fields do: a
+// Coding Scheme UID in a code, Referenced Frame Number in a reference.
+// Attributes the fields do not model are copied as they are, all of them for
+// an item and the content module's for the root.
+func keepWhatWasRead(ds *dataset.Dataset, item *ContentItem, root bool) {
+	read := readItemFields(item.Dataset)
+	unchanged := map[tag.Tag]bool{
+		tagRelationshipType:    read.RelationshipType == item.RelationshipType,
+		tagValueType:           read.ValueType == item.ValueType,
+		tagConceptNameCodeSeq:  sameCode(read.ConceptName, item.ConceptName),
+		tagContinuityOfContent: read.ContinuityOfContent == item.ContinuityOfContent,
+		tagTextValue:           read.Text == item.Text,
+		tagPersonName:          read.PersonName == item.PersonName,
+		tagUIDValue:            read.UID == item.UID,
+		tagDateValue:           read.DateTime == item.DateTime,
+		tagTimeValue:           read.DateTime == item.DateTime,
+		tagDateTimeValue:       read.DateTime == item.DateTime,
+		tagConceptCodeSeq:      sameCode(read.Code, item.Code),
+		tagMeasuredValueSeq:    sameMeasurement(read.Measurement, item.Measurement),
+		tagReferencedSOPSeq:    sameReference(read.Reference, item.Reference),
+		tagReferencedContentID: sameOrdinals(read.ReferencedContentItem, item.ReferencedContentItem),
+	}
+	sameType := unchanged[tagValueType]
+	for t, same := range unchanged {
+		if !same {
+			continue
+		}
+		original, ok := item.Dataset.Get(t)
+		if !ok {
+			continue
+		}
+		// Written, or left out only because it is empty; an item whose value
+		// type changed has no use for the old type's empty value.
+		if _, written := ds.Get(t); written || sameType {
+			_ = ds.Add(original)
+		}
+	}
+	// Attributes beside the value describe the value read: an item given a
+	// new value type is a new item, and GraphicData has no place in a TEXT.
+	if !sameType {
+		return
+	}
+
+	if root {
+		for _, t := range rootContentTags {
+			if original, ok := item.Dataset.Get(t); ok {
+				_ = ds.Add(original)
+			}
+		}
+		return
+	}
+	for _, original := range item.Dataset.GetAll() {
+		t, ok := original.Tag()
+		if !ok || modeledTags[t] {
+			continue
+		}
+		_ = ds.Add(original)
+	}
+}
+
+func sameCode(a, b *Code) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func sameMeasurement(a, b *Measurement) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Value == b.Value && sameCode(a.Units, b.Units)
+}
+
+func sameReference(a, b *Reference) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func sameOrdinals(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

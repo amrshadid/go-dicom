@@ -16,6 +16,7 @@ import (
 
 // FindSCUCommand implements the findscu CLI command.
 type FindSCUCommand struct {
+	tls         tlsFlags
 	callingAE   string
 	calledAE    string
 	timeout     int
@@ -44,6 +45,7 @@ func (c *FindSCUCommand) Name() string        { return "findscu" }
 func (c *FindSCUCommand) Description() string { return "DICOM Find SCU (query)" }
 
 func (c *FindSCUCommand) AddFlags(fs *flag.FlagSet) {
+	addClientTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.callingAE, "aet", "FINDSCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 30, "Connection timeout in seconds")
@@ -66,6 +68,10 @@ func (c *FindSCUCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: findscu [options] host:port")
@@ -74,6 +80,7 @@ func (c *FindSCUCommand) Execute(args []string) error {
 	address := fs.Arg(0)
 
 	scu := network.NewSCU(network.SCUConfig{
+		TLS:       tlsCfg,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,
@@ -148,10 +155,7 @@ func (c *FindSCUCommand) Execute(args []string) error {
 		fmt.Printf("Querying %s (level: %s)\n", address, c.level)
 	}
 
-	var (
-		results <-chan *network.CFindResult
-		err     error
-	)
+	var results <-chan *network.CFindResult
 	if c.sopClass != "" {
 		results, err = scu.FindWithSOPClass(ctx, c.sopClass, queryDS)
 	} else {

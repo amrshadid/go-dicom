@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/filebase"
@@ -23,6 +24,22 @@ import (
 // landed, and written again — which works only because the offsets are UL and
 // four bytes wide whatever they hold.
 
+// fileID turns a fixture's name into a File ID PS3.10 8.5 allows, which the
+// writer requires: CT_small.dcm is copied as CT_SMALL.
+func fileID(name string) string {
+	name = filepath.Base(name)
+	id := []rune(strings.ToUpper(strings.TrimSuffix(name, filepath.Ext(name))))
+	for i, r := range id {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			id[i] = '_'
+		}
+	}
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return string(id)
+}
+
 // scannedFileSet copies real DICOM files into a temporary directory and scans it.
 func scannedFileSet(t *testing.T, names ...string) *fileset.FileSet {
 	t.Helper()
@@ -39,7 +56,7 @@ func scannedFileSet(t *testing.T, names ...string) *fileset.FileSet {
 		if err != nil {
 			continue
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, fileID(name)), data, 0o600); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
 		}
 		copied++
@@ -165,17 +182,19 @@ func TestGeneratedDICOMDIRHasWorkingOffsets(t *testing.T) {
 	if dd.FileSetID != "TESTSET" {
 		t.Errorf("File-set ID is %q, want TESTSET", dd.FileSetID)
 	}
-	if got := len(dd.RecordsOfType(fileset.RecordImage)); got != count {
-		t.Errorf("the index has %d IMAGE records for %d files", got, count)
+	// The plan is an RT PLAN record, not an IMAGE (#215).
+	leaves := append(dd.RecordsOfType(fileset.RecordImage), dd.RecordsOfType(fileset.RecordRTPlan)...)
+	if got := len(leaves); got != count {
+		t.Errorf("the index has %d IMAGE and RT PLAN records for %d files", got, count)
 	}
 
-	// Every IMAGE has to name a file and sit three levels down.
-	for _, img := range dd.RecordsOfType(fileset.RecordImage) {
-		if len(img.ReferencedFileID) == 0 {
-			t.Error("an IMAGE record references no file")
+	// Every leaf has to name a file and sit three levels down.
+	for _, leaf := range leaves {
+		if len(leaf.ReferencedFileID) == 0 {
+			t.Errorf("a %s record references no file", leaf.Type)
 		}
-		if img.StringValue(tag.New(0x0004, 0x1511)) == "" {
-			t.Error("an IMAGE record has no Referenced SOP Instance UID in File")
+		if leaf.StringValue(tag.New(0x0004, 0x1511)) == "" {
+			t.Errorf("a %s record has no Referenced SOP Instance UID in File", leaf.Type)
 		}
 	}
 }

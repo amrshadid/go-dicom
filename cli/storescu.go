@@ -16,6 +16,8 @@ import (
 
 // StoreSCUCommand implements the storescu CLI command.
 type StoreSCUCommand struct {
+	tls       tlsFlags
+	tlsConfig *network.TLSConfig
 	callingAE string
 	calledAE  string
 	timeout   int
@@ -25,6 +27,7 @@ func (c *StoreSCUCommand) Name() string        { return "storescu" }
 func (c *StoreSCUCommand) Description() string { return "DICOM Store SCU (send files)" }
 
 func (c *StoreSCUCommand) AddFlags(fs *flag.FlagSet) {
+	addClientTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.callingAE, "aet", "STORESCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 60, "Connection timeout in seconds")
@@ -36,6 +39,11 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
+	c.tlsConfig = tlsCfg
 
 	if fs.NArg() < 2 {
 		return fmt.Errorf("usage: storescu [options] host:port file1.dcm [file2.dcm ...]")
@@ -79,6 +87,7 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 // sendBatch sends one batch of files over its own association.
 func (c *StoreSCUCommand) sendBatch(ctx context.Context, address string, batch storeBatch) (sent, failed int) {
 	scu := network.NewSCU(network.SCUConfig{
+		TLS:       c.tlsConfig,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,

@@ -156,8 +156,10 @@
 //
 // # Security
 //
-// DICOM over TCP is unauthenticated and unencrypted by default. Use [DialTLS]
-// and [ListenTLS] for encrypted transport. Checking the called AE title is a
+// DICOM over TCP is unauthenticated and unencrypted by default. Set
+// SCUConfig.TLS and SCPConfig.TLS for encrypted transport, with
+// TLSConfig.CAFile for each side to verify the other; SCPConfig.OutboundTLS
+// covers the associations an SCP opens itself. Checking the called AE title is a
 // naming convention, not authentication — anything reachable on the port can
 // claim any calling AE title unless TLS with client certificates or user
 // identity negotiation is in use. Set SCPConfig.MaxAssociations to bound

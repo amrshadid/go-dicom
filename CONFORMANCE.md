@@ -16,8 +16,8 @@ the library falls short of the standard, that appears in
 | | |
 |---|---|
 | Implementation Class UID | `1.2.826.0.1.3680043.10.511` |
-| Implementation Version Name | `GO-DICOM-1.6.0` |
-| Documented against | `v1.6.0` |
+| Implementation Version Name | `GO-DICOM-1.7.0` |
+| Documented against | `v1.7.0` |
 | Last verified | 2026-08-15 |
 
 ---
@@ -269,9 +269,16 @@ selection, and user identity negotiation. The window defaults to one.
 
 - **Physical media:** not applicable; this is a network and file library.
 - **Transport:** TCP/IP. DICOM Upper Layer Protocol per PS3.8.
-- **TLS:** available through `network.DialTLS` and `network.ListenTLS`. Plain
-  DICOM over TCP is neither authenticated nor encrypted, and checking a called AE
-  title is a naming convention rather than authentication.
+- **TLS:** `SCUConfig.TLS` puts an SCU's associations on TLS, `SCPConfig.TLS`
+  an SCP's, and `-tls` does the same for every network command. A
+  `TLSConfig.CAFile` makes each side authenticate the other: a server requires
+  a client certificate issued by that CA, and a client verifies the server
+  against it. The associations an SCP opens itself (C-MOVE sub-operations,
+  storage commitment results, UPS event reports) use `SCPConfig.OutboundTLS`,
+  plain TCP when it is unset, since a peer the SCP calls need not be reached
+  the way the SCP is; its certificate must then allow client authentication.
+  Verified against pynetdicom over TLS in both directions. Plain DICOM over TCP is neither authenticated nor encrypted, and
+  checking a called AE title is a naming convention rather than authentication.
 
 ---
 
@@ -283,7 +290,7 @@ selection, and user identity negotiation. The window defaults to one.
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations` |
-| Timeouts | `NetworkConfig` |
+| Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
@@ -346,6 +353,10 @@ advisory.
 | Limit | Value | Guards against |
 |---|---|---|
 | `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
+| The Maximum Length advertised in the A-ASSOCIATE-RQ or -AC | `NetworkConfig.MaxPDUSize` | A P-DATA-TF longer than the receiver agreed to; aborted (PS3.8 D.1) |
+| Command set being assembled | 1 MiB | Command fragments never marked last; aborted |
+| `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory; aborted |
+| `NetworkConfig.ARTIMTimeout` / `DIMSETimeout` | 30 s / 60 s | A peer that connects and sends nothing, or stops partway through a PDU |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
@@ -468,7 +479,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
 
 ### 8.3 Writing
 
-Files this library writes are read by dcmtk and pydicom. Encapsulated pixel data
+Files this library writes are read by dcmtk and pydicom. Structured reports
+from the `sr` package pass dsrdump, which checks the relationship constraints
+of Basic Text, Enhanced and Comprehensive SR, and a content tree read and
+written back keeps every attribute it was read with (#216). Encapsulated pixel data
 is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
 requires, both to a file and on the network. Native pixel data is never sent under
 a compressed syntax: the send fails rather than describe pixels as fragments.
@@ -481,6 +495,16 @@ dictionary entry keeps UN, and a UN element in a big endian file keeps UN,
 because Note 2's little endian value must not be byte-swapped with the rest of
 the data set. An undefined length means items whatever the dictionary says
 (Note 5), and they are parsed as a sequence.
+
+On writing, a private attribute read without a VR, as every attribute of an
+implicit VR file is, takes the VR GDCM's private dictionary gives it, looked up
+through the file's own private creator. Where the dictionary does not know the
+attribute, lists more than one VR, or lists a fixed-size VR its value is not a
+whole number of, it is written as UN with its value unchanged, which PS3.5
+6.2.2 provides for. Across pydicom's corpus every private attribute gets the VR
+pydicom gives it. The dictionary this replaced was generated, with VRs in
+rotation, and an implicit Siemens MR written through it had text relabeled as
+numbers (#186, #188).
 
 Where the dictionary gives an attribute two VRs, the one written is the one the
 data set calls for, resolved as pydicom resolves it. `US or SS` follows Pixel

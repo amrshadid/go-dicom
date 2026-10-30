@@ -8,7 +8,7 @@ DICOM Structured Report creation, validation, and management with template-based
 import "github.com/amrshadid/go-dicom/sr"
 
 // Create a report
-report := sr.NewStructuredReport("1.2.3.4.5", "1.2.840.10008.5.1.4.1.1.66.4")
+report := sr.NewStructuredReport("1.2.3.4.5", "1.2.840.10008.5.1.4.1.1.88.33")
 report.PatientName = "Smith^Jane"
 report.AddFinding(sr.Finding{
     ID: "F001", Description: "Nodule in right upper lobe",
@@ -18,7 +18,7 @@ report.AddObservation(sr.Observation{Code: "NODULE_SIZE", Value: "12", Unit: "mm
 report.AddConclusion("Recommend follow-up imaging")
 
 // Fluent builder
-report, result, err := sr.NewSRBuilder("1.2.3", "1.2.840.10008").
+report, result, err := sr.NewSRBuilder("1.2.3", "1.2.840.10008.5.1.4.1.1.88.33").
     AddPatientInfo("Doe^John", "12345").
     AddFinding("F1", "Abnormality", "MAJOR", "Abdomen", 0.95).
     Build()

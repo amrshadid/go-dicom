@@ -57,7 +57,7 @@ func (ds *Dataset) ResolveVR(t tag.Tag, elem *dataelem.DataElement, enclosing ..
 
 	vr := elem.GetVR()
 	if vr == "" {
-		if private := ds.privateVR(t); private != "" {
+		if private := ds.privateVR(t, elem); private != "" {
 			return private
 		}
 		vr = dataelem.VR(t.GetVR())

@@ -543,6 +543,7 @@ var ps315BasicProfile = map[tag.Tag]Action{
 	tag.New(0x2200, 0x0005): ActionEmpty,  // X/Z
 	tag.New(0x3002, 0x0121): ActionRemove, // X
 	tag.New(0x3002, 0x0123): ActionRemove, // X
+	tag.New(0x3004, 0x007F): ActionRemove, // X, Dose Calculation Model Name (#212)
 	tag.New(0x3006, 0x0002): ActionDummy,  // D
 	tag.New(0x3006, 0x0004): ActionRemove, // X
 	tag.New(0x3006, 0x0006): ActionRemove, // X

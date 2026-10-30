@@ -15,7 +15,9 @@
 //	}
 //
 // Anonymize mutates the data set in place. Clone it first if the original is
-// still needed.
+// still needed. It also sets Patient Identity Removed (0012,0062) to YES and
+// records the profile in (0012,0063) and (0012,0064), as PS3.15 E.1.1
+// requires.
 //
 // # Profiles
 //
@@ -52,8 +54,8 @@
 //   - [ActionDummy] — replace with a fixed dummy value
 //
 // Most actions replace rather than delete, so the attribute stays present for
-// readers that require it. The basic profile leaves PatientName in place with a
-// dummy value rather than removing it.
+// readers that require it. The basic profile leaves PatientName and PatientID
+// in place with an empty value rather than removing them.
 //
 // Override any single tag with [Anonymizer.SetCustomAction], which is how site
 // policy is expressed on top of the standard profile:
@@ -87,6 +89,16 @@
 //
 // Creating a new Anonymizer per file breaks those relationships, because each
 // one generates a fresh mapping.
+//
+// The file meta is not part of the data set, so give it the same UID before
+// writing it back. [Anonymizer.AnonymizeFileMeta] does that for the meta that
+// was read, and [Anonymizer.RemapUID] for one built by hand:
+//
+//	ds := df.GetDataset()
+//	if err := a.Anonymize(ds); err != nil {
+//		return err
+//	}
+//	a.AnonymizeFileMeta(df.FileMetaInfo)
 //
 // [Anonymizer.GetUIDMapping] returns the accumulated mapping. It is the link
 // back to the original identities: treat it as sensitive, store it apart from

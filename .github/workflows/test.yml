@@ -115,28 +115,31 @@ jobs:
       - name: Fuzz each target briefly
         env:
           GOMEMLIMIT: 1GiB
+        # Targets are found rather than listed, so a new one cannot be left
+        # out: a hand-kept list named six of nine (#168).
+        #
+        # A run that spends its whole -fuzztime is a pass, but Go's coordinator
+        # can report the expiry itself as a failure: it stops on ctx.Done() and
+        # suppresses ctx.Err() only once the workers' child context is canceled
+        # too, which happens just after (#177). That failure is the bare line
+        # "context deadline exceeded" with no input written; anything else, a
+        # crash included, still fails the job.
         run: |
           set -e
-          for target in FuzzDecodePDU FuzzDecodeDataset FuzzDecodeCommandDataset; do
-            echo "::group::$target"
-            go test ./network/ -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2
-            echo "::endgroup::"
+          log="$RUNNER_TEMP/fuzz.log"
+          for pkg in $(go list ./...); do
+            for target in $(go test -list '^Fuzz' "$pkg" | grep '^Fuzz' || true); do
+              echo "::group::$target"
+              if ! go test "$pkg" -run='^$' -fuzz="^${target}$" -fuzztime=30s -parallel=2 2>&1 | tee "$log"; then
+                if grep -qx '    context deadline exceeded' "$log" && ! grep -q 'Failing input written' "$log"; then
+                  echo "::warning::$target ran its full fuzz time; Go reported the expiry as a failure (#177)"
+                else
+                  exit 1
+                fi
+              fi
+              echo "::endgroup::"
+            done
           done
-          echo "::group::FuzzReadDICOMFile"
-          go test ./filereader/ -run='^$' -fuzz='^FuzzReadDICOMFile$' -fuzztime=30s -parallel=2
-          echo "::endgroup::"
-          # The lossless JPEG parser reads offsets and lengths out of the same
-          # attacker-controlled bytes it then indexes with; fuzzing it found two
-          # panics within a minute.
-          echo "::group::FuzzJPEGLosslessDecompress"
-          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLosslessDecompress$' -fuzztime=30s -parallel=2
-          echo "::endgroup::"
-          # JPEG-LS has more attacker-reachable arithmetic than the others: the
-          # coding parameters come from the frame header and an optional preset
-          # segment, and they feed shift counts and loop bounds.
-          echo "::group::FuzzJPEGLSDecompress"
-          go test ./compress/ -run='^$' -fuzz='^FuzzJPEGLSDecompress$' -fuzztime=30s -parallel=2
-          echo "::endgroup::"
 
       # A crash writes its input to testdata/fuzz; keep it so the failure can be
       # reproduced from the artifact rather than by re-fuzzing.

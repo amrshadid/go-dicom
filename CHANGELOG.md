@@ -9,6 +9,381 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [1.7.0] - 2026-10-30
+
+### Added
+
+- **A private dictionary taken from vendor documentation** (#188). The one it
+  replaces was generated, with VRs given in rotation and invented names, and
+  #186 had to stop trusting it. This one is GDCM's, by way of pydicom, generated
+  by `scripts/private-dictionary.py`: 8,858 attributes under 423 private
+  creators. An implicit private attribute takes its VR from it again where the
+  VR is unambiguous and the value is a whole number of values of it, and is UN
+  otherwise, so a wrong entry cannot write a file pydicom refuses. Across
+  pydicom's corpus every private attribute now gets the VR pydicom gives it.
+  GDCM's BSD license and pydicom's MIT license are in `THIRD_PARTY_NOTICES`,
+  which is published with each release.
+
+- **TLS for every association, and on every network command** (#182). The
+  README listed TLS as supported, but only `DialTLS` and `ListenTLS` had it, and
+  neither reached an `SCU`, whose `Associate` always dialed plain TCP, or
+  `ListenAndServe`. `SCUConfig.TLS` and `SCPConfig.TLS` now put an SCU's
+  associations and an SCP's on TLS, through `Associate`, `ListenAndServe` and
+  `StartServer`. `SCPConfig.OutboundTLS` covers the associations an SCP opens
+  itself: C-MOVE sub-operations, storage commitment results and UPS event
+  reports. It is plain TCP when unset, since a peer the SCP calls need not be
+  reached the way the SCP is.
+
+  All nine network commands take `-tls`, `-tls-cert`, `-tls-key` and
+  `-tls-ca`, and the clients also take `-tls-server-name` and `-tls-insecure`;
+  `qrscp -tls-outbound` puts its C-MOVE and commitment associations on TLS too.
+  A `-tls-*` option given without `-tls` is an error rather than a command that
+  quietly connects in the clear. `SCUConfigTLS` and `SCPConfigTLS`, which nothing
+  ever read, are deprecated.
+
+  `scripts/interop-test.sh` checks it against pynetdicom in both directions,
+  with an OpenSSL-made PKI and mutual authentication: a C-STORE each way arrives
+  intact, and a client without a certificate is refused.
+
+### Changed
+
+- **JPEG 2000 decodes up to four times faster** (#184). Code-blocks are coded
+  independently (ISO 15444-1 B.7), and the decoder now decodes a
+  tile-component's blocks in parallel rather than one at a time. The inverse
+  wavelet reuses one scratch buffer per pass instead of allocating one for every
+  row and column, and computes the symmetric extension only where it applies.
+  A 512×512 lossless frame took 48.8 ms and now takes 12.0 ms, and allocates a
+  third less; a 400×400 RGB frame of 16 tiles goes from 22.0 to 13.1 ms. On one
+  CPU it is no slower. The samples are unchanged: all 49 decodable files in
+  pydicom's corpus still match it sample for sample.
+
+- **The network timeouts are enforced** (#206). `ARTIMTimeout` (30 s) and
+  `DIMSETimeout` (60 s) were accepted and ignored. They now apply, so an SCP
+  aborts an association that sends nothing for `DIMSETimeout`, and an SCU
+  operation fails if no PDU of the response arrives within it, a C-MOVE whose
+  sub-operations each take longer included. Raise `DIMSETimeout` for such
+  peers, or set it below zero to turn it off. The entry under Fixed has the
+  details.
+
+- **A DICOMDIR refuses a path that is not a valid File ID** (#215). PS3.10
+  8.5 allows at most 8 components of at most 8 characters from A–Z, 0–9 and
+  `_`. A name such as `ct.dcm` was written into the index as it was, which
+  no media reader has to accept. `WriteDICOMDIR` and `GenerateDICOMDIR` now
+  return an error naming the file. `DICOMDIROptions.AllowNonConformantFileIDs`
+  indexes such names anyway, for a local directory.
+
+### Fixed
+
+- **Structured reports round-trip, and the ones this library writes are
+  conformant** (#216). `WriteContentTree` wrote each item from the tree's
+  fields alone, so a document read and written back lost what the fields do
+  not model: across pydicom's test-SR.dcm, 38 of 201 attributes, among them an
+  SCOORD's GraphicData, which made dcmtk refuse the file. It now keeps what
+  each item was read with, and writes from the fields only what was changed;
+  all three SR documents in pydicom's corpus come back unchanged.
+  `StructuredReport.ToDataset`, behind the README's `WriteSRFile`, wrote
+  (0002,0000) into the data set, the number of findings into Concept Name Code
+  Sequence as IS, the first finding into Study Description, and nothing else of
+  the report. It now writes the modules every SR IOD requires and the report
+  as a content tree, which dsrdump accepts as Basic Text, Enhanced and
+  Comprehensive SR. `ReadSRFile` returned an empty report whatever the file
+  held; it reads the file, and `FromDataset` reads the content tree.
+
+- **A failed Associate closes the connection it opened** (#210). A rejected,
+  aborted or timed-out request left its socket to the garbage collector, so
+  200 rejected calls held 200 descriptors open with `GOGC=off`, and a client
+  retrying against a peer that refused it could run out. It now holds none.
+
+- **ARTIMTimeout and DIMSETimeout are applied** (#206). Both were documented
+  and defaulted, and nothing read them, so a peer that connected and sent
+  nothing held an association slot for good. A connection that arrived while
+  the server was full was read inline in the accept loop, so one silent peer
+  stopped the server from accepting anything. An SCU waited on a silent peer
+  until its context ended, which with `context.Background` was never. ARTIM
+  now bounds the wait for the A-ASSOCIATE-RQ, A-ASSOCIATE-AC and
+  A-RELEASE-RP (PS3.8 9.1.5). `DIMSETimeout` bounds each PDU after that, and
+  an SCP aborts an association idle for longer. An over-limit connection is
+  answered off the accept loop. A negative value turns either timeout off.
+
+- **Data sets are written in ascending tag order** (#214). The file writer
+  and the network encoder wrote elements in the order they were added, so an
+  attribute added to a file read from disk landed after its Pixel Data. PS3.5
+  7.1 requires ascending order, and dcmtk warns on such a file. Out of order,
+  a big endian write could also reach Pixel Data before Bits Allocated and
+  swap 32-bit pixels as 16-bit ones, so pydicom read other values. Both now
+  write in tag order, at every level of nesting, through the new
+  `Dataset.ElementsInTagOrder`. `GetAll` keeps insertion order.
+
+- **A request whose data set does not decode is refused, not answered
+  Success** (#207). A C-STORE whose data set failed to decode was handed to the
+  handler as an empty data set and answered 0x0000, so the sender believed an
+  instance was stored that never was. A C-FIND whose identifier failed got no
+  response at all, and C-GET, C-MOVE and the N-services went on with whatever
+  the decoder returned. Every one of them now answers without calling the
+  handler: 0xC000, cannot understand, for the C-services (PS3.4), and 0x0110,
+  processing failure, for the N-services.
+
+- **US is a valid VR** (#201). The VR table had no US entry, so
+  `IsValidVR(US)` was false and `GetVRInfo(US)` nil, and `AllVRs` also left out
+  OV, SV and UV. Callers fell back quietly, which is why it went unseen, but a
+  check built on the table skipped every US. All 34 VRs of PS3.5 Table 6.2-1
+  are there now.
+
+- **A JPEG 2000 tile grid that does not cover the image is refused** (#164). The
+  SIZ parser checked where the image starts but not where the tile grid does, and
+  ISO 15444-1 A.5.1 requires the grid to start at or before the image. Every
+  tile's bounds are computed unsigned, so a grid starting past the image wrapped
+  the subtraction, and a 32×32 codestream asked the decoder for 144 TB. Running
+  out of memory is a fatal error in Go rather than a panic: no `recover` catches
+  it, and `Dataset.PixelArray` on such a file took the whole process with it.
+  OpenJPEG refuses the same file for an illegal tile offset.
+
+  Fuzzing past that found two more of the same kind. The image-size limit was
+  applied by `Decode` alone, so `ParseCodestream` and `ReadTilePackets` sized
+  their precincts from a 285212704×32 image and reached 6.2 GB first; the parser
+  now applies it too. And the tile count was a 32-bit ceiling division, which
+  counted a single tile wider than 2^31 as none. A grid of more tiles than a
+  tile-part can name, 65535, is refused as well.
+
+- **An 8-bit JPEG frame with no samples is an error** (#165). 8-bit frames are
+  decoded by the standard library, which takes a frame header of zero columns,
+  or of zero rows with the count left to a DNL marker it does not read, as an
+  empty image and says nothing. `JPEGDecompressor` passed that on as a
+  successful decode of no bytes, leaving every caller to notice the buffer was
+  empty. The 12-bit path already refused the same header, and libjpeg refuses it
+  too: "Empty JPEG image (DNL not supported)". `FuzzJPEGExtendedDecompress`
+  found it within three seconds of running past its seeds.
+
+- **Every way of starting a server applies `MaxAssociations`** (#170). An SCP
+  accepted associations in three loops, `SCP.ListenAndServe`, `StartServer` and
+  `StartServerTLS`, and only the first consulted the limit: with
+  `MaxAssociations: 1`, `StartServer` accepted three associations held open at
+  once. All three also retried a failed accept immediately and forever, so after
+  `SCP.Close()`, which closes the listener without canceling the context,
+  `ListenAndServe` never returned and logged a million lines in two seconds.
+
+  There is one loop now. A closed listener ends it, and `ListenAndServe`
+  returns nil after `Close`. Any other accept error is retried after a pause
+  that doubles from 5 ms to a second, as `net/http` does. `StartServerTLS`
+  emits the connection events `StartServer` always did.
+
+- **Lossless JPEG prediction resets at every restart marker** (#174). T.81
+  H.1.2.1 starts each restart interval afresh: its first sample takes the
+  default prediction, and its first line is predicted from the left, as the
+  image's first line is. The decoder did that at the start of the scan only, so
+  in a frame with restart markers every interval after the first was predicted
+  from the row before it and came out offset from the right values, with no
+  error. Neither dcmtk nor pydicom's corpus has such a file, which is how it went
+  unseen; `scripts/jpeglossless-restart-fixture.py` now writes two, at selection
+  values 1 and 7, and keeps them only once libjpeg decodes them to the original
+  samples. A restart interval that is not a whole number of rows, which T.81 H.2
+  does not allow in a lossless frame, is refused by name.
+
+- **`TLSConfig.CAFile` verifies the peer** (#180). It was documented as the CA
+  that client certificates are verified against, and nothing read it. A server
+  given a `CAFile` asked for no client certificate and accepted any client, so a
+  deployment set up for mutual TLS had none; a client given one verified the
+  server against the system roots, so a PACS certificate from a private CA
+  failed. A server with a `CAFile` now requires a client certificate and
+  verifies it against that CA, and a client verifies the server against it.
+  Half a key pair, or a CA file with no certificate in it, is an error rather
+  than ignored. OpenSSL's `s_client` is refused without a certificate and
+  accepted with one from the CA.
+
+- **An implicit private attribute is written as UN, not with an invented VR**
+  (#186). `ResolveVR`, which the file writer and the network encoder use, took
+  the VR of an element read without one from the private dictionary. Most of
+  that dictionary was generated: `gen_private_dict_tool.go` gives a vendor's
+  attributes VRs in rotation and names from a list, so `SIEMENS MR HEADER`
+  (0019,1008), a CS, is listed as SL, and (0019,100A), a US, as FL. An implicit
+  VR Siemens MR sent to `storescp` was stored with its text as three numbers and
+  a 2-byte value labeled with a 4-byte VR, which pydicom refuses to read, and
+  `ToDICOMJSON` failed on the same file. The dictionary is no longer consulted
+  for a VR: a private creator is LO and any other private attribute without a
+  VR is UN, its bytes unchanged, which pydicom and dcmtk both read. The README no
+  longer advertises the dictionary's size, and replacing it with one taken from
+  real vendor documentation is left to a later release.
+
+- **`dcmstore` no longer loses or tears instances it acknowledged** (#189).
+  Instances were written into their final path with `os.Create`, which truncates
+  first, so a store killed midway left an empty or partial file where the good
+  copy had been, still indexed and served. Two stores of one SOP Instance UID at
+  once left a file that was neither copy: 172 of 200 trials. The saved index
+  could be an older snapshot renamed in after a newer one, losing an instance
+  across a restart; an instance stored again under another study or series left
+  its old file, which `Rebuild` brought back after a `Remove`; and `Rebuild`
+  dropped instances stored while it ran, 24 of 50, with a data race besides.
+
+  Files are now written beside their final path, synced, and renamed into
+  place, so a reader, a rebuild or a crash sees a whole copy or the previous
+  one. Writers of one UID are serialized, a moved instance's old file is
+  removed, the index snapshot and its rename happen under one lock, and
+  `Rebuild` runs with stores held off. It also clears what an interrupted
+  write leaves behind, and keeps the newer file where an older version of the
+  store left two for one UID.
+
+- **`dcmstore` matches Modalities in Study, and `?` matches a character**
+  (#191). Modalities in Study was skipped with the computed keys, so a STUDY
+  query for MR returned every study, some answering "CT" in the attribute that
+  asked for MR. It is now matched as PS3.4 C.6.2.1 has it: a study matches when
+  any value asked for, wildcards allowed, names a modality it holds. And `?`
+  matched one byte, so `M?ller` missed `Müller`, whose `ü` is two bytes in
+  UTF-8; it now matches one character, as C.2.2.2.4 says.
+
+- **Thai text is decoded, and Chinese text loses its escape sequences** (#195).
+  ISO_IR 166 and ISO 2022 IR 166 fell back to UTF-8 because `x/text` has no
+  ISO-8859-11, so every Thai character became U+FFFD and the data set then
+  declared ISO_IR 192 over them; Windows-874, the same table for every Thai
+  character, now decodes and encodes them, and pydicom's reading matches. Under
+  ISO 2022 IR 58 the escape `ESC $ ) A` was left for a decoder assumed to
+  interpret it, and stayed in the text; it is now stripped as Korean's is, and
+  `EncodeString` writes it, as PS3.5 Annex K requires.
+
+- **`FromDICOMJSON` keeps the values it is given** (#193). Four kinds changed on
+  the way in, so this library's own JSON did not survive being read back. A null
+  number became 0; it is now no value, and a null among binary numbers, which
+  have no empty component, drops that element with a warning rather than
+  inventing a number, as a truncated element is dropped. UV and SV were read
+  through float64 and lost precision above 2^53; numbers are now decoded
+  exactly. An empty sequence came back as no value; it is now a sequence with no
+  items. And text was kept under whatever (0008,0005) the JSON declared, though
+  DICOM JSON text is UTF-8: a Latin-1 name was written back as "JÃ©rÃ´me". The
+  declaration now says ISO_IR 192 wherever the text needs it. pydicom's JSON for
+  every file in its corpus now reads back with no other difference.
+
+- **Only the text VRs a character set covers are decoded with it** (#198).
+  (0008,0005) applies to SH, LO, UC, ST, LT, UT and PN (PS3.5 6.1.2.3), and
+  every text VR was decoded with it, so a CS of bytes E9 58 under ISO_IR 144 read
+  "щX" where pydicom reads "éX". The others are now decoded in the default
+  repertoire, which changes nothing for the ASCII they should hold.
+  `dataelem.IsCharacterSetVR` names the seven.
+
+- **`charset.EncodeString` writes code extensions as the standard has them**
+  (#197). An empty first value of (0008,0005) was dropped, so
+  `\ISO 2022 IR 149` made EUC-KR the base set and Korean was written with no
+  `ESC $ ) C`; it now means the default repertoire, as PS3.5 6.1.2.5.3 says.
+  Text needing a second set was cut in bytes where it had been measured in
+  characters, failed, and came back as raw UTF-8 with no error; Latin-1 with Greek or Cyrillic is
+  now encoded with `ESC - F` or `ESC - L`. Each component between delimiters is
+  encoded from the initial designation, since a reader resets at `^`, `=` and
+  the line separators, and an encoder that writes its own escapes no longer has
+  another put in front: Japanese had IR 159's `ESC $ ( D` before its `ESC $ B`.
+  pydicom decodes all of it to the original text. The library's own writing
+  path writes UTF-8 and did not use this.
+
+- **CI fuzzes every target, not six of nine** (#168). The fuzz job named its
+  targets by hand, and the JPEG 2000 parser, its MQ decoder and the JPEG
+  Extended decoder were not among them, so they ran on their seeds alone. Both
+  defects above were found within seconds of running past those seeds. The job
+  now finds its targets with `go test -list`, so a new one cannot be left out.
+  The JPEG 2000 fuzzer is seeded with whole codestreams, where before every seed
+  stopped in the main header, and RLE, which had no fuzz target, has one.
+
+- **The pynetdicom interop tests listen on a free port** (#172). Three of them
+  asked `NewSCP` for port 0, which it reads as `DefaultPort`, so they bound
+  11112 and failed with "never bound a port" whenever anything else held it,
+  another test run included, or talked to whatever was listening there. They now
+  pick a free port, and report `ListenAndServe`'s own error if it fails.
+  `SCPConfig.Port` documents that 0 means `DefaultPort` to `NewSCP` and any free
+  port to `StartServer`.
+
+- **A lossless JPEG scan that runs out before its frame does is an error**
+  (#175). The bit reader counted the bytes it invented past the end of the
+  entropy-coded data, but a scan ends at a marker, EOI at the latest, and zeros
+  fed at a marker were not counted. A scan cut short and followed by any marker
+  decoded to a full frame, its missing part decoded from zeros, which is what
+  `maxLosslessPixels` says must not happen. Decoding now stops at the row where
+  the data ran out, counted per restart interval. A scan with fewer than one bit
+  per sample is refused before its samples are allocated, so 4396 bytes
+  declaring 5792×5792 no longer allocate 319 MB to produce 67 MB of invented
+  samples. A component that no scan covers is refused rather than returned as
+  zeros.
+
+- **The fuzz job no longer fails at random** (#177). Go's fuzz coordinator stops
+  when `-fuzztime` expires and can keep that expiry as the run's error, because
+  it checks it against the workers' context a moment before that context is
+  canceled too. A target that fuzzed its whole budget without finding anything
+  was then reported as `context deadline exceeded`, with no input written, and
+  passed on a re-run. Exactly that outcome is now a warning; a crash, a hang, or
+  an expiry that wrote an input still fails the job.
+
+- **A de-identified UID keeps nothing of the original** (#211). The
+  anonymizer built a replacement by keeping the original's first three
+  components as a root and appending a random number, so a UID of three
+  components or fewer, every `2.25` UID among them, survived whole inside its
+  replacement: the original could be read off the de-identified data. The cut
+  to 64 characters then returned a 64-character original unchanged and a
+  63-character one ending in a dot. A replacement is now a fresh UUID-derived
+  UID (`2.25.` and a random 128-bit number, PS3.5 B.2). The generator moved to
+  `uid.Generate`, which `network.GenerateUID` now calls.
+
+- **De-identification keeps no SR free text and no unsafe private
+  attribute** (#212). Content Sequence (0040,A730) is D in PS3.15 Table
+  E.1-1, but the walk went into it as into any sequence, and Text Value is not
+  in the table, so an SR's free text survived every profile: across pydicom's
+  corpus, `test-SR.dcm` kept 89 values, its findings among them. A sequence
+  marked D is now emptied, and `CleanStructuredContentProfile`, which had no
+  code at all, keeps the coded tree and empties the free values (Text Value,
+  Person Name, dates, times, UIDs). `RetainSafePrivateProfile` switched
+  private-tag removal off altogether, keeping a vendor field that held the
+  patient's name and ID; it now keeps only the 479 attributes Table E.3.10-1
+  lists, generated by `scripts/safe-private-table.py`. And Dose Calculation
+  Model Name (3004,007F), the one Table E.1-1 row the package was missing, is
+  removed. The values left in the corpus after de-identification fall from 745
+  to 453, and none is identifying.
+
+- **A de-identified data set says it was de-identified, and keeps no link
+  back through its UIDs** (#213). Nothing wrote Patient Identity Removed
+  (0012,0062) or the method, which PS3.15 E.1.1 requires, so a downstream
+  system could not tell. `Anonymize` now sets it to YES and records the profile
+  and option in (0012,0063) and (0012,0064), with CID 7050 codes.
+  `RetainUIDsProfile` kept only the four UIDs of an old table, so a Referenced
+  SOP Instance UID or Frame of Reference UID was remapped while the instance it
+  points at kept its UID. It now keeps every UID the Basic Profile remaps.
+  `GetDataset` leaves out the file meta, so its Media Storage SOP Instance UID
+  kept the original. `AnonymizeFileMeta` and `RemapUID` give it the same new
+  UID. The docs said Patient Name becomes ANONYMOUS and Patient ID a random
+  ID; both are emptied, as Table E.1-1 says.
+
+- **Written files are conformant in three more places** (#215).
+  - UR was padded with NUL, so pydicom read the NUL back as part of the URI.
+    PS3.5 6.2 pads it with a space, and both writers now do.
+  - Implementation Class UID (0002,0012), Type 1 in PS3.10, was written only
+    when the caller set one. A meta that does not name one now gets this
+    library's, `uid.ImplementationClassUID`, with its version name. The
+    network's `DefaultImplementationClassUID` and
+    `DefaultImplementationVersionName` are now the same constants.
+  - DICOMDIR records carried no Specific Character Set, so a Japanese name
+    read as mojibake, and every instance was an IMAGE record. Each record now
+    copies its instance's character set. SR documents, RT plans, doses,
+    structure sets and treatment records, presentation states, waveforms,
+    key object documents, encapsulated documents and the rest of pydicom's
+    list get their own record type (PS3.3 F.5), with that type's keys,
+    sequences included.
+  - `scripts/roundtrip-check` keeps the source's implementation fields, since
+    a DICOMDIR's record offsets count from the start of the file and a meta of
+    another length moves every record.
+
+- **What a peer sends is bounded** (#208). A P-DATA-TF longer than the
+  Maximum Length this side advertised was accepted, though PS3.8 D.1 makes
+  that the bound, and the fragments of a message were appended until one was
+  marked last, so a peer that never marked one grew the buffer without limit.
+  Such a PDU is now refused before its body is read, and the association
+  aborted. So is a command set over 1 MiB, a message whose fragments switch
+  presentation context or kind, and a data set over
+  `NetworkConfig.MaxDataSetSize`, a new setting with no limit by default.
+
+- **The association state machine aborts and answers as PS3.8 requires**
+  (#209). P-DATA on a presentation context that was never accepted reached
+  the handler, decoded as Implicit VR Little Endian; it is now aborted (PS3.8
+  9.3.5). An A-ASSOCIATE-RQ, AC or RJ on an established association, or a PDU
+  of an unknown type, closed the connection without saying why; it now gets
+  an A-ABORT naming an unexpected or unrecognized PDU (Table 9-10, AA-8).
+  When the peer released as the SCU did, `Release` failed and the peer never
+  got its A-RELEASE-RP. The collision is now answered as PS3.8 9.2.7 orders
+  it, and P-DATA still arriving during a release is set aside. A message
+  whose fragments switch context or kind was already aborted by #208.
+
 ## [1.6.0] - 2026-09-20
 
 ### Added
@@ -1535,7 +1910,9 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
+[1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/amrshadid/go-dicom/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/amrshadid/go-dicom/compare/v1.2.0...v1.3.0

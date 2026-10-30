@@ -16,21 +16,28 @@ import (
 // QRSCPCommand implements the qrscp CLI command — a combined Verification,
 // Storage, and Query/Retrieve SCP. Equivalent to pynetdicom's qrscp.
 type QRSCPCommand struct {
+	tls       tlsFlags
 	aeTitle   string
 	port      int
 	outputDir string
 	moveDests string
+	// tlsOutbound puts the associations qrscp opens itself on TLS too.
+	tlsOutbound bool
 }
 
 func (c *QRSCPCommand) Name() string        { return "qrscp" }
 func (c *QRSCPCommand) Description() string { return "DICOM Query/Retrieve SCP (store + find + move)" }
 
 func (c *QRSCPCommand) AddFlags(fs *flag.FlagSet) {
+	addServerTLSFlags(fs, &c.tls)
 	fs.StringVar(&c.aeTitle, "aet", "QRSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 	fs.StringVar(&c.outputDir, "output", "./received", "Storage directory for received instances")
 	fs.StringVar(&c.moveDests, "move-dest", "",
 		"C-MOVE destinations as AETITLE=host:port, comma separated (e.g. DEST=127.0.0.1:11113)")
+	fs.BoolVar(&c.tlsOutbound, "tls-outbound", false,
+		"Open C-MOVE and storage commitment associations over TLS too, presenting -tls-cert "+
+			"(which must then allow client authentication) and verifying against -tls-ca")
 }
 
 // parseMoveDestinations turns the -move-dest flag into an AE title to address
@@ -61,6 +68,19 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	tlsCfg, err := c.tls.config()
+	if err != nil {
+		return err
+	}
+	// The peers qrscp calls are verified against the same CA its clients are,
+	// and see the same certificate.
+	var outboundTLS *network.TLSConfig
+	if c.tlsOutbound {
+		if tlsCfg == nil {
+			return fmt.Errorf("-tls-outbound needs -tls")
+		}
+		outboundTLS = &network.TLSConfig{CertFile: tlsCfg.CertFile, KeyFile: tlsCfg.KeyFile, CAFile: tlsCfg.CAFile}
+	}
 
 	// The store writes the instances, indexes them, and answers the queries.
 	//
@@ -80,6 +100,8 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	}
 
 	scp := network.NewSCP(network.SCPConfig{
+		TLS:              tlsCfg,
+		OutboundTLS:      outboundTLS,
 		AETitle:          c.aeTitle,
 		Port:             c.port,
 		MoveDestinations: moveDests,

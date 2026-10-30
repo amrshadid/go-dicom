@@ -161,11 +161,21 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 		return NewAssociationError("ALREADY_ASSOCIATED", "already associated")
 	}
 
-	transport, err := Dial(ctx, s.config.Address, s.config.Network.NetworkTimeout)
+	var transport *Transport
+	var err error
+	if s.config.TLS != nil {
+		transport, err = DialTLS(ctx, s.config.Address, s.config.Network.NetworkTimeout, s.config.TLS)
+	} else {
+		transport, err = Dial(ctx, s.config.Address, s.config.Network.NetworkTimeout)
+	}
 	if err != nil {
 		return err
 	}
 
+	// The caller's context alone left an SCU waiting on a silent peer for as
+	// long as it ran, forever with context.Background (#206): the response to
+	// the request has ARTIM, and each PDU after it DIMSETimeout.
+	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
 	s.association = NewAssociation(transport)
 
 	if contexts == nil {
@@ -189,6 +199,8 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 		window = agreed.MaxOperationsInvoked
 	}
 	s.slots = newOperationSlots(window)
+	s.association.setMaxDataSetSize(s.config.Network.MaxDataSetSize)
+	transport.SetReadTimeout(s.config.Network.DIMSETimeout)
 
 	return nil
 }
@@ -1146,6 +1158,8 @@ func (s *SCU) Release(ctx context.Context) error {
 		return nil
 	}
 
+	// The A-RELEASE-RP is awaited under ARTIM, as the A-ASSOCIATE-AC is.
+	assoc.transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
 	err := assoc.Release(ctx)
 	s.mu.Lock()
 	s.association = nil

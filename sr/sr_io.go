@@ -4,12 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/amrshadid/go-dicom/dataelem"
-	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/filewriter"
-	"github.com/amrshadid/go-dicom/tag"
 	"github.com/amrshadid/go-dicom/uid"
 )
 
@@ -41,8 +38,9 @@ func ReadSRFile(filename string) (*StructuredReport, error) {
 		return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 	}
 
-	// Convert the DICOM file to dataset
-	ds := convertDICOMFileToDataset(dicomFile)
+	// convertDICOMFileToDataset returned an empty data set whatever the file
+	// held, so every report read came back empty (#216).
+	ds := dicomFile.GetDataset()
 
 	// Convert the dataset to StructuredReport
 	report, err := FromDataset(ds)
@@ -53,7 +51,8 @@ func ReadSRFile(filename string) (*StructuredReport, error) {
 	return report, nil
 }
 
-// WriteSRFile writes a StructuredReport to a DICOM file.
+// WriteSRFile writes a StructuredReport to a DICOM file, as the SR document
+// ToDataset builds.
 func WriteSRFile(filename string, report *StructuredReport) error {
 	if filename == "" {
 		return fmt.Errorf("filename is empty")
@@ -78,132 +77,34 @@ func WriteSRFile(filename string, report *StructuredReport) error {
 		return fmt.Errorf("failed to convert report to dataset: %w", err)
 	}
 
-	if ds == nil {
-		return fmt.Errorf("failed to create dataset")
-	}
-
-	// Create output file
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create output file '%s': %w", filename, err)
 	}
 	defer file.Close()
 
-	// Create a filebase writer wrapper
 	baseWriter := filebase.NewFileWriter(file)
 	defer baseWriter.Close()
-
-	// Create DICOM file writer
 	writer := filewriter.NewDICOMFileWriter(baseWriter)
 
-	// Set file meta information
-	metaInfo := &filewriter.FileMetaInfo{
+	// The library's own Implementation Class UID, which the writer supplies.
+	// The one written here was under a root this project does not own.
+	writer.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    report.SOPClassUID,
 		MediaStorageSOPInstanceUID: report.SOPInstanceUID,
 		TransferSyntaxUID:          uid.ExplicitVRLittleEndian().String(),
-		ImplementationClassUID:     "1.2.826.0.1.3680043.8.498.0",
-		ImplementationVersionName:  "GOSRDICOM001",
+	})
+
+	// ElementsFromDataset writes sequences with their items and every value
+	// of a list; the conversion this replaced kept the first value and wrote
+	// sequences empty (#216).
+	if err := writer.AddDataElements(filewriter.ElementsFromDataset(ds)); err != nil {
+		return fmt.Errorf("failed to add data elements: %w", err)
 	}
-	writer.SetFileMetaInfo(metaInfo)
-
-	// Convert dataset elements to filewriter format and add them
-	allElements := ds.GetAll()
-	for _, elem := range allElements {
-		// Convert dataelem.DataElement to filewriter.DataElement
-		fwElem, err := convertDataElement(elem)
-		if err != nil {
-			// Skip elements that can't be converted, log warning
-			fmt.Printf("Warning: skipping element: %v\n", err)
-			continue
-		}
-
-		// Add to writer
-		if err := writer.AddDataElement(fwElem); err != nil {
-			return fmt.Errorf("failed to add data element: %w", err)
-		}
-	}
-
-	// Write the complete DICOM file
 	if err := writer.Write(); err != nil {
 		return fmt.Errorf("failed to write DICOM file: %w", err)
 	}
-
 	return nil
-}
-
-// convertDataElement converts a dataelem.DataElement to filewriter.DataElement.
-func convertDataElement(elem *dataelem.DataElement) (*filewriter.DataElement, error) {
-	if elem == nil {
-		return nil, fmt.Errorf("element is nil")
-	}
-
-	// Get tag
-	var t tag.Tag
-	tagIface := elem.GetTag()
-	if tagAsTag, ok := tagIface.(tag.Tag); ok {
-		t = tagAsTag
-	} else {
-		return nil, fmt.Errorf("invalid tag type")
-	}
-
-	// Get VR
-	vr := string(elem.GetVR())
-	if vr == "" {
-		return nil, fmt.Errorf("element VR is empty")
-	}
-
-	// Get value as bytes
-	value := serializeElementValue(elem.GetValue())
-	if value == nil {
-		value = []byte{}
-	}
-
-	return &filewriter.DataElement{
-		Tag:    t,
-		VR:     vr,
-		Value:  value,
-		Length: uint32(len(value)),
-	}, nil
-}
-
-// serializeElementValue converts element values to bytes.
-func serializeElementValue(value interface{}) []byte {
-	if value == nil {
-		return []byte{}
-	}
-
-	switch v := value.(type) {
-	case []byte:
-		return v
-	case string:
-		return []byte(v)
-	case []string:
-		if len(v) > 0 {
-			return []byte(v[0])
-		}
-		return []byte{}
-	case []interface{}:
-		if len(v) > 0 {
-			if str, ok := v[0].(string); ok {
-				return []byte(str)
-			}
-			if b, ok := v[0].([]byte); ok {
-				return b
-			}
-		}
-		return []byte{}
-	default:
-		// For other types, convert to string
-		return []byte(fmt.Sprintf("%v", v))
-	}
-}
-
-// convertDICOMFileToDataset converts a DICOMFile to a Dataset.
-func convertDICOMFileToDataset(dicomFile *filereader.DICOMFile) *dataset.Dataset {
-	if dicomFile == nil {
-		return dataset.NewDataset()
-	}
-	return dataset.NewDataset()
 }
 
 // ValidateAndWriteSRFile validates a report and writes it to a file.

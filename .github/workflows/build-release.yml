@@ -159,6 +159,11 @@ jobs:
           echo "$NOTES" >> $GITHUB_OUTPUT
           echo "CHANGELOG_EOF" >> $GITHUB_OUTPUT
 
+      # The binaries embed GDCM's private dictionary, and its BSD license
+      # requires the notice in the materials distributed with them (#188).
+      - name: Include the licenses
+        run: cp LICENSE THIRD_PARTY_NOTICES release/
+
       - name: Create checksums
         working-directory: release
         run: |

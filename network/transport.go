@@ -15,6 +15,30 @@ type Transport struct {
 	mu         sync.Mutex
 	maxPDUSize uint32
 	closed     bool
+
+	// receiveLimit is the Maximum Length this side advertised, which bounds
+	// each P-DATA-TF it reads (#208). Zero is no bound.
+	receiveLimit uint32
+
+	// readTimeout bounds each ReadPDU: ARTIM until an association is
+	// established, DIMSETimeout after. Zero is no bound.
+	readTimeout time.Duration
+}
+
+// SetReadTimeout bounds how long each ReadPDU waits for a whole PDU, whatever
+// the caller's context. Zero or less removes the bound.
+func (t *Transport) SetReadTimeout(d time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.readTimeout = d
+}
+
+// noReadTimeoutKey marks a context whose reads are not bounded by the read
+// timeout: the C-CANCEL watcher's, which waits for as long as an operation runs.
+type noReadTimeoutKey struct{}
+
+func withoutReadTimeout(ctx context.Context) context.Context {
+	return context.WithValue(ctx, noReadTimeoutKey{}, true)
 }
 
 // NewTransport creates a new Transport wrapping an existing connection.
@@ -85,11 +109,22 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 		return nil, NewCommunicationError("CLOSED", "transport is closed", nil)
 	}
 
-	// Set read deadline from context
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := t.conn.SetReadDeadline(deadline); err != nil {
-			return nil, NewCommunicationError("DEADLINE", "failed to set read deadline", err)
-		}
+	// The earlier of the context's deadline and the read timeout, set on every
+	// read: one left by an earlier read would otherwise still apply. Without
+	// the timeout a peer that stops sending holds the association, and its
+	// slot, for good (#206).
+	t.mu.Lock()
+	timeout := t.readTimeout
+	t.mu.Unlock()
+	var deadline time.Time
+	if timeout > 0 && ctx.Value(noReadTimeoutKey{}) == nil {
+		deadline = time.Now().Add(timeout)
+	}
+	if ctxDeadline, ok := ctx.Deadline(); ok && (deadline.IsZero() || ctxDeadline.Before(deadline)) {
+		deadline = ctxDeadline
+	}
+	if err := t.conn.SetReadDeadline(deadline); err != nil {
+		return nil, NewCommunicationError("DEADLINE", "failed to set read deadline", err)
 	}
 
 	// A deadline alone does not make this cancellable: a context with no
@@ -110,7 +145,10 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 		defer stop()
 	}
 
-	pdu, err := DecodePDU(t.conn)
+	t.mu.Lock()
+	limit := t.receiveLimit
+	t.mu.Unlock()
+	pdu, err := decodePDU(t.conn, limit)
 	if err != nil {
 		// errors.As, not a type assertion: DecodePDU wraps the network error in
 		// its own, so asserting on the returned value never matched and no read
@@ -125,12 +163,23 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return nil, ctxErr
 			}
+			if timeout > 0 {
+				return nil, NewTimeoutError("read", fmt.Sprintf("no PDU from the peer within %v", timeout))
+			}
 			return nil, NewTimeoutError("read", "read operation timed out")
 		}
 		return nil, err
 	}
 
 	return pdu, nil
+}
+
+// SetReceiveLimit sets the Maximum Length this side advertised. A P-DATA-TF
+// longer than it is refused before its body is read.
+func (t *Transport) SetReceiveLimit(maxLength uint32) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.receiveLimit = maxLength
 }
 
 // SetMaxPDUSize updates the maximum PDU size (typically after negotiation).
@@ -234,6 +283,13 @@ func (l *Listener) Close() error {
 	}
 	l.closed = true
 	return l.listener.Close()
+}
+
+// isClosed reports whether Close has been called.
+func (l *Listener) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
 }
 
 // Addr returns the listener's address.

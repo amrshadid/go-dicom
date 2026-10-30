@@ -103,20 +103,32 @@ log.Fatal(scp.ListenAndServe(ctx))
 
 ### TLS Encrypted Communication
 
+Set `TLS` on the configuration and every association goes over TLS: `Associate`
+and all the operations on an `SCU`, `ListenAndServe` and `StartServer` on an SCP.
+
 ```go
-// SCU with TLS
-transport, err := network.DialTLS(ctx, "pacs:2762", 30*time.Second, &network.TLSConfig{
-    CertFile:   "client.crt",
-    KeyFile:    "client.key",
-    ServerName: "pacs.hospital.com",
+// SCU with TLS, verifying the PACS against a private CA and presenting a
+// client certificate for mutual TLS
+scu := network.NewSCU(network.SCUConfig{
+    CallingAE: "MY_APP", CalledAE: "PACS", Address: "pacs.hospital.com:2762",
+    TLS: &network.TLSConfig{
+        CertFile: "client.crt",
+        KeyFile:  "client.key",
+        CAFile:   "hospital-ca.crt",
+    },
 })
 
-// SCP with TLS
-ln, err := network.ListenTLS("0.0.0.0:2762", &network.TLSConfig{
-    CertFile: "server.crt",
-    KeyFile:  "server.key",
+// SCP with TLS. With CAFile set, a client must present a certificate issued
+// by that CA. OutboundTLS covers the associations the SCP opens itself:
+// C-MOVE sub-operations, storage commitment results and UPS events.
+scp := network.NewSCP(network.SCPConfig{
+    AETitle: "ARCHIVE", Port: 2762,
+    TLS:         &network.TLSConfig{CertFile: "server.crt", KeyFile: "server.key", CAFile: "hospital-ca.crt"},
+    OutboundTLS: &network.TLSConfig{CertFile: "server.crt", KeyFile: "server.key", CAFile: "hospital-ca.crt"},
 })
 ```
+
+`DialTLS` and `ListenTLS` remain for code that works with a `Transport` directly.
 
 ## Handler Patterns
 
