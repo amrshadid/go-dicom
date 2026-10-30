@@ -2,6 +2,7 @@ package sr
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -9,275 +10,104 @@ import (
 	"github.com/amrshadid/go-dicom/tag"
 )
 
-// ToDataset converts a StructuredReport to a DICOM Dataset.
+// ToDataset converts a StructuredReport to an SR document.
+//
+// The data set carries the modules every SR IOD requires (PS3.3 A.35):
+// Patient, General Study, SR Document Series, General Equipment, SR Document
+// General, SOP Common and SR Document Content, with the report itself as the
+// content tree. Type 2 attributes the report has no value for are written
+// empty, as the standard says to. It used to hold none of these but the
+// UIDs, a (0002,0000) element that belongs to the file meta alone, and the
+// count of findings where a code belongs, so dcmtk refused it (#216).
 func (sr *StructuredReport) ToDataset() (*dataset.Dataset, error) {
 	if sr == nil {
 		return nil, fmt.Errorf("structured report is nil")
 	}
+	sr.mu.RLock()
+	defer sr.mu.RUnlock()
+
+	created := sr.CreationTime
+	if created.IsZero() {
+		created = time.Now()
+	}
+	date, clock := created.Format("20060102"), created.Format("150405")
 
 	ds := dataset.NewDataset()
-
-	// Add file meta information tags
-	if err := addFileMetaElements(ds); err != nil {
-		return nil, fmt.Errorf("failed to add file meta elements: %w", err)
+	if !isASCII(sr.PatientName) || !reportIsASCII(sr.ReportContent) {
+		addString(ds, tag.New(0x0008, 0x0005), dataelem.CS, "ISO_IR 192")
 	}
 
-	// Add patient module elements
-	if err := addPatientElements(ds, sr); err != nil {
-		return nil, fmt.Errorf("failed to add patient elements: %w", err)
-	}
+	// SOP Common
+	addString(ds, tag.New(0x0008, 0x0016), dataelem.UI, sr.SOPClassUID)
+	addString(ds, tag.New(0x0008, 0x0018), dataelem.UI, sr.SOPInstanceUID)
+	addString(ds, tag.New(0x0008, 0x0012), dataelem.DA, date)
+	addString(ds, tag.New(0x0008, 0x0013), dataelem.TM, clock)
 
-	// Add study module elements
-	if err := addStudyElements(ds, sr); err != nil {
-		return nil, fmt.Errorf("failed to add study elements: %w", err)
-	}
+	// General Study
+	addRequired(ds, tag.New(0x0020, 0x000D), dataelem.UI, sr.StudyInstanceUID)
+	addString(ds, tag.New(0x0008, 0x0020), dataelem.DA, date)
+	addString(ds, tag.New(0x0008, 0x0030), dataelem.TM, clock)
+	addEmpty(ds, tag.New(0x0008, 0x0050), dataelem.SH) // Accession Number
+	addEmpty(ds, tag.New(0x0008, 0x0090), dataelem.PN) // Referring Physician's Name
+	addEmpty(ds, tag.New(0x0020, 0x0010), dataelem.SH) // Study ID
 
-	// Add series module elements
-	if err := addSeriesElements(ds, sr); err != nil {
-		return nil, fmt.Errorf("failed to add series elements: %w", err)
-	}
+	// Patient
+	addRequired(ds, tag.New(0x0010, 0x0010), dataelem.PN, sr.PatientName)
+	addRequired(ds, tag.New(0x0010, 0x0020), dataelem.LO, sr.PatientID)
+	addEmpty(ds, tag.New(0x0010, 0x0030), dataelem.DA) // Patient's Birth Date
+	addEmpty(ds, tag.New(0x0010, 0x0040), dataelem.CS) // Patient's Sex
 
-	// Add SOP common module elements
-	if err := addSOPCommonElements(ds, sr); err != nil {
-		return nil, fmt.Errorf("failed to add SOP common elements: %w", err)
-	}
+	// SR Document Series
+	addString(ds, tag.New(0x0008, 0x0060), dataelem.CS, "SR")
+	addRequired(ds, tag.New(0x0020, 0x000E), dataelem.UI, sr.SeriesInstanceUID)
+	addString(ds, tag.New(0x0020, 0x0011), dataelem.IS, "1")
+	addEmpty(ds, tag.New(0x0008, 0x1111), dataelem.SQ) // Referenced Performed Procedure Step Sequence
 
-	// Add SR document content elements
-	if err := addSRDocumentElements(ds, sr); err != nil {
-		return nil, fmt.Errorf("failed to add SR document elements: %w", err)
-	}
+	// General Equipment
+	addEmpty(ds, tag.New(0x0008, 0x0070), dataelem.LO) // Manufacturer
 
+	// SR Document General
+	addString(ds, tag.New(0x0020, 0x0013), dataelem.IS, "1")
+	addString(ds, tag.New(0x0040, 0xA491), dataelem.CS, "COMPLETE")
+	addString(ds, tag.New(0x0040, 0xA493), dataelem.CS, "UNVERIFIED")
+	addString(ds, tag.New(0x0008, 0x0023), dataelem.DA, date)
+	addString(ds, tag.New(0x0008, 0x0033), dataelem.TM, clock)
+	addEmpty(ds, tag.New(0x0040, 0xA372), dataelem.SQ) // Performed Procedure Code Sequence
+
+	// SR Document Content
+	if err := WriteContentTree(ds, sr.contentTree()); err != nil {
+		return nil, fmt.Errorf("writing the content tree: %w", err)
+	}
 	return ds, nil
 }
 
-// addFileMetaElements adds file meta information.
-func addFileMetaElements(ds *dataset.Dataset) error {
-	groupLengthElem := dataelem.NewDataElement(
-		tag.New(0x0002, 0x0000),
-		dataelem.UL,
-		[]interface{}{0},
-	)
-	if err := ds.Add(groupLengthElem); err != nil {
-		return err
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
 	}
-	return nil
+	return true
 }
 
-// addPatientElements adds patient module elements.
-func addPatientElements(ds *dataset.Dataset, sr *StructuredReport) error {
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
-
-	// Patient's Name (0010,0010)
-	if sr.PatientName != "" {
-		nameElem := dataelem.NewDataElement(
-			tag.New(0x0010, 0x0010),
-			dataelem.PN,
-			[]interface{}{sr.PatientName},
-		)
-		if err := ds.Add(nameElem); err != nil {
-			return err
+func reportIsASCII(content *ReportContent) bool {
+	if content == nil {
+		return true
+	}
+	var text []string
+	for _, f := range content.Findings {
+		text = append(text, f.ID, f.Description, f.Severity, f.Location)
+	}
+	for _, o := range content.Observations {
+		text = append(text, o.Code, o.Value, o.Unit)
+	}
+	text = append(text, content.Conclusions...)
+	for _, t := range text {
+		if !isASCII(t) {
+			return false
 		}
 	}
-
-	// Patient ID (0010,0020)
-	if sr.PatientID != "" {
-		idElem := dataelem.NewDataElement(
-			tag.New(0x0010, 0x0020),
-			dataelem.LO,
-			[]interface{}{sr.PatientID},
-		)
-		if err := ds.Add(idElem); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// addStudyElements adds study module elements.
-func addStudyElements(ds *dataset.Dataset, sr *StructuredReport) error {
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
-
-	// Study Instance UID (0020,000D)
-	if sr.StudyInstanceUID != "" {
-		studyUID := dataelem.NewDataElement(
-			tag.New(0x0020, 0x000D),
-			dataelem.UI,
-			[]interface{}{sr.StudyInstanceUID},
-		)
-		if err := ds.Add(studyUID); err != nil {
-			return err
-		}
-	}
-
-	// Study Date (0008,0020) - Use creation time
-	if !sr.CreationTime.IsZero() {
-		studyDate := sr.CreationTime.Format("20060102")
-		dateElem := dataelem.NewDataElement(
-			tag.New(0x0008, 0x0020),
-			dataelem.DA,
-			[]interface{}{studyDate},
-		)
-		if err := ds.Add(dateElem); err != nil {
-			return err
-		}
-
-		// Study Time (0008,0030)
-		studyTime := sr.CreationTime.Format("150405.000000")
-		timeElem := dataelem.NewDataElement(
-			tag.New(0x0008, 0x0030),
-			dataelem.TM,
-			[]interface{}{studyTime},
-		)
-		if err := ds.Add(timeElem); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// addSeriesElements adds series module elements.
-func addSeriesElements(ds *dataset.Dataset, sr *StructuredReport) error {
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
-
-	// Series Instance UID (0020,000E)
-	if sr.SeriesInstanceUID != "" {
-		seriesUID := dataelem.NewDataElement(
-			tag.New(0x0020, 0x000E),
-			dataelem.UI,
-			[]interface{}{sr.SeriesInstanceUID},
-		)
-		if err := ds.Add(seriesUID); err != nil {
-			return err
-		}
-	}
-
-	// Series Number (0020,0011)
-	seriesNumElem := dataelem.NewDataElement(
-		tag.New(0x0020, 0x0011),
-		dataelem.IS,
-		[]interface{}{"1"},
-	)
-	if err := ds.Add(seriesNumElem); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// addSOPCommonElements adds SOP common module elements.
-func addSOPCommonElements(ds *dataset.Dataset, sr *StructuredReport) error {
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
-
-	// SOP Class UID (0008,0016)
-	if sr.SOPClassUID != "" {
-		sopClassElem := dataelem.NewDataElement(
-			tag.New(0x0008, 0x0016),
-			dataelem.UI,
-			[]interface{}{sr.SOPClassUID},
-		)
-		if err := ds.Add(sopClassElem); err != nil {
-			return err
-		}
-	}
-
-	// SOP Instance UID (0008,0018)
-	if sr.SOPInstanceUID != "" {
-		sopInstanceElem := dataelem.NewDataElement(
-			tag.New(0x0008, 0x0018),
-			dataelem.UI,
-			[]interface{}{sr.SOPInstanceUID},
-		)
-		if err := ds.Add(sopInstanceElem); err != nil {
-			return err
-		}
-	}
-
-	// Instance Creation Date (0008,0012)
-	if !sr.CreationTime.IsZero() {
-		creationDate := sr.CreationTime.Format("20060102")
-		dateElem := dataelem.NewDataElement(
-			tag.New(0x0008, 0x0012),
-			dataelem.DA,
-			[]interface{}{creationDate},
-		)
-		if err := ds.Add(dateElem); err != nil {
-			return err
-		}
-
-		// Instance Creation Time (0008,0013)
-		creationTime := sr.CreationTime.Format("150405.000000")
-		timeElem := dataelem.NewDataElement(
-			tag.New(0x0008, 0x0013),
-			dataelem.TM,
-			[]interface{}{creationTime},
-		)
-		if err := ds.Add(timeElem); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// addSRDocumentElements adds SR-specific document elements.
-func addSRDocumentElements(ds *dataset.Dataset, sr *StructuredReport) error {
-	sr.mu.RLock()
-	defer sr.mu.RUnlock()
-
-	if sr.ReportContent == nil {
-		return nil
-	}
-
-	// Add findings count (0040,A043)
-	findingCount := len(sr.ReportContent.Findings)
-	if findingCount > 0 {
-		findingsElem := dataelem.NewDataElement(
-			tag.New(0x0040, 0xA043),
-			dataelem.IS,
-			[]interface{}{fmt.Sprintf("%d", findingCount)},
-		)
-		if err := ds.Add(findingsElem); err != nil {
-			return err
-		}
-
-		// Add first finding details
-		if len(sr.ReportContent.Findings) > 0 {
-			finding := sr.ReportContent.Findings[0]
-			if finding.Description != "" {
-				descElem := dataelem.NewDataElement(
-					tag.New(0x0008, 0x1030),
-					dataelem.LO,
-					[]interface{}{finding.Description},
-				)
-				if err := ds.Add(descElem); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	// Add conclusions
-	if len(sr.ReportContent.Conclusions) > 0 {
-		conclusion := sr.ReportContent.Conclusions[0]
-		if conclusion != "" {
-			concElem := dataelem.NewDataElement(
-				tag.New(0x0040, 0xA160),
-				dataelem.UT,
-				[]interface{}{conclusion},
-			)
-			if err := ds.Add(concElem); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
+	return true
 }
 
 // FromDataset converts a DICOM Dataset to a StructuredReport.
@@ -344,7 +174,14 @@ func FromDataset(ds *dataset.Dataset) (*StructuredReport, error) {
 		report.CreationTime = creationTime
 	}
 
-	// Extract findings description if present
+	// An SR document says what it says in its content tree, whether this
+	// package wrote it or something else did (#216).
+	if root, err := ReadContentTree(ds); err == nil {
+		report.ReportContent = readReportContent(root)
+		return report, nil
+	}
+
+	// A data set with no tree: what the package's earlier ToDataset wrote.
 	if elem, ok := ds.Get(tag.New(0x0008, 0x1030)); ok {
 		if value, err := extractStringValue(elem); err == nil && value != "" {
 			report.ReportContent.Findings = append(report.ReportContent.Findings, Finding{
@@ -426,6 +263,10 @@ func extractStringValue(elem *dataelem.DataElement) (string, error) {
 
 	// Handle different value types
 	switch v := values.(type) {
+	case []byte:
+		// What a data set read from a file holds. Without this case nothing
+		// was extracted from one, and ReadSRFile returned an empty report.
+		return strings.TrimRight(string(v), " \x00"), nil
 	case string:
 		return v, nil
 	case []interface{}:

@@ -74,6 +74,21 @@ Nothing yet.
 
 ### Fixed
 
+- **Structured reports round-trip, and the ones this library writes are
+  conformant** (#216). `WriteContentTree` wrote each item from the tree's
+  fields alone, so a document read and written back lost what the fields do
+  not model: across pydicom's test-SR.dcm, 38 of 201 attributes, among them an
+  SCOORD's GraphicData, which made dcmtk refuse the file. It now keeps what
+  each item was read with, and writes from the fields only what was changed;
+  all three SR documents in pydicom's corpus come back unchanged.
+  `StructuredReport.ToDataset`, behind the README's `WriteSRFile`, wrote
+  (0002,0000) into the data set, the number of findings into Concept Name Code
+  Sequence as IS, the first finding into Study Description, and nothing else of
+  the report. It now writes the modules every SR IOD requires and the report
+  as a content tree, which dsrdump accepts as Basic Text, Enhanced and
+  Comprehensive SR. `ReadSRFile` returned an empty report whatever the file
+  held; it reads the file, and `FromDataset` reads the content tree.
+
 - **A failed Associate closes the connection it opened** (#210). A rejected,
   aborted or timed-out request left its socket to the garbage collector, so
   200 rejected calls held 200 descriptors open with `GOGC=off`, and a client

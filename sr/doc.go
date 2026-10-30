@@ -11,11 +11,6 @@
 // They combine the semantic richness of coded concepts with the flexibility of
 // structured templates.
 //
-// Writing is not yet conformant (#216). [WriteSRFile] writes files dcmtk
-// refuses, and [WriteContentTree] drops the attributes the content tree does
-// not model, so a document read and written back is not the same document.
-// Reading is unaffected.
-//
 // # Key Features
 //
 //   - **Basic SR Support**: Create and manage structured reports with findings,
@@ -35,7 +30,7 @@
 // Represents a complete DICOM Structured Report containing patient information,
 // clinical content, and metadata.
 //
-//	sr := sr.NewStructuredReport("1.2.3.4.5", "1.2.840.10008.5.1.4.1.1.66.4")
+//	sr := sr.NewStructuredReport("1.2.3.4.5", "1.2.840.10008.5.1.4.1.1.88.33")
 //	sr.PatientName = "Doe^John"
 //	sr.PatientID = "12345"
 //
@@ -97,7 +92,7 @@
 //
 // Provides fluent API for constructing structured reports.
 //
-//	report, _, err := sr.NewSRBuilder("1.2.3", "1.2.840.10008").
+//	report, _, err := sr.NewSRBuilder("1.2.3", "1.2.840.10008.5.1.4.1.1.88.33").
 //	    AddPatientInfo("Doe^John", "12345").
 //	    AddFinding("F1", "Finding", "MAJOR", "Abdomen", 0.9).
 //	    AddConclusion("Further investigation recommended").
@@ -117,7 +112,7 @@
 //
 // ## Step 1: Create the Report
 //
-//	report := sr.NewStructuredReport("1.2.3.4.5", "1.2.840.10008.5.1.4.1.1.66.4")
+//	report := sr.NewStructuredReport("1.2.3.4.5", "1.2.840.10008.5.1.4.1.1.88.33")
 //	report.PatientName = "Smith^Jane"
 //	report.PatientID = "P123456"
 //
@@ -166,7 +161,7 @@
 //
 // ## Using the Builder with Validation
 //
-//	report, validationResult, err := sr.NewSRBuilder("1.2.3", "1.2.840.10008").
+//	report, validationResult, err := sr.NewSRBuilder("1.2.3", "1.2.840.10008.5.1.4.1.1.88.33").
 //	    WithValidator(validator).
 //	    WithTemplate(template).
 //	    AddPatientInfo("Doe^John", "12345").
