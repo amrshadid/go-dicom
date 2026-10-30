@@ -168,7 +168,16 @@ func (a *Anonymizer) anonymizeDataset(ds *dataset.Dataset, depth int) error {
 			// value types it knew, and returned. Every referenced UID inside
 			// survived, in 18 of pydicom's 69 files, each one linking the
 			// de-identified object straight back to the instance it came from.
-			switch a.getDefaultAction(t) {
+			action := a.getDefaultAction(t)
+			// D on a sequence replaces what it holds with nothing identifying,
+			// which for a sequence is no items. Walking into it instead, as
+			// into any other, kept the free text of an SR Content Sequence in
+			// every profile (#212). Clean Structured Content cleans that one
+			// rather than emptying it: the column says C, not D.
+			if action == ActionDummy && !(t == contentSequence && a.profile == CleanStructuredContentProfile) {
+				action = ActionEmpty
+			}
+			switch action {
 			case ActionRemove:
 				ds.Remove(t)
 			case ActionEmpty:
@@ -201,8 +210,12 @@ func (a *Anonymizer) anonymizeDataset(ds *dataset.Dataset, depth int) error {
 	}
 
 	// Private tags carry whatever their vendor put there, which the profile
-	// cannot describe and cannot vouch for.
-	if a.profile != RetainSafePrivateProfile {
+	// cannot describe and cannot vouch for. Retain Safe Private keeps only those
+	// PS3.15 Table E.3.10-1 lists; keeping every one, as it did, kept a vendor
+	// field holding the patient's name and ID (#212).
+	if a.profile == RetainSafePrivateProfile {
+		removeUnsafePrivate(ds)
+	} else {
 		for _, t := range ds.Tags() {
 			if t.IsPrivate() {
 				ds.Remove(t)
@@ -259,6 +272,12 @@ func (a *Anonymizer) getDefaultAction(t tag.Tag) Action {
 			tag.New(0x0018, 0x1020), // SoftwareVersions
 			tag.New(0x0008, 0x1010): // StationName
 			return ActionKeep
+		}
+	case CleanStructuredContentProfile:
+		// The content item attributes that carry free values rather than
+		// codes: what Clean Structured Content cleans (PS3.15 E.3.6).
+		if contentFreeValues[t] {
+			return ActionEmpty
 		}
 	case CleanDescriptorsProfile:
 		// Clean description fields instead of removing them
