@@ -78,7 +78,7 @@ func NewAnonymizer(profile Profile) *Anonymizer {
 }
 
 // SetRetainPatientName controls whether the patient name is retained (true)
-// or replaced with "ANONYMOUS" (false, the default).
+// or emptied as the profile says (false, the default).
 func (a *Anonymizer) SetRetainPatientName(retain bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -86,7 +86,7 @@ func (a *Anonymizer) SetRetainPatientName(retain bool) {
 }
 
 // SetRetainPatientID controls whether the patient ID is retained (true)
-// or replaced with a random identifier (false, the default).
+// or emptied as the profile says (false, the default).
 func (a *Anonymizer) SetRetainPatientID(retain bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -128,7 +128,10 @@ func (a *Anonymizer) Anonymize(ds *dataset.Dataset) error {
 	if ds == nil {
 		return fmt.Errorf("dataset is nil")
 	}
-	return a.anonymizeDataset(ds, 0)
+	if err := a.anonymizeDataset(ds, 0); err != nil {
+		return err
+	}
+	return a.recordMethod(ds)
 }
 
 // maxAnonymizeDepth bounds recursion into nested sequences, which a crafted
@@ -238,7 +241,10 @@ func (a *Anonymizer) getDefaultAction(t tag.Tag) Action {
 	// Profile-specific overrides
 	switch a.profile {
 	case RetainUIDsProfile:
-		if action, ok := basicProfileActions[t]; ok && action == ActionUID {
+		// Every attribute the Basic Profile remaps, not the four the old
+		// table named: a reference remapped while the instance it points at
+		// is kept no longer resolves (#213).
+		if ps315BasicProfile[t] == ActionUID || basicProfileActions[t] == ActionUID {
 			return ActionKeep
 		}
 	case RetainPatientCharsProfile:

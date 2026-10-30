@@ -55,6 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A de-identified data set says it was de-identified, and keeps no link
+  back through its UIDs** (#213). Nothing wrote Patient Identity Removed
+  (0012,0062) or the method, which PS3.15 E.1.1 requires, so a downstream
+  system could not tell. `Anonymize` now sets it to YES and records the profile
+  and option in (0012,0063) and (0012,0064), with CID 7050 codes.
+  `RetainUIDsProfile` kept only the four UIDs of an old table, so a Referenced
+  SOP Instance UID or Frame of Reference UID was remapped while the instance it
+  points at kept its UID. It now keeps every UID the Basic Profile remaps.
+  `GetDataset` leaves out the file meta, so its Media Storage SOP Instance UID
+  kept the original. `AnonymizeFileMeta` and `RemapUID` give it the same new
+  UID. The docs said Patient Name becomes ANONYMOUS and Patient ID a random
+  ID; both are emptied, as Table E.1-1 says.
+
 - **A request whose data set does not decode is refused, not answered
   Success** (#207). A C-STORE whose data set failed to decode was handed to the
   handler as an empty data set and answered 0x0000, so the sender believed an
