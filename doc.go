@@ -52,7 +52,7 @@
 //   - [github.com/amrshadid/go-dicom/network] — SCU and SCP, DIMSE services, PDU
 //     encoding, TLS
 //   - [github.com/amrshadid/go-dicom/tag] — the data dictionary, 5,000+ standard
-//     and 10,500+ private tags
+//     tags and GDCM's private dictionary of 8,858 attributes
 //   - [github.com/amrshadid/go-dicom/anonymize] — de-identification per
 //     DICOM PS3.15 Annex E
 //
