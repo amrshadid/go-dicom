@@ -427,7 +427,8 @@ func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq
 func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosing []*dataset.Dataset) ([]byte, error) {
 	var buf bytes.Buffer
 
-	for _, elem := range ds.GetAll() {
+	// In tag order, as PS3.5 7.1 requires of any encoded data set (#214).
+	for _, elem := range ds.ElementsInTagOrder() {
 		// An element whose tag cannot be read is an error, not something to
 		// skip. Skipping it sent a data set the peer accepted as complete while
 		// an attribute was missing from it — the worst outcome available, since

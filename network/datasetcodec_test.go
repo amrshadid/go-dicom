@@ -498,3 +498,30 @@ func TestEncodeDatasetRefusesAValueItCannotSend(t *testing.T) {
 		}
 	}
 }
+
+// TestEncodeDatasetWritesTagOrder: a data set sent over the network is a data
+// set, which PS3.5 7.1 orders by ascending tag. EncodeDataset wrote elements
+// in the order they were added, as the file writer did (#214). Decoding keeps
+// the order the bytes arrived in, so the round trip shows what was sent.
+func TestEncodeDatasetWritesTagOrder(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0020), dataelem.LO, "PID"))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0018), dataelem.UI, "1.2.3"))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0010, 0x0010), dataelem.PN, "Doe^Jane"))
+	for _, ts := range []string{ExplicitVRLittleEndianUID, ImplicitVRLittleEndianUID} {
+		encoded, err := EncodeDataset(ds, ts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeDataset(encoded, ts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tags := decoded.Tags()
+		for i := 1; i < len(tags); i++ {
+			if tags[i] <= tags[i-1] {
+				t.Errorf("%s: %s sent after %s", ts, tags[i], tags[i-1])
+			}
+		}
+	}
+}
