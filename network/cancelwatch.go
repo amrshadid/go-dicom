@@ -111,7 +111,9 @@ func watchForCancel(ctx context.Context, assoc *Association, messageID uint16) (
 
 	// A separate context stops the watcher's own read without canceling the
 	// operation: finishing normally must not look like a cancellation.
-	readCtx, stop := context.WithCancel(ctx)
+	// Nor is it bounded by the read timeout: no message is expected while the
+	// operation runs, however long that is.
+	readCtx, stop := context.WithCancel(withoutReadTimeout(ctx))
 
 	w := &cancelWatcher{
 		cancel:   cancel,

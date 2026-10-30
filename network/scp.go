@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -160,7 +161,13 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 			default:
 				logger.Warn("association limit (%d) reached, rejecting %s",
 					s.config.MaxAssociations, transport.RemoteAddr())
-				s.rejectOverLimit(ctx, transport)
+				// Not inline: the reply waits on the peer's A-ASSOCIATE-RQ, and
+				// a peer that never sends one stopped the accept loop (#206).
+				s.wg.Add(1)
+				go func() {
+					defer s.wg.Done()
+					s.rejectOverLimit(ctx, transport)
+				}()
 				continue
 			}
 		}
@@ -216,6 +223,7 @@ func (s *SCP) Close() error {
 // having the socket closed without explanation.
 func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	defer transport.Close()
+	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
 
 	// Only an A-ASSOCIATE-RQ can be answered with an A-ASSOCIATE-RJ; anything
 	// else gets the connection closed.
@@ -238,7 +246,9 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 
 	assoc := NewAssociation(transport)
 
-	// Read the A-ASSOCIATE-RQ
+	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
+	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).
+	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
 		// A connection that opens and closes without sending a PDU is not a fault.
@@ -282,6 +292,9 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	}
 
 	assoc.setMaxDataSetSize(s.config.Network.MaxDataSetSize)
+	// Each PDU of the association has DIMSETimeout to arrive, so a peer that
+	// goes quiet, or stops partway through a PDU, gives up its slot.
+	transport.SetReadTimeout(s.config.Network.DIMSETimeout)
 	s.handleAssociation(ctx, assoc, handler, transport, rq)
 }
 
@@ -308,6 +321,12 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 		// Receive a PDU (could be command data or release/abort)
 		ctxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
 		if err != nil {
+			var timeout *TimeoutError
+			if errors.As(err, &timeout) {
+				DefaultLogger.Warn("aborting the association with %s: %v", assoc.CallingAE(), err)
+				_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+				return
+			}
 			if endedNormally(err) {
 				DefaultLogger.Debug("association with %s ended: %v", assoc.CallingAE(), err)
 				return

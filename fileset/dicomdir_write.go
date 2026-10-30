@@ -15,6 +15,7 @@ import (
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/filewriter"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -65,6 +66,13 @@ type DICOMDIROptions struct {
 
 	// SOPInstanceUID identifies the DICOMDIR itself. Generated when empty.
 	SOPInstanceUID string
+
+	// AllowNonConformantFileIDs indexes files whose paths are not valid File
+	// IDs. PS3.10 8.5 allows at most 8 components of at most 8 characters
+	// from A-Z, 0-9 and underscore, so a name like ct.dcm is refused unless
+	// this is set. Such a DICOMDIR indexes a local directory but is not valid
+	// on media.
+	AllowNonConformantFileIDs bool
 }
 
 // GenerateDICOMDIR builds the file-set's index as a data set.
@@ -106,7 +114,7 @@ func (fs *FileSet) WriteDICOMDIR(opts DICOMDIROptions) ([]byte, error) {
 	root := fs.RootDir
 	fs.mu.RUnlock()
 
-	tree, err := buildRecordTree(records, root)
+	tree, err := buildRecordTree(records, root, opts.AllowNonConformantFileIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +175,7 @@ func (fs *FileSet) WriteDICOMDIR(opts DICOMDIROptions) ([]byte, error) {
 }
 
 // buildRecordTree groups the scanned files into the PS3.3 F.5 hierarchy.
-func buildRecordTree(files []*FileRecord, rootDir string) ([]*Record, error) {
+func buildRecordTree(files []*FileRecord, rootDir string, allowNonConformantIDs bool) ([]*Record, error) {
 	type seriesKey struct{ study, series string }
 
 	var roots []*Record
@@ -215,8 +223,8 @@ func buildRecordTree(files []*FileRecord, rootDir string) ([]*Record, error) {
 			study.Children = append(study.Children, series)
 		}
 
-		image := newRecord(RecordImage, file.Dataset)
-		if err := setReferencedFile(image, file, rootDir); err != nil {
+		image := newRecord(leafRecordType(recordString(file.Dataset, tag.New(0x0008, 0x0016))), file.Dataset)
+		if err := setReferencedFile(image, file, rootDir, allowNonConformantIDs); err != nil {
 			return nil, err
 		}
 		series.Children = append(series.Children, image)
@@ -243,9 +251,35 @@ func newRecord(recordType string, source *dataset.Dataset) *Record {
 	_ = ds.Add(dataelem.NewDataElement(tagDirectoryRecordType, dataelem.CS,
 		[]byte(evenLength(recordType))))
 
-	for _, t := range requiredRecordKeys[recordType] {
+	// PS3.3 F.3 makes Specific Character Set Type 1C in a record whose keys
+	// use an extended set. GetDataset gives text as UTF-8 and the set to
+	// match, so the source's is the one the copied keys are in (#215).
+	if elem, ok := source.Get(tagSpecificCharacterSet); ok {
+		if raw, ok := elem.GetValue().([]byte); ok && len(raw) > 0 {
+			_ = ds.Add(dataelem.NewDataElement(tagSpecificCharacterSet, dataelem.CS, raw))
+		}
+	}
+
+	keys, ok := leafRecordKeys[recordType]
+	if !ok {
+		keys = requiredRecordKeys[recordType]
+	}
+	for _, t := range conditionalRecordKeys[recordType] {
+		if elem, ok := source.Get(t); ok {
+			_ = ds.Add(elem)
+		}
+	}
+	for _, t := range keys {
 		value := ""
 		vr := dataelem.VR(t.GetVR())
+		if vr == dataelem.SQ {
+			if elem, ok := source.Get(t); ok {
+				_ = ds.Add(elem)
+			} else {
+				_ = ds.Add(dataelem.NewDataElement(t, dataelem.SQ, sequence.New()))
+			}
+			continue
+		}
 		if elem, ok := source.Get(t); ok {
 			if raw, ok := elem.GetValue().([]byte); ok {
 				value = strings.TrimRight(string(raw), " \x00")
@@ -263,8 +297,8 @@ func newRecord(recordType string, source *dataset.Dataset) *Record {
 	return &Record{Type: recordType, InUse: true, Dataset: ds}
 }
 
-// setReferencedFile fills in the attributes that point an IMAGE record at a file.
-func setReferencedFile(rec *Record, file *FileRecord, rootDir string) error {
+// setReferencedFile fills in the attributes that point a leaf record at a file.
+func setReferencedFile(rec *Record, file *FileRecord, rootDir string, allowNonConformant bool) error {
 	relative := file.FilePath
 	if rootDir != "" {
 		if rel, err := filepath.Rel(rootDir, file.FilePath); err == nil {
@@ -272,6 +306,11 @@ func setReferencedFile(rec *Record, file *FileRecord, rootDir string) error {
 		}
 	}
 	components := strings.Split(filepath.ToSlash(relative), "/")
+	if !allowNonConformant && !conformantFileID(components) {
+		return fmt.Errorf("fileset: %s is not a valid File ID: PS3.10 8.5 allows at most 8 "+
+			"components of at most 8 characters from A-Z, 0-9 and _ (set "+
+			"AllowNonConformantFileIDs to index it anyway)", relative)
+	}
 	rec.ReferencedFileID = components
 
 	// PS3.10 keeps the File ID split into components because the separator
@@ -454,6 +493,13 @@ func recordToWriterItem(ds *dataset.Dataset) (*filewriter.SequenceItem, error) {
 		t, ok := elem.Tag()
 		if !ok {
 			return nil, fmt.Errorf("fileset: a directory record element has an unreadable tag (%T)", elem)
+		}
+		if _, isSeq := elem.GetValue().(*sequence.Sequence); isSeq {
+			// A key such as Concept Name Code Sequence holds items, not bytes.
+			one := dataset.NewDataset()
+			_ = one.Add(elem)
+			converted = append(converted, filewriter.ElementsFromDataset(one)...)
+			continue
 		}
 		raw, _ := elem.GetValue().([]byte)
 		converted = append(converted, &filewriter.DataElement{

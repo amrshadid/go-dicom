@@ -41,10 +41,16 @@ type NetworkConfig struct {
 	// MaxPDUSize is the maximum PDU size to propose during association negotiation.
 	MaxPDUSize uint32
 
-	// ARTIMTimeout is the timeout for the ARTIM timer.
+	// ARTIMTimeout is the ARTIM timer (PS3.8 9.1.5): how long an SCP waits
+	// for the A-ASSOCIATE-RQ on a connection it accepted, and an SCU for the
+	// A-ASSOCIATE-AC or A-RELEASE-RP. Zero is the default; less than zero is
+	// no limit.
 	ARTIMTimeout time.Duration
 
-	// DIMSETimeout is the timeout for DIMSE operations.
+	// DIMSETimeout is how long each PDU of an established association has to
+	// arrive: an SCU waiting for a response, or an SCP waiting for the next
+	// request. An SCP aborts an association that is idle for longer. Zero is
+	// the default; less than zero is no limit.
 	DIMSETimeout time.Duration
 
 	// NetworkTimeout is the timeout for establishing TCP connections.

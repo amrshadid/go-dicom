@@ -7,6 +7,7 @@ import (
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/tag"
+	"github.com/amrshadid/go-dicom/uid"
 )
 
 // seekableBuffer adapts a bytes.Buffer to io.WriteSeeker for the file writer.
@@ -157,6 +158,34 @@ func TestWriteFileMetaInfoUsesCorrectTags(t *testing.T) {
 	}
 }
 
+// TestWriteFileMetaInfoNamesThisImplementation: Implementation Class UID is
+// Type 1 in PS3.10 Table 7.1-1, and it was written only when the caller set
+// it. Without it the meta header was 64 bytes shorter than the one it
+// replaced, which moved every record offset of a DICOMDIR written back (#215).
+func TestWriteFileMetaInfoNamesThisImplementation(t *testing.T) {
+	var sb seekableBuffer
+	w := NewDCMFileWriter(filebase.NewFileWriter(&sb))
+	meta := &FileMetaInfo{
+		MediaStorageSOPClassUID:    "1.2.840.10008.5.1.4.1.1.2",
+		MediaStorageSOPInstanceUID: "1.2.3.4",
+		TransferSyntaxUID:          "1.2.840.10008.1.2.1",
+	}
+	if err := w.WriteFileMetaInfo(meta); err != nil {
+		t.Fatalf("WriteFileMetaInfo: %v", err)
+	}
+
+	byTag := map[tag.Tag]string{}
+	for _, e := range parseExplicitVRElements(t, sb.buf.Bytes()) {
+		byTag[e.Tag] = trimPad(e.Value)
+	}
+	if got := byTag[tag.New(0x0002, 0x0012)]; got != uid.ImplementationClassUID {
+		t.Errorf("Implementation Class UID = %q, want %q", got, uid.ImplementationClassUID)
+	}
+	if got := byTag[tag.New(0x0002, 0x0013)]; got != uid.ImplementationVersionName {
+		t.Errorf("Implementation Version Name = %q, want %q", got, uid.ImplementationVersionName)
+	}
+}
+
 // TestWriteFileMetaInfoPadsToEvenLength verifies every meta value is even
 // length. An odd value silently misaligns everything after it.
 func TestWriteFileMetaInfoPadsToEvenLength(t *testing.T) {
@@ -195,6 +224,9 @@ func TestWriteDataElementPadsOddValues(t *testing.T) {
 		{"UI pads with NUL", "UI", "1.2.3.4.5", 0x00},
 		{"PN pads with space", "PN", "Doe^Jon", ' '},
 		{"LO pads with space", "LO", "ODD", ' '},
+		// PS3.5 6.2 pads UR with a space; pydicom read a NUL back as part of
+		// the URI (#215).
+		{"UR pads with space", "UR", "http://a.b/cd", ' '},
 	}
 
 	for _, tc := range tests {

@@ -107,10 +107,15 @@ func roundTrip(in, out string, asRLE bool) (err error) {
 	defer func() { _ = dst.Close() }()
 
 	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(dst))
+	// The source's implementation is kept, so the meta is as long as it was. A
+	// DICOMDIR's record offsets count from the start of the file, and a meta
+	// of another length moves every record away from them.
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    df.FileMetaInfo.MediaStorageSOPClassUID,
 		MediaStorageSOPInstanceUID: df.FileMetaInfo.MediaStorageSOPInstanceUID,
 		TransferSyntaxUID:          ts,
+		ImplementationClassUID:     df.FileMetaInfo.ImplementationClassUID,
+		ImplementationVersionName:  df.FileMetaInfo.ImplementationVersionName,
 	})
 	for _, e := range filewriter.ElementsFromDataset(ds) {
 		if err := w.AddDataElement(e); err != nil {
