@@ -385,7 +385,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [pixels](./pixels/) | Pixel data access and statistical analysis |
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
-| [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. `StructuredReport` alongside it is a simpler bespoke model, not the DICOM tree. **Not yet conformant on writing:** `WriteSRFile` writes files dcmtk refuses, and writing a tree read from a file drops what the tree does not model ([#216](https://github.com/amrshadid/go-dicom/issues/216)) |
+| [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. A tree read and written back keeps everything it was read with. `StructuredReport` alongside it is a simpler bespoke model, written as a content tree that dcmtk and pydicom read |
 | [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities
