@@ -25,9 +25,15 @@ func TestReplacementUIDKeepsNothingOfTheOriginal(t *testing.T) {
 	a := NewAnonymizer(BasicProfile)
 	for _, original := range originals {
 		replaced := a.generateNewUID(original)
-		components := strings.Split(original, ".")
-		if strings.Contains(replaced, components[len(components)-1]) || strings.Contains(replaced, original) {
-			t.Errorf("%s was replaced by %s, which still contains it", original, replaced)
+		if !strings.HasPrefix(replaced, uid.UUIDDerivedRoot+".") || strings.Contains(replaced, original) {
+			t.Errorf("%s was replaced by %s, which is not a fresh UUID-derived UID", original, replaced)
+		}
+		// Nor any long component of it, which cannot turn up in a random
+		// number by chance the way a short one such as "123" can.
+		for _, component := range strings.Split(original, ".") {
+			if len(component) >= 12 && strings.Contains(replaced, component) {
+				t.Errorf("%s was replaced by %s, which keeps its component %s", original, replaced, component)
+			}
 		}
 		if !uid.New(replaced).IsValid() || len(replaced) > 64 || strings.HasSuffix(replaced, ".") {
 			t.Errorf("%s was replaced by %q, which is not a valid UID", original, replaced)
