@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-12
+
 ### Added
 
 - **`storescu -jpeg-quality` sends an image as JPEG Baseline** (#252). The
@@ -2063,7 +2065,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0

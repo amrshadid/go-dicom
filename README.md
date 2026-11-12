@@ -25,7 +25,9 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Thread-safe dataset operations** for concurrent processing
 - **5,000+ standard DICOM tags** with O(1) lookup
 - **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
-- **De-identification / anonymization** per DICOM PS3.15 Annex E
+- **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
+- **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
+- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
@@ -57,7 +59,7 @@ It is worth reading before piping anything to a shell — it is about a hundred 
 curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
 less install.sh
 sh install.sh                          # the latest release
-sh install.sh v1.7.0                   # a specific one
+sh install.sh v1.8.0                   # a specific one
 PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
 ```
 
