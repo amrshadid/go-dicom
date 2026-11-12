@@ -7,7 +7,188 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+## [1.8.0] - 2026-11-12
+
+This release takes a study from the archive to something that can be handed
+on, without writing a program:
+
+- **De-identify from the command line.** `go-dicom anonymize study/ clean/`
+  applies the PS3.15 Annex E profiles to a file or a directory, and
+  `-redact x,y,width,height` blacks out text burned into the pixels, in
+  compressed images too. An image of a kind that commonly carries such text
+  is refused until you say where it is or that there is none.
+- **A picture that is safe to share.** `go-dicom share scan.dcm scan.png`
+  applies the same rule and writes pixels only. `convert --format png` and
+  `Dataset.RenderFrame` render any frame as a viewer shows it: rescaled,
+  windowed, MONOCHROME1, YBR and palette color. A windowed CT matches the
+  PS3.3 formula to within half a gray level.
+- **DICOMweb.** A client for QIDO-RS, WADO-RS and STOW-RS, and `qido`, `wado`
+  and `stow` commands. Against Orthanc, a retrieved file is the one Python's
+  requests fetches, byte for byte, and stored files come back byte for byte.
+- **JPEG Baseline can be written**, and `storescu -jpeg-quality` sends an
+  image that way. dcmtk and pydicom decode the result.
+
+It also fixes images that were read or sent wrong: a compressed frame split
+over several fragments, a 4:2:2 JPEG sent uncompressed and misread by the
+receiver, 1-bit images, and `SaveAsPNG` showing a CT as white.
+
+Nothing is removed or changed incompatibly. The interoperability suite runs
+34 checks against pynetdicom and dcmtk in both directions.
+
+### Added
+
+- **`storescu -jpeg-quality` sends an image as JPEG Baseline** (#252). The
+  library could send an 8-bit image that way and the command could not ask it
+  to. With the option, `storescu` offers JPEG Baseline beside each class it
+  holds uncompressed, and compresses an image at the given quality when the
+  peer accepts it. A peer that does not, and an image Baseline cannot hold,
+  get the file as it is, and the command says which. Nothing lossy is sent
+  without the option. dcmtk receives the result and decodes it to the
+  original within the loss of the quality.
+
+- **A DICOMweb client, and `qido`, `wado` and `stow` commands** (#244). The
+  library reached an archive over DIMSE only, and many now speak HTTP. The new
+  `dicomweb` package searches a service for studies, series and instances
+  (QIDO-RS), retrieves them as DICOM files or as metadata without the pixel
+  data (WADO-RS), and stores files (STOW-RS), with a bearer token, Basic
+  credentials or any header a deployment asks for. `Client.RetrieveEach`
+  hands each instance over as it arrives, so a study need not be held whole,
+  and a response is bounded in size. A store reports what the server kept and
+  what it refused, instance by instance. `go-dicom qido`, `wado` and `stow`
+  do the same from the command line. Search and retrieve return what Python's
+  requests and pydicom do against a public Orthanc server, byte for byte, and
+  files stored to a local Orthanc come back byte for byte.
+  Frames, rendered images, bulk data on its own, the XML encoding and the
+  server side are not implemented.
+
+- **`go-dicom anonymize` de-identifies a file or a directory** (#232). The
+  `anonymize` package had no command, so using it meant writing a program.
+  `go-dicom anonymize <input> <output>` applies the Basic Profile, or the
+  option `-profile` names, to a file or to every DICOM file under a directory,
+  which keeps its layout. One mapping serves the whole run, so the instances
+  of a study get the same new Study Instance UID, and the file meta gets the
+  data set's new SOP Instance UID. `-uid-map` writes the original-to-new
+  mapping, which is off by default because it links the output back to the
+  patient. Files that are not DICOM and DICOMDIRs are left out of the output
+  and reported.
+
+- **Burned-in text can be removed, and an image that may hold it is not
+  written unasked** (#233). De-identification stopped at the attributes, so a
+  name drawn into an ultrasound or a screen capture survived it.
+  `Dataset.RedactPixelRegions` fills rectangles of native pixel data with
+  black, in every frame, at any bit depth and sample layout.
+  `Anonymizer.CleanPixelData` does that, sets Burned In Annotation to NO and
+  records the Clean Pixel Data Option of PS3.15 E.3.1, and
+  `anonymize.BurnedInRisk` says whether an image is of a kind that is
+  commonly drawn on. `go-dicom anonymize -redact x,y,w,h` applies it, and the
+  command refuses an image at risk unless `-redact` or `-allow-burned-in` is
+  given. Nothing here finds the text: the rectangles are the caller's.
+  Native `YBR_FULL_422`, whose chroma is shared between pixels, is refused.
+
+- **Compressed images can be redacted** (#240). `-redact` and
+  `CleanPixelData` refused compressed pixel data, which is how most
+  ultrasound and screen captures are stored. They now decompress first.
+  `Dataset.DecompressInPlace` replaces encapsulated Pixel Data with its
+  samples and makes the data set describe them: Explicit VR Little Endian,
+  Planar Configuration 0, `YBR_FULL_422` as `YBR_FULL`, and the JPEG 2000
+  `YBR_RCT` and `YBR_ICT` as `RGB`. Nothing is encoded again, so redacting
+  adds no loss; the file is written uncompressed and is larger. An image
+  that is not redacted keeps its syntax.
+
+- **`go-dicom share` renders an image as a picture that is safe to hand on**
+  (#241). Getting from a study to a PNG took `anonymize` and then `convert`,
+  and leaving out the first gave a picture of an image nobody had checked.
+  `share <input.dcm> <output.png|.jpg>` renders as `convert` does, with
+  `--window`, `--frame` and `--quality`, and applies `anonymize`'s rule
+  first: an image that may hold burned-in text is refused unless `-redact`
+  says where it is or `-allow-burned-in` says there is none. Redaction
+  decompresses a compressed image in memory. The picture holds pixels only,
+  and the input is not changed.
+
+- **`go-dicom convert` writes PNG and JPEG, and `Dataset.RenderFrame` renders
+  an image for display** (#234). The library decoded every image it read and
+  could not show one. `RenderFrame` and `RenderFrames` return a frame as a
+  viewer shows it, at 8 bits: stored values read with their sign, Rescale
+  Slope and Intercept applied, then the window, which is the caller's, the
+  file's first Window Center and Width with its VOI LUT Function, or the range
+  of the data when the file has none. MONOCHROME1 is inverted, YBR is
+  converted to RGB, PALETTE COLOR goes through its tables, and an enhanced
+  multi-frame image takes its rescale and window from its functional groups.
+  `convert --format png|jpeg` writes it, with `--window center,width`,
+  `--frame n|all` and `--quality`. The file holds pixels only, so none of the
+  data set's attributes are in it. The existing `ApplyWindowing` reads samples
+  as unsigned and applies no rescale; it is unchanged.
+
+- **JPEG Baseline can be written** (#243). The library decoded the most widely
+  accepted compressed syntax and could not produce it, so a peer that takes
+  only `1.2.840.10008.1.2.4.50` for a storage class could not be sent a native
+  image. `compress.EncodeJPEGBaseline` codes 8-bit frames of one component or
+  three, each at full resolution.
+  `Dataset.CompressJPEGBaselineInPlace(quality)` encodes an image and makes
+  the data set describe it: color as `YBR_FULL`, a fragment per frame with a
+  Basic Offset Table, Lossy Image Compression `01` with its ratio and method.
+  The network sends an image this way only when `NetworkConfig.JPEGQuality` is
+  set; with it unset the send fails and names the setting, since nothing lossy
+  is done unasked. Deeper images and PALETTE COLOR are refused. dcmtk and
+  pydicom decode the output, at the quality and size libjpeg gives for the
+  same setting.
+
+### Changed
+
+- **`help <command>` is the command's own help, and names the binary it was
+  run as** (#242). `help` had a page of its own for `show`, `info`, `tag-doc`
+  and `codify`, written by hand beside each command's `-h`; the `tag-doc`
+  page left out `--limit` and `--output`. `help` now runs the command's `-h`
+  for every command, so the two cannot differ. Each command's help also uses
+  the name the binary was invoked under, where `-h` used to say `go-dicom`
+  whatever it was called.
+
+### Fixed
+
+- **A compressed color image sent uncompressed is described as it was
+  decoded** (#246). Sent over a context that negotiated an uncompressed
+  syntax, a compressed instance was decoded and still described as stored. A
+  4:2:2 JPEG arrived with chroma for every pixel and saying `YBR_FULL_422`,
+  which in native data means two bytes a pixel, so the receiver read the
+  bytes for the wrong pixels: pydicom's reading was off by up to 255, and the
+  send reported success. The transcoder now uses `Dataset.DecompressInPlace`,
+  so Photometric Interpretation and Planar Configuration describe what is
+  sent, for C-STORE and for C-GET and C-MOVE sub-operations, and from one
+  compressed syntax to another as well.
+
+- **A compressed frame stored in more than one fragment decodes** (#238).
+  PS3.5 A.4 lets a frame span several fragments, and each fragment was decoded
+  as a frame of its own, so such an image failed inside the codec: pydicom's
+  `examples_jpeg2k.dcm`, one JPEG 2000 frame in three fragments, gave
+  "tile-part 0 declares 152189 bytes, 65434 remain". `encaps.Frames` now
+  groups fragments into frames, by the Basic Offset Table when it has an entry
+  per frame, by count when there is a fragment per frame or a single frame,
+  and by the end-of-image marker otherwise, and refuses what it cannot assign.
+  `PixelArray` and everything built on it use it. `Extractor.ExtractFrame`,
+  behind `Dataset.GetEncapsulatedFrame`, returned a fragment twice when a
+  table was present and counted the table's offsets without the item headers
+  they include; it uses the same grouping.
+
+- **1-bit images render** (#242). `RenderFrame` and `convert --format png`
+  refused Bits Allocated 1, which is how segmentations are stored. They are
+  read eight samples to a byte from the low bit up, with frames following one
+  another unpadded, and render as black and white.
+
+- **A redacted region of a palette image is black** (#242).
+  `RedactPixelRegions` filled a PALETTE COLOR image with index 0, which is
+  whatever color the palette gives it. It now fills with the palette's
+  darkest entry, and falls back to index 0 only when the tables cannot be
+  read.
+
+- **`GetImage`, `SaveAsPNG` and `SaveAsJPEG` show an image as a viewer does**
+  (#253). They turned 16 bits into 8 with a window of 40/400 over the stored
+  values read as unsigned, whatever the image: a CT came out white, a signed
+  image wrong, and Rescale Slope and Intercept, the data set's own window and
+  MONOCHROME1 were ignored. YBR color was shown as RGB. They now render
+  through `RenderFrame`. `SaveAsWindowedPNG`, `SaveAsWindowedJPEG` and
+  `SaveWithOptions` take their window in rescaled units, Hounsfield units for
+  CT, where they applied it to stored values, and no longer refuse an image
+  that is not 16-bit. `SaveWithOptions` scaled a one-row image to no rows.
 
 ## [1.7.0] - 2026-10-30
 
@@ -1910,7 +2091,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0

@@ -16,8 +16,8 @@ the library falls short of the standard, that appears in
 | | |
 |---|---|
 | Implementation Class UID | `1.2.826.0.1.3680043.10.511` |
-| Implementation Version Name | `GO-DICOM-1.7.0` |
-| Documented against | `v1.7.0` |
+| Implementation Version Name | `GO-DICOM-1.8.0` |
+| Documented against | `v1.8.0` |
 | Last verified | 2026-08-15 |
 
 ---
@@ -280,6 +280,32 @@ selection, and user identity negotiation. The window defaults to one.
   Verified against pynetdicom over TLS in both directions. Plain DICOM over TCP is neither authenticated nor encrypted, and
   checking a called AE title is a naming convention rather than authentication.
 
+### 4.1 DICOMweb
+
+The `dicomweb` package and the `qido`, `wado` and `stow` commands are a user
+agent for the HTTP services of PS3.18. There is no origin server.
+
+| Service | Supported | Not supported |
+|---------|-----------|---------------|
+| QIDO-RS | Search for studies, series and instances, with matching, `includefield`, `limit`, `offset` and `fuzzymatching`; results as DICOM JSON | XML results |
+| WADO-RS | Study, series and instance as `application/dicom` in `multipart/related`, in a named transfer syntax or as stored; metadata as DICOM JSON | Frames, rendered images, thumbnails and bulk data retrieved on their own |
+| STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons | Metadata with separate bulk data |
+
+UPS-RS and the capabilities service are not implemented. Bulk data that
+metadata refers to by URI is not fetched: the element is kept, empty.
+
+Authentication is whatever header the caller supplies: a bearer token, Basic
+credentials, or another. TLS is the HTTP client's, with the system roots
+unless a CA is given. A response is read up to a bound, 4 GiB by default,
+and one that runs past it is an error.
+
+Search and retrieve are checked against a public Orthanc server, read-only,
+and return what Python's requests and pydicom do for the same requests, the
+retrieved file byte for byte. Store is checked against a local Orthanc:
+files of several transfer syntaxes come back byte for byte, and a refusal is
+reported instance by instance. Orthanc answers 400 for a request it kept part
+of, and does not name a file it could not read; both are counted as refused.
+
 ---
 
 ## 5. Configuration
@@ -387,7 +413,7 @@ at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded.
 
 Every file in pydicom's corpus that pydicom can decode decodes here to the same
-samples: **all 49 of them**, compared whole rather than by their leading values,
+samples: **all 50 of them**, compared whole rather than by their leading values,
 with nothing skipped for want of a decoder. What follows are two differences in
 how decoded samples are shaped and coloured, and the one tolerance.
 
@@ -434,6 +460,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   would leave a reader to convert a second time. This matches pydicom. Convert
   with the attribute, not despite it.
 
+- **`RenderFrame` renders for display, within what it knows.** It applies the
+  sign of the samples, Rescale Slope and Intercept, a window (LINEAR,
+  LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
+  the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
+  not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
+  an ICC profile, and it refuses 64-bit samples and segmented palettes by
+  name. `go-dicom convert --format png|jpeg` is the same
+  rendering. Grayscale output is checked against pydicom, and color against
+  the lossless copy of the same picture.
+
 ### 8.2 Network
 
 - **Compressed transfer syntaxes are not negotiated by default**, though all
@@ -450,8 +486,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Two syntaxes are compressed *to*: RLE Lossless and JPEG-LS Lossless.** Pixel
-  data is transcoded in both directions as the negotiated context requires.
+- **Three syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, and
+  JPEG Baseline when asked.** Pixel data is transcoded in both directions as
+  the negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
@@ -463,10 +500,24 @@ how decoded samples are shaped and coloured, and the one tolerance.
   it is lossy, and how much error to accept is the caller's decision rather than
   one to make silently while transcoding.
 
+  **JPEG Baseline (Process 1) is written only when the sender sets
+  `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
+  8-bit unsigned MONOCHROME1, MONOCHROME2, RGB and YBR_FULL images; a deeper
+  image and PALETTE COLOR are refused. Color is coded with every component at
+  full resolution and described as `YBR_FULL`, since the 4:2:0 that a common
+  encoder defaults to has no Photometric Interpretation in this syntax. Each
+  frame is one fragment, with a Basic Offset Table. The data set is marked
+  Lossy Image Compression `01` with its ratio and method `ISO_10918_1`. The SOP
+  Instance UID is not changed: a lossy copy is a different instance (PS3.3
+  C.7.6.1.1.5), and saying whether a send is one is the caller's.
+  `Dataset.CompressJPEGBaselineInPlace` is the same encoder for files. dcmtk
+  and pydicom decode what it writes, to the quality and size libjpeg gives at
+  the same setting.
+
   Every other compressed target fails, naming the syntax asked for. There is no
-  JPEG or JPEG 2000 encoder here, and a send that cannot be satisfied fails rather
-  than putting bytes on the wire described as something they are not, which the
-  receiver could not detect.
+  JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send that
+  cannot be satisfied fails rather than putting bytes on the wire described as
+  something they are not, which the receiver could not detect.
 
   *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
   shares no code with this library. A round trip through this package's own

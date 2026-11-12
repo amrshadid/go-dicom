@@ -905,7 +905,7 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 		return fmt.Errorf("send C-STORE-RQ: %w", err)
 	}
 
-	dataBytes, err := EncodeDataset(ds, assoc.TransferSyntaxFor(ctxID))
+	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(ctxID), s.config.Network.JPEGQuality)
 	if err != nil {
 		return fmt.Errorf("encode instance: %w", err)
 	}

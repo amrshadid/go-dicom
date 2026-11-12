@@ -29,8 +29,28 @@ type FileSpec struct {
 	Index    int
 }
 
+// invokedAs is the name the binary was run under, which help text has to
+// use: the same source ships as go-dicom and as dicom, and instructions for
+// a command the user does not have are no help.
+var invokedAs = "go-dicom"
+
+// printHelp prints a command's help with the name the binary was run under
+// in place of go-dicom.
+//
+// A replace over the finished text, as HelpCommand.print does: the name
+// occurs dozens of times across these literals, always meaning the same.
+// Every command's help goes through here, and `help <command>` runs the
+// command's own -h, so there is one text per command and it names the right
+// binary whichever way it is asked for (#242).
+func printHelp(text string) {
+	fmt.Print(strings.ReplaceAll(text, "go-dicom", invokedAs))
+}
+
 // NewCLI creates a new CLI instance.
 func NewCLI(name, version string) *CLI {
+	if name != "" {
+		invokedAs = name
+	}
 	return &CLI{
 		Name:     name,
 		Version:  version,
@@ -61,6 +81,15 @@ var netDescriptions = map[string]string{
 	"getscu":    "DICOM Get SCU — retrieve on same association",
 	"commitscu": "DICOM Storage Commitment SCU — ask a peer to take responsibility",
 	"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
+}
+
+// webCommands and webDescriptions are the same for the DICOMweb commands.
+var webCommands = []string{"qido", "wado", "stow"}
+
+var webDescriptions = map[string]string{
+	"qido": "DICOMweb search — find studies, series or instances (QIDO-RS)",
+	"wado": "DICOMweb retrieve — download a study, series or instance (WADO-RS)",
+	"stow": "DICOMweb store — upload DICOM files (STOW-RS)",
 }
 
 // RegisterCommand adds a command to the CLI.
@@ -118,13 +147,15 @@ func (c *CLI) ShowHelp() {
 
 	// Display commands in a specific order
 	fmt.Printf("  FILE COMMANDS:\n")
-	fileCommands := []string{"show", "info", "convert", "tag-doc", "codify"}
+	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
-		"show":    "Display DICOM file contents",
-		"info":    "Show DICOM file metadata and information",
-		"convert": "Convert DICOM files to other formats (JSON, CSV, NIfTI)",
-		"tag-doc": "Generate documentation for DICOM tags",
-		"codify":  "Read a DICOM file and produce Go code to create it",
+		"show":      "Display DICOM file contents",
+		"info":      "Show DICOM file metadata and information",
+		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
+		"anonymize": "De-identify a DICOM file or directory (PS3.15 Annex E)",
+		"share":     "Render an image as a PNG or JPEG that is safe to hand on",
+		"tag-doc":   "Generate documentation for DICOM tags",
+		"codify":    "Read a DICOM file and produce Go code to create it",
 	}
 	for _, cmdName := range fileCommands {
 		if desc, ok := fileDescriptions[cmdName]; ok {
@@ -139,6 +170,11 @@ func (c *CLI) ShowHelp() {
 		}
 	}
 
+	fmt.Printf("\n  WEB COMMANDS:\n")
+	for _, cmdName := range webCommands {
+		fmt.Printf("    %-12s %s\n", cmdName, webDescriptions[cmdName])
+	}
+
 	fmt.Printf("\n  OTHER:\n")
 	fmt.Printf("    %-12s %s\n", "help", "Display help for commands")
 	fmt.Printf("    %-12s %s\n", "version", "Display version information")
@@ -148,11 +184,14 @@ func (c *CLI) ShowHelp() {
 	fmt.Printf("  -v, --version   Show version information\n")
 	fmt.Printf("\nEXAMPLES:\n")
 	fmt.Printf("  %s show patient.dcm\n", c.Name)
+	fmt.Printf("  %s anonymize study/ clean-study/\n", c.Name)
+	fmt.Printf("  %s share -redact 0,0,640,40 ultrasound.dcm ultrasound.png\n", c.Name)
 	fmt.Printf("  %s echoscu pacs.hospital.com:11112\n", c.Name)
 	fmt.Printf("  %s storescu -aec PACS pacs:11112 study/*.dcm\n", c.Name)
 	fmt.Printf("  %s storescp -port 11112 -output ./received/\n", c.Name)
 	fmt.Printf("  %s findscu -patient-name \"Smith*\" pacs:11112\n", c.Name)
 	fmt.Printf("  %s movescu -dest MY_SCP -study 1.2.3.4 pacs:11112\n", c.Name)
+	fmt.Printf("  %s qido -match \"PatientName=Smith*\" https://pacs.hospital.com/dicom-web\n", c.Name)
 	fmt.Printf("\nUse '%s help <command>' for more information on a specific command.\n", c.Name)
 }
 

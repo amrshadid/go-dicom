@@ -51,6 +51,7 @@ var pydicomPixelExpectations = []pydicomPixels{
 	{"SC_rgb_small_odd_big_endian.dcm", "1.2.840.10008.1.2.2", 27, "ef2df252ba3cd066", 128.777778},
 	{"SC_rgb_small_odd_jpeg.dcm", "1.2.840.10008.1.2.4.50", 27, "", 128.000000},
 	{"SC_ybr_full_422_uncompressed.dcm", "1.2.840.10008.1.2.1", 30000, "ddddadc3c3d361b5", 127.880000},
+	{"examples_jpeg2k.dcm", "1.2.840.10008.1.2.4.90", 921600, "e16892020c73095e", 34.528793},
 	{"image_dfl.dcm", "1.2.840.10008.1.2.1.99", 262144, "1f5f1b1c1a57606a", 127.115967},
 	{"liver_1frame.dcm", "1.2.840.10008.1.2.1", 262144, "e036a07b502fdfd1", 0.138218},
 	{"liver_expb_1frame.dcm", "1.2.840.10008.1.2.2", 262144, "e036a07b502fdfd1", 0.138218},

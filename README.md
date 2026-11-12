@@ -25,11 +25,13 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Thread-safe dataset operations** for concurrent processing
 - **5,000+ standard DICOM tags** with O(1) lookup
 - **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
-- **De-identification / anonymization** per DICOM PS3.15 Annex E
+- **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
+- **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
+- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 16 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), and the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`)
+- **CLI tools** — 21 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -57,7 +59,7 @@ It is worth reading before piping anything to a shell — it is about a hundred 
 curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
 less install.sh
 sh install.sh                          # the latest release
-sh install.sh v1.7.0                   # a specific one
+sh install.sh v1.8.0                   # a specific one
 PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
 ```
 
@@ -294,7 +296,10 @@ go build -o go-dicom .
 ./go-dicom show patient.dcm           # Every element, as stored
 ./go-dicom info patient.dcm           # Key metadata and image dimensions
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
+./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
+./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
+./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
@@ -306,6 +311,9 @@ go build -o go-dicom .
 
 # Send DICOM files (.dcm, .ima, any DICOM format)
 ./go-dicom storescu -aec PACS pacs:11112 study/*.dcm
+
+# Send 8-bit images as JPEG Baseline when the peer accepts it (lossy)
+./go-dicom storescu -aec PACS -jpeg-quality 90 pacs:11112 us/*.dcm
 
 # Start a storage server (receive files)
 ./go-dicom storescp -port 11112 -output ./received/
@@ -321,6 +329,12 @@ go build -o go-dicom .
 
 # Ask an archive to take responsibility for instances you have sent
 ./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
+
+# === DICOMweb (HTTP) ===
+# Search, download and upload against a DICOMweb service
+./go-dicom qido -match "PatientName=Smith*" -limit 20 https://pacs.hospital.com/dicom-web
+./go-dicom wado -study 1.2.3.4 https://pacs.hospital.com/dicom-web ./retrieved/
+./go-dicom stow https://pacs.hospital.com/dicom-web study/
 
 # A storage and query/retrieve archive in one command: stores what it is
 # sent, indexes it, answers C-FIND, C-MOVE and C-GET against it, and
@@ -391,6 +405,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 #### Serialization and Utilities
 | Package | Description |
 |---------|-------------|
+| [dicomweb](./dicomweb/) | DICOMweb client (PS3.18): search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP |
 | [jsonrep](./jsonrep/) | A flat summary struct of common attributes, for feeding a web API. Not the DICOM JSON Model — see `dataset.ToDICOMJSON` for that |
 | [config](./config/) | Thread-safe global configuration |
 | [errors](./errors/) | DICOM-specific error types |
@@ -446,7 +461,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Two syntaxes are compressed *to*: **RLE Lossless** and **JPEG-LS Lossless**. Every other compressed target fails rather than sending bytes described as something they are not. JPEG-LS Near-Lossless is refused deliberately — it is lossy, and the error budget is the caller's decision. There is no JPEG or JPEG 2000 encoder here. |
+| **Compressing pixel data** | Three syntaxes are compressed *to*: **RLE Lossless**, **JPEG-LS Lossless**, and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, and JPEG-LS Near-Lossless is refused. There is no JPEG 2000 encoder here. |
 | **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
@@ -654,7 +669,7 @@ parsing and converted back on write, so byte order never reaches code above
 every JPEG syntax in the table above — all in pure Go, with no codec to install
 and nothing to register. `Dataset.PixelArray()` decompresses them without being
 asked. Verified against pydicom on its own test corpus, and checked in CI on
-every push: **all 49** of the files in that corpus pydicom can decode decode
+every push: **all 50** of the files in that corpus pydicom can decode decode
 here to the same samples, compared whole rather than by their leading values,
 with nothing skipped.
 

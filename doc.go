@@ -55,6 +55,8 @@
 //     tags and GDCM's private dictionary of 8,858 attributes
 //   - [github.com/amrshadid/go-dicom/anonymize] — de-identification per
 //     DICOM PS3.15 Annex E
+//   - [github.com/amrshadid/go-dicom/dicomweb] — a DICOMweb client: search,
+//     retrieve and store over HTTP (PS3.18)
 //
 // Supporting packages cover character sets ([github.com/amrshadid/go-dicom/charset]),
 // compression ([github.com/amrshadid/go-dicom/compress]), pixel data

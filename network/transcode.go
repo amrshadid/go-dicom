@@ -50,6 +50,18 @@ func compressPixelData(ds *dataset.Dataset, source, targetSyntax string,
 		return ds, nil
 	}
 
+	// From one compressed syntax to another goes through the decoded image,
+	// and what is encoded has to be described as decoded: a 4:2:2 JPEG
+	// re-encoded with chroma for every pixel is no longer YBR_FULL_422 (#246).
+	if compress.IsEncapsulated(source) {
+		decoded := ds.Clone()
+		if err := decoded.DecompressInPlace(); err != nil {
+			return nil, fmt.Errorf("cannot encode a %s instance as %s: its pixel data has to be "+
+				"decoded first and %w", source, targetSyntax, err)
+		}
+		ds = decoded
+	}
+
 	info, err := ds.GetPixelDataInfo()
 	if err != nil {
 		return nil, fmt.Errorf("cannot encode pixel data as %s: %w", targetSyntax, err)
@@ -164,7 +176,7 @@ var pixelDataTag = tag.New(0x7FE0, 0x0010)
 // here, because the alternative is an image that is wrong without looking wrong.
 //
 // Returns the data set to encode, which is the original when nothing is needed.
-func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Dataset, error) {
+func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality int) (*dataset.Dataset, error) {
 	if ds == nil {
 		return ds, nil
 	}
@@ -193,6 +205,24 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 			return compressPixelData(ds, source, targetSyntax, encodeFramesRLE)
 		case JPEGLSLosslessUID:
 			return compressPixelData(ds, source, targetSyntax, encodeFramesJPEGLS)
+		case JPEGBaselineUID:
+			// Lossy, so only for a sender that has said how much loss it
+			// accepts. Refusing is the same rule as for JPEG-LS Near-Lossless
+			// below: that decision is not one to make while transcoding.
+			if jpegQuality <= 0 {
+				return nil, fmt.Errorf("cannot encode pixel data as %s: JPEG Baseline is lossy and "+
+					"nothing is sent that way unasked; set NetworkConfig.JPEGQuality to allow it",
+					targetSyntax)
+			}
+			if _, ok := ds.Get(pixelDataTag); !ok {
+				return ds, nil
+			}
+			// A copy: sending must not make the caller's image lossy.
+			out := ds.Clone()
+			if err := out.CompressJPEGBaselineInPlace(jpegQuality); err != nil {
+				return nil, fmt.Errorf("cannot encode a %s instance as %s: %w", source, targetSyntax, err)
+			}
+			return out, nil
 		default:
 			// A send that cannot be satisfied fails rather than putting bytes on
 			// the wire described as something they are not, which the receiver
@@ -202,8 +232,9 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 			// much error to accept is the caller's decision rather than one to make
 			// silently on their behalf while transcoding.
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
-				"RLE Lossless (%s) and JPEG-LS Lossless (%s)",
-				targetSyntax, RLELosslessUID, JPEGLSLosslessUID)
+				"RLE Lossless (%s) and JPEG-LS Lossless (%s), and JPEG Baseline (%s) when "+
+				"NetworkConfig.JPEGQuality is set",
+				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEGBaselineUID)
 		}
 	}
 
@@ -214,29 +245,19 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 		return ds, nil
 	}
 
-	pixels, err := ds.DecodedPixelData()
-	if err != nil {
-		return nil, fmt.Errorf("cannot send a %s instance over a context that negotiated %s: "+
-			"its pixel data has to be decoded first and %w", source, targetSyntax, err)
-	}
-
 	// A copy, so a caller's data set is not mutated by the act of sending it —
 	// which would matter to anything holding it, and to a C-MOVE sending the
 	// same instance to more than one destination.
 	out := ds.Clone()
 
-	// DICOM values are of even length; native pixel data of odd length is padded.
-	if len(pixels)%2 == 1 {
-		pixels = append(pixels, 0x00)
-	}
-	// Native pixel data is OW when a sample is wider than a byte and OB when it
-	// is not.
-	vr := dataelem.OB
-	if info, err := ds.GetPixelDataInfo(); err == nil && info.BitsAllocated > 8 {
-		vr = dataelem.OW
-	}
-	if err := replacePixelData(out, vr, pixels); err != nil {
-		return nil, fmt.Errorf("replacing pixel data with its decoded form: %w", err)
+	// DecompressInPlace, not the bytes alone: decoding changes the layout as
+	// well. Samples come out by pixel, a 4:2:2 JPEG comes out with chroma for
+	// every pixel, and a JPEG 2000 color transform is undone. Sent still
+	// described as stored, a 4:2:2 image was read by the receiver two bytes a
+	// pixel where it held three, and the send reported success (#246).
+	if err := out.DecompressInPlace(); err != nil {
+		return nil, fmt.Errorf("cannot send a %s instance over a context that negotiated %s: "+
+			"its pixel data has to be decoded first and %w", source, targetSyntax, err)
 	}
 	out.SetTransferSyntaxUID(targetSyntax)
 

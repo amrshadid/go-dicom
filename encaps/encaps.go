@@ -88,7 +88,9 @@ func (p *Parser) parseEncapsulation() (*compress.EncapsulatedData, error) {
 	}
 
 	// Parse fragments
+	first := p.offset
 	for p.offset < int64(len(p.data)) {
+		start := uint64(p.offset - first)
 		fragment, err := p.parseItem()
 		if err != nil {
 			// Check if we reached end of items
@@ -100,6 +102,7 @@ func (p *Parser) parseEncapsulation() (*compress.EncapsulatedData, error) {
 
 		if len(fragment) > 0 {
 			encData.Fragments = append(encData.Fragments, fragment)
+			encData.FragmentOffsets = append(encData.FragmentOffsets, start)
 		}
 	}
 
@@ -256,76 +259,18 @@ func (e *Extractor) ExtractFrame(frameIndex int) ([]byte, error) {
 		return nil, fmt.Errorf("frame index out of range: %d", frameIndex)
 	}
 
-	// If we have a basic offset table, use it to determine frame boundaries
-	if len(e.encData.BasicOffsetTable) > 0 {
-		return e.extractFrameUsingBOT(frameIndex)
+	// One grouping of fragments into frames serves this and the decoders.
+	// This used to return fragment N as frame N, and with a table it
+	// appended a fragment twice and counted offsets without the item
+	// headers they include (#238).
+	frames, err := Frames(e.encData, e.encData.NumberOfFrames)
+	if err != nil {
+		return nil, err
 	}
-
-	// Otherwise, assume each fragment is a frame (or one frame is one fragment)
-	return e.extractFrameByFragment(frameIndex)
-}
-
-// extractFrameUsingBOT uses the Basic Offset Table to extract frame data.
-func (e *Extractor) extractFrameUsingBOT(frameIndex int) ([]byte, error) {
-	if frameIndex >= len(e.encData.BasicOffsetTable) {
-		return nil, fmt.Errorf("frame index %d exceeds BOT entries %d", frameIndex, len(e.encData.BasicOffsetTable))
+	if frameIndex >= len(frames) {
+		return nil, fmt.Errorf("frame index %d out of range: the data holds %d frame(s)", frameIndex, len(frames))
 	}
-
-	startOffset := e.encData.BasicOffsetTable[frameIndex]
-
-	// Determine end offset
-	var endOffset uint32
-	if frameIndex+1 < len(e.encData.BasicOffsetTable) {
-		endOffset = e.encData.BasicOffsetTable[frameIndex+1]
-	} else {
-		// For last frame, calculate from fragment sizes
-		endOffset = uint32(e.getTotalFragmentSize())
-	}
-
-	// Collect all fragments that fall within this frame's range
-	var frameData []byte
-	currentOffset := uint32(0)
-
-	for _, fragment := range e.encData.Fragments {
-		fragmentSize := uint32(len(fragment))
-
-		// Check if this fragment is within the frame range
-		if currentOffset >= startOffset && currentOffset < endOffset {
-			frameData = append(frameData, fragment...)
-		}
-
-		// Also include fragments that partially overlap
-		nextOffset := currentOffset + fragmentSize
-		if nextOffset > startOffset && currentOffset < endOffset {
-			frameData = append(frameData, fragment...)
-		}
-
-		currentOffset = nextOffset
-	}
-
-	if len(frameData) == 0 {
-		return nil, fmt.Errorf("no fragment data found for frame %d (offset %d-%d)", frameIndex, startOffset, endOffset)
-	}
-
-	return frameData, nil
-}
-
-// extractFrameByFragment assumes each fragment or group of fragments forms a frame.
-func (e *Extractor) extractFrameByFragment(frameIndex int) ([]byte, error) {
-	if frameIndex >= len(e.encData.Fragments) {
-		return nil, fmt.Errorf("frame index %d exceeds fragment count %d", frameIndex, len(e.encData.Fragments))
-	}
-
-	return e.encData.Fragments[frameIndex], nil
-}
-
-// getTotalFragmentSize returns the sum of all fragment sizes.
-func (e *Extractor) getTotalFragmentSize() uint64 {
-	var total uint64
-	for _, fragment := range e.encData.Fragments {
-		total += uint64(len(fragment))
-	}
-	return total
+	return frames[frameIndex], nil
 }
 
 // GetFrameCount returns the number of frames in the encapsulated data.

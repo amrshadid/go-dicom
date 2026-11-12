@@ -15,6 +15,11 @@ type ConvertCommand struct {
 	format     string
 	compressed bool
 	help       bool
+
+	// For --format png and jpeg.
+	window  string
+	frame   string
+	quality int
 }
 
 // NewConvertCommand creates a new convert command.
@@ -31,15 +36,18 @@ func (cc *ConvertCommand) Name() string {
 
 // Description returns the command description.
 func (cc *ConvertCommand) Description() string {
-	return "Convert DICOM files to other formats (json, csv, nifti)"
+	return "Convert DICOM files to other formats (json, csv, nifti, png, jpeg)"
 }
 
 // AddFlags adds command flags to the flag set.
 func (cc *ConvertCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&cc.help, "h", false, "Show help for this command")
 	fs.BoolVar(&cc.help, "help", false, "Show help for this command")
-	fs.StringVar(&cc.format, "format", "json", "Output format: json, csv, nifti")
+	fs.StringVar(&cc.format, "format", "json", "Output format: json, csv, nifti, png, jpeg")
 	fs.BoolVar(&cc.compressed, "compress", false, "Apply compression to output")
+	fs.StringVar(&cc.window, "window", "", "For png and jpeg: window as center,width (default: the file's)")
+	fs.StringVar(&cc.frame, "frame", "", "For png and jpeg: a frame number from 1, or all (default: 1)")
+	fs.IntVar(&cc.quality, "quality", 90, "For jpeg: quality from 1 to 100")
 }
 
 // Execute runs the convert command.
@@ -74,9 +82,29 @@ func (cc *ConvertCommand) Execute(args []string) error {
 		"json":  true,
 		"csv":   true,
 		"nifti": true,
+		"png":   true,
+		"jpeg":  true,
 	}
 	if !validFormats[cc.format] {
 		return fmt.Errorf("convert: unsupported format: %s", cc.format)
+	}
+
+	// An image is rendered from the data set, not from the element list the
+	// other formats are built on, and may be several files.
+	if cc.format == "png" || cc.format == "jpeg" {
+		if cc.compressed {
+			return fmt.Errorf("convert: --compress does not apply to %s, which is compressed already", cc.format)
+		}
+		written, err := convertToImages(cc.inputFile, cc.outputFile, imageOptions{
+			format: cc.format, window: cc.window, frame: cc.frame, quality: cc.quality,
+		})
+		if err != nil {
+			return fmt.Errorf("convert: %v", err)
+		}
+		for _, name := range written {
+			fmt.Printf("Wrote %s\n", name)
+		}
+		return nil
 	}
 
 	fmt.Printf("Reading DICOM file: %s\n", cc.inputFile)
@@ -131,7 +159,7 @@ func (cc *ConvertCommand) Execute(args []string) error {
 
 // showHelp displays help information for the convert command.
 func (cc *ConvertCommand) showHelp() {
-	fmt.Print(`COMMAND: convert - Convert DICOM to other formats
+	printHelp(`COMMAND: convert - Convert DICOM to other formats
 
 USAGE:
   go-dicom convert <input> <output> [options]
@@ -142,14 +170,29 @@ DESCRIPTION:
 
 OPTIONS:
   -h, --help          Show help for this command
-  --format <format>   Output format: json, csv, nifti (default: json)
-  --compress          Apply compression to output
+  --format <format>   Output format: json, csv, nifti, png, jpeg (default: json)
+  --compress          Apply compression to output (json, csv, nifti)
+
+IMAGES (--format png or jpeg):
+  --window <c,w>      Window center and width, in the image's output units
+                      (Hounsfield units for CT). Default: the file's own
+                      window, or the full range of the data when it has none.
+  --frame <n|all>     The frame to write, counted from 1 (default: 1). With
+                      "all", each frame is written beside the output name as
+                      name-0001.png, name-0002.png and so on.
+  --quality <1-100>   JPEG quality (default: 90). PNG is lossless.
+
+  The image is what a viewer shows: rescaled, windowed, MONOCHROME1 inverted,
+  and color converted to RGB, at 8 bits. It holds pixels only, so none of the
+  file's attributes are in it. Text burned into the picture itself still is.
 
 EXAMPLES:
   go-dicom convert patient.dcm output.json
   go-dicom convert patient.dcm output.json --format json
   go-dicom convert patient.dcm data.csv --format csv
   go-dicom convert patient.dcm image.nii --format nifti
+  go-dicom convert ct.dcm ct.png --format png --window 40,400
+  go-dicom convert cine.dcm frame.jpg --format jpeg --frame all
   go-dicom convert patient.dcm output.json --compress
   go-dicom convert -h
 `)

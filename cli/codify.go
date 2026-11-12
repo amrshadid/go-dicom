@@ -290,7 +290,7 @@ func byteLiteral(value []byte, limit int) string {
 
 // showHelp displays help information for the codify command.
 func (cc *CodifyCommand) showHelp() {
-	fmt.Print(`COMMAND: codify - Convert DICOM file to Go code
+	printHelp(`COMMAND: codify - Convert DICOM file to Go code
 
 USAGE:
   go-dicom codify <file> [options]

@@ -62,6 +62,12 @@ type EncapsulatedData struct {
 	// Fragments contains the compressed data fragments
 	Fragments [][]byte
 
+	// FragmentOffsets is where each fragment's item starts, counted from the
+	// first fragment's item tag, which is how the Basic Offset Table counts
+	// (PS3.5 A.4): every item's 8-byte header is in it. It is parallel to
+	// Fragments, and empty when the fragments were not parsed from a value.
+	FragmentOffsets []uint64
+
 	// NumberOfFrames is the expected number of frames (from DICOM tag 0028,0008)
 	NumberOfFrames int
 

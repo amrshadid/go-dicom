@@ -26,6 +26,8 @@ func allCommands() []Command {
 		&ConvertCommand{},
 		&TagDocCommand{},
 		&CodifyCommand{},
+		&AnonymizeCommand{},
+		&ShareCommand{},
 		&HelpCommand{},
 		&VersionCommand{},
 		&EchoSCUCommand{},
@@ -37,6 +39,9 @@ func allCommands() []Command {
 		&MoveSCUCommand{},
 		&GetSCUCommand{},
 		&QRSCPCommand{},
+		&QidoCommand{},
+		&WadoCommand{},
+		&StowCommand{},
 	}
 }
 
@@ -364,6 +369,56 @@ func TestHelpWorksForEveryCommand(t *testing.T) {
 	}
 }
 
+// TestHelpIsEachCommandsOwn: help had a page of its own for show, info,
+// tag-doc and codify, written by hand beside each command's -h. The tag-doc
+// page left out --limit and --output, which the command has (#242). help now
+// runs the command's -h for all of them, so there is one text to keep right.
+func TestHelpIsEachCommandsOwn(t *testing.T) {
+	binary := buildCLI(t)
+	for _, name := range advertisedCommands(t, binary) {
+		if name == "help" || name == "version" {
+			continue // these two are about the tool, and have no -h of their own
+		}
+		t.Run(name, func(t *testing.T) {
+			help, err := exec.Command(binary, "help", name).CombinedOutput()
+			if err != nil {
+				t.Fatalf("`help %s`: %v\n%s", name, err, help)
+			}
+			own, err := exec.Command(binary, name, "-h").CombinedOutput()
+			if err != nil {
+				t.Fatalf("`%s -h`: %v\n%s", name, err, own)
+			}
+			if string(help) != string(own) {
+				t.Errorf("`help %s` and `%s -h` print different text", name, name)
+			}
+		})
+	}
+}
+
+// TestHelpConvertIsTheCommandsOwn: `help convert` had a page of its own, which
+// described an --output option convert never had and stopped at three
+// formats when convert learned png and jpeg (#234). It is the command's -h
+// now, as it is for the network commands, so the two cannot differ.
+func TestHelpConvertIsTheCommandsOwn(t *testing.T) {
+	binary := buildCLI(t)
+	help, err := exec.Command(binary, "help", "convert").CombinedOutput()
+	if err != nil {
+		t.Fatalf("`help convert`: %v\n%s", err, help)
+	}
+	own, err := exec.Command(binary, "convert", "-h").CombinedOutput()
+	if err != nil {
+		t.Fatalf("`convert -h`: %v\n%s", err, own)
+	}
+	if string(help) != string(own) {
+		t.Errorf("`help convert` and `convert -h` differ:\n%s\n---\n%s", help, own)
+	}
+	for _, want := range []string{"png", "--window", "--frame"} {
+		if !strings.Contains(string(help), want) {
+			t.Errorf("`help convert` does not mention %s", want)
+		}
+	}
+}
+
 // A name that is not a command must still be reported as one, so that a typo is
 // told apart from a command that exists.
 func TestHelpRejectsAnUnknownCommandEndToEnd(t *testing.T) {
@@ -455,7 +510,8 @@ func TestHelpNamesTheBinaryItWasInvokedAs(t *testing.T) {
 			}
 
 			// Both listings, and a per-command page, since each is rendered separately.
-			for _, args := range [][]string{{}, {"help"}, {"help", "show"}} {
+			// And a command's own -h, which is what `help <command>` prints.
+			for _, args := range [][]string{{}, {"help"}, {"help", "show"}, {"convert", "-h"}, {"help", "anonymize"}} {
 				out, err := exec.Command(binary, args...).CombinedOutput()
 				if err != nil {
 					t.Fatalf("%s %v: %v\n%s", name, args, err, out)

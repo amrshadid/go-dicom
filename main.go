@@ -14,7 +14,7 @@ import (
 // Declared as a var, not a const, so release builds can stamp the real tag in
 // with -ldflags "-X main.Version=...". The linker cannot rewrite a const, so
 // making this a const silently turns that injection into a no-op.
-var Version = "1.7.0"
+var Version = "1.8.0"
 
 // programName is what this binary was invoked as.
 //
@@ -54,6 +54,8 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.ConvertCommand{})
 	dicomCLI.RegisterCommand(&cli.TagDocCommand{})
 	dicomCLI.RegisterCommand(&cli.CodifyCommand{})
+	dicomCLI.RegisterCommand(&cli.AnonymizeCommand{})
+	dicomCLI.RegisterCommand(&cli.ShareCommand{})
 	dicomCLI.RegisterCommand(&cli.HelpCommand{})
 	dicomCLI.RegisterCommand(&cli.VersionCommand{
 		AppName:    "go-dicom",
@@ -70,6 +72,11 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.MoveSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.GetSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.QRSCPCommand{})
+
+	// Register DICOMweb commands
+	dicomCLI.RegisterCommand(&cli.QidoCommand{})
+	dicomCLI.RegisterCommand(&cli.WadoCommand{})
+	dicomCLI.RegisterCommand(&cli.StowCommand{})
 
 	// Run CLI with command-line arguments
 	if err := dicomCLI.Run(os.Args[1:]); err != nil {
