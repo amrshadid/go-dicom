@@ -318,3 +318,39 @@ func TestRenderFrames(t *testing.T) {
 		t.Error("a data set with no image was rendered")
 	}
 }
+
+// TestRenderOneBitImage: a 1-bit image, as segmentations are stored, packs
+// eight samples to a byte from the low bit up, and its frames follow one
+// another with no padding between them. It was refused outright (#242).
+func TestRenderOneBitImage(t *testing.T) {
+	ds := dataset.NewDataset()
+	ds.SetTransferSyntaxUID("1.2.840.10008.1.2.1")
+	us := func(element uint16, v uint16) {
+		b := make([]byte, 2)
+		binary.LittleEndian.PutUint16(b, v)
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, element), dataelem.US, b))
+	}
+	us(0x0002, 1)
+	us(0x0010, 1) // one row
+	us(0x0011, 5) // of five, so the second frame starts mid-byte
+	us(0x0100, 1)
+	us(0x0101, 1)
+	us(0x0102, 0)
+	us(0x0103, 0)
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0004), dataelem.CS, []byte("MONOCHROME2 ")))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0008), dataelem.IS, []byte("2 ")))
+	// Frame 0: 1 0 1 1 0. Frame 1: 0 1 1 0 1. Low bit first:
+	// byte 0 holds samples 0-7 = 1 0 1 1 0 | 0 1 1 -> 0b11001101
+	// byte 1 holds samples 8-9 = 0 1           -> 0b00000010
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OB, []byte{0xCD, 0x02}))
+
+	for frame, want := range [][]uint8{{255, 0, 255, 255, 0}, {0, 255, 255, 0, 255}} {
+		img, err := ds.RenderFrame(frame, nil)
+		if err != nil {
+			t.Fatalf("RenderFrame(%d): %v", frame, err)
+		}
+		if got := img.(*image.Gray).Pix; !sameLevels(got, want) {
+			t.Errorf("frame %d rendered as %v, want %v", frame, got, want)
+		}
+	}
+}

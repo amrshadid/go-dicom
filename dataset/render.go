@@ -44,8 +44,8 @@ type RenderOptions struct {
 //
 // ApplyWindowing, which this does not replace, reads samples as unsigned and
 // applies no rescale. A VOI LUT Sequence and a Modality LUT Sequence are not
-// applied, and neither is a Presentation LUT or an ICC profile. Samples of 1
-// and 64 bits and segmented palettes are refused.
+// applied, and neither is a Presentation LUT or an ICC profile. Samples of
+// 64 bits and segmented palettes are refused.
 func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, error) {
 	r, err := ds.newRenderer(opts)
 	if err != nil {
@@ -92,7 +92,7 @@ func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
 		return nil, fmt.Errorf("render: %w", err)
 	}
 	switch info.BitsAllocated {
-	case 8, 16, 32:
+	case 1, 8, 16, 32:
 	default:
 		return nil, fmt.Errorf("render: %d bits allocated is not supported", info.BitsAllocated)
 	}
@@ -100,9 +100,11 @@ func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("render: %w", err)
 	}
-	if len(px) < info.BytesPerFrame*info.NumberOfFrames {
-		return nil, fmt.Errorf("render: the pixel data holds %d bytes and the image needs %d",
-			len(px), info.BytesPerFrame*info.NumberOfFrames)
+	// In bits, since a 1-bit image packs eight samples to a byte and its
+	// frames need not end on one.
+	bits := info.Rows * info.Columns * info.SamplesPerPixel * info.BitsAllocated * info.NumberOfFrames
+	if need := (bits + 7) / 8; len(px) < need {
+		return nil, fmt.Errorf("render: the pixel data holds %d bytes and the image needs %d", len(px), need)
 	}
 	r := &renderer{ds: ds, info: info, px: px, width: info.BitsAllocated / 8}
 	if opts != nil {
@@ -129,6 +131,11 @@ func (r *renderer) frame(f int) (image.Image, error) {
 // sample returns stored sample i of the whole pixel data as a number: the
 // Bits Stored bits below High Bit, with their sign when the data is signed.
 func (r *renderer) sample(i int) float64 {
+	if r.info.BitsAllocated == 1 {
+		// Packed from the low bit up, frame after frame with no padding
+		// between them (PS3.5 8.2): sample i is bit i of the whole value.
+		return float64(r.px[i/8] >> (i % 8) & 1)
+	}
 	var raw uint64
 	switch off := i * r.width; r.width {
 	case 1:

@@ -47,7 +47,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data set's attributes are in it. The existing `ApplyWindowing` reads samples
   as unsigned and applies no rescale; it is unchanged.
 
+### Changed
+
+- **`help <command>` is the command's own help, and names the binary it was
+  run as** (#242). `help` had a page of its own for `show`, `info`, `tag-doc`
+  and `codify`, written by hand beside each command's `-h`; the `tag-doc`
+  page left out `--limit` and `--output`. `help` now runs the command's `-h`
+  for every command, so the two cannot differ. Each command's help also uses
+  the name the binary was invoked under, where `-h` used to say `go-dicom`
+  whatever it was called.
+
 ### Fixed
+
+- **1-bit images render** (#242). `RenderFrame` and `convert --format png`
+  refused Bits Allocated 1, which is how segmentations are stored. They are
+  read eight samples to a byte from the low bit up, with frames following one
+  another unpadded, and render as black and white.
+
+- **A redacted region of a palette image is black** (#242).
+  `RedactPixelRegions` filled a PALETTE COLOR image with index 0, which is
+  whatever color the palette gives it. It now fills with the palette's
+  darkest entry, and falls back to index 0 only when the tables cannot be
+  read.
 
 - **A compressed frame stored in more than one fragment decodes** (#238).
   PS3.5 A.4 lets a frame span several fragments, and each fragment was decoded

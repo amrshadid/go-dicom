@@ -25,7 +25,7 @@ type PixelRegion struct {
 //
 // Black is the lowest value the samples can hold, or the highest under
 // MONOCHROME1, where high is dark. For YBR it is zero luminance with neutral
-// chroma, and for PALETTE COLOR it is index 0, whatever color that is.
+// chroma, and for PALETTE COLOR it is the darkest entry of the palette.
 func (ds *Dataset) RedactPixelRegions(regions ...PixelRegion) error {
 	return ds.redact(-1, regions)
 }
@@ -65,7 +65,7 @@ func (ds *Dataset) redact(frame int, regions []PixelRegion) error {
 			frame, info.NumberOfFrames)
 	}
 
-	fill, err := blackSamples(info)
+	fill, err := blackSamples(ds, info)
 	if err != nil {
 		return err
 	}
@@ -134,7 +134,7 @@ func clip(r PixelRegion, cols, rows int) (PixelRegion, bool) {
 
 // blackSamples returns the stored value of black for each sample of a pixel,
 // and refuses a layout whose samples it cannot place.
-func blackSamples(info *PixelDataInfo) ([]uint64, error) {
+func blackSamples(ds *Dataset, info *PixelDataInfo) ([]uint64, error) {
 	switch info.BitsAllocated {
 	case 8, 16, 32:
 	default:
@@ -160,6 +160,9 @@ func blackSamples(info *PixelDataInfo) ([]uint64, error) {
 			return nil, fmt.Errorf("redact: %s with %d samples per pixel",
 				info.PhotometricInterpretation, info.SamplesPerPixel)
 		}
+		if info.PhotometricInterpretation == "PALETTE COLOR" {
+			return []uint64{darkestPaletteValue(ds, info, lowest)}, nil
+		}
 		return []uint64{lowest}, nil
 	case "RGB":
 		return []uint64{0, 0, 0}[:min(info.SamplesPerPixel, 3)], sampleCount(info, 3)
@@ -180,4 +183,40 @@ func sampleCount(info *PixelDataInfo, want int) error {
 		return fmt.Errorf("redact: %s with %d samples per pixel", info.PhotometricInterpretation, info.SamplesPerPixel)
 	}
 	return nil
+}
+
+// darkestPaletteValue returns the stored value whose palette entry is the
+// darkest, which is what black is in a PALETTE COLOR image: the samples are
+// indexes, and index 0 is whatever color the palette gives it (#242). When
+// the tables cannot be read there is nothing to choose by, and fallback is
+// returned.
+func darkestPaletteValue(ds *Dataset, info *PixelDataInfo, fallback uint64) uint64 {
+	r := &renderer{ds: ds, info: info}
+	var tables [3]paletteTable
+	for c := range tables {
+		table, err := r.paletteTable(uint16(c))
+		if err != nil || len(table.entries) == 0 {
+			return fallback
+		}
+		tables[c] = table
+	}
+	if tables[0].first != tables[1].first || tables[0].first != tables[2].first ||
+		len(tables[0].entries) != len(tables[1].entries) || len(tables[0].entries) != len(tables[2].entries) {
+		return fallback
+	}
+
+	darkest, least := 0, 256*1000
+	for i := range tables[0].entries {
+		// Luminance in thousandths, by the weights of PS3.3 C.7.6.3.1.2.
+		l := 299*int(tables[0].entries[i]) + 587*int(tables[1].entries[i]) + 114*int(tables[2].entries[i])
+		if l < least {
+			darkest, least = i, l
+		}
+	}
+	value := tables[0].first + darkest
+	if value < 0 {
+		// Two's complement in the stored width, as signed samples are held.
+		return uint64(int64(value))
+	}
+	return uint64(value)
 }
