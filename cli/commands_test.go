@@ -364,6 +364,30 @@ func TestHelpWorksForEveryCommand(t *testing.T) {
 	}
 }
 
+// TestHelpConvertIsTheCommandsOwn: `help convert` had a page of its own, which
+// described an --output option convert never had and stopped at three
+// formats when convert learned png and jpeg (#234). It is the command's -h
+// now, as it is for the network commands, so the two cannot differ.
+func TestHelpConvertIsTheCommandsOwn(t *testing.T) {
+	binary := buildCLI(t)
+	help, err := exec.Command(binary, "help", "convert").CombinedOutput()
+	if err != nil {
+		t.Fatalf("`help convert`: %v\n%s", err, help)
+	}
+	own, err := exec.Command(binary, "convert", "-h").CombinedOutput()
+	if err != nil {
+		t.Fatalf("`convert -h`: %v\n%s", err, own)
+	}
+	if string(help) != string(own) {
+		t.Errorf("`help convert` and `convert -h` differ:\n%s\n---\n%s", help, own)
+	}
+	for _, want := range []string{"png", "--window", "--frame"} {
+		if !strings.Contains(string(help), want) {
+			t.Errorf("`help convert` does not mention %s", want)
+		}
+	}
+}
+
 // A name that is not a command must still be reported as one, so that a typo is
 // told apart from a command that exists.
 func TestHelpRejectsAnUnknownCommandEndToEnd(t *testing.T) {
