@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -149,4 +151,47 @@ func pixelsOf(t *testing.T, ds *dataset.Dataset) []byte {
 		t.Fatalf("Pixel Data is %d bytes", len(raw))
 	}
 	return raw
+}
+
+// TestAnonymizeRedactsACompressedImage: the images that carry burned-in text
+// are mostly stored compressed, and -redact refused them (#240). The output
+// is native, the region is black, and every other pixel is what the
+// compressed image decodes to.
+func TestAnonymizeRedactsACompressedImage(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	in := filepath.Join(corpus, "SC_rgb_rle.dcm")
+	if _, err := os.Stat(in); err != nil {
+		t.Skipf("SC_rgb_rle.dcm is not present: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.dcm")
+	if err := runAnonymize("-redact", "0,0,100,10", in, out); err != nil {
+		t.Fatalf("anonymize -redact: %v", err)
+	}
+
+	_, source := readAnonymized(t, in)
+	meta, ds := readAnonymized(t, out)
+	if meta.TransferSyntaxUID != "1.2.840.10008.1.2.1" {
+		t.Errorf("transfer syntax %q, want Explicit VR Little Endian", meta.TransferSyntaxUID)
+	}
+	want, err := source.DecodedPixelData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := pixelsOf(t, ds)
+	// 100 by 100 RGB: the first ten rows are the region.
+	region := 10 * 100 * 3
+	if len(got) < len(want) {
+		t.Fatalf("Pixel Data is %d bytes, the image %d", len(got), len(want))
+	}
+	for i := 0; i < region; i++ {
+		if got[i] != 0 {
+			t.Fatalf("byte %d of the region is %d", i, got[i])
+		}
+	}
+	if !bytes.Equal(got[region:len(want)], want[region:]) {
+		t.Error("pixels outside the region differ from the decoded source")
+	}
 }

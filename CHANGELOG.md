@@ -46,7 +46,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commonly drawn on. `go-dicom anonymize -redact x,y,w,h` applies it, and the
   command refuses an image at risk unless `-redact` or `-allow-burned-in` is
   given. Nothing here finds the text: the rectangles are the caller's.
-  Compressed pixel data and subsampled chroma are refused.
+  Native `YBR_FULL_422`, whose chroma is shared between pixels, is refused.
+
+- **Compressed images can be redacted** (#240). `-redact` and
+  `CleanPixelData` refused compressed pixel data, which is how most
+  ultrasound and screen captures are stored. They now decompress first.
+  `Dataset.DecompressInPlace` replaces encapsulated Pixel Data with its
+  samples and makes the data set describe them: Explicit VR Little Endian,
+  Planar Configuration 0, `YBR_FULL_422` as `YBR_FULL`, and the JPEG 2000
+  `YBR_RCT` and `YBR_ICT` as `RGB`. Nothing is encoded again, so redacting
+  adds no loss; the file is written uncompressed and is larger. An image
+  that is not redacted keeps its syntax.
+
+- **`go-dicom share` renders an image as a picture that is safe to hand on**
+  (#241). Getting from a study to a PNG took `anonymize` and then `convert`,
+  and leaving out the first gave a picture of an image nobody had checked.
+  `share <input.dcm> <output.png|.jpg>` renders as `convert` does, with
+  `--window`, `--frame` and `--quality`, and applies `anonymize`'s rule
+  first: an image that may hold burned-in text is refused unless `-redact`
+  says where it is or `-allow-burned-in` says there is none. Redaction
+  decompresses a compressed image in memory. The picture holds pixels only,
+  and the input is not changed.
 
 - **`go-dicom convert` writes PNG and JPEG, and `Dataset.RenderFrame` renders
   an image for display** (#234). The library decoded every image it read and
@@ -63,6 +83,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as unsigned and applies no rescale; it is unchanged.
 
 ### Fixed
+
+- **A compressed color image sent uncompressed is described as it was
+  decoded** (#246). Sent over a context that negotiated an uncompressed
+  syntax, a compressed instance was decoded and still described as stored. A
+  4:2:2 JPEG arrived with chroma for every pixel and saying `YBR_FULL_422`,
+  which in native data means two bytes a pixel, so the receiver read the
+  bytes for the wrong pixels: pydicom's reading was off by up to 255, and the
+  send reported success. The transcoder now uses `Dataset.DecompressInPlace`,
+  so Photometric Interpretation and Planar Configuration describe what is
+  sent, for C-STORE and for C-GET and C-MOVE sub-operations, and from one
+  compressed syntax to another as well.
 
 - **A compressed frame stored in more than one fragment decodes** (#238).
   PS3.5 A.4 lets a frame span several fragments, and each fragment was decoded

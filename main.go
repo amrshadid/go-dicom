@@ -55,6 +55,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.TagDocCommand{})
 	dicomCLI.RegisterCommand(&cli.CodifyCommand{})
 	dicomCLI.RegisterCommand(&cli.AnonymizeCommand{})
+	dicomCLI.RegisterCommand(&cli.ShareCommand{})
 	dicomCLI.RegisterCommand(&cli.HelpCommand{})
 	dicomCLI.RegisterCommand(&cli.VersionCommand{
 		AppName:    "go-dicom",
