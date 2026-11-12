@@ -1123,6 +1123,61 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# PNG export: go-dicom renders, pydicom and numpy say what it should look like.
+#
+# A rendering is a chain of four steps, the sign of the samples, the rescale,
+# the window and the rounding, and getting any one wrong still gives a
+# picture. Only the same picture worked out another way shows it.
+# ---------------------------------------------------------------------------
+if python3 -c "import numpy, pydicom, PIL" >/dev/null 2>&1; then
+  note "PNG export: go-dicom renderer, pydicom reference"
+  RAN_ANY=1
+
+  png_out="$WORKDIR/out.png"
+  png_src=$(python3 -c "from pydicom.data import get_testdata_file; print(get_testdata_file('CT_small.dcm'))" 2>/dev/null || true)
+
+  if [ -z "$png_src" ] || [ ! -f "$png_src" ]; then
+    skip "CT_small.dcm is not in the corpus"
+  elif ! "$GODICOM" convert -format png -window 40,400 "$png_src" "$png_out" >/dev/null 2>&1; then
+    fail "the converter did not produce a PNG"
+  elif python3 - "$png_out" "$png_src" <<'PYEOF'
+import sys
+import warnings
+
+warnings.filterwarnings("ignore")
+import numpy
+import pydicom
+from PIL import Image
+
+got = numpy.asarray(Image.open(sys.argv[1])).astype(int)
+ds = pydicom.dcmread(sys.argv[2])
+
+# Signed 16-bit samples, rescaled to Hounsfield units, then the window the
+# converter was given, by PS3.3 C.11.2.1.2, to 8 bits. The file has no window
+# of its own.
+x = ds.pixel_array.astype(float) * float(ds.RescaleSlope) + float(ds.RescaleIntercept)
+c, w = 40.0, 400.0
+y = ((x - (c - 0.5)) / (w - 1) + 0.5) * 255
+y[x <= c - 0.5 - (w - 1) / 2] = 0
+y[x > c - 0.5 + (w - 1) / 2] = 255
+want = numpy.floor(numpy.clip(y, 0, 255) + 0.5).astype(int)
+
+if got.shape != want.shape:
+    print(f"   the PNG is {got.shape}, the image {want.shape}", file=sys.stderr)
+    raise SystemExit(1)
+# One level of tolerance: a value exactly between two levels rounds either way.
+if numpy.abs(got - want).max() > 1:
+    print(f"   the PNG differs from the windowed image by up to {numpy.abs(got - want).max()} levels", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+  then
+    pass "PNG export — the rendering matches pydicom's pixels, rescaled and windowed"
+  else
+    fail "the PNG is not the image the file's rescale and window describe"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Tier-2 SOP classes: Relevant Patient Information Query, Display System, and a
 # non-patient object information model.
 #

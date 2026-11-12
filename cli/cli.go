@@ -122,7 +122,7 @@ func (c *CLI) ShowHelp() {
 	fileDescriptions := map[string]string{
 		"show":      "Display DICOM file contents",
 		"info":      "Show DICOM file metadata and information",
-		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI)",
+		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
 		"anonymize": "De-identify a DICOM file or directory (PS3.15 Annex E)",
 		"tag-doc":   "Generate documentation for DICOM tags",
 		"codify":    "Read a DICOM file and produce Go code to create it",
