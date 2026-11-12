@@ -29,8 +29,28 @@ type FileSpec struct {
 	Index    int
 }
 
+// invokedAs is the name the binary was run under, which help text has to
+// use: the same source ships as go-dicom and as dicom, and instructions for
+// a command the user does not have are no help.
+var invokedAs = "go-dicom"
+
+// printHelp prints a command's help with the name the binary was run under
+// in place of go-dicom.
+//
+// A replace over the finished text, as HelpCommand.print does: the name
+// occurs dozens of times across these literals, always meaning the same.
+// Every command's help goes through here, and `help <command>` runs the
+// command's own -h, so there is one text per command and it names the right
+// binary whichever way it is asked for (#242).
+func printHelp(text string) {
+	fmt.Print(strings.ReplaceAll(text, "go-dicom", invokedAs))
+}
+
 // NewCLI creates a new CLI instance.
 func NewCLI(name, version string) *CLI {
+	if name != "" {
+		invokedAs = name
+	}
 	return &CLI{
 		Name:     name,
 		Version:  version,

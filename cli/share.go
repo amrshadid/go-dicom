@@ -116,7 +116,7 @@ func (sc *ShareCommand) Execute(args []string) error {
 }
 
 func (sc *ShareCommand) showHelp() {
-	fmt.Print(`Render a DICOM image as a picture that is safe to hand on
+	printHelp(`Render a DICOM image as a picture that is safe to hand on
 
 USAGE:
   go-dicom share [options] <input.dcm> <output.png|.jpg|.jpeg>

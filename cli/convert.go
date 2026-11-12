@@ -159,7 +159,7 @@ func (cc *ConvertCommand) Execute(args []string) error {
 
 // showHelp displays help information for the convert command.
 func (cc *ConvertCommand) showHelp() {
-	fmt.Print(`COMMAND: convert - Convert DICOM to other formats
+	printHelp(`COMMAND: convert - Convert DICOM to other formats
 
 USAGE:
   go-dicom convert <input> <output> [options]

@@ -82,6 +82,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data set's attributes are in it. The existing `ApplyWindowing` reads samples
   as unsigned and applies no rescale; it is unchanged.
 
+- **JPEG Baseline can be written** (#243). The library decoded the most widely
+  accepted compressed syntax and could not produce it, so a peer that takes
+  only `1.2.840.10008.1.2.4.50` for a storage class could not be sent a native
+  image. `compress.EncodeJPEGBaseline` codes 8-bit frames of one component or
+  three, each at full resolution.
+  `Dataset.CompressJPEGBaselineInPlace(quality)` encodes an image and makes
+  the data set describe it: color as `YBR_FULL`, a fragment per frame with a
+  Basic Offset Table, Lossy Image Compression `01` with its ratio and method.
+  The network sends an image this way only when `NetworkConfig.JPEGQuality` is
+  set; with it unset the send fails and names the setting, since nothing lossy
+  is done unasked. Deeper images and PALETTE COLOR are refused. dcmtk and
+  pydicom decode the output, at the quality and size libjpeg gives for the
+  same setting.
+
+### Changed
+
+- **`help <command>` is the command's own help, and names the binary it was
+  run as** (#242). `help` had a page of its own for `show`, `info`, `tag-doc`
+  and `codify`, written by hand beside each command's `-h`; the `tag-doc`
+  page left out `--limit` and `--output`. `help` now runs the command's `-h`
+  for every command, so the two cannot differ. Each command's help also uses
+  the name the binary was invoked under, where `-h` used to say `go-dicom`
+  whatever it was called.
+
 ### Fixed
 
 - **A compressed color image sent uncompressed is described as it was
@@ -107,6 +131,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behind `Dataset.GetEncapsulatedFrame`, returned a fragment twice when a
   table was present and counted the table's offsets without the item headers
   they include; it uses the same grouping.
+
+- **1-bit images render** (#242). `RenderFrame` and `convert --format png`
+  refused Bits Allocated 1, which is how segmentations are stored. They are
+  read eight samples to a byte from the low bit up, with frames following one
+  another unpadded, and render as black and white.
+
+- **A redacted region of a palette image is black** (#242).
+  `RedactPixelRegions` filled a PALETTE COLOR image with index 0, which is
+  whatever color the palette gives it. It now fills with the palette's
+  darkest entry, and falls back to index 0 only when the tables cannot be
+  read.
 
 ## [1.7.0] - 2026-10-30
 

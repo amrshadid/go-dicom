@@ -176,7 +176,7 @@ var pixelDataTag = tag.New(0x7FE0, 0x0010)
 // here, because the alternative is an image that is wrong without looking wrong.
 //
 // Returns the data set to encode, which is the original when nothing is needed.
-func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Dataset, error) {
+func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality int) (*dataset.Dataset, error) {
 	if ds == nil {
 		return ds, nil
 	}
@@ -205,6 +205,24 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 			return compressPixelData(ds, source, targetSyntax, encodeFramesRLE)
 		case JPEGLSLosslessUID:
 			return compressPixelData(ds, source, targetSyntax, encodeFramesJPEGLS)
+		case JPEGBaselineUID:
+			// Lossy, so only for a sender that has said how much loss it
+			// accepts. Refusing is the same rule as for JPEG-LS Near-Lossless
+			// below: that decision is not one to make while transcoding.
+			if jpegQuality <= 0 {
+				return nil, fmt.Errorf("cannot encode pixel data as %s: JPEG Baseline is lossy and "+
+					"nothing is sent that way unasked; set NetworkConfig.JPEGQuality to allow it",
+					targetSyntax)
+			}
+			if _, ok := ds.Get(pixelDataTag); !ok {
+				return ds, nil
+			}
+			// A copy: sending must not make the caller's image lossy.
+			out := ds.Clone()
+			if err := out.CompressJPEGBaselineInPlace(jpegQuality); err != nil {
+				return nil, fmt.Errorf("cannot encode a %s instance as %s: %w", source, targetSyntax, err)
+			}
+			return out, nil
 		default:
 			// A send that cannot be satisfied fails rather than putting bytes on
 			// the wire described as something they are not, which the receiver
@@ -214,8 +232,9 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string) (*dataset.Data
 			// much error to accept is the caller's decision rather than one to make
 			// silently on their behalf while transcoding.
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
-				"RLE Lossless (%s) and JPEG-LS Lossless (%s)",
-				targetSyntax, RLELosslessUID, JPEGLSLosslessUID)
+				"RLE Lossless (%s) and JPEG-LS Lossless (%s), and JPEG Baseline (%s) when "+
+				"NetworkConfig.JPEGQuality is set",
+				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEGBaselineUID)
 		}
 	}
 

@@ -219,3 +219,40 @@ func TestRedactRefusesWhatItCannotAddress(t *testing.T) {
 		t.Error("a data set with no image was accepted")
 	}
 }
+
+// TestRedactPaletteWithItsDarkestEntry: a palette image holds indexes, and
+// index 0 is whatever color the palette gives it. Filling with it left a
+// redacted region white in a palette that starts at white (#242).
+func TestRedactPaletteWithItsDarkestEntry(t *testing.T) {
+	l := layout{2, 2, 1, 1, 8, 8, 0, 0, "PALETTE COLOR"}
+	region := dataset.PixelRegion{Width: 2, Height: 1}
+	lut := func(values ...uint16) []byte {
+		out := make([]byte, 2*len(values))
+		for i, v := range values {
+			binary.LittleEndian.PutUint16(out[2*i:], v)
+		}
+		return out
+	}
+
+	ds, _ := imageOf(l)
+	// Three entries: white, mid-gray, black. The darkest is index 2.
+	for c := uint16(0); c < 3; c++ {
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x1101+c), dataelem.US, lut(3, 0, 16)))
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x1201+c), dataelem.OW, lut(0xFFFF, 0x8000, 0x0000)))
+	}
+	if err := ds.RedactPixelRegions(region); err != nil {
+		t.Fatalf("RedactPixelRegions: %v", err)
+	}
+	if got := pixelBytes(t, ds)[:2]; got[0] != 2 || got[1] != 2 {
+		t.Errorf("the region holds indexes %v, want the palette's black, 2", got)
+	}
+
+	// With no table to consult there is nothing better than index 0.
+	bare, _ := imageOf(l)
+	if err := bare.RedactPixelRegions(region); err != nil {
+		t.Fatalf("RedactPixelRegions with no palette: %v", err)
+	}
+	if got := pixelBytes(t, bare)[:2]; got[0] != 0 || got[1] != 0 {
+		t.Errorf("the region holds %v, want 0 when the palette cannot be read", got)
+	}
+}

@@ -465,8 +465,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
   the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
   not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
-  an ICC profile, and it refuses 1-bit and 64-bit samples and segmented
-  palettes by name. `go-dicom convert --format png|jpeg` is the same
+  an ICC profile, and it refuses 64-bit samples and segmented palettes by
+  name. `go-dicom convert --format png|jpeg` is the same
   rendering. Grayscale output is checked against pydicom, and color against
   the lossless copy of the same picture.
 
@@ -486,8 +486,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Two syntaxes are compressed *to*: RLE Lossless and JPEG-LS Lossless.** Pixel
-  data is transcoded in both directions as the negotiated context requires.
+- **Three syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, and
+  JPEG Baseline when asked.** Pixel data is transcoded in both directions as
+  the negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
@@ -499,10 +500,24 @@ how decoded samples are shaped and coloured, and the one tolerance.
   it is lossy, and how much error to accept is the caller's decision rather than
   one to make silently while transcoding.
 
+  **JPEG Baseline (Process 1) is written only when the sender sets
+  `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
+  8-bit unsigned MONOCHROME1, MONOCHROME2, RGB and YBR_FULL images; a deeper
+  image and PALETTE COLOR are refused. Color is coded with every component at
+  full resolution and described as `YBR_FULL`, since the 4:2:0 that a common
+  encoder defaults to has no Photometric Interpretation in this syntax. Each
+  frame is one fragment, with a Basic Offset Table. The data set is marked
+  Lossy Image Compression `01` with its ratio and method `ISO_10918_1`. The SOP
+  Instance UID is not changed: a lossy copy is a different instance (PS3.3
+  C.7.6.1.1.5), and saying whether a send is one is the caller's.
+  `Dataset.CompressJPEGBaselineInPlace` is the same encoder for files. dcmtk
+  and pydicom decode what it writes, to the quality and size libjpeg gives at
+  the same setting.
+
   Every other compressed target fails, naming the syntax asked for. There is no
-  JPEG or JPEG 2000 encoder here, and a send that cannot be satisfied fails rather
-  than putting bytes on the wire described as something they are not, which the
-  receiver could not detect.
+  JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send that
+  cannot be satisfied fails rather than putting bytes on the wire described as
+  something they are not, which the receiver could not detect.
 
   *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
   shares no code with this library. A round trip through this package's own

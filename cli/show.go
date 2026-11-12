@@ -127,7 +127,7 @@ func (sc *ShowCommand) displayElement(elem DicomElement) {
 
 // showHelp displays help information for the show command.
 func (sc *ShowCommand) showHelp() {
-	fmt.Print(`COMMAND: show - Display DICOM file contents
+	printHelp(`COMMAND: show - Display DICOM file contents
 
 USAGE:
   go-dicom show <file> [options]

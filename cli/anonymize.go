@@ -357,7 +357,7 @@ func writeUIDMap(path string, mapping map[string]string) error {
 }
 
 func (ac *AnonymizeCommand) showHelp() {
-	fmt.Print(`De-identify a DICOM file or directory
+	printHelp(`De-identify a DICOM file or directory
 
 USAGE:
   go-dicom anonymize [options] <input> <output>

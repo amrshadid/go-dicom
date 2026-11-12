@@ -358,7 +358,7 @@ func tagStatus(info *tag.TagInfo) string {
 
 // showHelp displays help information for the tag-doc command.
 func (tc *TagDocCommand) showHelp() {
-	fmt.Print(`COMMAND: tag-doc - Generate tag documentation
+	printHelp(`COMMAND: tag-doc - Generate tag documentation
 
 USAGE:
   go-dicom tag-doc [options]
