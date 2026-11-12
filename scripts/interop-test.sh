@@ -453,6 +453,56 @@ PY
   fi
   stop_server "$dcmtk_scp_pid"
 
+  # storescu -jpeg-quality (#252): an 8-bit image compressed by this
+  # library's JPEG Baseline encoder on the way out. dcmtk receives it and
+  # dcmdjpeg decodes it, so neither end of the check is this library's.
+  if [ -x "$DCMTK_BIN/dcmdjpeg" ] && python3 -c "import numpy, pydicom" >/dev/null 2>&1; then
+    note "go-dicom storescu -jpeg-quality -> dcmtk"
+    mkdir -p "$WORKDIR/dcmtk_jpeg"
+    gray="$WORKDIR/gray8.dcm"
+    python3 - "$gray" <<'PY'
+import sys, numpy, pydicom
+from pydicom.data import get_testdata_file
+ds = pydicom.dcmread(get_testdata_file("CT_small.dcm"))
+ds.BitsAllocated, ds.BitsStored, ds.HighBit, ds.PixelRepresentation = 8, 8, 7, 0
+y, x = numpy.mgrid[0:ds.Rows, 0:ds.Columns]
+ds.PixelData = ((x + y) * 255 // (ds.Rows + ds.Columns - 2)).astype(numpy.uint8).tobytes()
+ds.save_as(sys.argv[1])
+PY
+    start_server "$WORKDIR/dcmtk_jpeg" "$WORKDIR/dcmtk_jpeg_scp.log" \
+      "$DCMTK_BIN/storescp" 11199 -aet DCMTKJPEG +xa
+    dcmtk_jpeg_pid=$SERVER_PID
+    if wait_for_port 11199; then
+      if "$GODICOM" storescu -aec DCMTKJPEG -jpeg-quality 90 127.0.0.1:11199 "$gray" >/dev/null 2>&1; then
+        received=$(find "$WORKDIR/dcmtk_jpeg" -type f | head -1)
+        if [ -n "$received" ] && "$DCMTK_BIN/dcmdjpeg" "$received" "$WORKDIR/gray8_decoded.dcm" >/dev/null 2>&1 &&
+           python3 - "$gray" "$received" "$WORKDIR/gray8_decoded.dcm" <<'PY'
+import sys, numpy, pydicom
+sent = pydicom.dcmread(sys.argv[1])
+received = pydicom.dcmread(sys.argv[2], stop_before_pixels=True)
+decoded = pydicom.dcmread(sys.argv[3])
+if received.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.50":
+    sys.exit("received as %s, not JPEG Baseline" % received.file_meta.TransferSyntaxUID)
+if received.LossyImageCompression != "01":
+    sys.exit("Lossy Image Compression is %r" % received.LossyImageCompression)
+worst = int(numpy.abs(decoded.pixel_array.astype(int) - sent.pixel_array.astype(int)).max())
+if worst > 6:
+    sys.exit("decoded samples differ from the original by up to %d" % worst)
+PY
+        then
+          pass "8-bit image sent as JPEG Baseline — dcmtk received it and dcmdjpeg decodes the image"
+        else
+          fail "storescu -jpeg-quality — dcmtk did not receive an image dcmdjpeg decodes to the original"
+        fi
+      else
+        fail "storescu -jpeg-quality — the send failed"
+      fi
+    else
+      fail "dcmtk storescp +xa did not start listening"
+    fi
+    stop_server "$dcmtk_jpeg_pid"
+  fi
+
   # go-dicom sending compressed pixel data, which is where #128 was: PS3.5 A.4
   # requires undefined length, and dcmtk aborts the association on anything
   # else. pynetdicom accepts both, so the checks above never saw it. qrscp

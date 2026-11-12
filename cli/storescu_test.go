@@ -124,7 +124,7 @@ func TestPlanStoreBatches(t *testing.T) {
 		{"b", "1.2.1", "1.2.840.10008.1.2.1"},
 		{"c", "1.2.1", "1.2.840.10008.1.2.4.70"},
 	}
-	batches := planStoreBatches(files)
+	batches := planStoreBatches(files, false)
 	if len(batches) != 1 || len(batches[0].contexts) != 2 || len(batches[0].files) != 3 {
 		t.Fatalf("got %+v, want one batch, two contexts, three files", batches)
 	}
@@ -142,7 +142,7 @@ func TestPlanStoreBatches(t *testing.T) {
 	for i := 0; i < 300; i++ {
 		files = append(files, storeFile{path: fmt.Sprintf("f%d", i), sopClass: fmt.Sprintf("1.2.3.%d", i), syntax: "1.2.840.10008.1.2.1"})
 	}
-	batches = planStoreBatches(files)
+	batches = planStoreBatches(files, false)
 	total := 0
 	for _, b := range batches {
 		if len(b.contexts) > maxContexts {

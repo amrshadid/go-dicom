@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/network"
@@ -21,6 +22,9 @@ type StoreSCUCommand struct {
 	callingAE string
 	calledAE  string
 	timeout   int
+	// jpegQuality is the quality to send 8-bit images as JPEG Baseline at,
+	// or 0 to send nothing that way.
+	jpegQuality int
 }
 
 func (c *StoreSCUCommand) Name() string        { return "storescu" }
@@ -31,6 +35,8 @@ func (c *StoreSCUCommand) AddFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.callingAE, "aet", "STORESCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 60, "Connection timeout in seconds")
+	fs.IntVar(&c.jpegQuality, "jpeg-quality", 0,
+		"Send uncompressed 8-bit images as JPEG Baseline at this quality, 1 to 100, when the peer accepts it. Lossy; the SOP Instance UID is kept")
 }
 
 func (c *StoreSCUCommand) Execute(args []string) error {
@@ -44,6 +50,10 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 		return err
 	}
 	c.tlsConfig = tlsCfg
+
+	if c.jpegQuality < 0 || c.jpegQuality > 100 {
+		return fmt.Errorf("-jpeg-quality runs from 1 to 100, got %d", c.jpegQuality)
+	}
 
 	if fs.NArg() < 2 {
 		return fmt.Errorf("usage: storescu [options] host:port file1.dcm [file2.dcm ...]")
@@ -71,7 +81,7 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.timeout)*time.Second)
 	defer cancel()
 
-	for _, batch := range planStoreBatches(readable) {
+	for _, batch := range planStoreBatches(readable, c.jpegQuality > 0) {
 		s, f := c.sendBatch(ctx, address, batch)
 		sent += s
 		failed += f
@@ -124,6 +134,9 @@ func (c *StoreSCUCommand) sendBatch(ctx context.Context, address string, batch s
 		// carries its content in Items rather than Value.
 		ds := dicomFile.GetDataset()
 		fmt.Printf("Sending: %s\n", sf.path)
+		if c.jpegQuality > 0 && isNativeSyntax(sf.syntax) {
+			c.compressForPeer(scu, ds, sf)
+		}
 		if err := scu.Store(ctx, ds); err != nil {
 			fmt.Fprintf(os.Stderr, "C-STORE failed for %s: %v\n", sf.path, err)
 			failed++
@@ -133,6 +146,48 @@ func (c *StoreSCUCommand) sendBatch(ctx context.Context, address string, batch s
 		fmt.Printf("  Stored successfully\n")
 	}
 	return sent, failed
+}
+
+// compressForPeer makes ds a JPEG Baseline image when the peer accepted that
+// syntax for its class, and says what it did. Store then sends it on that
+// context, since a data set goes out on the context of its own syntax first.
+//
+// The choice is made here and not left to the association: offered beside
+// the uncompressed syntaxes in one context, which of them is used would be
+// the peer's to pick.
+func (c *StoreSCUCommand) compressForPeer(scu *network.SCU, ds *dataset.Dataset, sf storeFile) {
+	if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); !hasPixels {
+		return
+	}
+	accepted := false
+	if assoc := scu.Association(); assoc != nil {
+		for _, pc := range assoc.AcceptedContexts() {
+			if pc.AbstractSyntax == sf.sopClass && pc.TransferSyntax == network.JPEGBaselineUID {
+				accepted = true
+			}
+		}
+	}
+	if !accepted {
+		fmt.Println("  The peer does not accept JPEG Baseline for it; sending it as it is")
+		return
+	}
+	// On an error the data set is unchanged.
+	if err := ds.CompressJPEGBaselineInPlace(c.jpegQuality); err != nil {
+		fmt.Printf("  Not sent as JPEG Baseline, as it is instead: %v\n", err)
+		return
+	}
+	fmt.Printf("  As JPEG Baseline, quality %d\n", c.jpegQuality)
+}
+
+// isNativeSyntax reports whether a transfer syntax holds pixel data
+// uncompressed.
+func isNativeSyntax(uid string) bool {
+	switch uid {
+	case network.ImplicitVRLittleEndianUID, network.ExplicitVRLittleEndianUID,
+		network.ExplicitVRBigEndianUID, network.DeflatedExplicitVRLittleEndianUID:
+		return true
+	}
+	return false
 }
 
 // storeFile is what the proposal needs to know about a file before sending it.
@@ -201,7 +256,11 @@ type storeBatch struct {
 // compressed form can still take the instance decoded. A class held in two
 // syntaxes gets two contexts, and SCU.Store sends each file on the one matching
 // it. More than 128 contexts are split over several associations.
-func planStoreBatches(files []storeFile) []storeBatch {
+//
+// With jpeg, each class held uncompressed also gets a context offering JPEG
+// Baseline alone, so that whether the peer takes it is known before a file
+// is compressed for it.
+func planStoreBatches(files []storeFile, jpeg bool) []storeBatch {
 	type key struct{ class, syntax string }
 	var keys []key
 	byKey := map[key][]storeFile{}
@@ -211,6 +270,12 @@ func planStoreBatches(files []storeFile) []storeBatch {
 			keys = append(keys, k)
 		}
 		byKey[k] = append(byKey[k], f)
+		if jk := (key{f.sopClass, network.JPEGBaselineUID}); jpeg && isNativeSyntax(f.syntax) {
+			if _, seen := byKey[jk]; !seen {
+				keys = append(keys, jk)
+				byKey[jk] = nil
+			}
+		}
 	}
 
 	var batches []storeBatch
@@ -219,8 +284,9 @@ func planStoreBatches(files []storeFile) []storeBatch {
 		var batch storeBatch
 		for i, k := range keys[start:end] {
 			syntaxes := []string{k.syntax}
+			// A context with no file of its own is the JPEG Baseline offer.
 			for _, s := range []string{network.ExplicitVRLittleEndianUID, network.ImplicitVRLittleEndianUID} {
-				if s != k.syntax {
+				if s != k.syntax && (len(byKey[k]) > 0 || !jpeg) {
 					syntaxes = append(syntaxes, s)
 				}
 			}
