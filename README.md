@@ -310,6 +310,9 @@ go build -o go-dicom .
 # Send DICOM files (.dcm, .ima, any DICOM format)
 ./go-dicom storescu -aec PACS pacs:11112 study/*.dcm
 
+# Send 8-bit images as JPEG Baseline when the peer accepts it (lossy)
+./go-dicom storescu -aec PACS -jpeg-quality 90 pacs:11112 us/*.dcm
+
 # Start a storage server (receive files)
 ./go-dicom storescp -port 11112 -output ./received/
 

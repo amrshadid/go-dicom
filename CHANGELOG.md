@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`storescu -jpeg-quality` sends an image as JPEG Baseline** (#252). The
+  library could send an 8-bit image that way and the command could not ask it
+  to. With the option, `storescu` offers JPEG Baseline beside each class it
+  holds uncompressed, and compresses an image at the given quality when the
+  peer accepts it. A peer that does not, and an image Baseline cannot hold,
+  get the file as it is, and the command says which. Nothing lossy is sent
+  without the option. dcmtk receives the result and decodes it to the
+  original within the loss of the quality.
+
 - **A DICOMweb client, and `qido`, `wado` and `stow` commands** (#244). The
   library reached an archive over DIMSE only, and many now speak HTTP. The new
   `dicomweb` package searches a service for studies, series and instances
