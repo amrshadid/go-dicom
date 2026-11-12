@@ -136,6 +136,11 @@ const webOptionsHelp = `  -token <token>     Bearer token to send. Better set in
   -h, --help         Show this help
 `
 
+// writeHelp is printHelp for a command that writes where it is told.
+func writeHelp(out io.Writer, text string) {
+	fmt.Fprint(out, strings.ReplaceAll(text, "go-dicom", invokedAs))
+}
+
 func orStdout(out io.Writer) io.Writer {
 	if out == nil {
 		return os.Stdout
@@ -247,7 +252,7 @@ func (c *QidoCommand) Execute(args []string) error {
 }
 
 func (c *QidoCommand) showHelp(out io.Writer) {
-	fmt.Fprint(out, `Search a DICOMweb service for studies, series or instances (QIDO-RS)
+	writeHelp(out, `Search a DICOMweb service for studies, series or instances (QIDO-RS)
 
 USAGE:
   go-dicom qido [options] <url>
@@ -394,7 +399,7 @@ func isUID(s string) bool {
 }
 
 func (c *WadoCommand) showHelp(out io.Writer) {
-	fmt.Fprint(out, `Retrieve a study, series or instance from a DICOMweb service (WADO-RS)
+	writeHelp(out, `Retrieve a study, series or instance from a DICOMweb service (WADO-RS)
 
 USAGE:
   go-dicom wado [options] -study <uid> <url> <output-dir>
@@ -614,7 +619,7 @@ func dicomFilesUnder(path string) ([]string, error) {
 }
 
 func (c *StowCommand) showHelp(out io.Writer) {
-	fmt.Fprint(out, `Store DICOM files to a DICOMweb service (STOW-RS)
+	writeHelp(out, `Store DICOM files to a DICOMweb service (STOW-RS)
 
 USAGE:
   go-dicom stow [options] <url> <file-or-directory>...
