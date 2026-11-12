@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-12
+
+This release takes a study from the archive to something that can be handed
+on, without writing a program:
+
+- **De-identify from the command line.** `go-dicom anonymize study/ clean/`
+  applies the PS3.15 Annex E profiles to a file or a directory, and
+  `-redact x,y,width,height` blacks out text burned into the pixels, in
+  compressed images too. An image of a kind that commonly carries such text
+  is refused until you say where it is or that there is none.
+- **A picture that is safe to share.** `go-dicom share scan.dcm scan.png`
+  applies the same rule and writes pixels only. `convert --format png` and
+  `Dataset.RenderFrame` render any frame as a viewer shows it: rescaled,
+  windowed, MONOCHROME1, YBR and palette color. A windowed CT matches the
+  PS3.3 formula to within half a gray level.
+- **DICOMweb.** A client for QIDO-RS, WADO-RS and STOW-RS, and `qido`, `wado`
+  and `stow` commands. Against Orthanc, a retrieved file is the one Python's
+  requests fetches, byte for byte, and stored files come back byte for byte.
+- **JPEG Baseline can be written**, and `storescu -jpeg-quality` sends an
+  image that way. dcmtk and pydicom decode the result.
+
+It also fixes images that were read or sent wrong: a compressed frame split
+over several fragments, a 4:2:2 JPEG sent uncompressed and misread by the
+receiver, 1-bit images, and `SaveAsPNG` showing a CT as white.
+
+Nothing is removed or changed incompatibly. The interoperability suite runs
+34 checks against pynetdicom and dcmtk in both directions.
+
 ### Added
 
 - **`storescu -jpeg-quality` sends an image as JPEG Baseline** (#252). The
@@ -2063,7 +2091,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/amrshadid/go-dicom/compare/v1.4.0...v1.5.0
