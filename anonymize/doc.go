@@ -124,8 +124,11 @@
 // survives it:
 //
 //   - Burned-in annotation in pixel data. Text rendered into the image is not
-//     an attribute. Check BurnedInAnnotation (0028,0301), and treat ultrasound,
-//     screen captures, and secondary captures as suspect.
+//     an attribute, and Anonymize does not look for it. [BurnedInRisk] says
+//     whether an image is of a kind that commonly carries it, and
+//     [Anonymizer.CleanPixelData] fills the rectangles the caller names and
+//     records the Clean Pixel Data Option. Finding the text is still the
+//     caller's part: nothing here reads the pixels.
 //   - Private tags that were deliberately retained. The basic profile removes
 //     private attributes outside the safe list, but one kept on purpose may
 //     carry identity.

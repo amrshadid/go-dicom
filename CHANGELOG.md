@@ -18,8 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data set's new SOP Instance UID. `-uid-map` writes the original-to-new
   mapping, which is off by default because it links the output back to the
   patient. Files that are not DICOM and DICOMDIRs are left out of the output
-  and reported. The command does not look at the pixels: burned-in text is
-  still there.
+  and reported.
+
+- **Burned-in text can be removed, and an image that may hold it is not
+  written unasked** (#233). De-identification stopped at the attributes, so a
+  name drawn into an ultrasound or a screen capture survived it.
+  `Dataset.RedactPixelRegions` fills rectangles of native pixel data with
+  black, in every frame, at any bit depth and sample layout.
+  `Anonymizer.CleanPixelData` does that, sets Burned In Annotation to NO and
+  records the Clean Pixel Data Option of PS3.15 E.3.1, and
+  `anonymize.BurnedInRisk` says whether an image is of a kind that is
+  commonly drawn on. `go-dicom anonymize -redact x,y,w,h` applies it, and the
+  command refuses an image at risk unless `-redact` or `-allow-burned-in` is
+  given. Nothing here finds the text: the rectangles are the caller's.
+  Compressed pixel data and subsampled chroma are refused.
 
 ## [1.7.0] - 2026-10-30
 
