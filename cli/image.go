@@ -32,14 +32,29 @@ type imageOptions struct {
 // The files hold pixels and nothing else: neither encoder is given any of
 // the data set's attributes, so no name, date or identifier can ride along.
 func convertToImages(input, output string, opts imageOptions) ([]string, error) {
-	render, err := parseWindow(opts.window)
+	if err := opts.check(); err != nil {
+		return nil, err
+	}
+	ds, err := readImageDataset(input)
 	if err != nil {
 		return nil, err
 	}
-	if opts.format == "jpeg" && (opts.quality < 1 || opts.quality > 100) {
-		return nil, fmt.Errorf("--quality is %d; it runs from 1 to 100", opts.quality)
-	}
+	return writeImages(ds, output, opts)
+}
 
+// check refuses options that cannot be used, before anything is read.
+func (opts imageOptions) check() error {
+	if _, err := parseWindow(opts.window); err != nil {
+		return err
+	}
+	if opts.format == "jpeg" && (opts.quality < 1 || opts.quality > 100) {
+		return fmt.Errorf("--quality is %d; it runs from 1 to 100", opts.quality)
+	}
+	return nil
+}
+
+// readImageDataset reads a DICOM file as a data set.
+func readImageDataset(input string) (*dataset.Dataset, error) {
 	f, err := os.Open(input)
 	if err != nil {
 		return nil, err
@@ -49,7 +64,15 @@ func convertToImages(input, output string, opts imageOptions) ([]string, error) 
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", input, err)
 	}
-	ds := df.GetDataset()
+	return df.GetDataset(), nil
+}
+
+// writeImages renders the frames of ds that opts asks for and writes them.
+func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]string, error) {
+	render, err := parseWindow(opts.window)
+	if err != nil {
+		return nil, err
+	}
 	info, err := ds.GetPixelDataInfo()
 	if err != nil {
 		return nil, fmt.Errorf("the instance has no image to convert: %w", err)

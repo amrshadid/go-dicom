@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adds no loss; the file is written uncompressed and is larger. An image
   that is not redacted keeps its syntax.
 
+- **`go-dicom share` renders an image as a picture that is safe to hand on**
+  (#241). Getting from a study to a PNG took `anonymize` and then `convert`,
+  and leaving out the first gave a picture of an image nobody had checked.
+  `share <input.dcm> <output.png|.jpg>` renders as `convert` does, with
+  `--window`, `--frame` and `--quality`, and applies `anonymize`'s rule
+  first: an image that may hold burned-in text is refused unless `-redact`
+  says where it is or `-allow-burned-in` says there is none. Redaction
+  decompresses a compressed image in memory. The picture holds pixels only,
+  and the input is not changed.
+
 - **`go-dicom convert` writes PNG and JPEG, and `Dataset.RenderFrame` renders
   an image for display** (#234). The library decoded every image it read and
   could not show one. `RenderFrame` and `RenderFrames` return a frame as a
