@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/amrshadid/go-dicom/anonymize"
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -280,12 +281,13 @@ func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, inpu
 	instance := datasetText(ds, tag.New(0x0008, 0x0018))
 
 	// The syntax the file was read in. Encapsulated pixel data must keep it,
-	// and nothing else needs to change.
+	// and nothing else needs to change, unless redacting decompressed the
+	// image, which is then native and written so.
 	syntax := ""
 	if df.FileMetaInfo != nil {
 		syntax = df.FileMetaInfo.TransferSyntaxUID
 	}
-	if syntax == "" {
+	if syntax == "" || compress.IsEncapsulated(syntax) != compress.IsEncapsulated(ds.TransferSyntaxUID()) {
 		syntax = filewriter.StorageTransferSyntax(ds)
 	}
 
@@ -392,8 +394,9 @@ BURNED-IN TEXT:
   image whose Burned In Annotation is YES, or that is of such a kind and does
   not say NO, is refused unless -redact says where the text is or
   -allow-burned-in says there is none. The command does not find text: the
-  rectangles are yours to get right. Compressed pixel data cannot be
-  redacted and has to be decompressed first.
+  rectangles are yours to get right. A compressed image that is redacted
+  is written uncompressed: nothing is encoded again, so no quality is lost,
+  and the file is larger.
 
 WHAT IT DOES NOT DO:
   File names are kept, so a name that identifies the patient still does.
