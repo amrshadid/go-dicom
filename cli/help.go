@@ -158,14 +158,6 @@ Use 'go-dicom help <command>' for more information on a specific command.
 // displayCommandHelp displays help for a specific command
 func (hc *HelpCommand) displayCommandHelp(cmdName string) error {
 	switch cmdName {
-	case "show":
-		return hc.helpShow()
-	case "info":
-		return hc.helpInfo()
-	case "tag-doc":
-		return hc.helpTagDoc()
-	case "codify":
-		return hc.helpCodify()
 	case "version":
 		return hc.helpVersion()
 	case "help":
@@ -186,101 +178,6 @@ func (hc *HelpCommand) displayCommandHelp(cmdName string) error {
 		}
 		return fmt.Errorf("help: unknown command '%s'", cmdName)
 	}
-}
-
-func (hc *HelpCommand) helpShow() error {
-	hc.print(`COMMAND: show - Display DICOM file contents
-
-USAGE:
-  go-dicom show <file> [options]
-
-DESCRIPTION:
-  Display all tags and values from a DICOM file.
-
-OPTIONS:
-  --exclude-private    Exclude private tags
-  --top               Show only top-level elements
-  --quiet             Show minimal output
-
-EXAMPLES:
-  go-dicom show patient.dcm
-  go-dicom show patient.dcm --exclude-private
-  go-dicom show patient.dcm --top --quiet
-`)
-	return nil
-}
-
-func (hc *HelpCommand) helpInfo() error {
-	hc.print(`COMMAND: info - Show DICOM file metadata
-
-USAGE:
-  go-dicom info <file> [options]
-
-DESCRIPTION:
-  Display key DICOM metadata including patient information, study details,
-  and image dimensions. Integrates with DICOM dictionary for tag information.
-
-OPTIONS:
-  --verbose           Show detailed information and tag metadata
-  --stats             Show file statistics
-
-EXAMPLES:
-  go-dicom info patient.dcm
-  go-dicom info patient.dcm --verbose
-  go-dicom info patient.dcm --stats
-`)
-	return nil
-}
-
-func (hc *HelpCommand) helpTagDoc() error {
-	hc.print(`COMMAND: tag-doc - Generate tag documentation
-
-USAGE:
-  go-dicom tag-doc [options]
-
-DESCRIPTION:
-  Generate documentation for DICOM tags using the built-in 5,182-tag dictionary.
-  Look up tag information by keyword or list all tags.
-
-OPTIONS:
-  --keyword <name>    Tag keyword to look up (e.g., PatientName)
-  --format <format>   Output format: text, markdown, json (default: text)
-  --retired           Include retired tags
-  --private           Include private tags
-
-EXAMPLES:
-  go-dicom tag-doc --keyword PatientName
-  go-dicom tag-doc --keyword PatientName --format markdown
-  go-dicom tag-doc --keyword PatientName --format json
-  go-dicom tag-doc                                          # Show all tags
-`)
-	return nil
-}
-
-func (hc *HelpCommand) helpCodify() error {
-	hc.print(`COMMAND: codify - Convert DICOM file to Go code
-
-USAGE:
-  go-dicom codify <file> [options]
-
-DESCRIPTION:
-  Read a DICOM file and produce Go code that can recreate it. Useful for
-  documentation, testing, and sharing DICOM file structures.
-
-OPTIONS:
-  --exclude-size <N>    Exclude binary data larger than N bytes (default: 100)
-  --exclude-private     Exclude private tags (default: true)
-  --output <file>       Output file (if not specified, writes to stdout)
-  --package <name>      Go package name (default: main)
-  --function <name>     Function name (default: createDataset)
-
-EXAMPLES:
-  go-dicom codify patient.dcm
-  go-dicom codify patient.dcm > create_patient.go
-  go-dicom codify patient.dcm --output patient.go --exclude-size 1000
-  go-dicom codify patient.dcm --exclude-private false
-`)
-	return nil
 }
 
 func (hc *HelpCommand) helpVersion() error {

@@ -219,7 +219,7 @@ func (ic *InfoCommand) displayDictionaryInfo(elements []DicomElement) {
 
 // showHelp displays help information for the info command.
 func (ic *InfoCommand) showHelp() {
-	fmt.Print(`COMMAND: info - Show DICOM file metadata
+	printHelp(`COMMAND: info - Show DICOM file metadata
 
 USAGE:
   go-dicom info <file> [options]

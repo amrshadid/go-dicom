@@ -439,8 +439,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
   the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
   not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
-  an ICC profile, and it refuses 1-bit and 64-bit samples and segmented
-  palettes by name. `go-dicom convert --format png|jpeg` is the same
+  an ICC profile, and it refuses 64-bit samples and segmented palettes by
+  name. `go-dicom convert --format png|jpeg` is the same
   rendering. Grayscale output is checked against pydicom, and color against
   the lossless copy of the same picture.
 
