@@ -162,8 +162,6 @@ func (hc *HelpCommand) displayCommandHelp(cmdName string) error {
 		return hc.helpShow()
 	case "info":
 		return hc.helpInfo()
-	case "convert":
-		return hc.helpConvert()
 	case "tag-doc":
 		return hc.helpTagDoc()
 	case "codify":
@@ -230,28 +228,6 @@ EXAMPLES:
   go-dicom info patient.dcm
   go-dicom info patient.dcm --verbose
   go-dicom info patient.dcm --stats
-`)
-	return nil
-}
-
-func (hc *HelpCommand) helpConvert() error {
-	hc.print(`COMMAND: convert - Convert DICOM to other formats
-
-USAGE:
-  go-dicom convert <file> --format <format> [options]
-
-DESCRIPTION:
-  Convert a DICOM file to another format for integration with other tools
-  or for data analysis.
-
-OPTIONS:
-  --format <format>   Output format: json, csv, nifti
-  --output <file>     Output file (if not specified, writes to stdout)
-
-EXAMPLES:
-  go-dicom convert patient.dcm --format json
-  go-dicom convert patient.dcm --format csv --output data.csv
-  go-dicom convert patient.dcm --format nifti --output image.nii
 `)
 	return nil
 }

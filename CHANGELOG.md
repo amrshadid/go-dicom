@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`go-dicom anonymize` de-identifies a file or a directory** (#232). The
+  `anonymize` package had no command, so using it meant writing a program.
+  `go-dicom anonymize <input> <output>` applies the Basic Profile, or the
+  option `-profile` names, to a file or to every DICOM file under a directory,
+  which keeps its layout. One mapping serves the whole run, so the instances
+  of a study get the same new Study Instance UID, and the file meta gets the
+  data set's new SOP Instance UID. `-uid-map` writes the original-to-new
+  mapping, which is off by default because it links the output back to the
+  patient. Files that are not DICOM and DICOMDIRs are left out of the output
+  and reported.
+
+- **Burned-in text can be removed, and an image that may hold it is not
+  written unasked** (#233). De-identification stopped at the attributes, so a
+  name drawn into an ultrasound or a screen capture survived it.
+  `Dataset.RedactPixelRegions` fills rectangles of native pixel data with
+  black, in every frame, at any bit depth and sample layout.
+  `Anonymizer.CleanPixelData` does that, sets Burned In Annotation to NO and
+  records the Clean Pixel Data Option of PS3.15 E.3.1, and
+  `anonymize.BurnedInRisk` says whether an image is of a kind that is
+  commonly drawn on. `go-dicom anonymize -redact x,y,w,h` applies it, and the
+  command refuses an image at risk unless `-redact` or `-allow-burned-in` is
+  given. Nothing here finds the text: the rectangles are the caller's.
+  Compressed pixel data and subsampled chroma are refused.
+
+- **`go-dicom convert` writes PNG and JPEG, and `Dataset.RenderFrame` renders
+  an image for display** (#234). The library decoded every image it read and
+  could not show one. `RenderFrame` and `RenderFrames` return a frame as a
+  viewer shows it, at 8 bits: stored values read with their sign, Rescale
+  Slope and Intercept applied, then the window, which is the caller's, the
+  file's first Window Center and Width with its VOI LUT Function, or the range
+  of the data when the file has none. MONOCHROME1 is inverted, YBR is
+  converted to RGB, PALETTE COLOR goes through its tables, and an enhanced
+  multi-frame image takes its rescale and window from its functional groups.
+  `convert --format png|jpeg` writes it, with `--window center,width`,
+  `--frame n|all` and `--quality`. The file holds pixels only, so none of the
+  data set's attributes are in it. The existing `ApplyWindowing` reads samples
+  as unsigned and applies no rescale; it is unchanged.
+
 ### Fixed
 
 - **A compressed frame stored in more than one fragment decodes** (#238).

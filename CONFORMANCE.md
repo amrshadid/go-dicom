@@ -434,6 +434,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   would leave a reader to convert a second time. This matches pydicom. Convert
   with the attribute, not despite it.
 
+- **`RenderFrame` renders for display, within what it knows.** It applies the
+  sign of the samples, Rescale Slope and Intercept, a window (LINEAR,
+  LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
+  the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
+  not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
+  an ICC profile, and it refuses 1-bit and 64-bit samples and segmented
+  palettes by name. `go-dicom convert --format png|jpeg` is the same
+  rendering. Grayscale output is checked against pydicom, and color against
+  the lossless copy of the same picture.
+
 ### 8.2 Network
 
 - **Compressed transfer syntaxes are not negotiated by default**, though all
