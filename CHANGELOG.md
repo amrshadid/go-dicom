@@ -31,7 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commonly drawn on. `go-dicom anonymize -redact x,y,w,h` applies it, and the
   command refuses an image at risk unless `-redact` or `-allow-burned-in` is
   given. Nothing here finds the text: the rectangles are the caller's.
-  Compressed pixel data and subsampled chroma are refused.
+  Native `YBR_FULL_422`, whose chroma is shared between pixels, is refused.
+
+- **Compressed images can be redacted** (#240). `-redact` and
+  `CleanPixelData` refused compressed pixel data, which is how most
+  ultrasound and screen captures are stored. They now decompress first.
+  `Dataset.DecompressInPlace` replaces encapsulated Pixel Data with its
+  samples and makes the data set describe them: Explicit VR Little Endian,
+  Planar Configuration 0, `YBR_FULL_422` as `YBR_FULL`, and the JPEG 2000
+  `YBR_RCT` and `YBR_ICT` as `RGB`. Nothing is encoded again, so redacting
+  adds no loss; the file is written uncompressed and is larger. An image
+  that is not redacted keeps its syntax.
 
 - **`go-dicom convert` writes PNG and JPEG, and `Dataset.RenderFrame` renders
   an image for display** (#234). The library decoded every image it read and
