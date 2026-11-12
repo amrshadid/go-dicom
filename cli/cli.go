@@ -120,11 +120,12 @@ func (c *CLI) ShowHelp() {
 	fmt.Printf("  FILE COMMANDS:\n")
 	fileCommands := []string{"show", "info", "convert", "anonymize", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
-		"show":    "Display DICOM file contents",
-		"info":    "Show DICOM file metadata and information",
-		"convert": "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
-		"tag-doc": "Generate documentation for DICOM tags",
-		"codify":  "Read a DICOM file and produce Go code to create it",
+		"show":      "Display DICOM file contents",
+		"info":      "Show DICOM file metadata and information",
+		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
+		"anonymize": "De-identify a DICOM file or directory (PS3.15 Annex E)",
+		"tag-doc":   "Generate documentation for DICOM tags",
+		"codify":    "Read a DICOM file and produce Go code to create it",
 	}
 	for _, cmdName := range fileCommands {
 		if desc, ok := fileDescriptions[cmdName]; ok {
