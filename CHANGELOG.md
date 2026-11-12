@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A compressed frame stored in more than one fragment decodes** (#238).
+  PS3.5 A.4 lets a frame span several fragments, and each fragment was decoded
+  as a frame of its own, so such an image failed inside the codec: pydicom's
+  `examples_jpeg2k.dcm`, one JPEG 2000 frame in three fragments, gave
+  "tile-part 0 declares 152189 bytes, 65434 remain". `encaps.Frames` now
+  groups fragments into frames, by the Basic Offset Table when it has an entry
+  per frame, by count when there is a fragment per frame or a single frame,
+  and by the end-of-image marker otherwise, and refuses what it cannot assign.
+  `PixelArray` and everything built on it use it. `Extractor.ExtractFrame`,
+  behind `Dataset.GetEncapsulatedFrame`, returned a fragment twice when a
+  table was present and counted the table's offsets without the item headers
+  they include; it uses the same grouping.
 
 ## [1.7.0] - 2026-10-30
 
