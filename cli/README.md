@@ -28,6 +28,8 @@ go-dicom show patient.dcm                    # Display file contents
 go-dicom show patient.dcm::PatientName       # Show specific element
 go-dicom info -verbose -stats patient.dcm    # File metadata
 go-dicom convert patient.dcm output.json     # Convert to JSON
+go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
+go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom codify patient.dcm -output struct.go # Generate Go code
 go-dicom tag-doc -keyword PatientName        # Tag documentation
 ```
