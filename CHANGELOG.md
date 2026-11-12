@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`go-dicom anonymize` de-identifies a file or a directory** (#232). The
+  `anonymize` package had no command, so using it meant writing a program.
+  `go-dicom anonymize <input> <output>` applies the Basic Profile, or the
+  option `-profile` names, to a file or to every DICOM file under a directory,
+  which keeps its layout. One mapping serves the whole run, so the instances
+  of a study get the same new Study Instance UID, and the file meta gets the
+  data set's new SOP Instance UID. `-uid-map` writes the original-to-new
+  mapping, which is off by default because it links the output back to the
+  patient. Files that are not DICOM and DICOMDIRs are left out of the output
+  and reported. The command does not look at the pixels: burned-in text is
+  still there.
 
 ## [1.7.0] - 2026-10-30
 
