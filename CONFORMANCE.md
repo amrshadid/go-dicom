@@ -280,6 +280,30 @@ selection, and user identity negotiation. The window defaults to one.
   Verified against pynetdicom over TLS in both directions. Plain DICOM over TCP is neither authenticated nor encrypted, and
   checking a called AE title is a naming convention rather than authentication.
 
+### 4.1 DICOMweb
+
+The `dicomweb` package and the `qido`, `wado` and `stow` commands are a user
+agent for the HTTP services of PS3.18. There is no origin server.
+
+| Service | Supported | Not supported |
+|---------|-----------|---------------|
+| QIDO-RS | Search for studies, series and instances, with matching, `includefield`, `limit`, `offset` and `fuzzymatching`; results as DICOM JSON | XML results |
+| WADO-RS | Study, series and instance as `application/dicom` in `multipart/related`, in a named transfer syntax or as stored; metadata as DICOM JSON | Frames, rendered images, thumbnails and bulk data retrieved on their own |
+| STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons | Metadata with separate bulk data |
+
+UPS-RS and the capabilities service are not implemented. Bulk data that
+metadata refers to by URI is not fetched: the element is kept, empty.
+
+Authentication is whatever header the caller supplies: a bearer token, Basic
+credentials, or another. TLS is the HTTP client's, with the system roots
+unless a CA is given. A response is read up to a bound, 4 GiB by default,
+and one that runs past it is an error.
+
+Search and retrieve are checked against a public Orthanc server, read-only,
+and return what Python's requests and pydicom do for the same requests, the
+retrieved file byte for byte. Store is checked against the package's own
+test server only.
+
 ---
 
 ## 5. Configuration

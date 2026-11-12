@@ -38,6 +38,9 @@ func allCommands() []Command {
 		&MoveSCUCommand{},
 		&GetSCUCommand{},
 		&QRSCPCommand{},
+		&QidoCommand{},
+		&WadoCommand{},
+		&StowCommand{},
 	}
 }
 
