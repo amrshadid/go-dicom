@@ -158,6 +158,23 @@ func (c *Client) resource(segments ...string) *url.URL {
 // want. Any other status is a *StatusError. The caller closes the body.
 func (c *Client) do(ctx context.Context, method string, u *url.URL, accept, contentType string,
 	body io.Reader, want ...int) (*http.Response, error) {
+	response, err := c.send(ctx, method, u, accept, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	for _, status := range want {
+		if response.StatusCode == status {
+			return response, nil
+		}
+	}
+	defer func() { _ = response.Body.Close() }()
+	start, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+	return nil, statusError(u, response, start)
+}
+
+// send sends a request and returns the response, whatever its status.
+func (c *Client) send(ctx context.Context, method string, u *url.URL, accept, contentType string,
+	body io.Reader) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, fmt.Errorf("dicomweb: %w", err)
@@ -171,22 +188,22 @@ func (c *Client) do(ctx context.Context, method string, u *url.URL, accept, cont
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("dicomweb: %w", err)
 	}
-	for _, status := range want {
-		if response.StatusCode == status {
-			return response, nil
-		}
+	return response, nil
+}
+
+// statusError is the error for a response, with the start of its body.
+func statusError(u *url.URL, response *http.Response, body []byte) *StatusError {
+	if len(body) > maxErrorBody {
+		body = body[:maxErrorBody]
 	}
-	defer func() { _ = response.Body.Close() }()
-	start, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
 	bare := *u
 	bare.RawQuery = ""
-	return nil, &StatusError{
-		StatusCode: response.StatusCode, Status: response.Status, URL: bare.String(), Body: string(start),
+	return &StatusError{
+		StatusCode: response.StatusCode, Status: response.Status, URL: bare.String(), Body: string(body),
 	}
 }
 

@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a response is bounded in size. A store reports what the server kept and
   what it refused, instance by instance. `go-dicom qido`, `wado` and `stow`
   do the same from the command line. Search and retrieve return what Python's
-  requests and pydicom do against a public Orthanc server, byte for byte.
+  requests and pydicom do against a public Orthanc server, byte for byte, and
+  files stored to a local Orthanc come back byte for byte.
   Frames, rendered images, bulk data on its own, the XML encoding and the
   server side are not implemented.
 

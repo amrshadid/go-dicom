@@ -374,3 +374,62 @@ func TestStowWithNothingToSendIsAnError(t *testing.T) {
 		t.Error("a directory with no DICOM file was accepted")
 	}
 }
+
+// Orthanc answers 400 for a request it kept part of, with the account of
+// each instance. The rest of the run still has to be sent and counted.
+func TestStowCountsARefusalUnderAnyStatus(t *testing.T) {
+	dir := t.TempDir()
+	a := writeInstance(t, dir, "a.dcm", webCTClass, "1.2.3.10", webLE, nil)
+	b := writeInstance(t, dir, "b.dcm", webCTClass, "1.2.3.11", webLE, nil)
+	c := writeInstance(t, dir, "c.dcm", webCTClass, "1.2.3.12", webLE, nil)
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, storeAnswer("1.2.3.10", "1.2.3.11"))
+		}
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := &StowCommand{out: &out, batchFiles: 2}
+	err := cmd.Execute([]string{server.URL, a, b, c})
+	if err == nil {
+		t.Error("a refused instance did not fail the command")
+	}
+	if requests != 2 {
+		t.Errorf("%d request(s) were sent, want the second batch sent too", requests)
+	}
+	if !strings.Contains(out.String(), "Stored 2 instance(s), 1 refused") {
+		t.Errorf("the counts are wrong:\n%s", out.String())
+	}
+}
+
+// Orthanc does not name a file it could not read at all: it answers 400
+// and lists only what it kept. The unnamed ones are refused, not stored,
+// and the answer's body is not the message.
+func TestStowCountsFilesARefusalDoesNotName(t *testing.T) {
+	dir := t.TempDir()
+	a := writeInstance(t, dir, "a.dcm", webCTClass, "1.2.3.10", webLE, nil)
+	b := writeInstance(t, dir, "b.dcm", webCTClass, "1.2.3.11", webLE, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, storeAnswer("1.2.3.10", ""))
+	}))
+	defer server.Close()
+
+	var out bytes.Buffer
+	cmd := &StowCommand{out: &out}
+	if err := cmd.Execute([]string{server.URL, a, b}); err == nil {
+		t.Error("an unnamed refusal did not fail the command")
+	}
+	text := out.String()
+	if !strings.Contains(text, "Stored 1 instance(s), 1 refused") || !strings.Contains(text, "did not name") {
+		t.Errorf("the counts are wrong:\n%s", text)
+	}
+	if strings.Contains(text, "00081199") {
+		t.Errorf("the server's answer was printed as the message:\n%s", text)
+	}
+}

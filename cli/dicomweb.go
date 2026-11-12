@@ -499,10 +499,9 @@ func (c *StowCommand) Execute(args []string) error {
 			return nil
 		}
 		result, err := client.Store(ctx, c.study, batch...)
-		var status *dicomweb.StatusError
-		// 409 is the server keeping none of them, and it says why for each.
-		refusedWhole := errors.As(err, &status) && status.StatusCode == http.StatusConflict && result != nil
-		if err != nil && !refusedWhole {
+		// A refusal that comes with the server's account of each instance
+		// is counted, and the run goes on. Any other error ends it.
+		if err != nil && result == nil {
 			return err
 		}
 		for _, instance := range result.Failed {
@@ -514,10 +513,19 @@ func (c *StowCommand) Execute(args []string) error {
 			}
 		}
 		refused := len(result.Failed)
-		if err != nil && refused == 0 {
-			// Refused whole, by a server that did not itemize.
-			refused = len(batch)
-			fmt.Fprintf(out, "  %v\n", err)
+		var status *dicomweb.StatusError
+		if errors.As(err, &status) {
+			// Under a refusal the instances the server names as kept are
+			// the ones kept. Orthanc names no file it could not read, so
+			// the rest of the request is refused too, unnamed.
+			kept := len(result.Stored)
+			if kept > len(batch) {
+				kept = len(batch)
+			}
+			if unnamed := len(batch) - kept - refused; unnamed > 0 {
+				fmt.Fprintf(out, "  refused %d file(s) the server did not name (%s)\n", unnamed, status.Status)
+			}
+			refused = len(batch) - kept
 		}
 		failed += refused
 		stored += len(batch) - refused
@@ -614,6 +622,7 @@ USAGE:
   A directory is walked, and what is not a DICOM file in it is passed over.
   The files are sent as they are, in requests of up to 100 files or 64 MiB.
   The command fails if the server refuses any instance, and says which.
+  The rest are still sent.
 
 OPTIONS:
   -study <uid>       Store into this study; the server refuses an instance

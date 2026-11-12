@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -53,10 +52,10 @@ type FailedInstance struct {
 // Store sends DICOM Part 10 files to the service, into the study when
 // studyUID is given, and returns what the server says became of each.
 //
-// A server that keeps none of them answers 409. That is returned as a
-// *StatusError together with the result, which still names each instance
-// and why it was refused. A server that keeps some answers 202, which is
-// not an error: Failed says which were not kept.
+// A server that keeps some answers 202, which is not an error: Failed says
+// which were not kept. One that keeps none answers 409, and some servers
+// answer 400 for either. A refusal is returned as a *StatusError, together
+// with the result whenever the server gave its account of each instance.
 func (c *Client) Store(ctx context.Context, studyUID string, files ...[]byte) (*StoreResult, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("dicomweb: nothing to store")
@@ -84,38 +83,41 @@ func (c *Client) Store(ctx context.Context, studyUID string, files ...[]byte) (*
 		segments = append(segments, studyUID)
 	}
 	contentType := `multipart/related; type="application/dicom"; boundary=` + writer.Boundary()
-	response, err := c.do(ctx, http.MethodPost, c.resource(segments...), jsonMedia, contentType, &body,
-		http.StatusOK, http.StatusAccepted)
-
-	// 409 carries the same account as a success does, of instances that
-	// were all refused.
-	var status *StatusError
-	if errors.As(err, &status) && status.StatusCode == http.StatusConflict {
-		result := &StoreResult{}
-		ds := dataset.NewDataset()
-		if ds.FromDICOMJSONString(status.Body) == nil {
-			result = storeResult(ds)
-		}
-		return result, err
-	}
+	u := c.resource(segments...)
+	response, err := c.send(ctx, http.MethodPost, u, jsonMedia, contentType, &body)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = response.Body.Close() }()
 
+	// Read whole whatever the status: a refusal carries the same account as
+	// a success does, and with many instances it is long.
 	data, err := io.ReadAll(c.limited(response.Body))
 	if err != nil {
 		return nil, fmt.Errorf("dicomweb: reading the response: %w", err)
 	}
-	if len(bytes.TrimSpace(data)) == 0 {
-		// Stored, and the server did not say more.
-		return &StoreResult{}, nil
-	}
+	var result *StoreResult
 	ds := dataset.NewDataset()
-	if err := ds.FromDICOMJSONString(string(data)); err != nil {
-		return nil, fmt.Errorf("dicomweb: the store response is not DICOM JSON: %w", err)
+	if len(bytes.TrimSpace(data)) > 0 && ds.FromDICOMJSONString(string(data)) == nil {
+		result = storeResult(ds)
 	}
-	return storeResult(ds), nil
+
+	switch response.StatusCode {
+	case http.StatusOK, http.StatusAccepted:
+		if result == nil {
+			if len(bytes.TrimSpace(data)) > 0 {
+				return nil, fmt.Errorf("dicomweb: the store response is not DICOM JSON")
+			}
+			// Stored, and the server did not say more.
+			result = &StoreResult{}
+		}
+		return result, nil
+	}
+	// A body that is not the account of any instance is only an explanation.
+	if result != nil && len(result.Stored)+len(result.Failed) == 0 {
+		result = nil
+	}
+	return result, statusError(u, response, data)
 }
 
 // StoreDatasets is Store for data sets, each written as a Part 10 file in

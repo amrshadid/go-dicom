@@ -301,8 +301,10 @@ and one that runs past it is an error.
 
 Search and retrieve are checked against a public Orthanc server, read-only,
 and return what Python's requests and pydicom do for the same requests, the
-retrieved file byte for byte. Store is checked against the package's own
-test server only.
+retrieved file byte for byte. Store is checked against a local Orthanc:
+files of several transfer syntaxes come back byte for byte, and a refusal is
+reported instance by instance. Orthanc answers 400 for a request it kept part
+of, and does not name a file it could not read; both are counted as refused.
 
 ---
 

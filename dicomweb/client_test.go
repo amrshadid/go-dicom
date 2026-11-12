@@ -461,3 +461,58 @@ func TestCancellation(t *testing.T) {
 		t.Errorf("the search took %v to give up", time.Since(start))
 	}
 }
+
+// TestStoreRefusalItemizedUnderAnotherStatus: Orthanc answers 400, not 409
+// or 202, when it refuses instances of a request, and itemizes them all the
+// same. With many instances that account is far longer than the part of an
+// error body kept for a message, and it was cut off there and lost.
+func TestStoreRefusalItemizedUnderAnotherStatus(t *testing.T) {
+	var failed []string
+	for i := 0; i < 60; i++ {
+		failed = append(failed, fmt.Sprintf(`{"00081150":{"vr":"UI","Value":["1.2.840.10008.5.1.4.1.1.7"]},`+
+			`"00081155":{"vr":"UI","Value":["1.2.826.0.1.3680043.8.498.%d"]},"00081197":{"vr":"US","Value":[49152]}}`, i))
+	}
+	body := `{"00081198":{"vr":"SQ","Value":[` + strings.Join(failed, ",") + `]},` +
+		`"00081199":{"vr":"SQ","Value":[{"00081155":{"vr":"UI","Value":["1.2.3.4"]}}]}}`
+	if len(body) <= maxErrorBody {
+		t.Fatalf("the answer is %d bytes, which does not exceed what an error keeps", len(body))
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/dicom+json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Store(context.Background(), "", []byte("file"))
+	var status *StatusError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusBadRequest {
+		t.Fatalf("the error is %v, want the 400", err)
+	}
+	if len(status.Body) > maxErrorBody {
+		t.Errorf("the error keeps %d bytes of the body", len(status.Body))
+	}
+	if result == nil || len(result.Failed) != 60 || len(result.Stored) != 1 {
+		t.Fatalf("the result is %+v, want the 60 refused and the 1 kept", result)
+	}
+	if result.Failed[59].FailureReason != 0xC000 {
+		t.Errorf("the reason is %04XH, want C000H", result.Failed[59].FailureReason)
+	}
+}
+
+// A refusal that itemizes nothing has no result to give.
+func TestStoreRefusalWithNoAccount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no", http.StatusUnsupportedMediaType)
+	}))
+	defer server.Close()
+	client, _ := NewClient(server.URL)
+	result, err := client.Store(context.Background(), "", []byte("file"))
+	if err == nil || result != nil {
+		t.Errorf("result %+v, error %v; want no result and an error", result, err)
+	}
+}
