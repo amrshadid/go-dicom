@@ -143,6 +143,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   darkest entry, and falls back to index 0 only when the tables cannot be
   read.
 
+- **`GetImage`, `SaveAsPNG` and `SaveAsJPEG` show an image as a viewer does**
+  (#253). They turned 16 bits into 8 with a window of 40/400 over the stored
+  values read as unsigned, whatever the image: a CT came out white, a signed
+  image wrong, and Rescale Slope and Intercept, the data set's own window and
+  MONOCHROME1 were ignored. YBR color was shown as RGB. They now render
+  through `RenderFrame`. `SaveAsWindowedPNG`, `SaveAsWindowedJPEG` and
+  `SaveWithOptions` take their window in rescaled units, Hounsfield units for
+  CT, where they applied it to stored values, and no longer refuse an image
+  that is not 16-bit. `SaveWithOptions` scaled a one-row image to no rows.
+
 ## [1.7.0] - 2026-10-30
 
 ### Added
