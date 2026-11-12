@@ -73,6 +73,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A compressed color image sent uncompressed is described as it was
+  decoded** (#246). Sent over a context that negotiated an uncompressed
+  syntax, a compressed instance was decoded and still described as stored. A
+  4:2:2 JPEG arrived with chroma for every pixel and saying `YBR_FULL_422`,
+  which in native data means two bytes a pixel, so the receiver read the
+  bytes for the wrong pixels: pydicom's reading was off by up to 255, and the
+  send reported success. The transcoder now uses `Dataset.DecompressInPlace`,
+  so Photometric Interpretation and Planar Configuration describe what is
+  sent, for C-STORE and for C-GET and C-MOVE sub-operations, and from one
+  compressed syntax to another as well.
+
 - **A compressed frame stored in more than one fragment decodes** (#238).
   PS3.5 A.4 lets a frame span several fragments, and each fragment was decoded
   as a frame of its own, so such an image failed inside the codec: pydicom's
