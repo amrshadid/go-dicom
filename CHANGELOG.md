@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`go-dicom convert` writes PNG and JPEG, and `Dataset.RenderFrame` renders
+  an image for display** (#234). The library decoded every image it read and
+  could not show one. `RenderFrame` and `RenderFrames` return a frame as a
+  viewer shows it, at 8 bits: stored values read with their sign, Rescale
+  Slope and Intercept applied, then the window, which is the caller's, the
+  file's first Window Center and Width with its VOI LUT Function, or the range
+  of the data when the file has none. MONOCHROME1 is inverted, YBR is
+  converted to RGB, PALETTE COLOR goes through its tables, and an enhanced
+  multi-frame image takes its rescale and window from its functional groups.
+  `convert --format png|jpeg` writes it, with `--window center,width`,
+  `--frame n|all` and `--quality`. The file holds pixels only, so none of the
+  data set's attributes are in it. The existing `ApplyWindowing` reads samples
+  as unsigned and applies no rescale; it is unchanged.
 
 ## [1.7.0] - 2026-10-30
 

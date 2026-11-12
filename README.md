@@ -294,6 +294,7 @@ go build -o go-dicom .
 ./go-dicom show patient.dcm           # Every element, as stored
 ./go-dicom info patient.dcm           # Key metadata and image dimensions
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
+./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
