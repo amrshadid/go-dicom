@@ -37,7 +37,18 @@ func (a *Anonymizer) recordMethod(ds *dataset.Dataset) error {
 	if option, ok := optionCodes[a.profile]; ok {
 		codes = append(codes, option)
 	}
+	// Cleaning the pixels is recorded by CleanPixelData, which may have run
+	// first; the profile is added to it, not written over it.
+	if hasMethodCode(ds, cleanPixelDataCode) {
+		codes = append(codes, cleanPixelDataCode)
+	}
+	return writeMethod(ds, codes, true)
+}
 
+// writeMethod writes the method codes, and Patient Identity Removed when the
+// attributes were de-identified. They replace what the data set carried from
+// an earlier pass.
+func writeMethod(ds *dataset.Dataset, codes []methodCode, identityRemoved bool) error {
 	meanings := make([]string, len(codes))
 	items := sequence.New()
 	for i, code := range codes {
@@ -57,13 +68,14 @@ func (a *Anonymizer) recordMethod(ds *dataset.Dataset) error {
 		}
 	}
 
-	// Replaced rather than added to: the data set may carry these from an
-	// earlier pass.
-	for _, elem := range []*dataelem.DataElement{
-		dataelem.NewDataElement(tag.New(0x0012, 0x0062), dataelem.CS, "YES"),
-		dataelem.NewDataElement(tag.New(0x0012, 0x0063), dataelem.LO, strings.Join(meanings, `\`)),
-		dataelem.NewDataElement(tag.New(0x0012, 0x0064), dataelem.SQ, items),
-	} {
+	elems := []*dataelem.DataElement{
+		dataelem.NewDataElement(tagMethod, dataelem.LO, strings.Join(meanings, `\`)),
+		dataelem.NewDataElement(tagMethodCodes, dataelem.SQ, items),
+	}
+	if identityRemoved {
+		elems = append(elems, dataelem.NewDataElement(tag.New(0x0012, 0x0062), dataelem.CS, "YES"))
+	}
+	for _, elem := range elems {
 		t, _ := elem.Tag()
 		ds.Remove(t)
 		if err := ds.Add(elem); err != nil {
@@ -71,6 +83,44 @@ func (a *Anonymizer) recordMethod(ds *dataset.Dataset) error {
 		}
 	}
 	return nil
+}
+
+var (
+	tagMethod      = tag.New(0x0012, 0x0063)
+	tagMethodCodes = tag.New(0x0012, 0x0064)
+)
+
+// hasMethodCode reports whether ds already records code as a method used.
+func hasMethodCode(ds *dataset.Dataset, code methodCode) bool {
+	elem, ok := ds.Get(tagMethodCodes)
+	if !ok {
+		return false
+	}
+	seq, ok := elem.GetValue().(*sequence.Sequence)
+	if !ok {
+		return false
+	}
+	for _, item := range seq.Items() {
+		if recorded, ok := item.(*dataset.Dataset); ok && textOf(recorded, tag.New(0x0008, 0x0100)) == code.value {
+			return true
+		}
+	}
+	return false
+}
+
+// textOf reads a text value without its padding.
+func textOf(ds *dataset.Dataset, t tag.Tag) string {
+	elem, ok := ds.Get(t)
+	if !ok {
+		return ""
+	}
+	switch v := elem.GetValue().(type) {
+	case []byte:
+		return strings.TrimRight(string(v), " \x00")
+	case string:
+		return strings.TrimRight(v, " \x00")
+	}
+	return ""
 }
 
 // RemapUID returns the UID that Anonymize put, or would put, in place of

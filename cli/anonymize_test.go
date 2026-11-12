@@ -277,7 +277,9 @@ func TestAnonymizeKeepsCompressedPixelData(t *testing.T) {
 		t.Skipf("JPEG2000.dcm is not present: %v", err)
 	}
 	out := filepath.Join(t.TempDir(), "out.dcm")
-	if err := runAnonymize(in, out); err != nil {
+	// A secondary capture, which is refused until someone answers for its
+	// pixels (#233); what is under test here is its transfer syntax.
+	if err := runAnonymize("-allow-burned-in", in, out); err != nil {
 		t.Fatalf("anonymize: %v", err)
 	}
 

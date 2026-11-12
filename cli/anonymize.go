@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/amrshadid/go-dicom/anonymize"
@@ -21,9 +22,36 @@ import (
 
 // AnonymizeCommand de-identifies DICOM files with the PS3.15 Annex E profiles.
 type AnonymizeCommand struct {
-	profile string
-	uidMap  string
-	help    bool
+	profile       string
+	uidMap        string
+	redact        regionList
+	allowBurnedIn bool
+	help          bool
+}
+
+// regionList collects each -redact x,y,w,h.
+type regionList []dataset.PixelRegion
+
+func (r *regionList) String() string { return fmt.Sprint(len(*r), " region(s)") }
+
+func (r *regionList) Set(value string) error {
+	var region dataset.PixelRegion
+	parts := strings.Split(value, ",")
+	if len(parts) != 4 {
+		return fmt.Errorf("a region is x,y,width,height")
+	}
+	for i, field := range []*int{&region.X, &region.Y, &region.Width, &region.Height} {
+		n, err := strconv.Atoi(strings.TrimSpace(parts[i]))
+		if err != nil {
+			return fmt.Errorf("a region is x,y,width,height in whole pixels")
+		}
+		*field = n
+	}
+	if region.Width <= 0 || region.Height <= 0 {
+		return fmt.Errorf("a region needs a width and a height above zero")
+	}
+	*r = append(*r, region)
+	return nil
 }
 
 // anonymizeProfiles names the option each -profile value applies on top of the
@@ -65,6 +93,8 @@ func (ac *AnonymizeCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&ac.help, "help", false, "Show help for this command")
 	fs.StringVar(&ac.profile, "profile", "basic", "Profile: "+profileNames())
 	fs.StringVar(&ac.uidMap, "uid-map", "", "Write the original-to-new UID mapping to this file as JSON")
+	fs.Var(&ac.redact, "redact", "Fill the rectangle x,y,width,height with black in every frame (repeatable)")
+	fs.BoolVar(&ac.allowBurnedIn, "allow-burned-in", false, "Write images that may hold burned-in text without -redact")
 }
 
 // Execute runs the anonymize command.
@@ -111,7 +141,7 @@ func (ac *AnonymizeCommand) Execute(args []string) error {
 		if sameFile(input, output) {
 			return fmt.Errorf("anonymize: the output is the input; the original would be lost")
 		}
-		if err := anonymizeFile(anonymizer, input, output); err != nil {
+		if err := ac.anonymizeFile(anonymizer, input, output); err != nil {
 			return fmt.Errorf("anonymize: %s: %w", input, err)
 		}
 		done = 1
@@ -163,7 +193,7 @@ func (ac *AnonymizeCommand) anonymizeDirectory(anonymizer *anonymize.Anonymizer,
 			return err
 		}
 		var skip skipError
-		switch err := anonymizeFile(anonymizer, path, filepath.Join(outAbs, rel)); {
+		switch err := ac.anonymizeFile(anonymizer, path, filepath.Join(outAbs, rel)); {
 		case err == nil:
 			done++
 		case errors.As(err, &skip):
@@ -198,7 +228,7 @@ const (
 const mediaStorageDirectory = "1.2.840.10008.1.3.10"
 
 // anonymizeFile reads input, de-identifies it and writes it to output.
-func anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error {
+func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error {
 	in, err := os.Open(input)
 	if err != nil {
 		return err
@@ -222,6 +252,23 @@ func anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error
 			return errDICOMDIR
 		}
 		return errNotDICOM
+	}
+
+	// The pixels before the attributes: an image that cannot be cleaned, or
+	// that may hold text nobody has answered for, is not written at all.
+	if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
+		switch {
+		case len(ac.redact) > 0:
+			if err := anonymizer.CleanPixelData(ds, ac.redact...); err != nil {
+				return err
+			}
+		case !ac.allowBurnedIn:
+			if risk, reason := anonymize.BurnedInRisk(ds); risk {
+				return fmt.Errorf("it may hold text burned into the pixels: %s. "+
+					"Give -redact x,y,width,height for where the text is, "+
+					"or -allow-burned-in if there is none", reason)
+			}
+		}
 	}
 
 	if err := anonymizer.Anonymize(ds); err != nil {
@@ -327,6 +374,11 @@ OPTIONS:
   -uid-map <file>    Write the original-to-new UID mapping as JSON. It links
                      the output back to the patient: keep it apart from the
                      output, or do not write it.
+  -redact x,y,w,h    Fill a rectangle with black in every frame of every
+                     image, counted in pixels from the top left. Repeat it
+                     for more rectangles. Sets Burned In Annotation to NO and
+                     records the Clean Pixel Data Option.
+  -allow-burned-in   Write images that may hold burned-in text as they are.
   -h, -help          Show this help message
 
 WHAT IT DOES:
@@ -334,9 +386,16 @@ WHAT IT DOES:
   consistently across the run so a study stays one study, sets Patient
   Identity Removed, and records the method used.
 
+BURNED-IN TEXT:
+  Ultrasound, endoscopy, secondary captures and screen captures often have
+  the patient's name drawn into the image, where no attribute holds it. An
+  image whose Burned In Annotation is YES, or that is of such a kind and does
+  not say NO, is refused unless -redact says where the text is or
+  -allow-burned-in says there is none. The command does not find text: the
+  rectangles are yours to get right. Compressed pixel data cannot be
+  redacted and has to be decompressed first.
+
 WHAT IT DOES NOT DO:
-  It does not look at the pixels. Text burned into an image, common in
-  ultrasound, screen captures and secondary captures, is still there.
   File names are kept, so a name that identifies the patient still does.
   Files that are not DICOM are left out of the output, and a DICOMDIR is
   reported and not written.
@@ -345,5 +404,6 @@ EXAMPLES:
   go-dicom anonymize scan.dcm clean.dcm
   go-dicom anonymize study/ clean-study/
   go-dicom anonymize -profile retain-dates study/ clean-study/
+  go-dicom anonymize -redact 0,0,640,40 ultrasound.dcm clean.dcm
 `)
 }
