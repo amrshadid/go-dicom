@@ -26,8 +26,14 @@ var (
 //
 // The regions are the caller's: this does not find text. It makes the claim
 // that the image holds none once they are filled, so they have to cover all
-// of it. Pixel data has to be native; see [dataset.Dataset.RedactPixelRegions]
-// for what is refused. On an error the data set is left as it was.
+// of it.
+//
+// Compressed pixel data is decompressed first, with
+// [dataset.Dataset.DecompressInPlace], and stays native: the images that
+// carry burned-in text are mostly stored compressed (#240). Nothing is
+// encoded again, so cleaning adds no loss of its own, and the data set
+// grows. See [dataset.Dataset.RedactPixelRegions] for the layouts that are
+// refused. On an error the data set is left as it was, compressed if it was.
 //
 // It is independent of Anonymize and may run before or after it. Alone it
 // does not set Patient Identity Removed, which is the profile's to say.
@@ -35,9 +41,26 @@ func (a *Anonymizer) CleanPixelData(ds *dataset.Dataset, regions ...dataset.Pixe
 	if ds == nil {
 		return fmt.Errorf("dataset is nil")
 	}
-	if err := ds.RedactPixelRegions(regions...); err != nil {
+	// On a copy, so a region that turns out to miss the image does not leave
+	// the caller's data set decompressed and uncleaned.
+	work := ds.Clone()
+	if err := work.DecompressInPlace(); err != nil {
 		return err
 	}
+	if err := work.RedactPixelRegions(regions...); err != nil {
+		return err
+	}
+	for _, t := range []tag.Tag{
+		tag.New(0x7FE0, 0x0010), tag.New(0x0028, 0x0004), tag.New(0x0028, 0x0006),
+	} {
+		if elem, ok := work.Get(t); ok {
+			ds.Remove(t)
+			if err := ds.Add(elem); err != nil {
+				return fmt.Errorf("replacing %s: %w", t, err)
+			}
+		}
+	}
+	ds.SetTransferSyntaxUID(work.TransferSyntaxUID())
 
 	ds.Remove(tagBurnedInAnnotation)
 	if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
