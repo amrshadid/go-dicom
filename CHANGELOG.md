@@ -67,6 +67,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data set's attributes are in it. The existing `ApplyWindowing` reads samples
   as unsigned and applies no rescale; it is unchanged.
 
+- **JPEG Baseline can be written** (#243). The library decoded the most widely
+  accepted compressed syntax and could not produce it, so a peer that takes
+  only `1.2.840.10008.1.2.4.50` for a storage class could not be sent a native
+  image. `compress.EncodeJPEGBaseline` codes 8-bit frames of one component or
+  three, each at full resolution.
+  `Dataset.CompressJPEGBaselineInPlace(quality)` encodes an image and makes
+  the data set describe it: color as `YBR_FULL`, a fragment per frame with a
+  Basic Offset Table, Lossy Image Compression `01` with its ratio and method.
+  The network sends an image this way only when `NetworkConfig.JPEGQuality` is
+  set; with it unset the send fails and names the setting, since nothing lossy
+  is done unasked. Deeper images and PALETTE COLOR are refused. dcmtk and
+  pydicom decode the output, at the quality and size libjpeg gives for the
+  same setting.
+
 ### Fixed
 
 - **A compressed color image sent uncompressed is described as it was

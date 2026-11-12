@@ -353,7 +353,7 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 		return fmt.Errorf("failed to encode C-STORE-RQ: %w", err)
 	}
 
-	dataBytes, err := EncodeDataset(ds, assoc.TransferSyntaxFor(pcID))
+	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(pcID), s.config.Network.JPEGQuality)
 	if err != nil {
 		return fmt.Errorf("failed to encode dataset: %w", err)
 	}
