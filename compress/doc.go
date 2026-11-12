@@ -168,10 +168,12 @@
 //
 // # Compression
 //
-// Two syntaxes can be compressed *to*: RLE Lossless, and JPEG-LS Lossless through
-// EncodeJPEGLS — lossless, 2 to 16 bits, one scan per component. Decoding is
-// broader than encoding, and a request to compress to any other syntax fails
-// rather than producing bytes described as something they are not.
+// Three syntaxes can be compressed *to*: RLE Lossless; JPEG-LS Lossless through
+// EncodeJPEGLS — lossless, 2 to 16 bits, one scan per component; and JPEG
+// Baseline through EncodeJPEGBaseline — lossy, 8 bits, one or three components
+// at full resolution. Decoding is broader than encoding, and a request to
+// compress to any other syntax fails rather than producing bytes described as
+// something they are not.
 //
 // JPEG-LS Near-Lossless is refused although the same encoder could produce it: it
 // is lossy, so how much error to accept belongs to the caller.
