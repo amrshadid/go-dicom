@@ -29,7 +29,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 18 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), and the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`)
+- **CLI tools** — 21 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -325,6 +325,12 @@ go build -o go-dicom .
 # Ask an archive to take responsibility for instances you have sent
 ./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
 
+# === DICOMweb (HTTP) ===
+# Search, download and upload against a DICOMweb service
+./go-dicom qido -match "PatientName=Smith*" -limit 20 https://pacs.hospital.com/dicom-web
+./go-dicom wado -study 1.2.3.4 https://pacs.hospital.com/dicom-web ./retrieved/
+./go-dicom stow https://pacs.hospital.com/dicom-web study/
+
 # A storage and query/retrieve archive in one command: stores what it is
 # sent, indexes it, answers C-FIND, C-MOVE and C-GET against it, and
 # commits what it holds (commitscu above works against it)
@@ -394,6 +400,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 #### Serialization and Utilities
 | Package | Description |
 |---------|-------------|
+| [dicomweb](./dicomweb/) | DICOMweb client (PS3.18): search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP |
 | [jsonrep](./jsonrep/) | A flat summary struct of common attributes, for feeding a web API. Not the DICOM JSON Model — see `dataset.ToDICOMJSON` for that |
 | [config](./config/) | Thread-safe global configuration |
 | [errors](./errors/) | DICOM-specific error types |

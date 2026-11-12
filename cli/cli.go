@@ -83,6 +83,15 @@ var netDescriptions = map[string]string{
 	"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
 }
 
+// webCommands and webDescriptions are the same for the DICOMweb commands.
+var webCommands = []string{"qido", "wado", "stow"}
+
+var webDescriptions = map[string]string{
+	"qido": "DICOMweb search — find studies, series or instances (QIDO-RS)",
+	"wado": "DICOMweb retrieve — download a study, series or instance (WADO-RS)",
+	"stow": "DICOMweb store — upload DICOM files (STOW-RS)",
+}
+
 // RegisterCommand adds a command to the CLI.
 //
 // The help command is handed the registry as it grows, so that `help <name>` can
@@ -161,6 +170,11 @@ func (c *CLI) ShowHelp() {
 		}
 	}
 
+	fmt.Printf("\n  WEB COMMANDS:\n")
+	for _, cmdName := range webCommands {
+		fmt.Printf("    %-12s %s\n", cmdName, webDescriptions[cmdName])
+	}
+
 	fmt.Printf("\n  OTHER:\n")
 	fmt.Printf("    %-12s %s\n", "help", "Display help for commands")
 	fmt.Printf("    %-12s %s\n", "version", "Display version information")
@@ -177,6 +191,7 @@ func (c *CLI) ShowHelp() {
 	fmt.Printf("  %s storescp -port 11112 -output ./received/\n", c.Name)
 	fmt.Printf("  %s findscu -patient-name \"Smith*\" pacs:11112\n", c.Name)
 	fmt.Printf("  %s movescu -dest MY_SCP -study 1.2.3.4 pacs:11112\n", c.Name)
+	fmt.Printf("  %s qido -match \"PatientName=Smith*\" https://pacs.hospital.com/dicom-web\n", c.Name)
 	fmt.Printf("\nUse '%s help <command>' for more information on a specific command.\n", c.Name)
 }
 

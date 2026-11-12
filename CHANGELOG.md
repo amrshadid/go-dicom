@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A DICOMweb client, and `qido`, `wado` and `stow` commands** (#244). The
+  library reached an archive over DIMSE only, and many now speak HTTP. The new
+  `dicomweb` package searches a service for studies, series and instances
+  (QIDO-RS), retrieves them as DICOM files or as metadata without the pixel
+  data (WADO-RS), and stores files (STOW-RS), with a bearer token, Basic
+  credentials or any header a deployment asks for. `Client.RetrieveEach`
+  hands each instance over as it arrives, so a study need not be held whole,
+  and a response is bounded in size. A store reports what the server kept and
+  what it refused, instance by instance. `go-dicom qido`, `wado` and `stow`
+  do the same from the command line. Search and retrieve return what Python's
+  requests and pydicom do against a public Orthanc server, byte for byte, and
+  files stored to a local Orthanc come back byte for byte.
+  Frames, rendered images, bulk data on its own, the XML encoding and the
+  server side are not implemented.
+
 - **`go-dicom anonymize` de-identifies a file or a directory** (#232). The
   `anonymize` package had no command, so using it meant writing a program.
   `go-dicom anonymize <input> <output>` applies the Basic Profile, or the
