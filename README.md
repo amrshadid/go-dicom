@@ -656,7 +656,7 @@ parsing and converted back on write, so byte order never reaches code above
 every JPEG syntax in the table above — all in pure Go, with no codec to install
 and nothing to register. `Dataset.PixelArray()` decompresses them without being
 asked. Verified against pydicom on its own test corpus, and checked in CI on
-every push: **all 49** of the files in that corpus pydicom can decode decode
+every push: **all 50** of the files in that corpus pydicom can decode decode
 here to the same samples, compared whole rather than by their leading values,
 with nothing skipped.
 

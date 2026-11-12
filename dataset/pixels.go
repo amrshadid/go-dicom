@@ -282,6 +282,11 @@ func (ds *Dataset) GetEncapsulatedFrame(frameIndex int) ([]byte, error) {
 		return nil, err
 	}
 
+	// The table alone does not say how many frames there are.
+	if info, err := ds.GetPixelDataInfo(); err == nil {
+		encData.NumberOfFrames = info.NumberOfFrames
+	}
+
 	// Extract specific frame using encaps module extractor
 	extractor := encaps.NewExtractor(encData)
 	return extractor.ExtractFrame(frameIndex)
@@ -688,8 +693,15 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read encapsulated pixel data: %w", err)
 	}
 
+	// A frame may span fragments (PS3.5 A.4). Decoding each fragment as a
+	// frame failed on the first image that used it (#238).
+	frames, err := encaps.Frames(encData, info.NumberOfFrames)
+	if err != nil {
+		return nil, err
+	}
+
 	var out []byte
-	for i, fragment := range encData.Fragments {
+	for i, fragment := range frames {
 		frame, err := decompressPixelFrame(compression, fragment, info)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode %s frame %d: %w", compression, i, err)

@@ -387,7 +387,7 @@ at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded.
 
 Every file in pydicom's corpus that pydicom can decode decodes here to the same
-samples: **all 49 of them**, compared whole rather than by their leading values,
+samples: **all 50 of them**, compared whole rather than by their leading values,
 with nothing skipped for want of a decoder. What follows are two differences in
 how decoded samples are shaped and coloured, and the one tolerance.
 
