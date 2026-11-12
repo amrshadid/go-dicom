@@ -118,7 +118,7 @@ func (c *CLI) ShowHelp() {
 
 	// Display commands in a specific order
 	fmt.Printf("  FILE COMMANDS:\n")
-	fileCommands := []string{"show", "info", "convert", "tag-doc", "codify"}
+	fileCommands := []string{"show", "info", "convert", "anonymize", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
 		"show":    "Display DICOM file contents",
 		"info":    "Show DICOM file metadata and information",
@@ -148,6 +148,7 @@ func (c *CLI) ShowHelp() {
 	fmt.Printf("  -v, --version   Show version information\n")
 	fmt.Printf("\nEXAMPLES:\n")
 	fmt.Printf("  %s show patient.dcm\n", c.Name)
+	fmt.Printf("  %s anonymize study/ clean-study/\n", c.Name)
 	fmt.Printf("  %s echoscu pacs.hospital.com:11112\n", c.Name)
 	fmt.Printf("  %s storescu -aec PACS pacs:11112 study/*.dcm\n", c.Name)
 	fmt.Printf("  %s storescp -port 11112 -output ./received/\n", c.Name)

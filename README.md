@@ -29,7 +29,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 16 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), and the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`)
+- **CLI tools** — 17 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification (`anonymize`), and the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`)
 
 ## Quick Start
 
@@ -296,6 +296,7 @@ go build -o go-dicom .
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
+./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
