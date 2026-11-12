@@ -33,7 +33,7 @@ func TestPixelsAgainstWholePydicomCorpus(t *testing.T) {
 		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
 	}
 
-	var compared, skipped int
+	var compared int
 	for _, want := range pydicomPixelExpectations {
 		t.Run(want.file, func(t *testing.T) {
 			path := filepath.Join(dir, want.file)
@@ -54,10 +54,12 @@ func TestPixelsAgainstWholePydicomCorpus(t *testing.T) {
 
 			arr, err := df.GetDataset().PixelArrayBySample()
 			if err != nil {
-				// A syntax with no decoder is a documented limitation, not a
-				// failure — but it must not be one pydicom handled silently.
-				skipped++
-				t.Skipf("no decoder: %v", err)
+				// Every file listed is one pydicom decodes, and every syntax
+				// among them has a decoder here, so this is a defect. It was
+				// a skip while some syntaxes had none, and under that skip a
+				// frame stored in three fragments went undecoded and
+				// unnoticed (#238).
+				t.Fatalf("pydicom decodes this and PixelArrayBySample does not: %v", err)
 			}
 
 			samples, width, signed := flattenSamples(arr)
@@ -101,7 +103,7 @@ func TestPixelsAgainstWholePydicomCorpus(t *testing.T) {
 			compared++
 		})
 	}
-	t.Logf("compared %d files against pydicom, skipped %d for want of a decoder", compared, skipped)
+	t.Logf("compared %d files against pydicom", compared)
 }
 
 // flattenSamples returns the samples, the byte width of each, and whether the
