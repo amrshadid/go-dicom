@@ -166,7 +166,7 @@ func (d *sequentialDecoder) parseFrameHeader(body []byte) error {
 	if count < 1 || count > 4 {
 		return fmt.Errorf("jpegextended: the frame declares %d components", count)
 	}
-	if d.width*d.height > maxSequentialPixels {
+	if int64(d.width)*int64(d.height) > maxSequentialPixels {
 		return fmt.Errorf("jpegextended: a %dx%d frame is beyond the %d pixel limit",
 			d.width, d.height, maxSequentialPixels)
 	}
