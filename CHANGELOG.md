@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`uid.CTImageStorage()` returns CT Image Storage, and the UID table names
+  the right classes** (#264). The function returned
+  `1.2.840.10008.5.1.4.1.1.2.1`, which is Enhanced CT Image Storage, and a
+  test pinned it, since 1.0.0. It returns `1.2.840.10008.5.1.4.1.1.2`, and
+  `EnhancedCTImageStorage()` is new. `GetUIDInfo` called CT Image Storage
+  "CR" and Enhanced CT "CT", and listed `1.2.840.10008.5.1.4.1.1.6.4` as
+  Ultrasound, which is not a registered UID. The table now has Computed
+  Radiography (`.1.1.1`), CT, Enhanced CT and Ultrasound (`.1.1.6.1`) under
+  the standard's names, marks Explicit VR Big Endian retired, and no longer
+  calls `1.2.840.10008.1.2.4.91` lossy, which it need not be. The `network`
+  package's constants were right throughout.
+
 ## [1.8.0] - 2026-11-12
 
 This release takes a study from the archive to something that can be handed
