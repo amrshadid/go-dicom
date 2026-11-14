@@ -162,7 +162,7 @@ func encapsulateFrames(frames [][]byte) []byte {
 	// A table entry is 32 bits. Where the frames run past that the table is
 	// left empty, which is allowed: a wrong entry is worse than a reader
 	// finding the frames itself.
-	if size-8 > math.MaxUint32 {
+	if uint64(size-8) > math.MaxUint32 {
 		item(0)
 	} else {
 		item(4 * len(frames))
