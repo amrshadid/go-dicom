@@ -1,9 +1,11 @@
 package network
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -23,6 +25,10 @@ type Transport struct {
 	// readTimeout bounds each ReadPDU: ARTIM until an association is
 	// established, DIMSETimeout after. Zero is no bound.
 	readTimeout time.Duration
+
+	// obs reports what passes as events, when the SCU or SCP that owns the
+	// transport was given somewhere to report to. Nil otherwise.
+	obs *observer
 }
 
 // SetReadTimeout bounds how long each ReadPDU waits for a whole PDU, whatever
@@ -69,22 +75,35 @@ func Dial(ctx context.Context, address string, timeout time.Duration) (*Transpor
 
 // WritePDU encodes and sends a PDU over the connection.
 func (t *Transport) WritePDU(ctx context.Context, pdu PDU) error {
+	data, err := t.writePDU(ctx, pdu)
+	if err != nil {
+		return err
+	}
+	// After the lock is released: a handler may use the transport.
+	if o := t.observed(); o != nil {
+		o.pdu(true, pdu, data)
+	}
+	return nil
+}
+
+// writePDU encodes and sends a PDU, and returns the bytes it sent.
+func (t *Transport) writePDU(ctx context.Context, pdu PDU) ([]byte, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if t.closed {
-		return NewCommunicationError("CLOSED", "transport is closed", nil)
+		return nil, NewCommunicationError("CLOSED", "transport is closed", nil)
 	}
 
 	data, err := pdu.Encode()
 	if err != nil {
-		return NewPDUErrorf("ENCODE", "failed to encode PDU: %v", err)
+		return nil, NewPDUErrorf("ENCODE", "failed to encode PDU: %v", err)
 	}
 
 	// Set write deadline from context
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := t.conn.SetWriteDeadline(deadline); err != nil {
-			return NewCommunicationError("DEADLINE", "failed to set write deadline", err)
+			return nil, NewCommunicationError("DEADLINE", "failed to set write deadline", err)
 		}
 	}
 
@@ -95,12 +114,12 @@ func (t *Transport) WritePDU(ctx context.Context, pdu PDU) error {
 		// write that timed out was reported as a generic write failure.
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
-			return NewTimeoutError("write", "write operation timed out")
+			return nil, NewTimeoutError("write", "write operation timed out")
 		}
-		return NewCommunicationError("WRITE", "failed to write PDU", err)
+		return nil, NewCommunicationError("WRITE", "failed to write PDU", err)
 	}
 
-	return nil
+	return data, nil
 }
 
 // ReadPDU reads and decodes a PDU from the connection.
@@ -147,8 +166,16 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 
 	t.mu.Lock()
 	limit := t.receiveLimit
+	obs := t.obs
 	t.mu.Unlock()
-	pdu, err := decodePDU(t.conn, limit)
+	// The bytes are kept as they are read only when something will be told
+	// of them.
+	var source io.Reader = t.conn
+	var raw bytes.Buffer
+	if obs != nil {
+		source = io.TeeReader(t.conn, &raw)
+	}
+	pdu, err := decodePDU(source, limit)
 	if err != nil {
 		// errors.As, not a type assertion: DecodePDU wraps the network error in
 		// its own, so asserting on the returned value never matched and no read
@@ -171,6 +198,9 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 		return nil, err
 	}
 
+	if obs != nil {
+		obs.pdu(false, pdu, raw.Bytes())
+	}
 	return pdu, nil
 }
 
@@ -205,7 +235,14 @@ func (t *Transport) Close() error {
 		return nil
 	}
 	t.closed = true
-	return t.conn.Close()
+	err := t.conn.Close()
+	if o := t.obs; o != nil {
+		// Not under the lock a handler might want.
+		t.mu.Unlock()
+		o.events.Emit(o.event(EVTConnClose))
+		t.mu.Lock()
+	}
+	return err
 }
 
 // LocalAddr returns the local network address.

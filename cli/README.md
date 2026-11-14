@@ -43,6 +43,33 @@ go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # D
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
 ```
 
+## The event log
+
+Every network command (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`,
+`movescu`, `getscu`, `commitscu`, `qrscp`) takes `-events <file>`, or `-events -`
+for standard output. It appends one JSON object per line as things happen, so
+the file can be followed while the command runs:
+
+```json
+{"event":"EVT_DIMSE_RECV","time":"2026-11-14T18:20:11.482913Z","associationId":1,"role":"SCU","localAE":"STORESCU","remoteAE":"PACS","localAddr":"10.0.0.5:51822","remoteAddr":"10.0.0.9:11112","dimse":{"command":"C-STORE-RSP","commandField":32769,"contextId":1,"messageIdBeingRespondedTo":1,"affectedSOPClassUID":"1.2.840.10008.5.1.4.1.1.2","affectedSOPInstanceUID":"1.2.3.4","hasDataSet":false,"status":0}}
+```
+
+| Event | When | Carries |
+|---|---|---|
+| `EVT_CONN_OPEN`, `EVT_CONN_CLOSE` | the connection opens and closes | addresses |
+| `EVT_PDU_SENT`, `EVT_PDU_RECV` | every PDU, either way | `pdu`: its type, length and bytes in hex; an A-ASSOCIATE-RQ's and -AC's presentation contexts and maximum PDU length; an A-ASSOCIATE-RJ's result, source and reason; an A-ABORT's source and reason; a P-DATA-TF's PDVs |
+| `EVT_REQUESTED`, `EVT_ACCEPTED`, `EVT_ESTABLISHED`, `EVT_REJECTED`, `EVT_RELEASED`, `EVT_ABORTED` | the association's own events | the PDU that caused it; on accepted and established, `presentationContexts`: each as proposed and as answered |
+| `EVT_DIMSE_SENT`, `EVT_DIMSE_RECV` | every DIMSE message, either way | `dimse`: command, message ID, SOP class and instance UIDs, status, and the remaining, completed, failed and warning counts of a C-GET or C-MOVE |
+| `EVT_C_ECHO`, `EVT_C_STORE`, `EVT_C_FIND`, `EVT_C_GET`, `EVT_C_MOVE`, `EVT_N_…` | a request arrives | `dimse` |
+| `STORED` | `storescp` or `qrscp` kept an instance | `stored`: its UIDs and the file's path. The command's own line, not a network event |
+
+`role` is `SCU` on the side that requested the association and `SCP` on the
+side that accepted it. `associationId` tells one association from another
+within a run; `qrscp` logs the association a C-MOVE opens to its destination
+under its own. Two commands' logs are paired by their addresses. A PDU's bytes
+are cut at `-events-pdu-bytes` (65536 by default, 0 for all), and
+`bytesTruncated` says when.
+
 ## API Reference
 
 ```go

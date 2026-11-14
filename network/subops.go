@@ -171,6 +171,7 @@ func (s *SCP) associateWithMoveDestination(ctx context.Context, destAE, destAddr
 		Address:   destAddress,
 		Network:   s.config.Network,
 		TLS:       s.config.OutboundTLS,
+		Events:    s.config.Events,
 	})
 
 	if err := dest.Associate(ctx, contexts); err != nil {

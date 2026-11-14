@@ -176,6 +176,7 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 	// long as it ran, forever with context.Background (#206): the response to
 	// the request has ARTIM, and each PDU after it DIMSETimeout.
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.observe(s.config.Events)
 	s.association = NewAssociation(transport)
 
 	if contexts == nil {

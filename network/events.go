@@ -10,6 +10,14 @@ type EventType int
 
 // Notification events — informational, multiple handlers allowed.
 // These match pynetdicom's EVT_* constants for full compatibility.
+//
+// An SCU reports them to SCUConfig.Events and an SCP to SCPConfig.Events (or
+// Server.Events). What is emitted: the connection opening and closing, every
+// PDU either way, the association being requested, accepted, established,
+// rejected, released and aborted, every DIMSE message either way, and the
+// service event of each request received. EVTACSERecv, EVTACSESent,
+// EVTDataRecv, EVTDataSent, EVTFSMTransition and the four negotiation events
+// are declared for pynetdicom's names and are not emitted.
 const (
 	// Connection lifecycle
 	EVTConnOpen  EventType = iota + 1 // Connection opened
@@ -81,7 +89,76 @@ type Event struct {
 	// Additional context
 	Description string
 	Error       error
+
+	// AssociationID tells the events of one association from another's. It
+	// is unique within the process, and 0 for an event that belongs to no
+	// connection, such as a server starting.
+	AssociationID uint64
+	// Role is "SCU" on the side that requested the association and "SCP"
+	// on the side that accepted it. It is empty until the A-ASSOCIATE-RQ
+	// has passed.
+	Role string
+	// LocalAE and RemoteAE are the two AE titles as this side sees them,
+	// and LocalAddr this side's address; RemoteAddr is above.
+	LocalAE, RemoteAE string
+	LocalAddr         string
+
+	// PDU is the PDU of a PDU event, and of the association event one
+	// gave rise to. PDUBytes is that PDU as it crossed the connection,
+	// header included.
+	PDU      PDU
+	PDUBytes []byte
+
+	// PresentationContexts is the outcome of each presentation context, on
+	// EVTAssocAccepted and EVTAssocEstablished.
+	PresentationContexts []NegotiatedContext
+
+	// Command is the command set of a DIMSE event, and of the service event
+	// a request gives rise to.
+	Command *CommandInfo
 }
+
+// NegotiatedContext is a presentation context as it was proposed and as it
+// was answered.
+type NegotiatedContext struct {
+	ID             byte
+	AbstractSyntax string
+	// Proposed are the transfer syntaxes the requestor offered.
+	Proposed []string
+	// Result is the acceptor's answer (PS3.8 Table 9-18): PCResultAcceptance
+	// or the reason for refusing.
+	Result byte
+	// TransferSyntax is the one accepted, empty when the context was refused.
+	TransferSyntax string
+}
+
+// CommandInfo is what a DIMSE command set says, read from the message as it
+// crossed the connection.
+type CommandInfo struct {
+	// ContextID is the presentation context the message went on.
+	ContextID byte
+	// CommandField is the command (PS3.7 E.1), and Name its usual name,
+	// such as "C-STORE-RQ".
+	CommandField uint16
+	Name         string
+	// MessageID is set on a request, MessageIDBeingRespondedTo on a response.
+	MessageID                 uint16
+	MessageIDBeingRespondedTo uint16
+	AffectedSOPClassUID       string
+	AffectedSOPInstanceUID    string
+	RequestedSOPClassUID      string
+	RequestedSOPInstanceUID   string
+	MoveDestination           string
+	// HasDataSet reports whether a data set follows the command set.
+	HasDataSet bool
+	// Status is nil on a request. The sub-operation counts are nil where the
+	// message does not carry them.
+	Status                                *uint16
+	Remaining, Completed, Failed, Warning *uint16
+}
+
+// IsResponse reports whether the command is a response.
+func (c *CommandInfo) IsResponse() bool { return c.CommandField&0x8000 != 0 }
 
 // EventHandler is a function that handles network events.
 type EventHandler func(event *Event)
@@ -104,6 +181,16 @@ func (em *EventManager) On(eventType EventType, handler EventHandler) {
 	em.mu.Lock()
 	defer em.mu.Unlock()
 	em.handlers[eventType] = append(em.handlers[eventType], handler)
+}
+
+// OnAny registers a handler for every event type, for a log of everything
+// that happens.
+func (em *EventManager) OnAny(handler EventHandler) {
+	em.mu.Lock()
+	defer em.mu.Unlock()
+	for t := EVTConnOpen; t <= EVTUserID; t++ {
+		em.handlers[t] = append(em.handlers[t], handler)
+	}
 }
 
 // Off removes all handlers for an event type.

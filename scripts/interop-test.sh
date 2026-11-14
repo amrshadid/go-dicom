@@ -265,6 +265,61 @@ if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/storescu" ]; then
     fi
 
     send_classes PYSCP 11151 "$WORKDIR/py_recv"
+
+    # -events (#260): the PDUs storescu logs are decoded by pynetdicom's own
+    # PDU classes, so the bytes in the log are what crossed the connection
+    # and the log's account of them is what another implementation reads.
+    events="$WORKDIR/events.jsonl"
+    if "$GODICOM" storescu -aet EVTSCU -aec PYSCP -events "$events" 127.0.0.1:11151 "$FIXTURE" >/dev/null 2>&1 &&
+       checked=$(python3 - "$events" <<'PY'
+import json, sys
+from pynetdicom.pdu import A_ASSOCIATE_RQ, A_ASSOCIATE_AC, P_DATA_TF, A_RELEASE_RQ, A_RELEASE_RP
+kinds = {"A-ASSOCIATE-RQ": A_ASSOCIATE_RQ, "A-ASSOCIATE-AC": A_ASSOCIATE_AC, "P-DATA-TF": P_DATA_TF,
+         "A-RELEASE-RQ": A_RELEASE_RQ, "A-RELEASE-RP": A_RELEASE_RP}
+records = [json.loads(line) for line in open(sys.argv[1])]
+pdus = dimse = 0
+for r in records:
+    if r["event"] not in ("EVT_PDU_SENT", "EVT_PDU_RECV"):
+        dimse += r["event"].startswith("EVT_DIMSE")
+        continue
+    log = r["pdu"]
+    raw = bytes.fromhex(log["bytes"])
+    pdu = kinds[log["type"]]()
+    pdu.decode(raw)
+    pdus += 1
+    if pdu.pdu_length != log["length"] or len(raw) != log["length"] + 6:
+        sys.exit("%s: length %d in the log, %d in the bytes" % (log["type"], log["length"], pdu.pdu_length))
+    if log["type"] == "A-ASSOCIATE-RQ":
+        if pdu.calling_ae_title.strip() != "EVTSCU" or pdu.called_ae_title.strip() != "PYSCP":
+            sys.exit("the request names %r and %r" % (pdu.calling_ae_title, pdu.called_ae_title))
+        theirs = sorted((c.context_id, str(c.abstract_syntax)) for c in pdu.presentation_context)
+        ours = sorted((c["id"], c["abstractSyntax"]) for c in log["proposedContexts"])
+        if theirs != ours:
+            sys.exit("proposed contexts differ: %r and %r" % (theirs, ours))
+    if log["type"] == "A-ASSOCIATE-AC":
+        theirs = sorted((c.context_id, c.result) for c in pdu.presentation_context)
+        ours = sorted((c["id"], c["result"]) for c in log["answeredContexts"])
+        if theirs != ours:
+            sys.exit("answered contexts differ: %r and %r" % (theirs, ours))
+    if log["type"] == "P-DATA-TF":
+        theirs = [(v.context_id, len(v.presentation_data_value) - 1) for v in pdu.presentation_data_value_items]
+        ours = [(v["contextId"], v["length"]) for v in log["pdvs"]]
+        if theirs != ours:
+            sys.exit("PDVs differ: %r and %r" % (theirs, ours))
+names = [r["event"] for r in records]
+for need in ("EVT_REQUESTED", "EVT_ACCEPTED", "EVT_ESTABLISHED", "EVT_DIMSE_SENT", "EVT_DIMSE_RECV", "EVT_RELEASED"):
+    if need not in names:
+        sys.exit("no %s in the log" % need)
+status = [r["dimse"]["status"] for r in records if r["event"] == "EVT_DIMSE_RECV"]
+if status != [0]:
+    sys.exit("the C-STORE response's status is logged as %r" % status)
+print("%d PDUs and %d DIMSE messages" % (pdus, dimse))
+PY
+    ); then
+      pass "-events: pynetdicom decodes every logged PDU to what the log says — $checked"
+    else
+      fail "-events: the log does not match what pynetdicom reads from its bytes: $checked"
+    fi
   else
     fail "pynetdicom storescp did not start listening"
   fi

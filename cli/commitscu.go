@@ -14,6 +14,7 @@ import (
 // storage responsibility for instances already sent to it (PS3.4 Annex J).
 type CommitSCUCommand struct {
 	tls            tlsFlags
+	events         eventsFlag
 	callingAE      string
 	calledAE       string
 	transactionUID string
@@ -49,6 +50,7 @@ func (c *CommitSCUCommand) Description() string {
 
 func (c *CommitSCUCommand) AddFlags(fs *flag.FlagSet) {
 	addClientTLSFlags(fs, &c.tls)
+	c.events.add(fs)
 	fs.StringVar(&c.callingAE, "aet", "COMMITSCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.StringVar(&c.transactionUID, "transaction", "", "Transaction UID (generated if empty)")
@@ -67,6 +69,11 @@ func (c *CommitSCUCommand) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
+	events, closeEvents, err := c.events.open()
+	if err != nil {
+		return err
+	}
+	defer closeEvents()
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: commitscu [options] -instance CLASS:INSTANCE host:port")
@@ -83,6 +90,7 @@ func (c *CommitSCUCommand) Execute(args []string) error {
 	address := fs.Arg(0)
 	scu := network.NewSCU(network.SCUConfig{
 		TLS:       tlsCfg,
+		Events:    events,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,
