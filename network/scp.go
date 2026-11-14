@@ -406,7 +406,8 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 	}
 
 	resp, err := handler.HandleCEcho(ctx, req)
-	if err != nil {
+	// A handler that returns nothing has not answered.
+	if err != nil || resp == nil {
 		resp = &CEchoResponse{
 			MessageIDRespondedTo: messageID,
 			AffectedSOPClass:     VerificationSOPClassUID,
@@ -414,7 +415,10 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 		}
 	}
 
-	rspDS := BuildCEchoRSP(resp.MessageIDRespondedTo, resp.Status)
+	// The request's Message ID, whatever the handler filled in: a response
+	// that answers message 0 is never matched to its request, and the
+	// requestor waits for one that is (#266).
+	rspDS := BuildCEchoRSP(messageID, resp.Status)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
 		DefaultLogger.Error("failed to encode C-ECHO-RSP: %v", err)
@@ -458,7 +462,8 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 	}
 
 	resp, err := handler.HandleCStore(ctx, req)
-	if err != nil {
+	// A handler that returns nothing has not stored anything it has said.
+	if err != nil || resp == nil {
 		resp = &CStoreResponse{
 			MessageIDRespondedTo: messageID,
 			AffectedSOPClass:     sopClassUID,
@@ -467,7 +472,8 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 		}
 	}
 
-	rspDS := BuildCStoreRSP(resp.MessageIDRespondedTo, sopClassUID, sopInstanceUID, resp.Status)
+	// The request's Message ID, as for C-ECHO above.
+	rspDS := BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, resp.Status)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
 		DefaultLogger.Error("failed to encode C-STORE-RSP: %v", err)
