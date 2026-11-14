@@ -17,6 +17,7 @@ import (
 // FindSCUCommand implements the findscu CLI command.
 type FindSCUCommand struct {
 	tls         tlsFlags
+	events      eventsFlag
 	callingAE   string
 	calledAE    string
 	timeout     int
@@ -46,6 +47,7 @@ func (c *FindSCUCommand) Description() string { return "DICOM Find SCU (query)" 
 
 func (c *FindSCUCommand) AddFlags(fs *flag.FlagSet) {
 	addClientTLSFlags(fs, &c.tls)
+	c.events.add(fs)
 	fs.StringVar(&c.callingAE, "aet", "FINDSCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 30, "Connection timeout in seconds")
@@ -72,6 +74,11 @@ func (c *FindSCUCommand) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
+	events, closeEvents, err := c.events.open()
+	if err != nil {
+		return err
+	}
+	defer closeEvents()
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: findscu [options] host:port")
@@ -81,6 +88,7 @@ func (c *FindSCUCommand) Execute(args []string) error {
 
 	scu := network.NewSCU(network.SCUConfig{
 		TLS:       tlsCfg,
+		Events:    events,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,

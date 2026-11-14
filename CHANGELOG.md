@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`-events` logs what happens on an association, and the library reports
+  it** (#260). `network/events.go` declared pynetdicom's `EVT_*` set and
+  emitted two of them, from an SCP only; an SCU had nowhere to report to at
+  all. `SCUConfig.Events` and `SCPConfig.Events` now take an `EventManager`
+  that is told of every PDU either way, with its bytes; of the association
+  being requested, accepted, established, rejected, released and aborted,
+  with each presentation context as proposed and as answered; of every DIMSE
+  message either way; and of each request arriving (`EVTCStore` and the
+  rest). An SCP's own associations, such as the one a C-MOVE opens to its
+  destination, report to the same place. `EventManager.OnAny` registers one
+  handler for all of them. The nine network commands take `-events <file|->`
+  and append one JSON object a line. pynetdicom's own PDU classes decode
+  every logged PDU to what the log says of it.
+
 ## [1.8.0] - 2026-11-12
 
 This release takes a study from the archive to something that can be handed

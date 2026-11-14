@@ -58,6 +58,9 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 		Events: NewEventManager(),
 		Logger: NewLogger(LogLevelInfo, nil),
 	}
+	if config.Events != nil {
+		s.Events = config.Events
+	}
 
 	// Start listening first (so we can return errors immediately)
 	addr := fmt.Sprintf("%s:%d", config.BindAddress, listenPort)
@@ -107,6 +110,9 @@ func StartServerTLS(ctx context.Context, config SCPConfig, handler Handler, tlsC
 		cancel: cancel,
 		Events: NewEventManager(),
 		Logger: NewLogger(LogLevelInfo, nil),
+	}
+	if config.Events != nil {
+		s.Events = config.Events
 	}
 
 	addr := fmt.Sprintf("%s:%d", config.BindAddress, listenPort)

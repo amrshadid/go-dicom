@@ -101,6 +101,11 @@ type SCUConfig struct {
 	// TLS, when set, makes Associate connect over TLS.
 	TLS *TLSConfig
 
+	// Events, when set, is told what happens on each association: every
+	// PDU, the association's own events and every DIMSE message. See
+	// EventType.
+	Events *EventManager
+
 	// OnCStore receives instances the peer sends as C-STORE sub-operations
 	// during a C-GET. Return a DIMSE status; StatusSuccess accepts the
 	// instance.
@@ -132,6 +137,12 @@ type SCPConfig struct {
 
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
 	MaxAssociations int
+
+	// Events, when set, is told what happens on each association the SCP
+	// accepts, and on those it opens itself: C-MOVE sub-operations, storage
+	// commitment results and UPS event reports. A Server started with it
+	// uses it as its Events.
+	Events *EventManager
 
 	// TLS, when set, makes ListenAndServe and StartServer accept associations
 	// over TLS only.

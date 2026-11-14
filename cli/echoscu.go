@@ -12,6 +12,7 @@ import (
 // EchoSCUCommand implements the echoscu CLI command.
 type EchoSCUCommand struct {
 	tls       tlsFlags
+	events    eventsFlag
 	callingAE string
 	calledAE  string
 	timeout   int
@@ -22,6 +23,7 @@ func (c *EchoSCUCommand) Description() string { return "DICOM Echo SCU (verifica
 
 func (c *EchoSCUCommand) AddFlags(fs *flag.FlagSet) {
 	addClientTLSFlags(fs, &c.tls)
+	c.events.add(fs)
 	fs.StringVar(&c.callingAE, "aet", "ECHOSCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 30, "Connection timeout in seconds")
@@ -37,6 +39,11 @@ func (c *EchoSCUCommand) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
+	events, closeEvents, err := c.events.open()
+	if err != nil {
+		return err
+	}
+	defer closeEvents()
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: echoscu [options] host:port")
@@ -46,6 +53,7 @@ func (c *EchoSCUCommand) Execute(args []string) error {
 
 	scu := network.NewSCU(network.SCUConfig{
 		TLS:       tlsCfg,
+		Events:    events,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,

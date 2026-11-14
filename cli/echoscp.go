@@ -14,6 +14,7 @@ import (
 // EchoSCPCommand implements the echoscp CLI command.
 type EchoSCPCommand struct {
 	tls     tlsFlags
+	events  eventsFlag
 	aeTitle string
 	port    int
 }
@@ -23,6 +24,7 @@ func (c *EchoSCPCommand) Description() string { return "DICOM Echo SCP (verifica
 
 func (c *EchoSCPCommand) AddFlags(fs *flag.FlagSet) {
 	addServerTLSFlags(fs, &c.tls)
+	c.events.add(fs)
 	fs.StringVar(&c.aeTitle, "aet", "ECHOSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 }
@@ -37,9 +39,15 @@ func (c *EchoSCPCommand) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
+	events, closeEvents, err := c.events.open()
+	if err != nil {
+		return err
+	}
+	defer closeEvents()
 
 	scp := network.NewSCP(network.SCPConfig{
 		TLS:     tlsCfg,
+		Events:  events,
 		AETitle: c.aeTitle,
 		Port:    c.port,
 	})

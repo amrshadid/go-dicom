@@ -330,6 +330,10 @@ go build -o go-dicom .
 # Ask an archive to take responsibility for instances you have sent
 ./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
 
+# Log what happens on the association as JSON lines: every PDU with its bytes,
+# the presentation contexts as proposed and answered, every DIMSE message
+./go-dicom storescu -aec PACS -events trace.jsonl pacs:11112 study/*.dcm
+
 # === DICOMweb (HTTP) ===
 # Search, download and upload against a DICOMweb service
 ./go-dicom qido -match "PatientName=Smith*" -limit 20 https://pacs.hospital.com/dicom-web

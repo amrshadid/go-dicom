@@ -124,6 +124,13 @@ const (
 //
 // events may be nil. Connections turned away at the limit emit no events.
 func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *EventManager) error {
+	if events == nil {
+		events = s.config.Events
+	}
+	// The associations the SCP opens itself report to the same place.
+	s.mu.Lock()
+	s.config.Events = events
+	s.mu.Unlock()
 	var delay time.Duration
 	for {
 		transport, err := ln.Accept(ctx)
@@ -172,10 +179,9 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 			}
 		}
 
-		remote := transport.RemoteAddr().String()
-		if events != nil {
-			events.Emit(&Event{Type: EVTConnOpen, RemoteAddr: remote})
-		}
+		// Reports the connection opening now, and closing when the
+		// transport is closed.
+		transport.observe(events)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -183,9 +189,6 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 				defer func() { <-s.assocSlots }()
 			}
 			s.handleConnection(ctx, transport)
-			if events != nil {
-				events.Emit(&Event{Type: EVTConnClose, RemoteAddr: remote})
-			}
 		}()
 	}
 }

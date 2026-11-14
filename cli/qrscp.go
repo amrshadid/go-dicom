@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -17,6 +18,7 @@ import (
 // Storage, and Query/Retrieve SCP. Equivalent to pynetdicom's qrscp.
 type QRSCPCommand struct {
 	tls       tlsFlags
+	events    eventsFlag
 	aeTitle   string
 	port      int
 	outputDir string
@@ -30,6 +32,7 @@ func (c *QRSCPCommand) Description() string { return "DICOM Query/Retrieve SCP (
 
 func (c *QRSCPCommand) AddFlags(fs *flag.FlagSet) {
 	addServerTLSFlags(fs, &c.tls)
+	c.events.add(fs)
 	fs.StringVar(&c.aeTitle, "aet", "QRSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 	fs.StringVar(&c.outputDir, "output", "./received", "Storage directory for received instances")
@@ -72,6 +75,11 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
+	events, closeEvents, err := c.events.open()
+	if err != nil {
+		return err
+	}
+	defer closeEvents()
 	// The peers qrscp calls are verified against the same CA its clients are,
 	// and see the same certificate.
 	var outboundTLS *network.TLSConfig
@@ -101,6 +109,7 @@ func (c *QRSCPCommand) Execute(args []string) error {
 
 	scp := network.NewSCP(network.SCPConfig{
 		TLS:              tlsCfg,
+		Events:           events,
 		OutboundTLS:      outboundTLS,
 		AETitle:          c.aeTitle,
 		Port:             c.port,
@@ -110,6 +119,9 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	handler := dcmstore.NewHandler(store)
 	handler.OnStored = func(_ context.Context, inst *dcmstore.Instance) error {
 		fmt.Printf("  Stored: %s -> %s\n", inst.SOPInstanceUID, inst.Path)
+		// The path is the store's own, made from a UID it has already checked.
+		kept := filepath.Join(c.outputDir, inst.Path)
+		c.events.stored(inst.SOPClassUID, inst.SOPInstanceUID, kept)
 		return nil
 	}
 	scp.SetHandler(handler)
