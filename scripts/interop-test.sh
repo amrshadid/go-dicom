@@ -1457,6 +1457,64 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# show --json: where each element sits in the file (#259)
+#
+# pydicom records where it found every value it read (file_tell). The
+# offsets `show --json` prints are held against those, across pydicom's own
+# corpus, so a wrong offset is caught by a reader that is not this one.
+# ---------------------------------------------------------------------------
+if python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "show --json: element offsets against pydicom's"
+  RAN_ANY=1
+  corpus=$(python3 -c "import os, pydicom.data; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+  if offsets=$(python3 - "$GODICOM" "$corpus" <<'PY'
+import sys, json, subprocess, glob, os, warnings
+import pydicom
+warnings.simplefilter("ignore")
+G, D = sys.argv[1], sys.argv[2]
+files = ok = 0; elems = 0; bad = []
+def walk(pds, gelems, path, name):
+    global elems
+    gmap = {e["tag"]: e for e in gelems}
+    for pe in pds:
+        t = "(%04X,%04X)" % (pe.tag.group, pe.tag.element)
+        ge = gmap.get(t)
+        if ge is None or pe.file_tell is None: continue
+        elems += 1
+        if ge["valueOffset"] != pe.file_tell:
+            bad.append((name, path + t, ge["valueOffset"], pe.file_tell)); return
+        # pydicom reads a sequence of stated length from a buffer of its own,
+        # and its offsets inside one count from that buffer, not the file.
+        if pe.VR == "SQ" and pe.is_undefined_length and "items" in ge and len(pe.value) == len(ge["items"]):
+            for i, (pi, gi) in enumerate(zip(pe.value, ge["items"])):
+                tell = getattr(pi, "seq_item_tell", None)
+                if tell is not None and tell != gi["tagOffset"]:
+                    bad.append((name, path + t + "[%d] item" % i, gi["tagOffset"], tell)); return
+                walk(pi, gi["elements"], path + t + "[%d]" % i, name)
+for f in sorted(glob.glob(os.path.join(D, "*.dcm"))):
+    name = os.path.basename(f)
+    r = subprocess.run([G, "show", "--json", f], capture_output=True, text=True)
+    if r.returncode != 0: continue
+    doc = json.loads(r.stdout)
+    if doc["offsetsRelativeTo"] != "file": continue
+    try: pds = pydicom.dcmread(f, force=True)
+    except Exception: continue
+    files += 1; before = len(bad)
+    if hasattr(pds, "file_meta"): walk(pds.file_meta, doc["fileMeta"], "meta ", name)
+    walk(pds, doc["dataSet"], "", name)
+    ok += len(bad) == before
+for b in bad[:12]: print("  DIFF", b)
+if bad or files < 50: sys.exit("%d of %d files disagree" % (files - ok, files))
+print("%d elements of %d files" % (elems, files))
+PY
+  ); then
+    pass "value offsets agree with pydicom's — $offsets"
+  else
+    fail "show --json offsets differ from pydicom's: $offsets"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 note "Result"
 if [ "$RAN_ANY" -eq 0 ]; then
   echo "   No third-party peer was available, so nothing was verified." >&2
