@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A C-STORE or C-ECHO response carries the request's Message ID whatever
+  the handler returned** (#266). The SCP used the ID in the handler's
+  response. A handler returning `&CStoreResponse{Status: StatusSuccess}`
+  answered message 0, which the requestor never matched to its request, so
+  `SCU.Store` waited out its timeout for an instance that had been stored.
+  A handler returning no response and no error made the SCP dereference nil;
+  it is now answered `0xC000`.
+
 ## [1.8.0] - 2026-11-12
 
 This release takes a study from the archive to something that can be handed
