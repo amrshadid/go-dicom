@@ -13,6 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the 64-bit builds, for 32-bit x86: older hardware, embedded boxes, and
   emulators with no 64-bit mode. `install.sh` picks it on such a machine.
 
+- **`show --json` says where every element sits in the file** (#259). `show`
+  printed the decoded tree and nothing about its bytes, so a tool tying an
+  attribute to them needed a parser of its own. `--json` gives, for each
+  element, its value and the offsets of its tag, VR, length field and value
+  and of its end, for nested items and their delimiters as well, the
+  fragments of encapsulated pixel data, and the preamble, prefix, file meta
+  and data set regions. The reader records these as it goes:
+  `filereader.DataElementValue.Position`, and `DataSetOffset`,
+  `MetaGroupLength` and `Deflated` on `DICOMFile`. Across pydicom's corpus
+  the positions account for every byte of each file with no gap or overlap,
+  and each value offset is the one pydicom records.
+
 ### Changed
 
 - **The Linux release binaries are static, and all are smaller** (#258).

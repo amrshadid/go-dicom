@@ -26,6 +26,7 @@ func main() {
 ```bash
 go-dicom show patient.dcm                    # Display file contents
 go-dicom show patient.dcm::PatientName       # Show specific element
+go-dicom show patient.dcm --json             # Every element with its byte offsets in the file
 go-dicom info -verbose -stats patient.dcm    # File metadata
 go-dicom convert patient.dcm output.json     # Convert to JSON
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
