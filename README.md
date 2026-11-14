@@ -74,6 +74,7 @@ Pick your platform from the [latest release](https://github.com/amrshadid/go-dic
 | macOS, Intel | `go-dicom-macos-amd64` |
 | Linux, x86-64 | `go-dicom-linux-amd64` |
 | Linux, ARM64 | `go-dicom-linux-arm64` |
+| Linux, x86 32-bit | `go-dicom-linux-386` |
 | Windows, x86-64 | `go-dicom-windows-amd64.exe` |
 
 Then, on macOS or Linux:
