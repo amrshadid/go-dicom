@@ -100,10 +100,11 @@
 //
 // **Common SOP Classes:**
 //   - Verification SOP Class: 1.2.840.10008.1.1
-//   - CR Image Storage: 1.2.840.10008.5.1.4.1.1.2
-//   - CT Image Storage: 1.2.840.10008.5.1.4.1.1.2.1
+//   - Computed Radiography Image Storage: 1.2.840.10008.5.1.4.1.1.1
+//   - CT Image Storage: 1.2.840.10008.5.1.4.1.1.2
+//   - Enhanced CT Image Storage: 1.2.840.10008.5.1.4.1.1.2.1
 //   - MR Image Storage: 1.2.840.10008.5.1.4.1.1.4
-//   - Ultrasound Image Storage: 1.2.840.10008.5.1.4.1.1.6.4
+//   - Ultrasound Image Storage: 1.2.840.10008.5.1.4.1.1.6.1
 //
 // # API Reference
 //

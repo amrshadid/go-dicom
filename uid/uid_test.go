@@ -128,7 +128,7 @@ func TestIsTransferSyntax(t *testing.T) {
 		{"1.2.840.10008.1.2.2", true},        // Explicit VR Big Endian
 		{"1.2.840.10008.1.2.4.50", true},     // JPEG Baseline
 		{"1.2.840.10008.1.1", false},         // Verification SOP Class
-		{"1.2.840.10008.5.1.4.1.1.2", false}, // CR Image Storage
+		{"1.2.840.10008.5.1.4.1.1.2", false}, // CT Image Storage
 		{"1.2.3.4.5.6.7.8.9", false},         // Unknown UID
 	}
 
@@ -390,8 +390,8 @@ func TestVerificationSOPClass(t *testing.T) {
 // TestCTImageStorage tests the CTImageStorage function.
 func TestCTImageStorage(t *testing.T) {
 	u := uid.CTImageStorage()
-	if u.String() != "1.2.840.10008.5.1.4.1.1.2.1" {
-		t.Errorf("uid.CTImageStorage() = %s, want 1.2.840.10008.5.1.4.1.1.2.1", u.String())
+	if u.String() != "1.2.840.10008.5.1.4.1.1.2" {
+		t.Errorf("uid.CTImageStorage() = %s, want 1.2.840.10008.5.1.4.1.1.2", u.String())
 	}
 }
 
@@ -431,5 +431,48 @@ func TestMultipleUIDOperations(t *testing.T) {
 
 	if u1.Equals(u2) {
 		t.Error("UIDs should not be equal")
+	}
+}
+
+// TestUIDTableNamesWhatTheStandardRegisters: the table called CT Image
+// Storage "CR", Enhanced CT "CT", and listed an Ultrasound UID that is not
+// registered, and CTImageStorage returned Enhanced CT (#264). The names and
+// retired flags here are PS3.6 Annex A's, checked against pydicom's copy.
+func TestUIDTableNamesWhatTheStandardRegisters(t *testing.T) {
+	for _, want := range []struct {
+		uid, name, kind string
+		retired         bool
+	}{
+		{"1.2.840.10008.1.2", "Implicit VR Little Endian", "TransferSyntax", false},
+		{"1.2.840.10008.1.2.1", "Explicit VR Little Endian", "TransferSyntax", false},
+		{"1.2.840.10008.1.2.2", "Explicit VR Big Endian", "TransferSyntax", true},
+		{"1.2.840.10008.1.2.4.90", "JPEG 2000 Image Compression (Lossless Only)", "TransferSyntax", false},
+		{"1.2.840.10008.1.2.4.91", "JPEG 2000 Image Compression", "TransferSyntax", false},
+		{"1.2.840.10008.1.1", "Verification SOP Class", "SOPClass", false},
+		{"1.2.840.10008.5.1.4.1.1.1", "Computed Radiography Image Storage", "SOPClass", false},
+		{"1.2.840.10008.5.1.4.1.1.2", "CT Image Storage", "SOPClass", false},
+		{"1.2.840.10008.5.1.4.1.1.2.1", "Enhanced CT Image Storage", "SOPClass", false},
+		{"1.2.840.10008.5.1.4.1.1.4", "MR Image Storage", "SOPClass", false},
+		{"1.2.840.10008.5.1.4.1.1.6.1", "Ultrasound Image Storage", "SOPClass", false},
+	} {
+		info := uid.GetUIDInfo(want.uid)
+		if info == nil {
+			t.Errorf("%s (%s) is not in the table", want.uid, want.name)
+			continue
+		}
+		if info.Name != want.name || info.Type != want.kind || info.IsRetired != want.retired || info.UID != want.uid {
+			t.Errorf("%s is %q, %s, retired %v; the standard has %q, %s, retired %v",
+				want.uid, info.Name, info.Type, info.IsRetired, want.name, want.kind, want.retired)
+		}
+	}
+	// Not a registered UID.
+	if uid.GetUIDInfo("1.2.840.10008.5.1.4.1.1.6.4") != nil {
+		t.Error("1.2.840.10008.5.1.4.1.1.6.4 is in the table, and is not a UID the standard registers")
+	}
+	if got := uid.CTImageStorage().String(); got != "1.2.840.10008.5.1.4.1.1.2" {
+		t.Errorf("CTImageStorage() = %s, want 1.2.840.10008.5.1.4.1.1.2", got)
+	}
+	if got := uid.EnhancedCTImageStorage().String(); got != "1.2.840.10008.5.1.4.1.1.2.1" {
+		t.Errorf("EnhancedCTImageStorage() = %s, want 1.2.840.10008.5.1.4.1.1.2.1", got)
 	}
 }
