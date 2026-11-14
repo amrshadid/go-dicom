@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-14
+
+This release shows what the library sees: where every element sits in a
+file, and what crosses a connection.
+
+- **`go-dicom show file.dcm --json`** gives every element with the offsets
+  of its tag, VR, length field and value, nested items and their delimiters
+  included, and the preamble, prefix, file meta and data set regions. A hex
+  viewer can be drawn from it without a second parser. Its value offsets are
+  the ones pydicom records, across pydicom's corpus.
+- **`-events trace.jsonl`** on every network command logs what happens on an
+  association, one JSON object a line: each PDU with its bytes, each
+  presentation context as proposed and as answered, each DIMSE message with
+  its status. Programs get the same through `SCUConfig.Events` and
+  `SCPConfig.Events`. pynetdicom's own decoder reads every logged PDU.
+- **32-bit targets work again.** 1.8.0 did not compile for 386 or 32-bit
+  ARM. It does now, the tests run on 386 in CI, and releases carry a static
+  `go-dicom-linux-386` that runs on Alpine.
+
+It also corrects `uid.CTImageStorage()`, which returned Enhanced CT's UID,
+and a C-STORE handler that could leave the sender waiting.
+
+**Upgrading:** `uid.CTImageStorage()` now returns
+`1.2.840.10008.5.1.4.1.1.2`. A program that used it was naming Enhanced CT
+Image Storage; `uid.EnhancedCTImageStorage()` returns that. Nothing else
+changes for existing code.
+
+### Added
+
+- **`-events` logs what happens on an association, and the library reports
+  it** (#260). `network/events.go` declared pynetdicom's `EVT_*` set and
+  emitted two of them, from an SCP only; an SCU had nowhere to report to at
+  all. `SCUConfig.Events` and `SCPConfig.Events` now take an `EventManager`
+  that is told of every PDU either way, with its bytes; of the association
+  being requested, accepted, established, rejected, released and aborted,
+  with each presentation context as proposed and as answered; of every DIMSE
+  message either way; and of each request arriving (`EVTCStore` and the
+  rest). The bytes and the contexts are read with `Event.PDUBytes` and
+  `Event.PresentationContexts`. An SCP's own associations, such as the one a C-MOVE opens to its
+  destination, report to the same place. `EventManager.OnAny` registers one
+  handler for all of them. The nine network commands take `-events <file|->`
+  and append one JSON object a line. pynetdicom's own PDU classes decode
+  every logged PDU to what the log says of it.
+
+- **A linux/386 binary** (#258). Releases carry `go-dicom-linux-386` beside
+  the 64-bit builds, for 32-bit x86: older hardware, embedded boxes, and
+  emulators with no 64-bit mode. `install.sh` picks it on such a machine.
+
+- **`show --json` says where every element sits in the file** (#259). `show`
+  printed the decoded tree and nothing about its bytes, so a tool tying an
+  attribute to them needed a parser of its own. `--json` gives, for each
+  element, its value and the offsets of its tag, VR, length field and value
+  and of its end, for nested items and their delimiters as well, the
+  fragments of encapsulated pixel data, and the preamble, prefix, file meta
+  and data set regions. The reader records these as it goes:
+  `filereader.DataElementValue.Position`, and `DataSetOffset`,
+  `MetaGroupLength` and `Deflated` on `DICOMFile`. Across pydicom's corpus
+  the positions account for every byte of each file with no gap or overlap,
+  and each value offset is the one pydicom records.
+
+### Changed
+
+- **The Linux release binaries are static, and all are smaller** (#258).
+  They are built without cgo, so they run on a musl system such as Alpine,
+  and every release binary is built with `-trimpath -ldflags "-s -w"`.
+
+### Fixed
+
+- **A C-STORE or C-ECHO response carries the request's Message ID whatever
+  the handler returned** (#266). The SCP used the ID in the handler's
+  response. A handler returning `&CStoreResponse{Status: StatusSuccess}`
+  answered message 0, which the requestor never matched to its request, so
+  `SCU.Store` waited out its timeout for an instance that had been stored.
+  A handler returning no response and no error made the SCP dereference nil;
+  it is now answered `0xC000`.
+
+- **The module builds for 32-bit targets again** (#258). 1.8.0 did not
+  compile for `GOARCH=386` or `arm`: the JPEG Baseline encapsulation compared
+  a size with a constant that does not fit a 32-bit `int`. 1.7.0 built. CI
+  now runs the tests on 386 and builds for 32-bit ARM, which nothing did.
+
+- **A crafted image cannot overflow a size on a 32-bit platform** (#258).
+  The first runs of the tests on 386 found two. A JPEG-LS header declaring
+  65535 by 65535 passed the size check, because the product wraps a 32-bit
+  `int`, and the decoder panicked allocating for it. An RLE segment offset
+  past 2^31 is negative as an `int`, passed for one inside the frame, and
+  the decoder panicked slicing at it. The size checks of the JPEG-LS, JPEG
+  Lossless, JPEG Extended and JPEG 2000 decoders and the RLE offsets are
+  compared in 64 bits, and `GetPixelDataInfo` refuses an image whose size
+  the platform cannot address, on which every later size depends. 64-bit
+  builds were not affected.
+
+- **`uid.CTImageStorage()` returns CT Image Storage, and the UID table names
+  the right classes** (#264). The function returned
+  `1.2.840.10008.5.1.4.1.1.2.1`, which is Enhanced CT Image Storage, and a
+  test pinned it, since 1.0.0. It returns `1.2.840.10008.5.1.4.1.1.2`, and
+  `EnhancedCTImageStorage()` is new. `GetUIDInfo` called CT Image Storage
+  "CR" and Enhanced CT "CT", and listed `1.2.840.10008.5.1.4.1.1.6.4` as
+  Ultrasound, which is not a registered UID. The table now has Computed
+  Radiography (`.1.1.1`), CT, Enhanced CT and Ultrasound (`.1.1.6.1`) under
+  the standard's names, marks Explicit VR Big Endian retired, and no longer
+  calls `1.2.840.10008.1.2.4.91` lossy, which it need not be. The `network`
+  package's constants were right throughout.
+
 ## [1.8.0] - 2026-11-12
 
 This release takes a study from the archive to something that can be handed
@@ -2091,7 +2195,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0

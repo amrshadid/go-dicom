@@ -882,16 +882,19 @@ func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllo
 	segments := make([][]byte, len(offsets))
 	pixelCount := -1
 	for i, off := range offsets {
-		end := len(data)
+		// The offsets are 32 bits of the file's choosing. Compared as ints
+		// they are negative on a 32-bit platform once past 2^31, and a
+		// negative offset is not past the end of anything (#258).
+		start, end := int64(off), int64(len(data))
 		if i+1 < len(offsets) {
-			end = int(offsets[i+1])
+			end = int64(offsets[i+1])
 		}
-		if int(off) > len(data) || end > len(data) || int(off) > end {
+		if start > int64(len(data)) || end > int64(len(data)) || start > end {
 			return nil, fmt.Errorf("rle: segment %d spans [%d,%d) outside a %d byte frame",
-				i, off, end, len(data))
+				i, start, end, len(data))
 		}
 
-		segment, err := decodeRLESegment(data[off:end])
+		segment, err := decodeRLESegment(data[start:end])
 		if err != nil {
 			return nil, fmt.Errorf("rle: segment %d: %w", i, err)
 		}
@@ -943,7 +946,7 @@ func parseRLEHeader(data []byte) ([]uint32, error) {
 	offsets := make([]uint32, count)
 	for i := range offsets {
 		off := binary.LittleEndian.Uint32(data[4+i*4 : 8+i*4])
-		if off < RLEHeaderSize || int(off) > len(data) {
+		if off < RLEHeaderSize || int64(off) > int64(len(data)) {
 			return nil, fmt.Errorf("rle: segment %d starts at %d, outside the frame body [%d,%d]",
 				i, off, RLEHeaderSize, len(data))
 		}

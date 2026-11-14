@@ -18,7 +18,10 @@ import (
 // StoreSCUCommand implements the storescu CLI command.
 type StoreSCUCommand struct {
 	tls       tlsFlags
+	events    eventsFlag
 	tlsConfig *network.TLSConfig
+	// eventLog is where each association reports, nil with no -events.
+	eventLog  *network.EventManager
 	callingAE string
 	calledAE  string
 	timeout   int
@@ -32,6 +35,7 @@ func (c *StoreSCUCommand) Description() string { return "DICOM Store SCU (send f
 
 func (c *StoreSCUCommand) AddFlags(fs *flag.FlagSet) {
 	addClientTLSFlags(fs, &c.tls)
+	c.events.add(fs)
 	fs.StringVar(&c.callingAE, "aet", "STORESCU", "Calling AE title")
 	fs.StringVar(&c.calledAE, "aec", "ANY-SCP", "Called AE title")
 	fs.IntVar(&c.timeout, "timeout", 60, "Connection timeout in seconds")
@@ -49,6 +53,12 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 	if err != nil {
 		return err
 	}
+	events, closeEvents, err := c.events.open()
+	if err != nil {
+		return err
+	}
+	defer closeEvents()
+	c.eventLog = events
 	c.tlsConfig = tlsCfg
 
 	if c.jpegQuality < 0 || c.jpegQuality > 100 {
@@ -98,6 +108,7 @@ func (c *StoreSCUCommand) Execute(args []string) error {
 func (c *StoreSCUCommand) sendBatch(ctx context.Context, address string, batch storeBatch) (sent, failed int) {
 	scu := network.NewSCU(network.SCUConfig{
 		TLS:       c.tlsConfig,
+		Events:    c.eventLog,
 		CallingAE: c.callingAE,
 		CalledAE:  c.calledAE,
 		Address:   address,

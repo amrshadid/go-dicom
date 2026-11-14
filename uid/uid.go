@@ -85,13 +85,13 @@ var uids = map[string]*UIDInfo{
 		IsRetired:   false,
 		Description: "Standard explicit VR transfer syntax",
 	},
-	// Explicit VR Big Endian
+	// Explicit VR Big Endian (retired)
 	"1.2.840.10008.1.2.2": {
 		UID:         "1.2.840.10008.1.2.2",
 		Name:        "Explicit VR Big Endian",
 		Type:        "TransferSyntax",
-		IsRetired:   false,
-		Description: "Big-endian explicit VR transfer syntax",
+		IsRetired:   true,
+		Description: "Big-endian explicit VR transfer syntax, retired",
 	},
 	// JPEG Baseline (Process 1)
 	"1.2.840.10008.1.2.4.50": {
@@ -142,21 +142,21 @@ var uids = map[string]*UIDInfo{
 		IsRetired:   false,
 		Description: "JPEG-LS near-lossless compression",
 	},
-	// JPEG 2000 Lossless
+	// JPEG 2000 Image Compression (Lossless Only)
 	"1.2.840.10008.1.2.4.90": {
 		UID:         "1.2.840.10008.1.2.4.90",
-		Name:        "JPEG 2000 Lossless",
+		Name:        "JPEG 2000 Image Compression (Lossless Only)",
 		Type:        "TransferSyntax",
 		IsRetired:   false,
 		Description: "JPEG 2000 lossless compression",
 	},
-	// JPEG 2000 Lossy
+	// JPEG 2000 Image Compression: lossless or lossy
 	"1.2.840.10008.1.2.4.91": {
 		UID:         "1.2.840.10008.1.2.4.91",
-		Name:        "JPEG 2000 Lossy",
+		Name:        "JPEG 2000 Image Compression",
 		Type:        "TransferSyntax",
 		IsRetired:   false,
-		Description: "JPEG 2000 lossy compression",
+		Description: "JPEG 2000 compression, lossless or lossy",
 	},
 	// JPEG 2000 Part 2 Multicomponent, Lossless only
 	"1.2.840.10008.1.2.4.92": {
@@ -190,21 +190,29 @@ var uids = map[string]*UIDInfo{
 		IsRetired:   false,
 		Description: "Used for verification of DICOM communication",
 	},
-	// CR Image Storage
-	"1.2.840.10008.5.1.4.1.1.2": {
-		UID:         "1.2.840.10008.5.1.4.1.1.2",
-		Name:        "CR Image Storage",
+	// Computed Radiography Image Storage
+	"1.2.840.10008.5.1.4.1.1.1": {
+		UID:         "1.2.840.10008.5.1.4.1.1.1",
+		Name:        "Computed Radiography Image Storage",
 		Type:        "SOPClass",
 		IsRetired:   false,
 		Description: "Computed Radiography image storage",
 	},
 	// CT Image Storage
-	"1.2.840.10008.5.1.4.1.1.2.1": {
-		UID:         "1.2.840.10008.5.1.4.1.1.2.1",
+	"1.2.840.10008.5.1.4.1.1.2": {
+		UID:         "1.2.840.10008.5.1.4.1.1.2",
 		Name:        "CT Image Storage",
 		Type:        "SOPClass",
 		IsRetired:   false,
 		Description: "Computed Tomography image storage",
+	},
+	// Enhanced CT Image Storage
+	"1.2.840.10008.5.1.4.1.1.2.1": {
+		UID:         "1.2.840.10008.5.1.4.1.1.2.1",
+		Name:        "Enhanced CT Image Storage",
+		Type:        "SOPClass",
+		IsRetired:   false,
+		Description: "Enhanced (multi-frame) Computed Tomography image storage",
 	},
 	// MR Image Storage
 	"1.2.840.10008.5.1.4.1.1.4": {
@@ -215,8 +223,8 @@ var uids = map[string]*UIDInfo{
 		Description: "Magnetic Resonance image storage",
 	},
 	// Ultrasound Image Storage
-	"1.2.840.10008.5.1.4.1.1.6.4": {
-		UID:         "1.2.840.10008.5.1.4.1.1.6.4",
+	"1.2.840.10008.5.1.4.1.1.6.1": {
+		UID:         "1.2.840.10008.5.1.4.1.1.6.1",
 		Name:        "Ultrasound Image Storage",
 		Type:        "SOPClass",
 		IsRetired:   false,
@@ -379,7 +387,15 @@ func VerificationSOPClass() UID {
 }
 
 // CTImageStorage returns the CT Image Storage SOP class UID.
+//
+// Up to 1.8.0 it returned Enhanced CT Image Storage, which is
+// EnhancedCTImageStorage (#264).
 func CTImageStorage() UID {
+	return New("1.2.840.10008.5.1.4.1.1.2")
+}
+
+// EnhancedCTImageStorage returns the Enhanced CT Image Storage SOP class UID.
+func EnhancedCTImageStorage() UID {
 	return New("1.2.840.10008.5.1.4.1.1.2.1")
 }
 

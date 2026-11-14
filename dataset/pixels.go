@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -106,6 +107,22 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 	// Validate required fields
 	if info.Rows == 0 || info.Columns == 0 {
 		return nil, fmt.Errorf("invalid pixel dimensions: rows=%d, columns=%d", info.Rows, info.Columns)
+	}
+
+	// Every size worked out from these is an int. A header can describe more
+	// than an int holds, and on a 32-bit platform a 65535 by 65535 image
+	// already does: the product wraps, and what wraps passes for a small
+	// image until something indexes past it (#258).
+	bits := uint64(1)
+	for _, n := range []int{info.Rows, info.Columns, info.SamplesPerPixel, info.BitsAllocated, info.NumberOfFrames} {
+		if n <= 0 {
+			continue
+		}
+		if bits > uint64(math.MaxInt)/uint64(n) {
+			return nil, fmt.Errorf("pixel data of %dx%d, %d sample(s) of %d bits and %d frame(s) is larger than this platform can address",
+				info.Rows, info.Columns, info.SamplesPerPixel, info.BitsAllocated, info.NumberOfFrames)
+		}
+		bits *= uint64(n)
 	}
 
 	// Calculate bytes per frame

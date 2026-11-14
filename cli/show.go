@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -14,7 +15,10 @@ type ShowCommand struct {
 	excludePrivate bool
 	topLevelOnly   bool
 	quiet          bool
+	json           bool
 	help           bool
+	// out is where --json writes; nil means standard output.
+	out io.Writer
 }
 
 // NewShowCommand creates a new show command.
@@ -39,6 +43,7 @@ func (sc *ShowCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&sc.excludePrivate, "exclude-private", false, "Exclude private tags")
 	fs.BoolVar(&sc.topLevelOnly, "top", false, "Only show top-level elements")
 	fs.BoolVar(&sc.quiet, "quiet", false, "Minimal output")
+	fs.BoolVar(&sc.json, "json", false, "Print every element as JSON with its byte offsets in the file")
 }
 
 // Execute runs the show command.
@@ -72,6 +77,16 @@ func (sc *ShowCommand) Execute(args []string) error {
 
 	if _, err := os.Stat(sc.filespec); os.IsNotExist(err) {
 		return fmt.Errorf("show: file not found: %s", sc.filespec)
+	}
+
+	if sc.json {
+		if sc.element != "" {
+			return fmt.Errorf("show: --json describes the whole file; leave out ::%s", sc.element)
+		}
+		if err := writeShowJSON(orStdout(sc.out), sc.filespec); err != nil {
+			return fmt.Errorf("show: failed to read DICOM file: %v", err)
+		}
+		return nil
 	}
 
 	elements, err := readDICOMFile(sc.filespec)
@@ -140,11 +155,19 @@ OPTIONS:
   --exclude-private    Exclude private tags
   --top                Show only top-level elements
   --quiet              Show minimal output
+  --json               Describe the file as JSON: every element with its
+                       value and where its tag, VR, length and value sit in
+                       the file, nested items and delimiters included, and
+                       the preamble, prefix, file meta and data set regions.
+                       Offsets count from the start of the file, except in a
+                       deflated data set, where they count from the start of
+                       the inflated one; "offsetsRelativeTo" says which.
 
 EXAMPLES:
   go-dicom show patient.dcm
   go-dicom show patient.dcm --exclude-private
   go-dicom show patient.dcm --top --quiet
+  go-dicom show patient.dcm --json
   go-dicom show -h
 `)
 }

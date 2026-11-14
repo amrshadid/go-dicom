@@ -124,6 +124,13 @@ const (
 //
 // events may be nil. Connections turned away at the limit emit no events.
 func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *EventManager) error {
+	if events == nil {
+		events = s.config.Events
+	}
+	// The associations the SCP opens itself report to the same place.
+	s.mu.Lock()
+	s.config.Events = events
+	s.mu.Unlock()
 	var delay time.Duration
 	for {
 		transport, err := ln.Accept(ctx)
@@ -172,10 +179,9 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 			}
 		}
 
-		remote := transport.RemoteAddr().String()
-		if events != nil {
-			events.Emit(&Event{Type: EVTConnOpen, RemoteAddr: remote})
-		}
+		// Reports the connection opening now, and closing when the
+		// transport is closed.
+		transport.observe(events)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -183,9 +189,6 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 				defer func() { <-s.assocSlots }()
 			}
 			s.handleConnection(ctx, transport)
-			if events != nil {
-				events.Emit(&Event{Type: EVTConnClose, RemoteAddr: remote})
-			}
 		}()
 	}
 }
@@ -403,7 +406,8 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 	}
 
 	resp, err := handler.HandleCEcho(ctx, req)
-	if err != nil {
+	// A handler that returns nothing has not answered.
+	if err != nil || resp == nil {
 		resp = &CEchoResponse{
 			MessageIDRespondedTo: messageID,
 			AffectedSOPClass:     VerificationSOPClassUID,
@@ -411,7 +415,10 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 		}
 	}
 
-	rspDS := BuildCEchoRSP(resp.MessageIDRespondedTo, resp.Status)
+	// The request's Message ID, whatever the handler filled in: a response
+	// that answers message 0 is never matched to its request, and the
+	// requestor waits for one that is (#266).
+	rspDS := BuildCEchoRSP(messageID, resp.Status)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
 		DefaultLogger.Error("failed to encode C-ECHO-RSP: %v", err)
@@ -455,7 +462,8 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 	}
 
 	resp, err := handler.HandleCStore(ctx, req)
-	if err != nil {
+	// A handler that returns nothing has not stored anything it has said.
+	if err != nil || resp == nil {
 		resp = &CStoreResponse{
 			MessageIDRespondedTo: messageID,
 			AffectedSOPClass:     sopClassUID,
@@ -464,7 +472,8 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 		}
 	}
 
-	rspDS := BuildCStoreRSP(resp.MessageIDRespondedTo, sopClassUID, sopInstanceUID, resp.Status)
+	// The request's Message ID, as for C-ECHO above.
+	rspDS := BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, resp.Status)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
 		DefaultLogger.Error("failed to encode C-STORE-RSP: %v", err)

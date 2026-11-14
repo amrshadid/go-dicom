@@ -28,6 +28,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
 - **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
 - **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
+- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
@@ -59,7 +60,7 @@ It is worth reading before piping anything to a shell — it is about a hundred 
 curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
 less install.sh
 sh install.sh                          # the latest release
-sh install.sh v1.8.0                   # a specific one
+sh install.sh v1.9.0                   # a specific one
 PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
 ```
 
@@ -74,6 +75,7 @@ Pick your platform from the [latest release](https://github.com/amrshadid/go-dic
 | macOS, Intel | `go-dicom-macos-amd64` |
 | Linux, x86-64 | `go-dicom-linux-amd64` |
 | Linux, ARM64 | `go-dicom-linux-arm64` |
+| Linux, x86 32-bit | `go-dicom-linux-386` |
 | Windows, x86-64 | `go-dicom-windows-amd64.exe` |
 
 Then, on macOS or Linux:
@@ -294,6 +296,7 @@ go build -o go-dicom .
 
 # === File Operations ===
 ./go-dicom show patient.dcm           # Every element, as stored
+./go-dicom show patient.dcm --json    # The same as JSON, with where each element sits in the file
 ./go-dicom info patient.dcm           # Key metadata and image dimensions
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
@@ -329,6 +332,10 @@ go build -o go-dicom .
 
 # Ask an archive to take responsibility for instances you have sent
 ./go-dicom commitscu -aec PACS -instance 1.2.840.10008.5.1.4.1.1.2:1.2.3.4 -wait pacs:11112
+
+# Log what happens on the association as JSON lines: every PDU with its bytes,
+# the presentation contexts as proposed and answered, every DIMSE message
+./go-dicom storescu -aec PACS -events trace.jsonl pacs:11112 study/*.dcm
 
 # === DICOMweb (HTTP) ===
 # Search, download and upload against a DICOMweb service
