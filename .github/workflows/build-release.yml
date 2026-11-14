@@ -24,6 +24,10 @@ jobs:
             arch: arm64
             runs-on: ubuntu-latest
             output: go-dicom-linux-arm64
+          - os: linux
+            arch: '386'
+            runs-on: ubuntu-latest
+            output: go-dicom-linux-386
           - os: darwin
             arch: amd64
             runs-on: macos-latest
@@ -197,6 +201,7 @@ jobs:
             |----------|------|
             | Linux x86-64 | `go-dicom-linux-amd64` |
             | Linux ARM64 | `go-dicom-linux-arm64` |
+            | Linux x86 32-bit | `go-dicom-linux-386` |
             | macOS Intel | `go-dicom-macos-amd64` |
             | macOS Apple Silicon | `go-dicom-macos-arm64` |
             | Windows x86-64 | `go-dicom-windows-amd64.exe` |

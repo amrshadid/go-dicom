@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A linux/386 binary** (#258). Releases carry `go-dicom-linux-386` beside
+  the 64-bit builds, for 32-bit x86: older hardware, embedded boxes, and
+  emulators with no 64-bit mode. `install.sh` picks it on such a machine.
+
+### Fixed
+
+- **The module builds for 32-bit targets again** (#258). 1.8.0 did not
+  compile for `GOARCH=386` or `arm`: the JPEG Baseline encapsulation compared
+  a size with a constant that does not fit a 32-bit `int`. 1.7.0 built. CI
+  now runs the tests on 386 and builds for 32-bit ARM, which nothing did.
+
 ## [1.8.0] - 2026-11-12
 
 This release takes a study from the archive to something that can be handed
