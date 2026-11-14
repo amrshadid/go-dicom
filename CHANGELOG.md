@@ -27,13 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now runs the tests on 386 and builds for 32-bit ARM, which nothing did.
 
 - **A crafted image cannot overflow a size on a 32-bit platform** (#258).
-  The first run of the tests on 386 found one: a JPEG-LS header declaring
+  The first runs of the tests on 386 found two. A JPEG-LS header declaring
   65535 by 65535 passed the size check, because the product wraps a 32-bit
-  `int`, and the decoder panicked allocating for it. The JPEG-LS, JPEG
-  Lossless and JPEG 2000 size checks are made in 64 bits, and
-  `GetPixelDataInfo` refuses an image whose size the platform cannot
-  address, on which every later size depends. 64-bit builds were not
-  affected.
+  `int`, and the decoder panicked allocating for it. An RLE segment offset
+  past 2^31 is negative as an `int`, passed for one inside the frame, and
+  the decoder panicked slicing at it. The size checks of the JPEG-LS, JPEG
+  Lossless, JPEG Extended and JPEG 2000 decoders and the RLE offsets are
+  compared in 64 bits, and `GetPixelDataInfo` refuses an image whose size
+  the platform cannot address, on which every later size depends. 64-bit
+  builds were not affected.
 
 ## [1.8.0] - 2026-11-12
 
