@@ -210,9 +210,9 @@ func (w *eventWriter) event(e *network.Event) {
 		record.Error = e.Error.Error()
 	}
 	if e.PDU != nil {
-		record.PDU = w.pdu(e.PDU, e.PDUBytes)
+		record.PDU = w.pdu(e.PDU, e.PDUBytes())
 	}
-	for _, pc := range e.PresentationContexts {
+	for _, pc := range e.PresentationContexts() {
 		record.Contexts = append(record.Contexts, contextRecord{
 			ID: int(pc.ID), AbstractSyntax: pc.AbstractSyntax, TransferSyntaxes: pc.Proposed,
 			Result: int(pc.Result), ResultText: contextResult(pc.Result), TransferSyntax: pc.TransferSyntax,

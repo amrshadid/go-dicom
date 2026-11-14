@@ -142,7 +142,7 @@ func TestEventsToStandardOutputAndNowhere(t *testing.T) {
 	events := network.NewEventManager()
 	events.OnAny(writer.event)
 	events.Emit(&network.Event{Type: network.EVTAssocAborted, PDU: &network.AbortPDU{Source: 2, Reason: 1},
-		PDUBytes: []byte{7, 0, 0, 0, 0, 4, 0, 0, 2, 1}})
+		Detail: &network.EventDetail{PDUBytes: []byte{7, 0, 0, 0, 0, 4, 0, 0, 2, 1}}})
 	var record eventRecord
 	if err := json.Unmarshal(out.Bytes(), &record); err != nil || !strings.HasSuffix(out.String(), "\n") {
 		t.Fatalf("not one JSON line: %v %q", err, out.String())

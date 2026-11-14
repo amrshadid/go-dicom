@@ -92,7 +92,8 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 	}
 	with := func(t EventType) *Event {
 		e := o.event(t)
-		e.PDU, e.PDUBytes, e.PDUType = pdu, raw, pdu.Type()
+		e.PDU, e.PDUType = pdu, pdu.Type()
+		e.Detail = &EventDetail{PDUBytes: raw}
 		return e
 	}
 
@@ -116,7 +117,7 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 		contexts := o.negotiated(p)
 		for _, t := range []EventType{EVTAssocAccepted, EVTAssocEstablished} {
 			e := with(t)
-			e.PresentationContexts = contexts
+			e.Detail.PresentationContexts = contexts
 			o.events.Emit(e)
 		}
 
