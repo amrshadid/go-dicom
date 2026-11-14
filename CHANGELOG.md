@@ -44,7 +44,8 @@ changes for existing code.
   being requested, accepted, established, rejected, released and aborted,
   with each presentation context as proposed and as answered; of every DIMSE
   message either way; and of each request arriving (`EVTCStore` and the
-  rest). An SCP's own associations, such as the one a C-MOVE opens to its
+  rest). The bytes and the contexts are read with `Event.PDUBytes` and
+  `Event.PresentationContexts`. An SCP's own associations, such as the one a C-MOVE opens to its
   destination, report to the same place. `EventManager.OnAny` registers one
   handler for all of them. The nine network commands take `-events <file|->`
   and append one JSON object a line. pynetdicom's own PDU classes decode

@@ -104,18 +104,46 @@ type Event struct {
 	LocalAddr         string
 
 	// PDU is the PDU of a PDU event, and of the association event one
-	// gave rise to. PDUBytes is that PDU as it crossed the connection,
-	// header included.
-	PDU      PDU
-	PDUBytes []byte
+	// gave rise to.
+	PDU PDU
 
-	// PresentationContexts is the outcome of each presentation context, on
-	// EVTAssocAccepted and EVTAssocEstablished.
-	PresentationContexts []NegotiatedContext
+	// Detail holds what an event carries that is a list: the PDU's bytes,
+	// and the presentation contexts. It is behind a pointer so that an
+	// Event can be compared, as it could before it had these. Read it with
+	// PDUBytes and PresentationContexts, which allow for its absence.
+	Detail *EventDetail
 
 	// Command is the command set of a DIMSE event, and of the service event
 	// a request gives rise to.
 	Command *CommandInfo
+}
+
+// EventDetail is the part of an Event that holds lists.
+type EventDetail struct {
+	// PDUBytes is the event's PDU as it crossed the connection, header
+	// included.
+	PDUBytes []byte
+	// PresentationContexts is the outcome of each presentation context, on
+	// EVTAssocAccepted and EVTAssocEstablished.
+	PresentationContexts []NegotiatedContext
+}
+
+// PDUBytes returns the event's PDU as it crossed the connection, header
+// included, or nil for an event with no PDU.
+func (e *Event) PDUBytes() []byte {
+	if e.Detail == nil {
+		return nil
+	}
+	return e.Detail.PDUBytes
+}
+
+// PresentationContexts returns the outcome of each presentation context, on
+// EVTAssocAccepted and EVTAssocEstablished, and nil on any other event.
+func (e *Event) PresentationContexts() []NegotiatedContext {
+	if e.Detail == nil {
+		return nil
+	}
+	return e.Detail.PresentationContexts
 }
 
 // NegotiatedContext is a presentation context as it was proposed and as it

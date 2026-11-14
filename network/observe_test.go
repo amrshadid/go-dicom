@@ -141,10 +141,10 @@ func TestEventsOfAnEcho(t *testing.T) {
 	}
 
 	// The context, as proposed and as answered.
-	if len(established.PresentationContexts) != 1 {
-		t.Fatalf("contexts: %+v", established.PresentationContexts)
+	if len(established.PresentationContexts()) != 1 {
+		t.Fatalf("contexts: %+v", established.PresentationContexts())
 	}
-	pc := established.PresentationContexts[0]
+	pc := established.PresentationContexts()[0]
 	if pc.AbstractSyntax != VerificationSOPClassUID || pc.Result != PCResultAcceptance ||
 		pc.TransferSyntax == "" || len(pc.Proposed) == 0 {
 		t.Errorf("the context is %+v", pc)
@@ -153,14 +153,14 @@ func TestEventsOfAnEcho(t *testing.T) {
 	// The bytes are the PDU: they decode to it, and what one side sent is
 	// what the other received.
 	requested := scuLog.first(t, EVTAssocRequested)
-	decoded, err := DecodePDU(bytes.NewReader(requested.PDUBytes))
+	decoded, err := DecodePDU(bytes.NewReader(requested.PDUBytes()))
 	if err != nil {
 		t.Fatalf("the request's bytes do not decode: %v", err)
 	}
 	if rq, ok := decoded.(*AssociateRQ); !ok || rq.CallingAE != "EVT_SCU" || rq.CalledAE != "EVT_SCP" {
 		t.Errorf("the request's bytes decode to %+v", decoded)
 	}
-	if received := scpLog.first(t, EVTAssocRequested); !bytes.Equal(received.PDUBytes, requested.PDUBytes) {
+	if received := scpLog.first(t, EVTAssocRequested); !bytes.Equal(received.PDUBytes(), requested.PDUBytes()) {
 		t.Error("the SCP received other bytes than the SCU sent")
 	}
 
@@ -279,6 +279,18 @@ func TestEventsOfARejectionAndAnAbort(t *testing.T) {
 	}
 	if abort, ok := log.first(t, EVTAssocAborted).PDU.(*AbortPDU); !ok || abort.Source != AbortSourceServiceProvider || abort.Reason != 2 {
 		t.Errorf("the abort is %+v", log.first(t, EVTAssocAborted).PDU)
+	}
+}
+
+// An Event could be compared before it carried lists, and still can.
+func TestEventsAreStillComparable(t *testing.T) {
+	a := Event{Type: EVTConnOpen, RemoteAddr: "x"}
+	b := a
+	if a != b {
+		t.Error("two equal events compare unequal")
+	}
+	if a.PDUBytes() != nil || a.PresentationContexts() != nil {
+		t.Error("an event with no detail reports some")
 	}
 }
 
