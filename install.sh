@@ -46,6 +46,7 @@ esac
 case "$arch" in
   arm64|aarch64) arch_name=arm64 ;;
   x86_64|amd64)  arch_name=amd64 ;;
+  i386|i486|i586|i686) arch_name=386 ;;
   *) die "unsupported architecture: $arch" ;;
 esac
 
@@ -53,7 +54,7 @@ asset="${BIN}-${os_name}-${arch_name}"
 
 # The published set. A combination outside it should say so rather than 404 later.
 case "$asset" in
-  go-dicom-macos-arm64|go-dicom-macos-amd64|go-dicom-linux-amd64|go-dicom-linux-arm64) ;;
+  go-dicom-macos-arm64|go-dicom-macos-amd64|go-dicom-linux-amd64|go-dicom-linux-arm64|go-dicom-linux-386) ;;
   *) die "no published binary for ${os_name}/${arch_name}. Build from source:
        go build -o go-dicom github.com/$REPO" ;;
 esac

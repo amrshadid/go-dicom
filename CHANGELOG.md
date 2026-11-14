@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A linux/386 binary** (#258). Releases carry `go-dicom-linux-386` beside
+  the 64-bit builds, for 32-bit x86: older hardware, embedded boxes, and
+  emulators with no 64-bit mode. `install.sh` picks it on such a machine.
+
+### Changed
+
+- **The Linux release binaries are static, and all are smaller** (#258).
+  They are built without cgo, so they run on a musl system such as Alpine,
+  and every release binary is built with `-trimpath -ldflags "-s -w"`.
+
 ### Fixed
+
+- **The module builds for 32-bit targets again** (#258). 1.8.0 did not
+  compile for `GOARCH=386` or `arm`: the JPEG Baseline encapsulation compared
+  a size with a constant that does not fit a 32-bit `int`. 1.7.0 built. CI
+  now runs the tests on 386 and builds for 32-bit ARM, which nothing did.
+
+- **A crafted image cannot overflow a size on a 32-bit platform** (#258).
+  The first runs of the tests on 386 found two. A JPEG-LS header declaring
+  65535 by 65535 passed the size check, because the product wraps a 32-bit
+  `int`, and the decoder panicked allocating for it. An RLE segment offset
+  past 2^31 is negative as an `int`, passed for one inside the frame, and
+  the decoder panicked slicing at it. The size checks of the JPEG-LS, JPEG
+  Lossless, JPEG Extended and JPEG 2000 decoders and the RLE offsets are
+  compared in 64 bits, and `GetPixelDataInfo` refuses an image whose size
+  the platform cannot address, on which every later size depends. 64-bit
+  builds were not affected.
 
 - **`uid.CTImageStorage()` returns CT Image Storage, and the UID table names
   the right classes** (#264). The function returned
