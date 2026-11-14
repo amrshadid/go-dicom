@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-14
+
+This release shows what the library sees: where every element sits in a
+file, and what crosses a connection.
+
+- **`go-dicom show file.dcm --json`** gives every element with the offsets
+  of its tag, VR, length field and value, nested items and their delimiters
+  included, and the preamble, prefix, file meta and data set regions. A hex
+  viewer can be drawn from it without a second parser. Its value offsets are
+  the ones pydicom records, across pydicom's corpus.
+- **`-events trace.jsonl`** on every network command logs what happens on an
+  association, one JSON object a line: each PDU with its bytes, each
+  presentation context as proposed and as answered, each DIMSE message with
+  its status. Programs get the same through `SCUConfig.Events` and
+  `SCPConfig.Events`. pynetdicom's own decoder reads every logged PDU.
+- **32-bit targets work again.** 1.8.0 did not compile for 386 or 32-bit
+  ARM. It does now, the tests run on 386 in CI, and releases carry a static
+  `go-dicom-linux-386` that runs on Alpine.
+
+It also corrects `uid.CTImageStorage()`, which returned Enhanced CT's UID,
+and a C-STORE handler that could leave the sender waiting.
+
+**Upgrading:** `uid.CTImageStorage()` now returns
+`1.2.840.10008.5.1.4.1.1.2`. A program that used it was naming Enhanced CT
+Image Storage; `uid.EnhancedCTImageStorage()` returns that. Nothing else
+changes for existing code.
+
 ### Added
 
 - **`-events` logs what happens on an association, and the library reports
@@ -2167,7 +2194,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/amrshadid/go-dicom/compare/v1.5.0...v1.6.0
