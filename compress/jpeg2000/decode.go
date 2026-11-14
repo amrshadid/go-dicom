@@ -66,7 +66,8 @@ func checkImageSize(c *Codestream) error {
 	if width <= 0 || height <= 0 {
 		return errorf("an image of %dx%d samples", width, height)
 	}
-	if width > 1<<16 || height > 1<<16 || width*height > 1<<28 {
+	// The product in 64 bits: 65536 squared is 0 in a 32-bit int (#258).
+	if width > 1<<16 || height > 1<<16 || int64(width)*int64(height) > 1<<28 {
 		return errorf("an image of %dx%d samples is larger than this decoder accepts",
 			width, height)
 	}

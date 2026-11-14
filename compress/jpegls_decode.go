@@ -162,7 +162,9 @@ func parseJPEGLSFrameHeader(body, stream []byte) (*jpeglsImage, []byte, error) {
 	if numComponents == 0 {
 		return nil, nil, fmt.Errorf("jpegls: frame declares no components")
 	}
-	if width*height > maxJPEGLSSamples/numComponents {
+	// In 64 bits: two 16-bit dimensions multiply past a 32-bit int, and the
+	// product that wraps passes for a small one (#258).
+	if int64(width)*int64(height) > int64(maxJPEGLSSamples/numComponents) {
 		return nil, nil, fmt.Errorf("jpegls: frame of %dx%d with %d components is too large to decode",
 			width, height, numComponents)
 	}

@@ -148,7 +148,8 @@ func parseLosslessFrameHeader(body []byte) (*losslessImage, error) {
 	if numComponents == 0 {
 		return nil, fmt.Errorf("jpeglossless: frame declares no components")
 	}
-	if width*height > maxLosslessPixels/max(numComponents, 1) {
+	// In 64 bits: two 16-bit dimensions multiply past a 32-bit int (#258).
+	if int64(width)*int64(height) > int64(maxLosslessPixels/max(numComponents, 1)) {
 		return nil, fmt.Errorf("jpeglossless: frame of %dx%d with %d components is too large to decode",
 			width, height, numComponents)
 	}

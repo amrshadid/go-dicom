@@ -54,6 +54,50 @@ jobs:
           flags: unittests
           name: codecov-umbrella
 
+  # A 32-bit target. int is 32 bits there, so a length or an offset that fits
+  # everywhere else can overflow, and a constant can fail to compile: 1.8.0
+  # did not build for any 32-bit target (#258), and nothing here said so.
+  # ubuntu's amd64 runs a 386 binary natively. No -race: the detector needs
+  # 64 bits.
+  test-32bit:
+    name: Test - linux/386
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests on 386
+        env:
+          GOARCH: '386'
+          CGO_ENABLED: '0'
+        run: go test -timeout 10m ./...
+
+      # The command as a release builds it, run on a 32-bit musl system: a
+      # binary that needs glibc, or 64 bits, does not start there.
+      - name: Run the CLI on 32-bit Alpine
+        env:
+          GOARCH: '386'
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags "-s -w" -o go-dicom-linux-386 .
+          docker run --rm -v "$PWD:/w" i386/alpine:3.20 /w/go-dicom-linux-386 -v
+
+      # 32-bit ARM is the other 32-bit target people run this on. It cannot
+      # be run here, so it is built and vetted, tests included.
+      - name: Build and vet for 32-bit ARM
+        env:
+          GOARCH: arm
+          CGO_ENABLED: '0'
+        run: go build ./... && go vet ./...
+
   network-integration:
     name: Network Integration Tests - ${{ matrix.os }} - Go ${{ matrix.go-version }}
     runs-on: ${{ matrix.os }}
@@ -456,6 +500,7 @@ jobs:
     if: always()
     needs:
       - test
+      - test-32bit
       - network-integration
       - fuzz
       - interop
