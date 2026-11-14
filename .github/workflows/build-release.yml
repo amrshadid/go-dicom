@@ -56,11 +56,24 @@ jobs:
       # github.ref_name is exactly the tag that triggered this run. Using it
       # instead of `git describe` avoids depending on tag history being present
       # in the default shallow checkout, and cannot produce a "-N-gHASH" suffix.
+      # The Linux binaries are built without cgo, so they are static: a
+      # binary linked against glibc does not start on a musl system such as
+      # Alpine. -trimpath and -s -w drop the build machine's paths and the
+      # debug tables, which nobody downloading a release needs; the 386
+      # binary goes from about 16 MB to about 11.
       - name: Build binary
+        shell: bash
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
-        run: go build -ldflags "-X main.Version=${{ github.ref_name }}" -o ${{ matrix.output }} .
+        run: |
+          if [ "$GOOS" = linux ]; then export CGO_ENABLED=0; fi
+          go build -trimpath -ldflags "-s -w -X main.Version=${{ github.ref_name }}" -o ${{ matrix.output }} .
+
+      # The 386 binary is run where it is meant to run: a 32-bit musl system.
+      - name: Run the 386 binary on 32-bit Alpine
+        if: matrix.arch == '386'
+        run: docker run --rm -v "$PWD:/w" i386/alpine:3.20 /w/${{ matrix.output }} -v
 
       - name: Verify the version was stamped
         if: matrix.os == 'linux' && matrix.arch == 'amd64'

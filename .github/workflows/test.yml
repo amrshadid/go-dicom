@@ -80,6 +80,16 @@ jobs:
           CGO_ENABLED: '0'
         run: go test -timeout 10m ./...
 
+      # The command as a release builds it, run on a 32-bit musl system: a
+      # binary that needs glibc, or 64 bits, does not start there.
+      - name: Run the CLI on 32-bit Alpine
+        env:
+          GOARCH: '386'
+          CGO_ENABLED: '0'
+        run: |
+          go build -trimpath -ldflags "-s -w" -o go-dicom-linux-386 .
+          docker run --rm -v "$PWD:/w" i386/alpine:3.20 /w/go-dicom-linux-386 -v
+
       # 32-bit ARM is the other 32-bit target people run this on. It cannot
       # be run here, so it is built and vetted, tests included.
       - name: Build and vet for 32-bit ARM

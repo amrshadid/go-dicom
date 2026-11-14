@@ -354,3 +354,24 @@ func TestRenderOneBitImage(t *testing.T) {
 		}
 	}
 }
+
+// TestImageLargerThanAnIntIsRefused: sizes are worked out as ints, and a
+// header may describe more than one holds. On a 32-bit platform 65535 by
+// 65535 already does, and the product that wraps passed for a small image
+// (#258). The image here is too large for 64 bits as well, so the test means
+// the same everywhere.
+func TestImageLargerThanAnIntIsRefused(t *testing.T) {
+	ds := picture{allocated: 16, stored: 16, photometric: "MONOCHROME2", px: words(1, 2)}.dataset()
+	for element, v := range map[uint16]int{0x0010: 65535, 0x0011: 65535, 0x0002: 65535, 0x0100: 65535} {
+		b := make([]byte, 2)
+		binary.LittleEndian.PutUint16(b, uint16(v))
+		_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, element), dataelem.US, b))
+	}
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0008), dataelem.IS, []byte("2147483647 ")))
+	if _, err := ds.GetPixelDataInfo(); err == nil {
+		t.Error("an image of 2^95 bits was accepted")
+	}
+	if _, err := ds.RenderFrame(0, nil); err == nil {
+		t.Error("an image of 2^95 bits was rendered")
+	}
+}
