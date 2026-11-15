@@ -53,7 +53,9 @@ func newDisplayScope(elements []*filereader.DataElementValue, outer *displayScop
 // dataset.ResolveVR make of a dictionary VR that offers a choice.
 //
 // An element the dictionary does not know has no VR in an implicit VR file.
-// A private creator is LO by definition (PS3.5 7.8.1); anything else is UN.
+// A private creator is LO by definition (PS3.5 7.8.1). Anything else is
+// left with none: calling it UN would be a guess, and would hide a value
+// that is readable text, as the value of such an element often is.
 func (s *displayScope) vr(e *filereader.DataElementValue) string {
 	if e.Items != nil {
 		return e.VR
@@ -62,7 +64,7 @@ func (s *displayScope) vr(e *filereader.DataElementValue) string {
 		if e.Tag.IsPrivateCreator() {
 			return "LO"
 		}
-		return "UN"
+		return ""
 	}
 	if !strings.Contains(e.VR, " or ") {
 		return e.VR

@@ -130,3 +130,35 @@ func TestShowOfImplicitMatchesExplicit(t *testing.T) {
 		t.Errorf("only %d elements are in both files", common)
 	}
 }
+
+// An element nobody knows the VR of is shown when it is text and given by
+// its position when it is not. Calling it UN hid the first, and printing it
+// regardless made a string of the second.
+func TestShowOfAnElementWithNoKnownVR(t *testing.T) {
+	element := func(group, elem uint16, value []byte) []byte {
+		out := binary.LittleEndian.AppendUint16(nil, group)
+		out = binary.LittleEndian.AppendUint16(out, elem)
+		out = binary.LittleEndian.AppendUint32(out, uint32(len(value)))
+		return append(out, value...)
+	}
+	var f bytes.Buffer
+	f.Write(element(0x0009, 0x0010, []byte("ACME 1.0")))             // a private creator
+	f.Write(element(0x0009, 0x1001, []byte("Double Nested ")))       // text
+	f.Write(element(0x0009, 0x1002, []byte{0x00, 0x01, 0xFE, 0xFF})) // not text
+	path := filepath.Join(t.TempDir(), "private.dcm")
+	if err := os.WriteFile(path, f.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	doc := showJSON(t, path)
+	creator, text, blob := doc.DataSet[0], doc.DataSet[1], doc.DataSet[2]
+	if creator.VR != "LO" || creator.Value == nil || *creator.Value != "ACME 1.0" {
+		t.Errorf("the private creator is %s %v", creator.VR, creator.Value)
+	}
+	if text.VR != "" || text.Value == nil || *text.Value != "Double Nested" {
+		t.Errorf("the text is %q %v, want it shown under no VR", text.VR, text.Value)
+	}
+	if blob.VR != "" || blob.Value != nil || blob.ValueLength != 4 {
+		t.Errorf("the bytes are %q %v, want no value", blob.VR, blob.Value)
+	}
+}
