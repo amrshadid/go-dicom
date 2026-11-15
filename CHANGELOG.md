@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`show` lists the File Meta Information Group Length** (#271). The text
+  table began the file meta group at (0002,0001), and `show file::0002,0000`
+  answered that the element was not found, though it is the first one in the
+  file and `show --json` lists it. Both forms now show it. `convert`,
+  `codify` and `info` are unchanged: the element counts the bytes of its
+  group, which a writer works out, so it is not carried into what they
+  produce.
+
 - **A file meta group that does not state the encoding is said to, and the
   data set is read as it is written** (#273). Transfer Syntax UID
   (0002,0010) is required, and files are written without it. The reader
