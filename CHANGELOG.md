@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-15
+
+`show` is what other programs read a file through, and this release makes
+what it prints right in the cases 1.9.0 got wrong:
+
+- **Implicit VR files.** Numbers were printed as bytes, and `show --json`
+  wrote the whole of Pixel Data into its output as text: 772 MB of JSON and
+  4 GB of memory for a 200 MB image. Each value now has its real VR.
+- **Text that is not Latin.** Greek, Arabic, Hebrew, Cyrillic and UTF-8 were
+  all read as Latin-1 by `show`, `info`, `convert` and `qido`. They are read
+  in the character set the file declares.
+- **Memory.** `show` in both its forms leaves bulk data in the file: 18 MB
+  for a 200 MB image where it took 218. The output is the same.
+- **The file meta group.** `show` lists its first element, (0002,0000),
+  which it left out, and a file whose meta group does not state the transfer
+  syntax is read as it is actually written, with a warning.
+
+Nothing in the format of `show --json` changes: `schemaVersion` is still 1,
+and every offset is where it was. Programs reading it get corrected values
+in the cases above and nothing else moves.
+
+For programs using the library there are additions and no changes:
+`filereader.ReadDICOMFileWithOptions` and `ReadOptions`, to read a file
+without its bulk data, and `filereader.TextEncodings` and `DecodeText`.
+
 ### Added
 
 - **A file can be read without its bulk data, and `show` reads it so**
@@ -2263,7 +2288,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0
