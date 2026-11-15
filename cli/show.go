@@ -89,7 +89,9 @@ func (sc *ShowCommand) Execute(args []string) error {
 		return nil
 	}
 
-	elements, err := readDICOMFile(sc.filespec)
+	// With the group length that opens the file meta group: show lists what
+	// is in the file, as --json does.
+	elements, err := readDICOMElements(sc.filespec, true)
 	if err != nil {
 		return fmt.Errorf("show: failed to read DICOM file: %v", err)
 	}
@@ -121,7 +123,7 @@ func (sc *ShowCommand) Execute(args []string) error {
 		}
 
 		if sc.quiet {
-			fmt.Printf("%s: %s\n", elem.Tag, formatValue(elem.VR, elem.Value, 50))
+			fmt.Printf("%s: %s\n", elem.Tag, elem.display(50))
 		} else {
 			sc.displayElement(elem)
 		}
@@ -132,12 +134,12 @@ func (sc *ShowCommand) Execute(args []string) error {
 
 // displayElement displays a single element in formatted output.
 func (sc *ShowCommand) displayElement(elem DicomElement) {
-	value := formatValue(elem.VR, elem.Value, 100)
+	value := elem.display(shownBytes)
 
 	// Indent by nesting level so elements inside a sequence item are
 	// distinguishable from those at the top of the data set.
 	indent := strings.Repeat("  ", elem.Depth)
-	fmt.Printf("%-12s %-3s %-7d %s%s\n", elem.Tag, elem.VR, len(elem.Value), indent, value)
+	fmt.Printf("%-12s %-3s %-7d %s%s\n", elem.Tag, elem.VR, elem.Length, indent, value)
 }
 
 // showHelp displays help information for the show command.

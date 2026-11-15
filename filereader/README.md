@@ -32,6 +32,14 @@ elem, _ := dfr.ReadDataElement(true) // explicit VR
 
 ```go
 func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error)
+
+// The same, leaving bulk values (Pixel Data, long binary values) in the
+// file: each such element has ValueSkipped set and keeps its Position.
+func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DICOMFile, error)
+type ReadOptions struct {
+    SkipBulkData      bool
+    BulkDataThreshold uint32 // the longest binary value still read
+}
 func NewDCMFileReader(reader filebase.Reader) *DCMFileReader
 
 func (dfr *DCMFileReader) ReadPreamble() error
@@ -40,6 +48,12 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error)
 func (dfr *DCMFileReader) ReadTag() (tag.Tag, error)
 func (dfr *DCMFileReader) ReadDataElement(explicitVR bool) (*DataElementValue, error)
 func (dfr *DCMFileReader) GetPosition() int64
+
+// For a program that shows a DICOMFile's elements as they are in the file:
+// the character encodings a data set's text is in, and a value decoded
+// under them. GetDataset applies the same rules itself.
+func TextEncodings(elements []*DataElementValue, inherited []string) []string
+func DecodeText(vr string, value []byte, encodings []string) string
 
 type DICOMFile struct {
     FileMetaInfo   *FileMetaInfo

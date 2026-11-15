@@ -60,6 +60,32 @@ type DCMFileReader struct {
 	// metaGroupLength is the (0002,0000) element, which metaElements leaves
 	// out, or nil when the file has none.
 	metaGroupLength *DataElementValue
+
+	// options are those the file is being read with.
+	options ReadOptions
+}
+
+// ReadOptions choose how ReadDICOMFileWithOptions reads a file.
+type ReadOptions struct {
+	// SkipBulkData leaves bulk values in the file instead of reading them
+	// into memory: Pixel Data in every form, its fragments when it is
+	// encapsulated, and any value of a binary VR (OB, OD, OF, OL, OV, OW or
+	// UN) longer than BulkDataThreshold. A value whose VR nobody knows, in
+	// an implicit VR file, may be text or may be bulk: it is read up to
+	// UnknownVRBulkLength bytes, or BulkDataThreshold when that is more, and
+	// left in the file beyond. Each such element has ValueSkipped set and a
+	// nil Value, and keeps its Length and its Position, so the bytes can be
+	// found again.
+	//
+	// It is for reading the structure of a file: what it holds and where.
+	// Memory then follows the metadata and not the image. A data set built
+	// from such a file with GetDataset has those values empty.
+	SkipBulkData bool
+
+	// BulkDataThreshold is the longest value of a binary VR still read
+	// when SkipBulkData is set. Zero reads none of them. Pixel Data is
+	// skipped whatever its length.
+	BulkDataThreshold uint32
 }
 
 // NewDCMFileReader creates a new DICOM file reader.
@@ -344,6 +370,12 @@ type DataElementValue struct {
 	// Position is where the element was read from. It is the zero value for
 	// an element that was not read from a file.
 	Position ElementPosition
+
+	// ValueSkipped reports that the value was left unread, because the file
+	// was read with ReadOptions.SkipBulkData. Value is then nil, Length is
+	// still the length the element states, and Position says where the bytes
+	// are.
+	ValueSkipped bool
 }
 
 // ElementPosition is where a data element sits in the bytes it was read
@@ -598,6 +630,7 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 	// An undefined length on pixel data means encapsulated (fragmented) pixel
 	// data: a run of items terminated by a Sequence Delimitation Item.
 	if element.UndefinedLength {
+		element.ValueSkipped = dfr.options.SkipBulkData
 		value, fragments, delimiter, err := dfr.readEncapsulatedValue()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read encapsulated value for %s: %w",
@@ -615,6 +648,14 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 		if err := dfr.checkValueLength(element.Length); err != nil {
 			return nil, fmt.Errorf("invalid length for tag %s: %w", element.Tag.String(), err)
 		}
+		if dfr.isBulk(element) {
+			if err := dfr.skip(element.Length); err != nil {
+				return nil, fmt.Errorf("failed to pass over the value of tag %s (claimed %d bytes): %w",
+					element.Tag.String(), element.Length, err)
+			}
+			element.ValueSkipped = true
+			return element, nil
+		}
 		value := make([]byte, element.Length)
 		if err := dfr.reader.ReadBytes(value); err != nil {
 			return nil, fmt.Errorf("failed to read data element value for tag %s (claimed %d bytes): %w",
@@ -625,6 +666,65 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 	}
 
 	return element, nil
+}
+
+// UnknownVRBulkLength is how long a value of no known VR may be and still
+// be read when bulk data is skipped. Such a value is often a line of text.
+const UnknownVRBulkLength = 1024
+
+// binaryVRs are the VRs whose values are bytes, words and floats in bulk,
+// never text or a few numbers.
+var binaryVRs = map[string]bool{"OB": true, "OD": true, "OF": true, "OL": true, "OV": true, "OW": true, "UN": true}
+
+// isBulk reports whether an element's value is left unread under the options
+// the file is being read with.
+func (dfr *DCMFileReader) isBulk(element *DataElementValue) bool {
+	if !dfr.options.SkipBulkData {
+		return false
+	}
+	if isEncapsulatedPixelDataTag(element.Tag) {
+		return true
+	}
+	if element.VR == "" {
+		return element.Length > max(dfr.options.BulkDataThreshold, UnknownVRBulkLength)
+	}
+	if element.Length <= dfr.options.BulkDataThreshold {
+		return false
+	}
+	// An implicit VR file has the dictionary's VR, which may offer a choice,
+	// "OB or OW". It is bulk when every choice is binary: "US or OW" may
+	// yet be a short list of numbers.
+	for _, vr := range strings.Split(element.VR, " or ") {
+		if !binaryVRs[vr] {
+			return false
+		}
+	}
+	return true
+}
+
+// skip passes over n bytes of the stream without keeping them: by seeking
+// where the stream can, by reading and discarding where it cannot.
+func (dfr *DCMFileReader) skip(n uint32) error {
+	if n == 0 {
+		return nil
+	}
+	if _, err := dfr.reader.Seek(int64(n), io.SeekCurrent); err == nil {
+		dfr.position += int64(n)
+		return nil
+	}
+	scratch := make([]byte, 64<<10)
+	for left := int64(n); left > 0; {
+		chunk := scratch
+		if left < int64(len(chunk)) {
+			chunk = chunk[:left]
+		}
+		if err := dfr.reader.ReadBytes(chunk); err != nil {
+			return err
+		}
+		left -= int64(len(chunk))
+		dfr.position += int64(len(chunk))
+	}
+	return nil
 }
 
 // checkValueLength rejects declared value lengths that cannot be satisfied by
@@ -895,12 +995,28 @@ func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, []FragmentPosition, i
 			return nil, nil, 0, fmt.Errorf("encapsulated data item has undefined length")
 		}
 
-		writeItemHeader(&raw, dfr.reader.GetByteOrder(), marker)
-
 		if marker.length > 0 {
 			if err := dfr.checkValueLength(marker.length); err != nil {
 				return nil, nil, 0, err
 			}
+		}
+		// Left in the file: where each fragment is, and nothing of it.
+		if dfr.options.SkipBulkData {
+			if err := dfr.skip(marker.length); err != nil {
+				return nil, nil, 0, fmt.Errorf("failed to pass over an encapsulated fragment (%d bytes): %w",
+					marker.length, err)
+			}
+			fragments = append(fragments, FragmentPosition{
+				Offset:      dfr.position - int64(marker.length) - 8,
+				ValueOffset: dfr.position - int64(marker.length),
+				End:         dfr.position,
+			})
+			continue
+		}
+
+		writeItemHeader(&raw, dfr.reader.GetByteOrder(), marker)
+
+		if marker.length > 0 {
 			fragment := make([]byte, marker.length)
 			if err := dfr.reader.ReadBytes(fragment); err != nil {
 				return nil, nil, 0, fmt.Errorf("failed to read encapsulated fragment (%d bytes): %w",
@@ -1270,6 +1386,29 @@ func hasSpecificCharacterSet(elements []*DataElementValue) bool {
 	return false
 }
 
+// TextEncodings returns the character encodings in force for the text of a
+// data set: those its Specific Character Set (0008,0005) declares, or, when
+// it has none, inherited, which is what the data set it is an item of uses
+// (PS3.3 C.12.1.1.2). Pass nil for the top of a file. The result is what
+// DecodeText takes.
+//
+// It is for a program that shows the elements of a DICOMFile as they are in
+// the file. GetDataset applies the same rules and returns text already
+// decoded.
+func TextEncodings(elements []*DataElementValue, inherited []string) []string {
+	encodings, _ := encodingsFor(elements, inherited)
+	return encodings
+}
+
+// DecodeText returns a value of the given VR as UTF-8 text, decoded under
+// encodings as TextEncodings returns them. Only the VRs a character set
+// applies to are decoded with it; a UI or a DA is in the default repertoire
+// whatever the data set declares. A value that does not decode is returned
+// as it is.
+func DecodeText(vr string, value []byte, encodings []string) string {
+	return string(decodeTextValue(dataelem.VR(vr), value, encodings))
+}
+
 // encodingsFor settles the character set for a data set, and reports whether it
 // is a fallback rather than what the file asked for.
 //
@@ -1354,7 +1493,14 @@ func decodeTextValue(vr dataelem.VR, value []byte, encodings []string) []byte {
 
 // ReadDICOMFile reads an entire DICOM file.
 func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
+	return ReadDICOMFileWithOptions(reader, ReadOptions{})
+}
+
+// ReadDICOMFileWithOptions is ReadDICOMFile with a choice of how to read:
+// see ReadOptions.
+func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DICOMFile, error) {
 	dfr := NewDCMFileReader(reader)
+	dfr.options = options
 
 	dicomFile := &DICOMFile{
 		DataElements: make([]*DataElementValue, 0),
@@ -1405,14 +1551,40 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
 
-	if sniffed {
-		explicit, little, ok := dfr.sniffDataSetHead()
-		if ok {
+	// Why the encoding is not known from the file meta group, when it is not.
+	// Transfer Syntax UID (0002,0010) is Type 1, and files are written
+	// without it, or with a UID that is not a transfer syntax at all. Either
+	// way the group says nothing of how the data set is encoded, and a
+	// reader that assumed implicit VR lost every element of one that was
+	// explicit (#273). The data set's first element says, as it does for a
+	// file with no meta group, and the reader says that it looked.
+	//
+	// unstated is what is said, up to the encoding the data set is read as.
+	unstated := ""
+	switch {
+	case sniffed:
+		unstated = "no file meta header; parsing as a raw data set in"
+	case ts == "":
+		unstated = "the file meta has no Transfer Syntax UID (0002,0010); reading the data set as"
+	case !isStandardTransferSyntax(ts):
+		unstated = "Transfer Syntax UID " + ts + " is not one the standard registers; reading the data set as"
+	}
+	if unstated != "" {
+		explicit, little, looked := dfr.sniffDataSetHead()
+		if looked {
 			dicomFile.ExplicitVR, dicomFile.IsLittleEndian = explicit, little
 		}
-		dicomFile.Warnings = append(dicomFile.Warnings,
-			fmt.Sprintf("no file meta header; parsing as a raw data set in %s",
-				describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)))
+		warning := unstated + " " + describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)
+		// A file with a meta group was expected to say. Whether the
+		// encoding was read off the data set or assumed is worth knowing.
+		switch {
+		case sniffed:
+		case looked:
+			warning += ", judged from its first element"
+		default:
+			warning += ", the default"
+		}
+		dicomFile.Warnings = append(dicomFile.Warnings, warning)
 	}
 
 	// Under the Deflated syntax the meta header is uncompressed but everything
@@ -1554,6 +1726,15 @@ func inflateRemainder(reader filebase.Reader, compressedSize int64) ([]byte, err
 			compressedSize, limit)
 	}
 	return out, nil
+}
+
+// isStandardTransferSyntax reports whether a UID is in the part of the
+// registry the standard keeps for transfer syntaxes: 1.2.840.10008.1.2 and
+// everything under it (PS3.6 Annex A). One it adds later is there too, which
+// a list would not know.
+func isStandardTransferSyntax(ts string) bool {
+	const root = "1.2.840.10008.1.2"
+	return ts == root || strings.HasPrefix(ts, root+".")
 }
 
 // determineTransferSyntax determines the VR type and byte order from a transfer syntax UID.

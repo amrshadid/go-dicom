@@ -6,12 +6,14 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
 	"unicode"
 
 	"github.com/amrshadid/go-dicom/charset"
+	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
@@ -24,6 +26,13 @@ type DicomElement struct {
 	VR    string
 	Value []byte
 	Depth int
+	// Encodings are the character encodings the value's text is in, as
+	// filereader.TextEncodings gives them for the data set it is in.
+	Encodings []string
+	// Length is how many bytes the value is in the file. It is more than
+	// len(Value) for a bulk value listed for display, of which Value is
+	// only the start.
+	Length int
 }
 
 // DicomInfo contains extracted key DICOM metadata.
@@ -50,21 +59,56 @@ type DicomInfo struct {
 // never descended into sequences, and received none of the fixes made to the
 // real reader.
 func readDICOMFile(filename string) ([]DicomElement, error) {
+	return readDICOMElements(filename, false)
+}
+
+// shownBytes is how much of a value the table prints at most.
+const shownBytes = 100
+
+// readDICOMElements is readDICOMFile, and with forDisplay it lists a file as
+// show prints it, which differs in two ways.
+//
+// The File Meta Information Group Length (0002,0000) leads the list, as it
+// leads the file. The element is not content: it counts the bytes of the
+// group it opens, and a writer works it out. What converts a file or
+// generates code to rebuild one must not carry the old count along.
+//
+// And bulk values stay in the file. The table prints the first hundred
+// bytes of a value at most, and read all of it to do so: a 200 MB image
+// took 200 MB to show one line of (#274). Only the part that is printed is
+// read; Length still says how long the value is.
+func readDICOMElements(filename string, forDisplay bool) ([]DicomElement, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(file))
+	options := filereader.ReadOptions{SkipBulkData: forDisplay, BulkDataThreshold: shownBytes}
+	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file), options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 	}
+	// A deflated data set is read after inflating it, and its positions are
+	// in the inflated bytes, which are not on disk to go back to.
+	if forDisplay && df.Deflated {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
+		}
+		if df, err = filereader.ReadDICOMFile(filebase.NewFileReader(file)); err != nil {
+			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
+		}
+	}
+	// Where the start of a value left in the file is read from.
+	root := &displayScope{deciding: dataset.NewDataset(), source: file}
 
 	// The file meta header first, as it appears in the file, then the data set.
-	elements := make([]DicomElement, 0, len(df.MetaElements)+len(df.DataElements))
-	elements = appendElements(elements, df.MetaElements, 0)
-	elements = appendElements(elements, df.DataElements, 0)
+	elements := make([]DicomElement, 0, 1+len(df.MetaElements)+len(df.DataElements))
+	if forDisplay && df.MetaGroupLength != nil {
+		elements = appendElements(elements, []*filereader.DataElementValue{df.MetaGroupLength}, 0, root)
+	}
+	elements = appendElements(elements, df.MetaElements, 0, root)
+	elements = appendElements(elements, df.DataElements, 0, root)
 
 	// A file that yielded nothing is not a DICOM file, and saying so is more use than
 	// printing an empty table.
@@ -88,19 +132,25 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 
 // appendElements flattens parsed elements for display, descending into
 // sequences and recording the nesting level in Depth.
-func appendElements(out []DicomElement, elems []*filereader.DataElementValue, depth int) []DicomElement {
+//
+// outer is the scope of the data set these elements are an item of, nil at
+// the top.
+func appendElements(out []DicomElement, elems []*filereader.DataElementValue, depth int, outer *displayScope) []DicomElement {
+	scope := newDisplayScope(elems, outer)
 	for _, e := range elems {
 		out = append(out, DicomElement{
-			Tag:   fmt.Sprintf("%04X,%04X", e.Tag.Group(), e.Tag.Element()),
-			Name:  getElementName(e.Tag.Group(), e.Tag.Element()),
-			VR:    e.VR,
-			Value: e.Value,
-			Depth: depth,
+			Tag:       fmt.Sprintf("%04X,%04X", e.Tag.Group(), e.Tag.Element()),
+			Name:      getElementName(e.Tag.Group(), e.Tag.Element()),
+			VR:        scope.vr(e),
+			Value:     scope.shown(e),
+			Depth:     depth,
+			Encodings: scope.encodings,
+			Length:    valueBytes(e),
 		})
 
 		// Sequence items nest one level deeper than the sequence itself.
 		for _, item := range e.Items {
-			out = appendElements(out, item.Elements, depth+1)
+			out = appendElements(out, item.Elements, depth+1, scope)
 		}
 	}
 	return out
@@ -128,22 +178,50 @@ func getElementName(group, element uint16) string {
 
 // formatValue converts bytes to displayable string.
 func formatValue(vr string, value []byte, maxLen int) string {
+	return formatValueIn(vr, value, maxLen, nil)
+}
+
+// display is the element's value as the table shows it: all of a short
+// one, and the start of a long one with how long it is.
+func (e DicomElement) display(maxLen int) string {
+	if e.Length == 0 {
+		return ""
+	}
+	value := e.Value
+	if len(value) > maxLen {
+		value = value[:maxLen]
+	}
+	if e.Length > maxLen {
+		return fmt.Sprintf("%s... (%d bytes)", formatValueRawIn(e.VR, value, e.Encodings), e.Length)
+	}
+	return formatValueRawIn(e.VR, value, e.Encodings)
+}
+
+// formatValueIn is formatValue for a value whose text is in encodings.
+func formatValueIn(vr string, value []byte, maxLen int, encodings []string) string {
 	if len(value) == 0 {
 		return ""
 	}
 
 	// Limit length for display
 	if len(value) > maxLen {
-		return fmt.Sprintf("%s... (%d bytes)", formatValueRaw(vr, value[:maxLen]), len(value))
+		return fmt.Sprintf("%s... (%d bytes)", formatValueRawIn(vr, value[:maxLen], encodings), len(value))
 	}
 
-	return formatValueRaw(vr, value)
+	return formatValueRawIn(vr, value, encodings)
 }
 
 // decodeTextWithCharset decodes text value with charset support
-func decodeTextWithCharset(value []byte, vr string) string {
+//
+// encodings are those of the data set the value is in. With none it is
+// read as Latin-1, which is what every value was read as before, whatever
+// its file declared (#270).
+func decodeTextWithCharset(value []byte, vr string, encodings []string) string {
 	if len(value) == 0 {
 		return ""
+	}
+	if len(encodings) > 0 {
+		return strings.TrimRight(filereader.DecodeText(vr, value, encodings), "\x00")
 	}
 
 	// Try charset-aware decoding for text VRs
@@ -160,6 +238,11 @@ func decodeTextWithCharset(value []byte, vr string) string {
 
 // formatValueRaw formats value based on VR type.
 func formatValueRaw(vr string, value []byte) string {
+	return formatValueRawIn(vr, value, nil)
+}
+
+// formatValueRawIn is formatValueRaw for a value whose text is in encodings.
+func formatValueRawIn(vr string, value []byte, encodings []string) string {
 	vr = strings.TrimSpace(vr)
 
 	// Binary VRs
@@ -198,7 +281,7 @@ func formatValueRaw(vr string, value []byte) string {
 	}
 
 	// Text-based VRs with charset support
-	strVal := decodeTextWithCharset(value, vr)
+	strVal := decodeTextWithCharset(value, vr, encodings)
 
 	// Check if printable
 	printable := true
@@ -236,17 +319,17 @@ func extractDICOMInfo(elements []DicomElement) DicomInfo {
 	for _, elem := range elements {
 		switch elem.Tag {
 		case "0010,0010": // PatientName
-			info.PatientName = strings.TrimSpace(formatValueRaw("PN", elem.Value))
+			info.PatientName = strings.TrimSpace(formatValueRawIn("PN", elem.Value, elem.Encodings))
 		case "0010,0020": // PatientID
-			info.PatientID = strings.TrimSpace(formatValueRaw("LO", elem.Value))
+			info.PatientID = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
 		case "0008,0020": // StudyDate
 			info.StudyDate = strings.TrimSpace(formatValueRaw("DA", elem.Value))
 		case "0008,0060": // Modality
 			info.Modality = strings.TrimSpace(formatValueRaw("CS", elem.Value))
 		case "0008,1030": // StudyDescription
-			info.StudyDescription = strings.TrimSpace(formatValueRaw("LO", elem.Value))
+			info.StudyDescription = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
 		case "0008,103E": // SeriesDescription
-			info.SeriesDescription = strings.TrimSpace(formatValueRaw("LO", elem.Value))
+			info.SeriesDescription = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
 		case "0020,1209": // NumberOfFrames
 			if len(elem.Value) > 0 {
 				_, _ = fmt.Sscanf(string(elem.Value), "%d", &info.NumberOfFrames)
@@ -282,9 +365,9 @@ func convertToJSON(elements []DicomElement) ([]byte, error) {
 		case "OB", "OW", "OF", "OD", "OL":
 			val = fmt.Sprintf("<%d bytes>", len(elem.Value))
 		case "US", "UL", "SL", "SS": // Numeric
-			val = formatValueRaw(elem.VR, elem.Value)
+			val = formatValueRawIn(elem.VR, elem.Value, elem.Encodings)
 		default: // Text
-			val = formatValueRaw(elem.VR, elem.Value)
+			val = formatValueRawIn(elem.VR, elem.Value, elem.Encodings)
 		}
 
 		// Use tag as key with element name as description
@@ -313,7 +396,7 @@ func convertToCSV(elements []DicomElement) ([]byte, error) {
 
 	// Write data
 	for _, elem := range elements {
-		value := formatValue(elem.VR, elem.Value, 100)
+		value := formatValueIn(elem.VR, elem.Value, 100, elem.Encodings)
 		_ = writer.Write([]string{
 			elem.Tag,
 			elem.Name,

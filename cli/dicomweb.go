@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/amrshadid/go-dicom/charset"
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
@@ -711,6 +712,17 @@ func webValue(elem *dataelem.DataElement) string {
 		}
 		return strings.Join(values, "\\")
 	}
-	// Text is padded to an even length, which is not part of the value.
-	return strings.TrimRight(formatValueRaw(string(elem.GetVR()), raw), " ")
+	// A data set built from DICOM JSON holds its text in UTF-8, whatever
+	// character set the instance it describes is stored in. Text is padded
+	// to an even length, which is not part of the value.
+	return strings.TrimRight(formatValueRawIn(string(elem.GetVR()), raw, utf8Text), " ")
 }
+
+// utf8Text is the encoding of text that came from JSON.
+var utf8Text = func() []string {
+	encodings, err := charset.ConvertEncodings([]string{"ISO_IR 192"})
+	if err != nil {
+		return nil
+	}
+	return encodings
+}()

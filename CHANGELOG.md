@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-11-15
+
+`show` is what other programs read a file through, and this release makes
+what it prints right in the cases 1.9.0 got wrong:
+
+- **Implicit VR files.** Numbers were printed as bytes, and `show --json`
+  wrote the whole of Pixel Data into its output as text: 772 MB of JSON and
+  4 GB of memory for a 200 MB image. Each value now has its real VR.
+- **Text that is not Latin.** Greek, Arabic, Hebrew, Cyrillic and UTF-8 were
+  all read as Latin-1 by `show`, `info`, `convert` and `qido`. They are read
+  in the character set the file declares.
+- **Memory.** `show` in both its forms leaves bulk data in the file: 18 MB
+  for a 200 MB image where it took 218. The output is the same.
+- **The file meta group.** `show` lists its first element, (0002,0000),
+  which it left out, and a file whose meta group does not state the transfer
+  syntax is read as it is actually written, with a warning.
+
+Nothing in the format of `show --json` changes: `schemaVersion` is still 1,
+and every offset is where it was. Programs reading it get corrected values
+in the cases above and nothing else moves.
+
+For programs using the library there are additions and no changes:
+`filereader.ReadDICOMFileWithOptions` and `ReadOptions`, to read a file
+without its bulk data, and `filereader.TextEncodings` and `DecodeText`.
+
+### Added
+
+- **A file can be read without its bulk data, and `show` reads it so**
+  (#274). `show` prints a bulk value's position, or its first hundred
+  bytes, and read every one whole to do it: 218 MB of memory for a 200 MB
+  image.
+  `filereader.ReadDICOMFileWithOptions` with `ReadOptions.SkipBulkData`
+  leaves Pixel Data, the fragments of encapsulated Pixel Data and the
+  values of the binary VRs in the file, seeking past them where the stream
+  can seek. Each such element has `ValueSkipped` set and keeps its length
+  and position. `BulkDataThreshold` reads the short ones. `show` reads
+  this way in both its forms: the table needs the first hundred bytes of a
+  value at most, and reads those. Either form now takes 18 MB for that
+  file, and prints what it printed: across pydicom's corpus the JSON
+  document and every row of the table are identical either way.
+
+### Fixed
+
+- **`show`, `info` and `convert` show text in the character set the file
+  declares** (#270). They read every text value as Latin-1 whatever
+  Specific Character Set said, so a Greek or Arabic name came out as
+  accented Latin letters, and so did one in UTF-8. The library decoded them
+  correctly all along; the commands did not ask it to. They now use the
+  reader's own rules, which `filereader.TextEncodings` and
+  `filereader.DecodeText` make available: the data set's declared
+  character set, or the enclosing data set's for an item with none, applied
+  to the VRs a character set covers. Of pydicom's 17 character set files,
+  the name in each of the 15 that have one is shown as pydicom reads it.
+  `qido` printed such a name in a search result as a count of bytes, and
+  prints it now. `codify` is unchanged, since the code it writes carries
+  the bytes and their declaration.
+
+- **`show` settles a VR the file does not state** (#272). An implicit VR
+  file carries no VRs, and for some attributes the dictionary offers a
+  choice. `show` printed the choice: Pixel Data as "OB or OW", with its
+  bytes as an 8192-character string in `show --json`, growing with the
+  image, and Smallest and Largest Image Pixel Value as "US or SS" with their
+  bytes for a value. Both forms now apply `dataset.ResolveVR`, the rules the
+  file writer and the network already used, so the signed or unsigned
+  choice follows Pixel Representation, from an enclosing data set where an
+  item does not repeat it, and Pixel Data is bulk data given by position.
+  A private creator the file gives no VR is shown as LO. Any other
+  element nobody knows the VR of keeps its value in `show --json` when the
+  value is text, and is given by position when it is not. `convert` and
+  `codify` take the same VRs. Across pydicom's corpus no VR is left as a
+  choice, and 6,134 of 6,135 are the VR pydicom settles on; the other is
+  8-bit Pixel Data in implicit VR, OB here and OW there, where the standard
+  allows either.
+
+- **`show` lists the File Meta Information Group Length** (#271). The text
+  table began the file meta group at (0002,0001), and `show file::0002,0000`
+  answered that the element was not found, though it is the first one in the
+  file and `show --json` lists it. Both forms now show it. `convert`,
+  `codify` and `info` are unchanged: the element counts the bytes of its
+  group, which a writer works out, so it is not carried into what they
+  produce.
+
+- **A file meta group that does not state the encoding is said to, and the
+  data set is read as it is written** (#273). Transfer Syntax UID
+  (0002,0010) is required, and files are written without it. The reader
+  took such a file for implicit VR little endian without a word, so a guess
+  could not be told from a declaration, and where the data set was in fact
+  explicit VR every element of it was lost. The reader now looks at the data
+  set's first element, as it does for a file with no meta group, and records
+  in `DICOMFile.Warnings` that the UID was missing and what it read the data
+  set as. A UID outside the standard's transfer syntax registry is treated
+  the same way.
+
 ## [1.9.0] - 2026-11-14
 
 This release shows what the library sees: where every element sits in a
@@ -2195,7 +2288,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...HEAD
+[1.9.1]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/amrshadid/go-dicom/compare/v1.6.0...v1.7.0

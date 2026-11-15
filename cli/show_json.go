@@ -8,6 +8,8 @@ import (
 	"math"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -123,15 +125,25 @@ func writeShowJSON(out io.Writer, path string) error {
 	if err != nil {
 		return err
 	}
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
+	// The document gives bulk values by their position alone, so they are
+	// left in the file: memory follows the metadata, not the image (#274).
+	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f), filereader.ReadOptions{SkipBulkData: true})
 	if err != nil {
 		return err
 	}
 
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(describeFile(df, path, info.Size()))
+}
+
+// describeFile is the document for a file that has been read.
+func describeFile(df *filereader.DICOMFile, path string, size int64) showDocument {
 	doc := showDocument{
 		SchemaVersion:     showSchemaVersion,
 		File:              path,
-		Size:              info.Size(),
+		Size:              size,
 		Preamble:          df.HasPreamble,
 		OffsetsRelativeTo: "file",
 		FileMeta:          []showElement{},
@@ -149,37 +161,37 @@ func writeShowJSON(out io.Writer, path string) error {
 			showRegion{"prefix", 128, 132},
 			showRegion{"fileMeta", 132, df.DataSetOffset})
 		if df.MetaGroupLength != nil {
-			doc.FileMeta = append(doc.FileMeta, describeElement(df.MetaGroupLength))
+			doc.FileMeta = append(doc.FileMeta, describeElements([]*filereader.DataElementValue{df.MetaGroupLength}, nil)...)
 		}
-		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements)...)
+		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements, nil)...)
 	}
-	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, info.Size()})
+	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, size})
 	if df.Deflated {
 		doc.OffsetsRelativeTo = "inflatedDataSet"
 	}
-	doc.DataSet = describeElements(df.DataElements)
-
-	encoder := json.NewEncoder(out)
-	encoder.SetIndent("", "  ")
-	encoder.SetEscapeHTML(false)
-	return encoder.Encode(doc)
+	doc.DataSet = describeElements(df.DataElements, nil)
+	return doc
 }
 
-func describeElements(elements []*filereader.DataElementValue) []showElement {
+// describeElements describes the elements of one data set. outer is the
+// scope of the data set it is an item of, nil at the top.
+func describeElements(elements []*filereader.DataElementValue, outer *displayScope) []showElement {
+	scope := newDisplayScope(elements, outer)
 	out := make([]showElement, 0, len(elements))
 	for _, e := range elements {
-		out = append(out, describeElement(e))
+		out = append(out, describeElement(e, scope))
 	}
 	return out
 }
 
-func describeElement(e *filereader.DataElementValue) showElement {
+func describeElement(e *filereader.DataElementValue, scope *displayScope) showElement {
 	p := e.Position
+	vr := scope.vr(e)
 	out := showElement{
 		Tag:             e.Tag.String(),
 		Keyword:         e.Tag.GetKeyword(),
 		Name:            e.Tag.GetName(),
-		VR:              e.VR,
+		VR:              vr,
 		TagOffset:       p.Offset,
 		LengthOffset:    p.LengthOffset,
 		LengthSize:      p.LengthSize,
@@ -211,7 +223,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 				ValueOffset:     item.Offset + 8,
 				UndefinedLength: item.DeclaredLength == filereader.UndefinedLength,
 				EndOffset:       item.End,
-				Elements:        describeElements(item.Elements),
+				Elements:        describeElements(item.Elements, scope),
 			}
 			itemContentEnd := item.End
 			if item.DelimiterOffset != 0 {
@@ -229,8 +241,11 @@ func describeElement(e *filereader.DataElementValue) showElement {
 				fragment.End - fragment.ValueOffset, fragment.End,
 			})
 		}
+	case e.ValueSkipped:
+		// Bulk data left in the file: one value, given by where it is.
+		out.VM = 1
 	default:
-		value, vm, isText := displayValue(e.VR, e.Value)
+		value, vm, isText := displayValue(vr, e.Value, scope.encodings)
 		out.VM = vm
 		if isText {
 			out.Value = &value
@@ -241,7 +256,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 
 // displayValue is a value as text, how many values it holds, and whether
 // it is one to show at all: bulk binary is given by its position alone.
-func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
+func displayValue(vr string, raw []byte, encodings []string) (text string, vm int, show bool) {
 	if len(raw) == 0 {
 		return "", 0, true
 	}
@@ -259,6 +274,18 @@ func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
 	switch vr {
 	case "OB", "OW", "OF", "OD", "OL", "OV", "UN":
 		return "", 1, false
+	case "":
+		// Nobody knows what this is: the file states no VR and the
+		// dictionary has none. It is shown when it reads as text, which is
+		// often what it is, and given by its position when it does not:
+		// bytes written out as a string are of no use to anyone.
+		text := strings.TrimRight(string(raw), " \x00")
+		for _, r := range text {
+			if r == utf8.RuneError || (!unicode.IsPrint(r) && !unicode.IsSpace(r)) {
+				return "", 1, false
+			}
+		}
+		return text, 1, true
 	case "US":
 		return number(2, func(b []byte) string { return fmt.Sprint(le.Uint16(b)) })
 	case "SS":
@@ -278,7 +305,7 @@ func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
 	case "AT":
 		return number(4, func(b []byte) string { return tag.New(le.Uint16(b), le.Uint16(b[2:])).String() })
 	}
-	text = strings.TrimRight(decodeTextWithCharset(raw, vr), " \x00")
+	text = strings.TrimRight(decodeTextWithCharset(raw, vr, encodings), " \x00")
 	switch vr {
 	// One value whatever it holds: a backslash is text in these.
 	case "LT", "ST", "UT", "UR":

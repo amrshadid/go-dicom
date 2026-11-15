@@ -217,6 +217,33 @@
 // dicom, err := filereader.ReadDICOMFile(reader)
 // ```
 //
+// ### ReadDICOMFileWithOptions
+//
+//	func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DICOMFile, error)
+//
+// ReadDICOMFile with a choice of how to read. ReadOptions.SkipBulkData
+// leaves Pixel Data, its fragments and the long values of the binary VRs in
+// the file: each such element has ValueSkipped set and a nil Value, and its
+// Position says where the bytes are. It is for a program that wants what a
+// file holds and where, without the memory of the image.
+//
+//	dicom, err := filereader.ReadDICOMFileWithOptions(reader, filereader.ReadOptions{SkipBulkData: true})
+//	for _, e := range dicom.DataElements {
+//		fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
+//	}
+//
+// ### TextEncodings and DecodeText
+//
+//	func TextEncodings(elements []*DataElementValue, inherited []string) []string
+//	func DecodeText(vr string, value []byte, encodings []string) string
+//
+// The elements of a DICOMFile hold their values as the file has them, text
+// in whatever Specific Character Set (0008,0005) declares. TextEncodings
+// returns the encodings in force for one data set, given those of the data
+// set it is an item of, and DecodeText a value as UTF-8 under them.
+// GetDataset applies the same rules and returns text already decoded; these
+// are for a program that shows the file's own elements.
+//
 // ## File Structure Reading
 //
 // ### ReadPreamble
