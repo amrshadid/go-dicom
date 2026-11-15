@@ -159,33 +159,37 @@ func describeFile(df *filereader.DICOMFile, path string, size int64) showDocumen
 			showRegion{"prefix", 128, 132},
 			showRegion{"fileMeta", 132, df.DataSetOffset})
 		if df.MetaGroupLength != nil {
-			doc.FileMeta = append(doc.FileMeta, describeElement(df.MetaGroupLength))
+			doc.FileMeta = append(doc.FileMeta, describeElements([]*filereader.DataElementValue{df.MetaGroupLength}, nil)...)
 		}
-		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements)...)
+		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements, nil)...)
 	}
 	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, size})
 	if df.Deflated {
 		doc.OffsetsRelativeTo = "inflatedDataSet"
 	}
-	doc.DataSet = describeElements(df.DataElements)
+	doc.DataSet = describeElements(df.DataElements, nil)
 	return doc
 }
 
-func describeElements(elements []*filereader.DataElementValue) []showElement {
+// describeElements describes the elements of one data set. outer is the
+// scope of the data set it is an item of, nil at the top.
+func describeElements(elements []*filereader.DataElementValue, outer *displayScope) []showElement {
+	scope := newDisplayScope(elements, outer)
 	out := make([]showElement, 0, len(elements))
 	for _, e := range elements {
-		out = append(out, describeElement(e))
+		out = append(out, describeElement(e, scope))
 	}
 	return out
 }
 
-func describeElement(e *filereader.DataElementValue) showElement {
+func describeElement(e *filereader.DataElementValue, scope *displayScope) showElement {
 	p := e.Position
+	vr := scope.vr(e)
 	out := showElement{
 		Tag:             e.Tag.String(),
 		Keyword:         e.Tag.GetKeyword(),
 		Name:            e.Tag.GetName(),
-		VR:              e.VR,
+		VR:              vr,
 		TagOffset:       p.Offset,
 		LengthOffset:    p.LengthOffset,
 		LengthSize:      p.LengthSize,
@@ -217,7 +221,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 				ValueOffset:     item.Offset + 8,
 				UndefinedLength: item.DeclaredLength == filereader.UndefinedLength,
 				EndOffset:       item.End,
-				Elements:        describeElements(item.Elements),
+				Elements:        describeElements(item.Elements, scope),
 			}
 			itemContentEnd := item.End
 			if item.DelimiterOffset != 0 {
@@ -235,8 +239,11 @@ func describeElement(e *filereader.DataElementValue) showElement {
 				fragment.End - fragment.ValueOffset, fragment.End,
 			})
 		}
+	case e.ValueSkipped:
+		// Bulk data left in the file: one value, given by where it is.
+		out.VM = 1
 	default:
-		value, vm, isText := displayValue(e.VR, e.Value)
+		value, vm, isText := displayValue(vr, e.Value, scope.encodings)
 		out.VM = vm
 		if isText {
 			out.Value = &value
@@ -247,7 +254,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 
 // displayValue is a value as text, how many values it holds, and whether
 // it is one to show at all: bulk binary is given by its position alone.
-func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
+func displayValue(vr string, raw []byte, encodings []string) (text string, vm int, show bool) {
 	if len(raw) == 0 {
 		return "", 0, true
 	}
@@ -284,7 +291,7 @@ func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
 	case "AT":
 		return number(4, func(b []byte) string { return tag.New(le.Uint16(b), le.Uint16(b[2:])).String() })
 	}
-	text = strings.TrimRight(decodeTextWithCharset(raw, vr), " \x00")
+	text = strings.TrimRight(decodeTextWithCharset(raw, vr, encodings), " \x00")
 	switch vr {
 	// One value whatever it holds: a backslash is text in these.
 	case "LT", "ST", "UT", "UR":
