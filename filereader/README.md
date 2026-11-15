@@ -32,6 +32,14 @@ elem, _ := dfr.ReadDataElement(true) // explicit VR
 
 ```go
 func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error)
+
+// The same, leaving bulk values (Pixel Data, long binary values) in the
+// file: each such element has ValueSkipped set and keeps its Position.
+func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DICOMFile, error)
+type ReadOptions struct {
+    SkipBulkData      bool
+    BulkDataThreshold uint32 // the longest binary value still read
+}
 func NewDCMFileReader(reader filebase.Reader) *DCMFileReader
 
 func (dfr *DCMFileReader) ReadPreamble() error

@@ -217,6 +217,23 @@
 // dicom, err := filereader.ReadDICOMFile(reader)
 // ```
 //
+// ### ReadDICOMFileWithOptions
+//
+//	func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DICOMFile, error)
+//
+// ReadDICOMFile with a choice of how to read. ReadOptions.SkipBulkData
+// leaves Pixel Data, its fragments and the long values of the binary VRs in
+// the file: each such element has ValueSkipped set and a nil Value, and its
+// Position says where the bytes are. It is for a program that wants what a
+// file holds and where, without the memory of the image.
+//
+// ```go
+// dicom, err := filereader.ReadDICOMFileWithOptions(reader, filereader.ReadOptions{SkipBulkData: true})
+// for _, e := range dicom.DataElements {
+//     fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
+// }
+// ```
+//
 // ### TextEncodings and DecodeText
 //
 //	func TextEncodings(elements []*DataElementValue, inherited []string) []string
