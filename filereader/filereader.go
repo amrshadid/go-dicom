@@ -1405,14 +1405,36 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	ts := metaInfo.TransferSyntaxUID
 	dicomFile.ExplicitVR, dicomFile.IsLittleEndian = determineTransferSyntax(ts)
 
-	if sniffed {
-		explicit, little, ok := dfr.sniffDataSetHead()
-		if ok {
+	// Why the encoding is not known from the file meta group, when it is not.
+	// Transfer Syntax UID (0002,0010) is Type 1, and files are written
+	// without it, or with a UID that is not a transfer syntax at all. Either
+	// way the group says nothing of how the data set is encoded, and a
+	// reader that assumed implicit VR lost every element of one that was
+	// explicit (#273). The data set's first element says, as it does for a
+	// file with no meta group, and the reader says that it looked.
+	unstated := ""
+	switch {
+	case sniffed:
+		unstated = "no file meta header"
+	case ts == "":
+		unstated = "the file meta has no Transfer Syntax UID (0002,0010)"
+	case !isStandardTransferSyntax(ts):
+		unstated = fmt.Sprintf("Transfer Syntax UID %s is not one the standard registers", ts)
+	}
+	if unstated != "" {
+		how := "the default"
+		if explicit, little, ok := dfr.sniffDataSetHead(); ok {
 			dicomFile.ExplicitVR, dicomFile.IsLittleEndian = explicit, little
+			how = "judged from its first element"
 		}
-		dicomFile.Warnings = append(dicomFile.Warnings,
-			fmt.Sprintf("no file meta header; parsing as a raw data set in %s",
-				describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)))
+		encoding := describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)
+		if sniffed {
+			dicomFile.Warnings = append(dicomFile.Warnings,
+				fmt.Sprintf("no file meta header; parsing as a raw data set in %s", encoding))
+		} else {
+			dicomFile.Warnings = append(dicomFile.Warnings,
+				fmt.Sprintf("%s; reading the data set as %s, %s", unstated, encoding, how))
+		}
 	}
 
 	// Under the Deflated syntax the meta header is uncompressed but everything
@@ -1554,6 +1576,15 @@ func inflateRemainder(reader filebase.Reader, compressedSize int64) ([]byte, err
 			compressedSize, limit)
 	}
 	return out, nil
+}
+
+// isStandardTransferSyntax reports whether a UID is in the part of the
+// registry the standard keeps for transfer syntaxes: 1.2.840.10008.1.2 and
+// everything under it (PS3.6 Annex A). One it adds later is there too, which
+// a list would not know.
+func isStandardTransferSyntax(ts string) bool {
+	const root = "1.2.840.10008.1.2"
+	return ts == root || strings.HasPrefix(ts, root+".")
 }
 
 // determineTransferSyntax determines the VR type and byte order from a transfer syntax UID.
