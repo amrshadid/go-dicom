@@ -123,15 +123,25 @@ func writeShowJSON(out io.Writer, path string) error {
 	if err != nil {
 		return err
 	}
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
+	// The document gives bulk values by their position alone, so they are
+	// left in the file: memory follows the metadata, not the image (#274).
+	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f), filereader.ReadOptions{SkipBulkData: true})
 	if err != nil {
 		return err
 	}
 
+	encoder := json.NewEncoder(out)
+	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
+	return encoder.Encode(describeFile(df, path, info.Size()))
+}
+
+// describeFile is the document for a file that has been read.
+func describeFile(df *filereader.DICOMFile, path string, size int64) showDocument {
 	doc := showDocument{
 		SchemaVersion:     showSchemaVersion,
 		File:              path,
-		Size:              info.Size(),
+		Size:              size,
 		Preamble:          df.HasPreamble,
 		OffsetsRelativeTo: "file",
 		FileMeta:          []showElement{},
@@ -153,16 +163,12 @@ func writeShowJSON(out io.Writer, path string) error {
 		}
 		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements)...)
 	}
-	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, info.Size()})
+	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, size})
 	if df.Deflated {
 		doc.OffsetsRelativeTo = "inflatedDataSet"
 	}
 	doc.DataSet = describeElements(df.DataElements)
-
-	encoder := json.NewEncoder(out)
-	encoder.SetIndent("", "  ")
-	encoder.SetEscapeHTML(false)
-	return encoder.Encode(doc)
+	return doc
 }
 
 func describeElements(elements []*filereader.DataElementValue) []showElement {

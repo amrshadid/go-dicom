@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/filereader"
 )
 
 // show printed the decoded tree and nothing about where it sits in the
@@ -200,5 +203,41 @@ func TestShowJSONDescribesTheWholeFile(t *testing.T) {
 	path := sequenceFile(t)
 	if err := (&ShowCommand{out: &bytes.Buffer{}}).Execute([]string{path + "::Rows", "--json"}); err == nil {
 		t.Error("--json with one element was accepted")
+	}
+}
+
+// --json leaves bulk values in the file (#274). What it prints is what it
+// printed when it read them.
+func TestShowJSONIsTheSameWithoutReadingBulkData(t *testing.T) {
+	dir := os.Getenv("GODICOM_PYDICOM_DATA")
+	if dir == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	paths, _ := filepath.Glob(filepath.Join(dir, "*.dcm"))
+	compared := 0
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		full, err := filereader.ReadDICOMFile(filebase.NewFileReader(bytes.NewReader(data)))
+		if err != nil {
+			continue
+		}
+		light, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(bytes.NewReader(data)),
+			filereader.ReadOptions{SkipBulkData: true})
+		if err != nil {
+			t.Errorf("%s reads in full and not with bulk data skipped: %v", filepath.Base(path), err)
+			continue
+		}
+		a, _ := json.Marshal(describeFile(full, path, int64(len(data))))
+		b, _ := json.Marshal(describeFile(light, path, int64(len(data))))
+		if !bytes.Equal(a, b) {
+			t.Errorf("%s: the document differs when bulk data is not read", filepath.Base(path))
+		}
+		compared++
+	}
+	if compared < 60 {
+		t.Errorf("only %d files were compared", compared)
 	}
 }
