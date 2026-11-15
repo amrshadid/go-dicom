@@ -70,9 +70,12 @@ type ReadOptions struct {
 	// SkipBulkData leaves bulk values in the file instead of reading them
 	// into memory: Pixel Data in every form, its fragments when it is
 	// encapsulated, and any value of a binary VR (OB, OD, OF, OL, OV, OW or
-	// UN) longer than BulkDataThreshold. Each such element has ValueSkipped
-	// set and a nil Value, and keeps its Length and its Position, so the
-	// bytes can be found again.
+	// UN) longer than BulkDataThreshold. A value whose VR nobody knows, in
+	// an implicit VR file, may be text or may be bulk: it is read up to
+	// UnknownVRBulkLength bytes, or BulkDataThreshold when that is more, and
+	// left in the file beyond. Each such element has ValueSkipped set and a
+	// nil Value, and keeps its Length and its Position, so the bytes can be
+	// found again.
 	//
 	// It is for reading the structure of a file: what it holds and where.
 	// Memory then follows the metadata and not the image. A data set built
@@ -665,6 +668,10 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 	return element, nil
 }
 
+// UnknownVRBulkLength is how long a value of no known VR may be and still
+// be read when bulk data is skipped. Such a value is often a line of text.
+const UnknownVRBulkLength = 1024
+
 // binaryVRs are the VRs whose values are bytes, words and floats in bulk,
 // never text or a few numbers.
 var binaryVRs = map[string]bool{"OB": true, "OD": true, "OF": true, "OL": true, "OV": true, "OW": true, "UN": true}
@@ -677,6 +684,9 @@ func (dfr *DCMFileReader) isBulk(element *DataElementValue) bool {
 	}
 	if isEncapsulatedPixelDataTag(element.Tag) {
 		return true
+	}
+	if element.VR == "" {
+		return element.Length > max(dfr.options.BulkDataThreshold, UnknownVRBulkLength)
 	}
 	if element.Length <= dfr.options.BulkDataThreshold {
 		return false

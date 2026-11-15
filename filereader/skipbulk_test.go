@@ -186,3 +186,26 @@ func TestSkipBulkDataAcrossThePydicomCorpus(t *testing.T) {
 		t.Errorf("%d files checked, %d bytes skipped", checked, skippedBytes)
 	}
 }
+
+// A value nobody knows the VR of is read when it is short, since it is
+// often text, and left in the file when it is long.
+func TestSkipBulkDataOfAValueWithNoKnownVR(t *testing.T) {
+	element := func(elem uint16, value []byte) []byte {
+		out := []byte{0x09, 0x00, byte(elem), byte(elem >> 8)}
+		out = append(out, le32(uint32(len(value)))...)
+		return append(out, value...)
+	}
+	var ds bytes.Buffer
+	ds.Write(element(0x0010, []byte("ACME 1.0")))
+	ds.Write(element(0x1001, []byte("a note")))
+	ds.Write(element(0x1002, bytes.Repeat([]byte{0x7F}, 4000)))
+	data := part10("1.2.840.10008.1.2", ds.Bytes())
+
+	df := wholeFileWith(t, data, ReadOptions{SkipBulkData: true})
+	if note := elementAt(df, 0x0009, 0x1001); note.ValueSkipped || string(note.Value) != "a note" {
+		t.Errorf("the short value is %+v", note)
+	}
+	if blob := elementAt(df, 0x0009, 0x1002); !blob.ValueSkipped || blob.Value != nil || blob.Length != 4000 {
+		t.Errorf("the long value was read: %d bytes held", len(blob.Value))
+	}
+}
