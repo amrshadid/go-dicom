@@ -9,16 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A file can be read without its bulk data, and `show --json` reads it
-  so** (#274). `show --json` gives bulk values by their position alone and
-  read every one of them to do it: 218 MB of memory for a 200 MB image.
+- **A file can be read without its bulk data, and `show` reads it so**
+  (#274). `show` prints a bulk value's position, or its first hundred
+  bytes, and read every one whole to do it: 218 MB of memory for a 200 MB
+  image.
   `filereader.ReadDICOMFileWithOptions` with `ReadOptions.SkipBulkData`
   leaves Pixel Data, the fragments of encapsulated Pixel Data and the
   values of the binary VRs in the file, seeking past them where the stream
   can seek. Each such element has `ValueSkipped` set and keeps its length
-  and position. `BulkDataThreshold` reads the short ones. `show --json` now
-  takes 18 MB for that file, and prints the same document: across pydicom's
-  corpus the output is identical either way.
+  and position. `BulkDataThreshold` reads the short ones. `show` reads
+  this way in both its forms: the table needs the first hundred bytes of a
+  value at most, and reads those. Either form now takes 18 MB for that
+  file, and prints what it printed: across pydicom's corpus the JSON
+  document and every row of the table are identical either way.
 
 ### Fixed
 

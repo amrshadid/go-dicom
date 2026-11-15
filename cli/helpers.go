@@ -6,12 +6,14 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
 	"unicode"
 
 	"github.com/amrshadid/go-dicom/charset"
+	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
@@ -27,6 +29,10 @@ type DicomElement struct {
 	// Encodings are the character encodings the value's text is in, as
 	// filereader.TextEncodings gives them for the data set it is in.
 	Encodings []string
+	// Length is how many bytes the value is in the file. It is more than
+	// len(Value) for a bulk value listed for display, of which Value is
+	// only the start.
+	Length int
 }
 
 // DicomInfo contains extracted key DICOM metadata.
@@ -56,31 +62,53 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 	return readDICOMElements(filename, false)
 }
 
-// readDICOMElements is readDICOMFile, and with groupLength the File Meta
-// Information Group Length (0002,0000) leads the list, as it leads the file.
+// shownBytes is how much of a value the table prints at most.
+const shownBytes = 100
+
+// readDICOMElements is readDICOMFile, and with forDisplay it lists a file as
+// show prints it, which differs in two ways.
 //
-// Only for display. The element is not content: it counts the bytes of the
+// The File Meta Information Group Length (0002,0000) leads the list, as it
+// leads the file. The element is not content: it counts the bytes of the
 // group it opens, and a writer works it out. What converts a file or
 // generates code to rebuild one must not carry the old count along.
-func readDICOMElements(filename string, groupLength bool) ([]DicomElement, error) {
+//
+// And bulk values stay in the file. The table prints the first hundred
+// bytes of a value at most, and read all of it to do so: a 200 MB image
+// took 200 MB to show one line of (#274). Only the part that is printed is
+// read; Length still says how long the value is.
+func readDICOMElements(filename string, forDisplay bool) ([]DicomElement, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(file))
+	options := filereader.ReadOptions{SkipBulkData: forDisplay, BulkDataThreshold: shownBytes}
+	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file), options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 	}
+	// A deflated data set is read after inflating it, and its positions are
+	// in the inflated bytes, which are not on disk to go back to.
+	if forDisplay && df.Deflated {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
+		}
+		if df, err = filereader.ReadDICOMFile(filebase.NewFileReader(file)); err != nil {
+			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
+		}
+	}
+	// Where the start of a value left in the file is read from.
+	root := &displayScope{deciding: dataset.NewDataset(), source: file}
 
 	// The file meta header first, as it appears in the file, then the data set.
 	elements := make([]DicomElement, 0, 1+len(df.MetaElements)+len(df.DataElements))
-	if groupLength && df.MetaGroupLength != nil {
-		elements = appendElements(elements, []*filereader.DataElementValue{df.MetaGroupLength}, 0, nil)
+	if forDisplay && df.MetaGroupLength != nil {
+		elements = appendElements(elements, []*filereader.DataElementValue{df.MetaGroupLength}, 0, root)
 	}
-	elements = appendElements(elements, df.MetaElements, 0, nil)
-	elements = appendElements(elements, df.DataElements, 0, nil)
+	elements = appendElements(elements, df.MetaElements, 0, root)
+	elements = appendElements(elements, df.DataElements, 0, root)
 
 	// A file that yielded nothing is not a DICOM file, and saying so is more use than
 	// printing an empty table.
@@ -114,9 +142,10 @@ func appendElements(out []DicomElement, elems []*filereader.DataElementValue, de
 			Tag:       fmt.Sprintf("%04X,%04X", e.Tag.Group(), e.Tag.Element()),
 			Name:      getElementName(e.Tag.Group(), e.Tag.Element()),
 			VR:        scope.vr(e),
-			Value:     e.Value,
+			Value:     scope.shown(e),
 			Depth:     depth,
 			Encodings: scope.encodings,
+			Length:    valueBytes(e),
 		})
 
 		// Sequence items nest one level deeper than the sequence itself.
@@ -150,6 +179,22 @@ func getElementName(group, element uint16) string {
 // formatValue converts bytes to displayable string.
 func formatValue(vr string, value []byte, maxLen int) string {
 	return formatValueIn(vr, value, maxLen, nil)
+}
+
+// display is the element's value as the table shows it: all of a short
+// one, and the start of a long one with how long it is.
+func (e DicomElement) display(maxLen int) string {
+	if e.Length == 0 {
+		return ""
+	}
+	value := e.Value
+	if len(value) > maxLen {
+		value = value[:maxLen]
+	}
+	if e.Length > maxLen {
+		return fmt.Sprintf("%s... (%d bytes)", formatValueRawIn(e.VR, value, e.Encodings), e.Length)
+	}
+	return formatValueRawIn(e.VR, value, e.Encodings)
 }
 
 // formatValueIn is formatValue for a value whose text is in encodings.
