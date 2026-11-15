@@ -30,22 +30,21 @@ type displayScope struct {
 	encodings []string
 }
 
-// decidingTags are the attributes dataset.ResolveVR consults.
-var decidingTags = map[tag.Tag]dataelem.VR{
-	tag.New(0x0028, 0x0100): dataelem.US, // Bits Allocated
-	tag.New(0x0028, 0x0103): dataelem.US, // Pixel Representation
-	tag.New(0x0028, 0x3002): "",          // LUT Descriptor, US or SS itself
+// decidingTags are the attributes dataset.ResolveVR consults. Each is read
+// as an unsigned short, which is all it asks of them: LUT Descriptor is
+// "US or SS" itself, and only its first value, a count, is used.
+var decidingTags = map[tag.Tag]bool{
+	tag.New(0x0028, 0x0100): true, // Bits Allocated
+	tag.New(0x0028, 0x0103): true, // Pixel Representation
+	tag.New(0x0028, 0x3002): true, // LUT Descriptor
 }
 
 // newDisplayScope is the scope of a data set's elements, inside outer.
 func newDisplayScope(elements []*filereader.DataElementValue, outer *displayScope) *displayScope {
 	scope := &displayScope{deciding: dataset.NewDataset()}
 	for _, e := range elements {
-		if vr, ok := decidingTags[e.Tag]; ok {
-			if vr == "" {
-				vr = dataelem.US
-			}
-			_ = scope.deciding.Add(dataelem.NewDataElement(e.Tag, vr, e.Value))
+		if decidingTags[e.Tag] {
+			_ = scope.deciding.Add(dataelem.NewDataElement(e.Tag, dataelem.US, e.Value))
 		}
 	}
 	var inherited []string
