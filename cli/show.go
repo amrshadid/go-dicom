@@ -89,7 +89,9 @@ func (sc *ShowCommand) Execute(args []string) error {
 		return nil
 	}
 
-	elements, err := readDICOMFile(sc.filespec)
+	// With the group length that opens the file meta group: show lists what
+	// is in the file, as --json does.
+	elements, err := readDICOMElements(sc.filespec, true)
 	if err != nil {
 		return fmt.Errorf("show: failed to read DICOM file: %v", err)
 	}
