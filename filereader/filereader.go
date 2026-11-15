@@ -1412,29 +1412,33 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 	// reader that assumed implicit VR lost every element of one that was
 	// explicit (#273). The data set's first element says, as it does for a
 	// file with no meta group, and the reader says that it looked.
+	//
+	// unstated is what is said, up to the encoding the data set is read as.
 	unstated := ""
 	switch {
 	case sniffed:
-		unstated = "no file meta header"
+		unstated = "no file meta header; parsing as a raw data set in"
 	case ts == "":
-		unstated = "the file meta has no Transfer Syntax UID (0002,0010)"
+		unstated = "the file meta has no Transfer Syntax UID (0002,0010); reading the data set as"
 	case !isStandardTransferSyntax(ts):
-		unstated = fmt.Sprintf("Transfer Syntax UID %s is not one the standard registers", ts)
+		unstated = "Transfer Syntax UID " + ts + " is not one the standard registers; reading the data set as"
 	}
 	if unstated != "" {
-		how := "the default"
-		if explicit, little, ok := dfr.sniffDataSetHead(); ok {
+		explicit, little, looked := dfr.sniffDataSetHead()
+		if looked {
 			dicomFile.ExplicitVR, dicomFile.IsLittleEndian = explicit, little
-			how = "judged from its first element"
 		}
-		encoding := describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)
-		if sniffed {
-			dicomFile.Warnings = append(dicomFile.Warnings,
-				fmt.Sprintf("no file meta header; parsing as a raw data set in %s", encoding))
-		} else {
-			dicomFile.Warnings = append(dicomFile.Warnings,
-				fmt.Sprintf("%s; reading the data set as %s, %s", unstated, encoding, how))
+		warning := unstated + " " + describeEncoding(dicomFile.ExplicitVR, dicomFile.IsLittleEndian)
+		// A file with a meta group was expected to say. Whether the
+		// encoding was read off the data set or assumed is worth knowing.
+		switch {
+		case sniffed:
+		case looked:
+			warning += ", judged from its first element"
+		default:
+			warning += ", the default"
 		}
+		dicomFile.Warnings = append(dicomFile.Warnings, warning)
 	}
 
 	// Under the Deflated syntax the meta header is uncompressed but everything
