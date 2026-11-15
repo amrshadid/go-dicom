@@ -92,7 +92,11 @@ func tiling(t *testing.T, data []byte, order binary.ByteOrder, elements []*DataE
 		default:
 			end = p.ValueOffset + int64(e.Length)
 			// Big endian values are converted as they are read.
-			if order == binary.ByteOrder(binary.LittleEndian) && !bytes.Equal(data[p.ValueOffset:end], e.Value) {
+			if e.ValueSkipped {
+				if e.Value != nil {
+					t.Fatalf("%s: a skipped value was kept", name)
+				}
+			} else if order == binary.ByteOrder(binary.LittleEndian) && !bytes.Equal(data[p.ValueOffset:end], e.Value) {
 				t.Fatalf("%s: the bytes at %d are not its value", name, p.ValueOffset)
 			}
 		}
@@ -117,7 +121,13 @@ func tiling(t *testing.T, data []byte, order binary.ByteOrder, elements []*DataE
 // without a warning: the meta group and the data set, end to end.
 func wholeFile(t *testing.T, data []byte) *DICOMFile {
 	t.Helper()
-	df, err := ReadDICOMFile(filebase.NewFileReader(bytes.NewReader(data)))
+	return wholeFileWith(t, data, ReadOptions{})
+}
+
+// wholeFileWith is wholeFile for a file read with options.
+func wholeFileWith(t *testing.T, data []byte, options ReadOptions) *DICOMFile {
+	t.Helper()
+	df, err := ReadDICOMFileWithOptions(filebase.NewFileReader(bytes.NewReader(data)), options)
 	if err != nil {
 		t.Fatal(err)
 	}
