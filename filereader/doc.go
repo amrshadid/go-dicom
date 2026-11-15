@@ -217,6 +217,18 @@
 // dicom, err := filereader.ReadDICOMFile(reader)
 // ```
 //
+// ### TextEncodings and DecodeText
+//
+//	func TextEncodings(elements []*DataElementValue, inherited []string) []string
+//	func DecodeText(vr string, value []byte, encodings []string) string
+//
+// The elements of a DICOMFile hold their values as the file has them, text
+// in whatever Specific Character Set (0008,0005) declares. TextEncodings
+// returns the encodings in force for one data set, given those of the data
+// set it is an item of, and DecodeText a value as UTF-8 under them.
+// GetDataset applies the same rules and returns text already decoded; these
+// are for a program that shows the file's own elements.
+//
 // ## File Structure Reading
 //
 // ### ReadPreamble
