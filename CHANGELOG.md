@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`show` settles a VR the file does not state** (#272). An implicit VR
+  file carries no VRs, and for some attributes the dictionary offers a
+  choice. `show` printed the choice: Pixel Data as "OB or OW", with its
+  bytes as an 8192-character string in `show --json`, growing with the
+  image, and Smallest and Largest Image Pixel Value as "US or SS" with their
+  bytes for a value. Both forms now apply `dataset.ResolveVR`, the rules the
+  file writer and the network already used, so the signed or unsigned
+  choice follows Pixel Representation, from an enclosing data set where an
+  item does not repeat it, and Pixel Data is bulk data given by position.
+  A private creator the file gives no VR is shown as LO. Any other
+  element nobody knows the VR of keeps its value in `show --json` when the
+  value is text, and is given by position when it is not. `convert` and
+  `codify` take the same VRs. Across pydicom's corpus no VR is left as a
+  choice, and 6,134 of 6,135 are the VR pydicom settles on; the other is
+  8-bit Pixel Data in implicit VR, OB here and OW there, where the standard
+  allows either.
+
 - **`show` lists the File Meta Information Group Length** (#271). The text
   table began the file meta group at (0002,0001), and `show file::0002,0000`
   answered that the element was not found, though it is the first one in the

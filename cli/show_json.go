@@ -8,6 +8,8 @@ import (
 	"math"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -149,15 +151,15 @@ func writeShowJSON(out io.Writer, path string) error {
 			showRegion{"prefix", 128, 132},
 			showRegion{"fileMeta", 132, df.DataSetOffset})
 		if df.MetaGroupLength != nil {
-			doc.FileMeta = append(doc.FileMeta, describeElement(df.MetaGroupLength))
+			doc.FileMeta = append(doc.FileMeta, describeElements([]*filereader.DataElementValue{df.MetaGroupLength}, nil)...)
 		}
-		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements)...)
+		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements, nil)...)
 	}
 	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, info.Size()})
 	if df.Deflated {
 		doc.OffsetsRelativeTo = "inflatedDataSet"
 	}
-	doc.DataSet = describeElements(df.DataElements)
+	doc.DataSet = describeElements(df.DataElements, nil)
 
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
@@ -165,21 +167,25 @@ func writeShowJSON(out io.Writer, path string) error {
 	return encoder.Encode(doc)
 }
 
-func describeElements(elements []*filereader.DataElementValue) []showElement {
+// describeElements describes the elements of one data set. outer is the
+// scope of the data set it is an item of, nil at the top.
+func describeElements(elements []*filereader.DataElementValue, outer *displayScope) []showElement {
+	scope := newDisplayScope(elements, outer)
 	out := make([]showElement, 0, len(elements))
 	for _, e := range elements {
-		out = append(out, describeElement(e))
+		out = append(out, describeElement(e, scope))
 	}
 	return out
 }
 
-func describeElement(e *filereader.DataElementValue) showElement {
+func describeElement(e *filereader.DataElementValue, scope *displayScope) showElement {
 	p := e.Position
+	vr := scope.vr(e)
 	out := showElement{
 		Tag:             e.Tag.String(),
 		Keyword:         e.Tag.GetKeyword(),
 		Name:            e.Tag.GetName(),
-		VR:              e.VR,
+		VR:              vr,
 		TagOffset:       p.Offset,
 		LengthOffset:    p.LengthOffset,
 		LengthSize:      p.LengthSize,
@@ -211,7 +217,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 				ValueOffset:     item.Offset + 8,
 				UndefinedLength: item.DeclaredLength == filereader.UndefinedLength,
 				EndOffset:       item.End,
-				Elements:        describeElements(item.Elements),
+				Elements:        describeElements(item.Elements, scope),
 			}
 			itemContentEnd := item.End
 			if item.DelimiterOffset != 0 {
@@ -230,7 +236,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 			})
 		}
 	default:
-		value, vm, isText := displayValue(e.VR, e.Value)
+		value, vm, isText := displayValue(vr, e.Value)
 		out.VM = vm
 		if isText {
 			out.Value = &value
@@ -259,6 +265,18 @@ func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
 	switch vr {
 	case "OB", "OW", "OF", "OD", "OL", "OV", "UN":
 		return "", 1, false
+	case "":
+		// Nobody knows what this is: the file states no VR and the
+		// dictionary has none. It is shown when it reads as text, which is
+		// often what it is, and given by its position when it does not:
+		// bytes written out as a string are of no use to anyone.
+		text := strings.TrimRight(string(raw), " \x00")
+		for _, r := range text {
+			if r == utf8.RuneError || (!unicode.IsPrint(r) && !unicode.IsSpace(r)) {
+				return "", 1, false
+			}
+		}
+		return text, 1, true
 	case "US":
 		return number(2, func(b []byte) string { return fmt.Sprint(le.Uint16(b)) })
 	case "SS":
