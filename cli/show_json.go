@@ -149,15 +149,15 @@ func writeShowJSON(out io.Writer, path string) error {
 			showRegion{"prefix", 128, 132},
 			showRegion{"fileMeta", 132, df.DataSetOffset})
 		if df.MetaGroupLength != nil {
-			doc.FileMeta = append(doc.FileMeta, describeElement(df.MetaGroupLength))
+			doc.FileMeta = append(doc.FileMeta, describeElements([]*filereader.DataElementValue{df.MetaGroupLength}, nil)...)
 		}
-		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements)...)
+		doc.FileMeta = append(doc.FileMeta, describeElements(df.MetaElements, nil)...)
 	}
 	doc.Regions = append(doc.Regions, showRegion{"dataSet", df.DataSetOffset, info.Size()})
 	if df.Deflated {
 		doc.OffsetsRelativeTo = "inflatedDataSet"
 	}
-	doc.DataSet = describeElements(df.DataElements)
+	doc.DataSet = describeElements(df.DataElements, nil)
 
 	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
@@ -165,21 +165,25 @@ func writeShowJSON(out io.Writer, path string) error {
 	return encoder.Encode(doc)
 }
 
-func describeElements(elements []*filereader.DataElementValue) []showElement {
+// describeElements describes the elements of one data set. outer is the
+// scope of the data set it is an item of, nil at the top.
+func describeElements(elements []*filereader.DataElementValue, outer *displayScope) []showElement {
+	scope := newDisplayScope(elements, outer)
 	out := make([]showElement, 0, len(elements))
 	for _, e := range elements {
-		out = append(out, describeElement(e))
+		out = append(out, describeElement(e, scope))
 	}
 	return out
 }
 
-func describeElement(e *filereader.DataElementValue) showElement {
+func describeElement(e *filereader.DataElementValue, scope *displayScope) showElement {
 	p := e.Position
+	vr := scope.vr(e)
 	out := showElement{
 		Tag:             e.Tag.String(),
 		Keyword:         e.Tag.GetKeyword(),
 		Name:            e.Tag.GetName(),
-		VR:              e.VR,
+		VR:              vr,
 		TagOffset:       p.Offset,
 		LengthOffset:    p.LengthOffset,
 		LengthSize:      p.LengthSize,
@@ -211,7 +215,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 				ValueOffset:     item.Offset + 8,
 				UndefinedLength: item.DeclaredLength == filereader.UndefinedLength,
 				EndOffset:       item.End,
-				Elements:        describeElements(item.Elements),
+				Elements:        describeElements(item.Elements, scope),
 			}
 			itemContentEnd := item.End
 			if item.DelimiterOffset != 0 {
@@ -230,7 +234,7 @@ func describeElement(e *filereader.DataElementValue) showElement {
 			})
 		}
 	default:
-		value, vm, isText := displayValue(e.VR, e.Value)
+		value, vm, isText := displayValue(vr, e.Value)
 		out.VM = vm
 		if isText {
 			out.Value = &value

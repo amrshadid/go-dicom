@@ -63,8 +63,8 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 
 	// The file meta header first, as it appears in the file, then the data set.
 	elements := make([]DicomElement, 0, len(df.MetaElements)+len(df.DataElements))
-	elements = appendElements(elements, df.MetaElements, 0)
-	elements = appendElements(elements, df.DataElements, 0)
+	elements = appendElements(elements, df.MetaElements, 0, nil)
+	elements = appendElements(elements, df.DataElements, 0, nil)
 
 	// A file that yielded nothing is not a DICOM file, and saying so is more use than
 	// printing an empty table.
@@ -88,19 +88,23 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 
 // appendElements flattens parsed elements for display, descending into
 // sequences and recording the nesting level in Depth.
-func appendElements(out []DicomElement, elems []*filereader.DataElementValue, depth int) []DicomElement {
+//
+// outer is the scope of the data set these elements are an item of, nil at
+// the top.
+func appendElements(out []DicomElement, elems []*filereader.DataElementValue, depth int, outer *displayScope) []DicomElement {
+	scope := newDisplayScope(elems, outer)
 	for _, e := range elems {
 		out = append(out, DicomElement{
 			Tag:   fmt.Sprintf("%04X,%04X", e.Tag.Group(), e.Tag.Element()),
 			Name:  getElementName(e.Tag.Group(), e.Tag.Element()),
-			VR:    e.VR,
+			VR:    scope.vr(e),
 			Value: e.Value,
 			Depth: depth,
 		})
 
 		// Sequence items nest one level deeper than the sequence itself.
 		for _, item := range e.Items {
-			out = appendElements(out, item.Elements, depth+1)
+			out = appendElements(out, item.Elements, depth+1, scope)
 		}
 	}
 	return out
