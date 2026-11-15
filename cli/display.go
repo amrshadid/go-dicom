@@ -24,6 +24,10 @@ type displayScope struct {
 	// enclosing are those of the data sets this one is an item of, nearest
 	// first.
 	enclosing []*dataset.Dataset
+	// encodings are the character encodings its text is in: what its
+	// Specific Character Set declares, or the enclosing data set's. Text
+	// shown without them is right for Latin-1 alone (#270).
+	encodings []string
 }
 
 // decidingTags are the attributes dataset.ResolveVR consults.
@@ -44,9 +48,12 @@ func newDisplayScope(elements []*filereader.DataElementValue, outer *displayScop
 			_ = scope.deciding.Add(dataelem.NewDataElement(e.Tag, vr, e.Value))
 		}
 	}
+	var inherited []string
 	if outer != nil {
 		scope.enclosing = append([]*dataset.Dataset{outer.deciding}, outer.enclosing...)
+		inherited = outer.encodings
 	}
+	scope.encodings = filereader.TextEncodings(elements, inherited)
 	return scope
 }
 

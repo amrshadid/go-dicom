@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`show`, `info` and `convert` show text in the character set the file
+  declares** (#270). They read every text value as Latin-1 whatever
+  Specific Character Set said, so a Greek or Arabic name came out as
+  accented Latin letters, and so did one in UTF-8. The library decoded them
+  correctly all along; the commands did not ask it to. They now use the
+  reader's own rules, which `filereader.TextEncodings` and
+  `filereader.DecodeText` make available: the data set's declared
+  character set, or the enclosing data set's for an item with none, applied
+  to the VRs a character set covers. The name in each of pydicom's 17
+  character set files is shown as pydicom reads it. `codify` is unchanged,
+  since the code it writes carries the bytes and their declaration.
+
 - **`show` settles a VR the file does not state** (#272). An implicit VR
   file carries no VRs, and for some attributes the dictionary offers a
   choice. `show` printed the choice: Pixel Data as "OB or OW", with its

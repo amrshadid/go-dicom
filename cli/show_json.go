@@ -234,7 +234,7 @@ func describeElement(e *filereader.DataElementValue, scope *displayScope) showEl
 			})
 		}
 	default:
-		value, vm, isText := displayValue(vr, e.Value)
+		value, vm, isText := displayValue(vr, e.Value, scope.encodings)
 		out.VM = vm
 		if isText {
 			out.Value = &value
@@ -245,7 +245,7 @@ func describeElement(e *filereader.DataElementValue, scope *displayScope) showEl
 
 // displayValue is a value as text, how many values it holds, and whether
 // it is one to show at all: bulk binary is given by its position alone.
-func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
+func displayValue(vr string, raw []byte, encodings []string) (text string, vm int, show bool) {
 	if len(raw) == 0 {
 		return "", 0, true
 	}
@@ -282,7 +282,7 @@ func displayValue(vr string, raw []byte) (text string, vm int, show bool) {
 	case "AT":
 		return number(4, func(b []byte) string { return tag.New(le.Uint16(b), le.Uint16(b[2:])).String() })
 	}
-	text = strings.TrimRight(decodeTextWithCharset(raw, vr), " \x00")
+	text = strings.TrimRight(decodeTextWithCharset(raw, vr, encodings), " \x00")
 	switch vr {
 	// One value whatever it holds: a backslash is text in these.
 	case "LT", "ST", "UT", "UR":
