@@ -24,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8-bit Pixel Data in implicit VR, OB here and OW there, where the standard
   allows either.
 
+- **`show` lists the File Meta Information Group Length** (#271). The text
+  table began the file meta group at (0002,0001), and `show file::0002,0000`
+  answered that the element was not found, though it is the first one in the
+  file and `show --json` lists it. Both forms now show it. `convert`,
+  `codify` and `info` are unchanged: the element counts the bytes of its
+  group, which a writer works out, so it is not carried into what they
+  produce.
+
 ## [1.9.0] - 2026-11-14
 
 This release shows what the library sees: where every element sits in a

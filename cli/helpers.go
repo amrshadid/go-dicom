@@ -50,6 +50,16 @@ type DicomInfo struct {
 // never descended into sequences, and received none of the fixes made to the
 // real reader.
 func readDICOMFile(filename string) ([]DicomElement, error) {
+	return readDICOMElements(filename, false)
+}
+
+// readDICOMElements is readDICOMFile, and with groupLength the File Meta
+// Information Group Length (0002,0000) leads the list, as it leads the file.
+//
+// Only for display. The element is not content: it counts the bytes of the
+// group it opens, and a writer works it out. What converts a file or
+// generates code to rebuild one must not carry the old count along.
+func readDICOMElements(filename string, groupLength bool) ([]DicomElement, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -62,7 +72,10 @@ func readDICOMFile(filename string) ([]DicomElement, error) {
 	}
 
 	// The file meta header first, as it appears in the file, then the data set.
-	elements := make([]DicomElement, 0, len(df.MetaElements)+len(df.DataElements))
+	elements := make([]DicomElement, 0, 1+len(df.MetaElements)+len(df.DataElements))
+	if groupLength && df.MetaGroupLength != nil {
+		elements = appendElements(elements, []*filereader.DataElementValue{df.MetaGroupLength}, 0, nil)
+	}
 	elements = appendElements(elements, df.MetaElements, 0, nil)
 	elements = appendElements(elements, df.DataElements, 0, nil)
 
