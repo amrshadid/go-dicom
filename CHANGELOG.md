@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group, which a writer works out, so it is not carried into what they
   produce.
 
+- **A file meta group that does not state the encoding is said to, and the
+  data set is read as it is written** (#273). Transfer Syntax UID
+  (0002,0010) is required, and files are written without it. The reader
+  took such a file for implicit VR little endian without a word, so a guess
+  could not be told from a declaration, and where the data set was in fact
+  explicit VR every element of it was lost. The reader now looks at the data
+  set's first element, as it does for a file with no meta group, and records
+  in `DICOMFile.Warnings` that the UID was missing and what it read the data
+  set as. A UID outside the standard's transfer syntax registry is treated
+  the same way.
+
 ## [1.9.0] - 2026-11-14
 
 This release shows what the library sees: where every element sits in a
