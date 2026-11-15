@@ -41,6 +41,12 @@ func (dfr *DCMFileReader) ReadTag() (tag.Tag, error)
 func (dfr *DCMFileReader) ReadDataElement(explicitVR bool) (*DataElementValue, error)
 func (dfr *DCMFileReader) GetPosition() int64
 
+// For a program that shows a DICOMFile's elements as they are in the file:
+// the character encodings a data set's text is in, and a value decoded
+// under them. GetDataset applies the same rules itself.
+func TextEncodings(elements []*DataElementValue, inherited []string) []string
+func DecodeText(vr string, value []byte, encodings []string) string
+
 type DICOMFile struct {
     FileMetaInfo   *FileMetaInfo
     DataElements   []*DataElementValue

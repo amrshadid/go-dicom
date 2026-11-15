@@ -123,7 +123,7 @@ func (sc *ShowCommand) Execute(args []string) error {
 		}
 
 		if sc.quiet {
-			fmt.Printf("%s: %s\n", elem.Tag, formatValue(elem.VR, elem.Value, 50))
+			fmt.Printf("%s: %s\n", elem.Tag, formatValueIn(elem.VR, elem.Value, 50, elem.Encodings))
 		} else {
 			sc.displayElement(elem)
 		}
@@ -134,7 +134,7 @@ func (sc *ShowCommand) Execute(args []string) error {
 
 // displayElement displays a single element in formatted output.
 func (sc *ShowCommand) displayElement(elem DicomElement) {
-	value := formatValue(elem.VR, elem.Value, 100)
+	value := formatValueIn(elem.VR, elem.Value, 100, elem.Encodings)
 
 	// Indent by nesting level so elements inside a sequence item are
 	// distinguishable from those at the top of the data set.

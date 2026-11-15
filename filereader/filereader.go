@@ -1270,6 +1270,29 @@ func hasSpecificCharacterSet(elements []*DataElementValue) bool {
 	return false
 }
 
+// TextEncodings returns the character encodings in force for the text of a
+// data set: those its Specific Character Set (0008,0005) declares, or, when
+// it has none, inherited, which is what the data set it is an item of uses
+// (PS3.3 C.12.1.1.2). Pass nil for the top of a file. The result is what
+// DecodeText takes.
+//
+// It is for a program that shows the elements of a DICOMFile as they are in
+// the file. GetDataset applies the same rules and returns text already
+// decoded.
+func TextEncodings(elements []*DataElementValue, inherited []string) []string {
+	encodings, _ := encodingsFor(elements, inherited)
+	return encodings
+}
+
+// DecodeText returns a value of the given VR as UTF-8 text, decoded under
+// encodings as TextEncodings returns them. Only the VRs a character set
+// applies to are decoded with it; a UI or a DA is in the default repertoire
+// whatever the data set declares. A value that does not decode is returned
+// as it is.
+func DecodeText(vr string, value []byte, encodings []string) string {
+	return string(decodeTextValue(dataelem.VR(vr), value, encodings))
+}
+
 // encodingsFor settles the character set for a data set, and reports whether it
 // is a fallback rather than what the file asked for.
 //
