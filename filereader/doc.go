@@ -227,12 +227,10 @@
 // Position says where the bytes are. It is for a program that wants what a
 // file holds and where, without the memory of the image.
 //
-// ```go
-// dicom, err := filereader.ReadDICOMFileWithOptions(reader, filereader.ReadOptions{SkipBulkData: true})
-// for _, e := range dicom.DataElements {
-//     fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
-// }
-// ```
+//	dicom, err := filereader.ReadDICOMFileWithOptions(reader, filereader.ReadOptions{SkipBulkData: true})
+//	for _, e := range dicom.DataElements {
+//		fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
+//	}
 //
 // ### TextEncodings and DecodeText
 //
