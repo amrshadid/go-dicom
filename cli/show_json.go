@@ -8,6 +8,8 @@ import (
 	"math"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -263,6 +265,18 @@ func displayValue(vr string, raw []byte, encodings []string) (text string, vm in
 	switch vr {
 	case "OB", "OW", "OF", "OD", "OL", "OV", "UN":
 		return "", 1, false
+	case "":
+		// Nobody knows what this is: the file states no VR and the
+		// dictionary has none. It is shown when it reads as text, which is
+		// often what it is, and given by its position when it does not:
+		// bytes written out as a string are of no use to anyone.
+		text := strings.TrimRight(string(raw), " \x00")
+		for _, r := range text {
+			if r == utf8.RuneError || (!unicode.IsPrint(r) && !unicode.IsSpace(r)) {
+				return "", 1, false
+			}
+		}
+		return text, 1, true
 	case "US":
 		return number(2, func(b []byte) string { return fmt.Sprint(le.Uint16(b)) })
 	case "SS":
