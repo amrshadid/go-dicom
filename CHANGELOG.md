@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader's own rules, which `filereader.TextEncodings` and
   `filereader.DecodeText` make available: the data set's declared
   character set, or the enclosing data set's for an item with none, applied
-  to the VRs a character set covers. The name in each of pydicom's 17
-  character set files is shown as pydicom reads it. `codify` is unchanged,
+  to the VRs a character set covers. Of pydicom's 17 character set files,
+  the name in each of the 15 that have one is shown as pydicom reads it. `codify` is unchanged,
   since the code it writes carries the bytes and their declaration.
 
 - **`show` settles a VR the file does not state** (#272). An implicit VR
