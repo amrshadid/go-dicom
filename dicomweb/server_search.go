@@ -36,7 +36,8 @@ const (
 
 // The attributes a search returns whether or not it is asked for them
 // (PS3.18 10.6.3.3, Tables 10.6.3-3 to 10.6.3-5). Retrieve URL (0008,1190) is
-// in each table and is left out until this server retrieves.
+// in each table too: the server knows it and the archive does not, so it is
+// added to each result and never asked of the archive.
 var (
 	studyAttributes = []tag.Tag{
 		tag.New(0x0008, 0x0020), // StudyDate
@@ -405,9 +406,14 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, target searchTar
 		matches = matches[:page.limit]
 	}
 
+	root := serviceRoot(r)
 	results := make([]map[string]dataset.DICOMJSONElement, 0, len(matches))
 	for _, match := range matches {
-		result, err := searchResult(match).ToDICOMJSON()
+		found := searchResult(match)
+		if url := retrieveURL(root, found, target.level); url != "" {
+			_ = found.Add(dataelem.NewDataElement(tagRetrieveURL, dataelem.UR, url))
+		}
+		result, err := found.ToDICOMJSON()
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -481,4 +487,52 @@ func isEmpty(elem *dataelem.DataElement) bool {
 		return len(v) == 0
 	}
 	return false
+}
+
+// serviceRoot is the URL this service was reached at: the scheme and host
+// of the request, and whatever path the handler is mounted under.
+//
+// http.StripPrefix shortens the path a handler sees and leaves RequestURI
+// as it was sent, so what was stripped is the part of one that the other
+// no longer has. Behind a proxy this is the address the proxy used, which
+// may not be the one a client can reach: a client is free to build the URL
+// from the UIDs instead, and most do.
+func serviceRoot(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	sent, _, _ := strings.Cut(r.RequestURI, "?")
+	prefix := ""
+	if seen := r.URL.EscapedPath(); strings.HasPrefix(sent, "/") && strings.HasSuffix(sent, seen) {
+		prefix = strings.TrimSuffix(sent, seen)
+	}
+	return scheme + "://" + r.Host + prefix
+}
+
+// retrieveURL is where the study, series or instance a result describes is
+// retrieved from (PS3.18 10.6.3.3), or nothing when the result does not
+// carry the UIDs that name it.
+func retrieveURL(root string, result *dataset.Dataset, level string) string {
+	study := text(result, tagStudyInstanceUID)
+	if study == "" {
+		return ""
+	}
+	url := root + "/studies/" + study
+	if level == levelStudy {
+		return url
+	}
+	series := text(result, tagSeriesInstanceUID)
+	if series == "" {
+		return ""
+	}
+	url += "/series/" + series
+	if level == levelSeries {
+		return url
+	}
+	instance := text(result, tag.New(0x0008, 0x0018))
+	if instance == "" {
+		return ""
+	}
+	return url + "/instances/" + instance
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strconv"
@@ -28,6 +29,17 @@ type Backend interface {
 	// Text in the identifier is UTF-8, held as Go strings. Text in a result
 	// is in the character set the result declares.
 	Query(ctx context.Context, identifier *dataset.Dataset) ([]*dataset.Dataset, error)
+
+	// Locate names the instances the archive holds of a study: all of them,
+	// those of one series when series is given, or the one instance when
+	// instance is given too. It returns their SOP Instance UIDs in an order
+	// that does not change between calls, and none, with no error, when it
+	// holds nothing of what was named.
+	Locate(ctx context.Context, study, series, instance string) ([]string, error)
+
+	// Open returns the Part 10 file of an instance Locate named, as the
+	// archive holds it. The caller closes it.
+	Open(ctx context.Context, sopInstanceUID string) (io.ReadSeekCloser, error)
 }
 
 // Server is the origin-server side of DICOMweb (PS3.18): an http.Handler
@@ -41,6 +53,14 @@ type Backend interface {
 //	GET /studies/{study}/instances
 //	GET /series
 //	GET /instances
+//
+// and the retrieve service, WADO-RS (PS3.18 10.4), for instances and for
+// their metadata:
+//
+//	GET /studies/{study}
+//	GET /studies/{study}/series/{series}
+//	GET /studies/{study}/series/{series}/instances/{instance}
+//	GET each of these with /metadata
 //
 // The paths are relative to wherever the handler is mounted, so a service at
 // /dicom-web is http.StripPrefix("/dicom-web", server).
@@ -78,7 +98,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// could run what a stored name holds.
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	target, err := searchTargetOf(r.URL.Path)
+	retrieved, isRetrieve, err := retrieveTargetOf(r.URL.Path)
+	var searched searchTarget
+	if !isRetrieve {
+		searched, err = searchTargetOf(r.URL.Path)
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -88,7 +112,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, refuse(http.StatusMethodNotAllowed, "%s is not a method of this resource", r.Method))
 		return
 	}
-	s.search(w, r, target)
+	switch {
+	case !isRetrieve:
+		s.search(w, r, searched)
+	case retrieved.metadata:
+		s.metadata(w, r, retrieved)
+	default:
+		s.retrieve(w, r, retrieved)
+	}
 }
 
 // fail writes the answer to a request that was not served.

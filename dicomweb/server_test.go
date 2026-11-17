@@ -1,6 +1,7 @@
 package dicomweb
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,12 +24,48 @@ import (
 // dcmstore, and the two together in dcmstore's web tests.
 
 // recorder is a Backend that keeps the identifier it was asked with and
-// answers with what it was given.
+// answers with what it was given. For retrieval it holds files by SOP
+// Instance UID, in the order it names them.
 type recorder struct {
 	asked   *dataset.Dataset
 	answers []*dataset.Dataset
 	err     error
+
+	files   map[string][]byte
+	order   []string
+	located [3]string
 }
+
+func (r *recorder) hold(uid string, file []byte) {
+	if r.files == nil {
+		r.files = map[string][]byte{}
+	}
+	r.files[uid] = file
+	r.order = append(r.order, uid)
+}
+
+func (r *recorder) Locate(_ context.Context, study, series, instance string) ([]string, error) {
+	r.located = [3]string{study, series, instance}
+	if instance == "" {
+		return r.order, r.err
+	}
+	if _, ok := r.files[instance]; ok {
+		return []string{instance}, r.err
+	}
+	return nil, r.err
+}
+
+func (r *recorder) Open(_ context.Context, uid string) (io.ReadSeekCloser, error) {
+	file, ok := r.files[uid]
+	if !ok {
+		return nil, errors.New("no such instance in /srv/archive")
+	}
+	return readSeekNopCloser{bytes.NewReader(file)}, nil
+}
+
+type readSeekNopCloser struct{ *bytes.Reader }
+
+func (readSeekNopCloser) Close() error { return nil }
 
 func (r *recorder) Query(_ context.Context, identifier *dataset.Dataset) ([]*dataset.Dataset, error) {
 	r.asked = identifier
