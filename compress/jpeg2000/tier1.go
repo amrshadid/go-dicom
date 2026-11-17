@@ -62,22 +62,43 @@ const (
 	neighborShift = 4 // where the neighbor bits start
 )
 
-// blockDecoder decodes one code-block.
+// passState is what the coding passes know about a code-block as they walk
+// it: which coefficients are significant, their signs, and what each one's
+// neighbors have done. The decoder and the encoder walk the same block in the
+// same order and must choose the same context for every decision, so the
+// state and the rules that read it are in one place, used by both.
 //
 // The sample grid is padded by one on every side, so the eight neighbors of a
 // real sample always exist and no neighbor lookup needs a bounds test. The
 // padding stays zero, which is exactly what a sample outside the block should
 // contribute: blocks are coded independently, and a neighbor in another block
 // is treated as insignificant (D.3).
-type blockDecoder struct {
+type passState struct {
 	w, h   int
 	stride int
 	flags  []uint16
-	data   []int32 // magnitudes, built up plane by plane
-
-	mq *mqDecoder
 	// zc is the significance context table for this band's orientation.
 	zc *[256]uint8
+}
+
+// newPassState prepares the state of a block of w by h samples.
+func newPassState(w, h, bandType int) passState {
+	stride := w + 2
+	return passState{
+		w:      w,
+		h:      h,
+		stride: stride,
+		flags:  make([]uint16, stride*(h+2)),
+		zc:     &zeroCodingTables[orientationOf(bandType)],
+	}
+}
+
+// blockDecoder decodes one code-block.
+type blockDecoder struct {
+	passState
+	data []int32 // magnitudes, built up plane by plane
+
+	mq *mqDecoder
 }
 
 // neighborWrite is one of the eight bits a newly significant coefficient sets:
@@ -98,15 +119,10 @@ var neighborWrites = [8]neighborWrite{
 
 // newBlockDecoder prepares a decoder for a block of w by h samples.
 func newBlockDecoder(w, h, bandType int, data []byte) *blockDecoder {
-	stride := w + 2
 	return &blockDecoder{
-		w:      w,
-		h:      h,
-		stride: stride,
-		flags:  make([]uint16, stride*(h+2)),
-		data:   make([]int32, w*h),
-		mq:     newMQDecoder(data, numContexts),
-		zc:     &zeroCodingTables[orientationOf(bandType)],
+		passState: newPassState(w, h, bandType),
+		data:      make([]int32, w*h),
+		mq:        newMQDecoder(data, numContexts),
 	}
 }
 
@@ -157,7 +173,7 @@ func bitsIn(mask int, positions ...int) int {
 }
 
 // index is the offset of sample (x, y) in the padded flag grid.
-func (b *blockDecoder) index(x, y int) int { return (y+1)*b.stride + x + 1 }
+func (b *passState) index(x, y int) int { return (y+1)*b.stride + x + 1 }
 
 // SubbandIndex is where a subband's quantization values sit in a QCD or QCC
 // list (A.6.4): the LL band first, then HL, LH and HH of each resolution.
@@ -243,10 +259,9 @@ func decodeBlock(block CodeBlockData, magnitudeBits int) (*blockDecoder, error) 
 
 	d := newBlockDecoder(w, h, block.BandType, block.Data)
 
-	// Table D.7: three contexts do not start at state 0.
-	d.mq.setContext(cxUniform, 46, 0)
-	d.mq.setContext(cxRunLen, 3, 0)
-	d.mq.setContext(cxZero, 4, 0)
+	for _, start := range initialContexts {
+		d.mq.setContext(int(start[0]), start[1], 0)
+	}
 
 	// The first plane a block can hold is its most significant, less the planes
 	// the header said are entirely zero. The first pass of that plane is always
@@ -359,7 +374,7 @@ func zeroCodingContext(orientation, h, v, d int) int {
 }
 
 // significanceContext looks up the context of the sample at flag index i.
-func (b *blockDecoder) significanceContext(i int) int {
+func (b *passState) significanceContext(i int) int {
 	return int(b.zc[(b.flags[i]>>neighborShift)&0xFF])
 }
 
@@ -369,7 +384,7 @@ func (b *blockDecoder) significanceContext(i int) int {
 // significant and positive, -1 if significant and negative, and nothing if it is
 // not significant yet. The two sums pick one of five contexts and say whether
 // the decoded bit means the sign it appears to or its opposite.
-func (b *blockDecoder) signContext(i int) (int, int) {
+func (b *passState) signContext(i int) (int, int) {
 	h := b.contribution(i-1) + b.contribution(i+1)
 	v := b.contribution(i-b.stride) + b.contribution(i+b.stride)
 	h, v = clampUnit(h), clampUnit(v)
@@ -406,7 +421,7 @@ func (b *blockDecoder) signContext(i int) (int, int) {
 
 // contribution is one neighbor's vote for the sign context: +1 positive, -1
 // negative, 0 not yet significant.
-func (b *blockDecoder) contribution(i int) int {
+func (b *passState) contribution(i int) int {
 	f := b.flags[i]
 	if f&flagSignificant == 0 {
 		return 0
@@ -450,12 +465,23 @@ func (b *blockDecoder) decodeSign(i int) {
 // coefficient decoded all the way to plane 0 comes out at its true value, since
 // the half is then below the last bit and the halving drops it.
 func (b *blockDecoder) setSignificant(x, y, i, plane int) {
-	b.flags[i] |= flagSignificant
+	b.markSignificant(i)
 	b.data[y*b.w+x] = 3 << uint(plane)
+}
+
+// markSignificant records that the coefficient at flag index i has become
+// significant, and tells its eight neighbors.
+func (b *passState) markSignificant(i int) {
+	b.flags[i] |= flagSignificant
 	for _, n := range neighborWrites {
 		b.flags[i+n.dy*b.stride+n.dx] |= n.bit
 	}
 }
+
+// initialContexts are the contexts that do not start at state 0 (Table D.7),
+// as (context, state) pairs. The encoder and the decoder start from the same
+// ones or agree on nothing after the first decision.
+var initialContexts = [3][2]uint8{{cxUniform, 46}, {cxRunLen, 3}, {cxZero, 4}}
 
 // significancePass is D.3.1: every coefficient that is not yet significant but
 // has a significant neighbor gets a bit. Those are the ones most likely to
@@ -566,7 +592,7 @@ func (b *blockDecoder) cleanupPass(plane int) {
 // columnIsClean says whether the column of four starting at flag index i can go
 // into run-length mode: nothing in it significant or already coded this plane,
 // and no neighbor of any of the four significant either (D.3.4).
-func (b *blockDecoder) columnIsClean(i int) bool {
+func (b *passState) columnIsClean(i int) bool {
 	const busy = flagSignificant | flagVisited | flagNeighbors
 	return b.flags[i]&busy == 0 &&
 		b.flags[i+b.stride]&busy == 0 &&
@@ -575,7 +601,7 @@ func (b *blockDecoder) columnIsClean(i int) bool {
 }
 
 // clearVisited clears the visited mark on n samples down a column.
-func (b *blockDecoder) clearVisited(i, n int) {
+func (b *passState) clearVisited(i, n int) {
 	for k := 0; k < n; k++ {
 		b.flags[i+k*b.stride] &^= flagVisited
 	}
