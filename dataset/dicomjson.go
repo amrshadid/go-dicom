@@ -177,7 +177,14 @@ func (ds *Dataset) elementToDICOMJSON(t tag.Tag, elem *dataelem.DataElement,
 		return out, nil
 	}
 
-	raw, _ := elem.GetValue().([]byte)
+	// The file reader holds a value as bytes; an element built in memory holds
+	// a Go value. ValueBytes is what the file writer and the network encoder
+	// render it with, so the three agree on what a value is, and one that does
+	// not fit its VR is refused here as it is there (#295).
+	raw, err := dataelem.ValueBytes(vr, elem.GetValue())
+	if err != nil {
+		return out, fmt.Errorf("dataset: %s: %w", dicomJSONKey(t), err)
+	}
 	if len(raw) == 0 {
 		return out, nil // no Value member at all, which is what empty means here
 	}

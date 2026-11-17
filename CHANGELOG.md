@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was printed with `"value": ""`, the only place such a VR had a value, and
   now has none, as when it holds bytes.
 
+- **DICOM JSON carries the values of a data set built in memory** (#295).
+  `Dataset.ToDICOMJSON` wrote a value only when the element held it as
+  bytes, as the file reader leaves it. An element given a string, a list, a
+  number, a `PersonName` or a tag was written with its VR and no `Value`,
+  with no error, so a data set that wrote to disk and sent over DIMSE whole
+  came out of JSON empty. The JSON writer now renders a value with
+  `dataelem.ValueBytes`, as the file writer and the network encoder do, and
+  one that does not fit its VR is an error that names the element. The JSON
+  of a data set read from a file is unchanged.
+
 - **A C-FIND answer says which character set it is in** (#297). The archive
   indexed an instance's text as the bytes it arrived with and answered a
   C-FIND with them and no Specific Character Set, so a peer could not read
