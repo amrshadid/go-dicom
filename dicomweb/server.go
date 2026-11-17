@@ -40,6 +40,11 @@ type Backend interface {
 	// Open returns the Part 10 file of an instance Locate named, as the
 	// archive holds it. The caller closes it.
 	Open(ctx context.Context, sopInstanceUID string) (io.ReadSeekCloser, error)
+
+	// Put keeps an instance, replacing one the archive already holds under
+	// the same SOP Instance UID. The data set knows the transfer syntax it
+	// arrived in, and the archive keeps a compressed one as it came.
+	Put(ctx context.Context, instance *dataset.Dataset) error
 }
 
 // Server is the origin-server side of DICOMweb (PS3.18): an http.Handler
@@ -62,6 +67,11 @@ type Backend interface {
 //	GET /studies/{study}/series/{series}/instances/{instance}
 //	GET each of these with /metadata
 //
+// and the store service, STOW-RS (PS3.18 10.5):
+//
+//	POST /studies
+//	POST /studies/{study}
+//
 // The paths are relative to wherever the handler is mounted, so a service at
 // /dicom-web is http.StripPrefix("/dicom-web", server).
 //
@@ -69,12 +79,30 @@ type Backend interface {
 // goroutines when its Backend is. It does not authenticate: it is a handler,
 // and what guards it is the handler it is wrapped in.
 type Server struct {
-	backend Backend
+	backend  Backend
+	maxStore int64
+}
+
+// ServerOption configures a Server.
+type ServerOption func(*Server)
+
+// WithMaxStoreBytes bounds the body of one store request. A request that
+// runs past it is refused with 413.
+func WithMaxStoreBytes(n int64) ServerOption {
+	return func(server *Server) {
+		if n > 0 {
+			server.maxStore = n
+		}
+	}
 }
 
 // NewServer returns a server over backend.
-func NewServer(backend Backend) *Server {
-	return &Server{backend: backend}
+func NewServer(backend Backend, options ...ServerOption) *Server {
+	server := &Server{backend: backend, maxStore: DefaultMaxStoreBytes}
+	for _, option := range options {
+		option(server)
+	}
+	return server
 }
 
 // requestError is a request the server will not answer, and the status that
@@ -107,12 +135,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", http.MethodGet)
-		s.fail(w, refuse(http.StatusMethodNotAllowed, "%s is not a method of this resource", r.Method))
-		return
-	}
+	// The studies resource and a study are where instances are stored to
+	// as well as searched for and retrieved from.
+	storesTo := (!isRetrieve && searched.level == levelStudy) ||
+		(isRetrieve && retrieved.series == "" && !retrieved.metadata)
 	switch {
+	case r.Method == http.MethodPost && storesTo:
+		s.store(w, r, retrieved.study)
+	case r.Method != http.MethodGet:
+		allow := http.MethodGet
+		if storesTo {
+			allow += ", " + http.MethodPost
+		}
+		w.Header().Set("Allow", allow)
+		s.fail(w, refuse(http.StatusMethodNotAllowed, "%s is not a method of this resource", r.Method))
 	case !isRetrieve:
 		s.search(w, r, searched)
 	case retrieved.metadata:

@@ -1601,7 +1601,7 @@ fi
 # what Orthanc answers. The token is checked the same way: from outside.
 # ---------------------------------------------------------------------------
 if python3 -c "import pydicom, pynetdicom, numpy" >/dev/null 2>&1; then
-  note "DICOMweb: the archive searched and retrieved from over HTTP by a client that is not this library"
+  note "DICOMweb: the archive searched, retrieved from and stored to over HTTP by a client that is not this library"
   RAN_ANY=1
   mkdir -p "$WORKDIR/webarc" "$WORKDIR/webarc_guarded" "$WORKDIR/webarc_back"
   start_server "$WORKDIR" "$WORKDIR/webarc.log" \
@@ -1786,6 +1786,57 @@ for name, ds in zip(names, files):
                 if a != b:
                     sys.exit("%s %s %s: %r against Orthanc's %r" % (name, path, tag, a, b))
 
+# Stored over HTTP by urllib, the multipart written by hand, and then found
+# over DIMSE: the other direction through the same archive.
+def stow(base, path, blobs):
+    boundary = b"interop-boundary"
+    body = b"".join(b"--" + boundary + b"\r\nContent-Type: application/dicom\r\n\r\n" + blob + b"\r\n"
+                    for blob in blobs) + b"--" + boundary + b"--\r\n"
+    request = urllib.request.Request(base + path, data=body, method="POST", headers={
+        "Content-Type": 'multipart/related; type="application/dicom"; boundary=' + boundary.decode(),
+        "Accept": "application/dicom+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        text = e.read()
+        return e.code, json.loads(text) if text.strip().startswith(b"{") else {}
+
+extra_path = get_testdata_file("JPEG2000.dcm")
+extra = pydicom.dcmread(extra_path)
+with open(extra_path, "rb") as f:
+    extra_bytes = f.read()
+status, answer = stow(ours, "/studies", [extra_bytes])
+kept = [i["00081155"]["Value"][0] for i in answer.get("00081199", {}).get("Value", [])]
+if status != 200 or kept != [str(extra.SOPInstanceUID)]:
+    sys.exit("a store over HTTP answered %d and kept %r" % (status, kept))
+status, answer = stow(ours, "/studies/1.2.3.4.5", [extra_bytes])
+reasons = [i["00081197"]["Value"][0] for i in answer.get("00081198", {}).get("Value", [])]
+if status != 409 or reasons != [0xA900]:
+    sys.exit("a store into the wrong study answered %d with %r" % (status, reasons))
+status, answer = stow(ours, "/studies", [b"not an image", extra_bytes])
+if status != 202 or len(answer.get("00081199", {}).get("Value", [])) != 1:
+    sys.exit("a store of one instance and one stray part answered %d" % status)
+
+find = Dataset()
+find.QueryRetrieveLevel = "IMAGE"
+find.StudyInstanceUID = str(extra.StudyInstanceUID)
+find.SeriesInstanceUID = str(extra.SeriesInstanceUID)
+find.SOPInstanceUID = str(extra.SOPInstanceUID)
+found = [i for s, i in assoc.send_c_find(find, FIND) if i is not None]
+if len(found) != 1:
+    sys.exit("what was stored over HTTP was found %d times over DIMSE" % len(found))
+came_back = retrieve(ours, "/studies/%s/series/%s/instances/%s" % (
+    extra.StudyInstanceUID, extra.SeriesInstanceUID, extra.SOPInstanceUID), DICOM + "; transfer-syntax=*")
+if pydicom.dcmread(io.BytesIO(came_back[0][1])).PixelData != extra.PixelData:
+    sys.exit("what was stored over HTTP came back with other pixel data")
+files.append(extra)
+
+# And by this library's own command, which reports what the server kept.
+sent = subprocess.run([go, "stow", ours, get_testdata_file("MR_small.dcm")], capture_output=True, text=True)
+if sent.returncode != 0 or "Stored 1 instance(s)" not in sent.stdout:
+    sys.exit("go-dicom stow to the archive: %s%s" % (sent.stdout[-200:], sent.stderr[-200:]))
+
 # The same archive by C-FIND and by HTTP: the same studies, the same names.
 query = Dataset()
 query.QueryRetrieveLevel = "STUDY"
@@ -1818,7 +1869,7 @@ if get(guarded, "/studies")[0] != 401 or get(guarded, "/studies", token="wrong")
 if get(guarded, "/studies", token="interop-token")[0] != 204:
     sys.exit("the guarded archive refused its own token")
 
-print("%d files stored over DIMSE, found over HTTP at three levels%s, retrieved as stored and decoded, and described; C-FIND and HTTP agree; the token is enforced"
+print("%d files stored over DIMSE and HTTP, found at three levels%s, retrieved as stored and decoded, and described; C-FIND and HTTP agree; a wrong study is refused; the token is enforced"
       % (len(files), ", as Orthanc answers" if orthanc else ""))
 PY
     ); then

@@ -287,3 +287,40 @@ func TestWebRetrieveReturnsTheStoredFile(t *testing.T) {
 		t.Errorf("metadata of the other study: %d, %v", len(metadata), err)
 	}
 }
+
+// TestWebStoreReachesTheStore checks storing through the service: the
+// instance is in the store afterwards, found by a search, and retrieved
+// with the attributes it was sent with.
+func TestWebStoreReachesTheStore(t *testing.T) {
+	store, err := dcmstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := webClient(t, store)
+	ctx := context.Background()
+
+	result, err := client.StoreDatasets(ctx, "", corpus[0].dataset(), corpus[3].dataset())
+	if err != nil || len(result.Stored) != 2 || len(result.Failed) != 0 {
+		t.Fatalf("Store: %+v, %v", result, err)
+	}
+	if store.Count() != 2 {
+		t.Fatalf("the store holds %d instances", store.Count())
+	}
+
+	studies, err := client.SearchForStudies(ctx, dicomweb.Query{Match: map[string]string{"PatientName": "jones*"}})
+	if err != nil || len(studies) != 1 || webText(t, studies[0], tagStudyUID) != "1.2.2" {
+		t.Errorf("searching for what was stored: %d studies, %v", len(studies), err)
+	}
+	back, err := client.RetrieveInstance(ctx, "1.2.1", "1.2.1.1", "1.2.1.1.1")
+	if err != nil || webText(t, back, tagName) != "SMITH^JOHN" {
+		t.Errorf("retrieving what was stored: %v", err)
+	}
+
+	// Into a study it is not of: refused, and not in the store.
+	if _, err := client.StoreDatasets(ctx, "1.2.2", corpus[1].dataset()); err == nil {
+		t.Error("an instance was stored into another study")
+	}
+	if store.Count() != 2 {
+		t.Errorf("the store holds %d instances after a refusal", store.Count())
+	}
+}

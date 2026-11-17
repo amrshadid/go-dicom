@@ -301,8 +301,8 @@ selection, and user identity negotiation. The window defaults to one.
 
 The `dicomweb` package and the `qido`, `wado` and `stow` commands are a user
 agent for the HTTP services of PS3.18. `dicomweb.Server`, and `qrscp -web`
-over its store, are an origin server for the search and retrieve services;
-see below.
+over its store, are an origin server for the same three services; see
+below.
 
 | Service | Supported | Not supported |
 |---------|-----------|---------------|
@@ -316,7 +316,7 @@ As an origin server (`dicomweb.NewServer`, `qrscp -web`):
 |---------|-----------|---------------|
 | QIDO-RS | `/studies`, `/series`, `/instances` and the same within a study or a series. Matching is the archive's own (section 2.7), so a search matches what a C-FIND does: single value, wildcard, range, list of UID, and `Sequence.Attribute` for an attribute inside a sequence. `includefield`, `limit`, `offset`. Results as DICOM JSON in UTF-8, each with the attributes of PS3.18 10.6.3.3 the archive holds a value for; 204 when nothing matches | XML results. Fuzzy matching: `fuzzymatching=true` is answered by literal matching and a `Warning: 299`. `includefield=all` returns the default attributes |
 | WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON | Frames, rendered images, thumbnails, bulk data on its own. Metadata names a bulk value by its VR and gives no `BulkDataURI`. Encoding into a compressed syntax on request |
-| STOW-RS | Not served yet | |
+| STOW-RS | `application/dicom` parts in `multipart/related`, to `/studies` or into a study. Each instance kept or refused on its own: 200 when all were kept, 202 when some were, 409 when none was, with Referenced SOP Sequence and Failed SOP Sequence in the answer. Failure reasons: A900H for an instance sent into a study it is not of, 0110H when the archive could not keep it. A compressed instance is kept in the syntax it came in. A request is bounded (4 GiB unless set), 413 beyond | Metadata with separate bulk data (415). A part that is not a DICOM file has no UID to be listed under, and shows in the status alone |
 
 `qrscp -web` serves under `/dicom-web`. A port alone listens on this machine
 only. An address other machines can reach is refused without `-web-token` (or

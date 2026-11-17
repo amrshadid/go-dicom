@@ -68,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decodes, the metadata has every attribute Orthanc's has with the same
   values, and `go-dicom wado` writes the bytes the server sent.
 
+- **The archive is stored to over HTTP** (#294). The DICOMweb server gains
+  STOW-RS (PS3.18 10.5), which completes it: `POST /studies` and
+  `POST /studies/{study}` take Part 10 files as the parts of one request.
+  Each instance is kept or refused on its own, and the answer lists both:
+  200 when all were kept, 202 when some were, 409 when none was. An
+  instance sent into a study it is not of is refused with A900H. A request
+  is bounded at 4 GiB unless `dicomweb.WithMaxStoreBytes` says otherwise.
+  `dicomweb.Backend` gains `Put`, which `dcmstore.Store` has. With this an
+  instance stored over HTTP is found by C-FIND, and one stored over DIMSE
+  is retrieved over HTTP: the interoperability suite does both with
+  pynetdicom and urllib, and `go-dicom stow` against the archive as well.
+
 - **`show` prints a whole value when asked for one, and `--full` prints
   them all** (#282). The table printed the first hundred bytes of a value,
   and so did `show file::Element`, so a long text value or a list of numbers
