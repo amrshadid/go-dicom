@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-17
+
+Three things the library could only do from the other side, it now does
+itself, and the command line is finished where programs and people lean on
+it:
+
+- **A DICOMweb server.** Package `dicomweb` was a client. `dicomweb.NewServer`
+  is the origin server: search (QIDO-RS), retrieve with metadata (WADO-RS)
+  and store (STOW-RS), over any backend, and `dcmstore.Store` is one. So
+  `qrscp -web <address>` serves one archive over DIMSE and over HTTP, on
+  this machine only unless a bearer token is given.
+  Frames, rendered images and bulk data URIs are not served.
+- **A JPEG 2000 lossless encoder.** `compress/jpeg2000` decoded and nothing
+  wrote the format. A data set is compressed to JPEG 2000 Lossless in
+  place, and a send is transcoded to it when that is what the peer accepts.
+  OpenJPEG returns every sample of what it writes. Lossy is not written.
+- **Text burned into the pixels is found.** `anonymize -redact auto` and
+  `share -redact auto` black out the lettering a pure Go detector finds,
+  `-detect` prints the regions, and `share -preview` shows them. A detector
+  can miss, so `auto` is never the default, what it did is recorded as
+  unverified, and only a person looking confirms an image is clean.
+- **The command line.** `show file::Element` prints a whole value and the
+  table has `--full`; the table prints every value of a number; `STORED`
+  carries its association's id; the commands print their own output and not
+  the library's log; a file with elements written without a VR says so in
+  its warnings.
+- **The archive.** Its index is UTF-8, so a C-FIND answer declares its
+  character set and non-Latin names match; a person name matches whatever
+  its case; a date written `1997.04.24` matches a range; an answer carries
+  the size of the image.
+- **Releases.** A release merged into `main` tags and publishes itself.
+
+Nothing in the format of `show --json` changes: `schemaVersion` is still 1.
+A program reading it sees two differences from 1.9.1: the new warning on a
+file that has elements written without a VR, and an empty value of a bulk
+binary VR, which was printed as `"value": ""` and now has none.
+
+For programs using the library there are additions and no changes; nothing
+is removed or renamed.
+
 ### Added
 
 - **Text burned into the pixels is found** (#310). `-redact` took rectangles
@@ -2518,7 +2558,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...v1.10.0
 [1.9.1]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0
