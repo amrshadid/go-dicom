@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"strings"
 	"unicode"
@@ -59,7 +58,7 @@ type DicomInfo struct {
 // never descended into sequences, and received none of the fixes made to the
 // real reader.
 func readDICOMFile(filename string) ([]DicomElement, error) {
-	return readDICOMElements(filename, false)
+	return readDICOMElements(filename, false, false)
 }
 
 // shownBytes is how much of a value the table prints at most.
@@ -77,7 +76,11 @@ const shownBytes = 100
 // bytes of a value at most, and read all of it to do so: a 200 MB image
 // took 200 MB to show one line of (#274). Only the part that is printed is
 // read; Length still says how long the value is.
-func readDICOMElements(filename string, forDisplay bool) ([]DicomElement, error) {
+//
+// With whole as well, every value that can be printed is held whole, for a
+// listing that is not cut. Bulk binary still stays in the file: it is
+// printed as a count of bytes either way.
+func readDICOMElements(filename string, forDisplay, whole bool) ([]DicomElement, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
@@ -100,7 +103,7 @@ func readDICOMElements(filename string, forDisplay bool) ([]DicomElement, error)
 		}
 	}
 	// Where the start of a value left in the file is read from.
-	root := &displayScope{deciding: dataset.NewDataset(), source: file}
+	root := &displayScope{deciding: dataset.NewDataset(), source: file, whole: whole}
 
 	// The file meta header first, as it appears in the file, then the data set.
 	elements := make([]DicomElement, 0, 1+len(df.MetaElements)+len(df.DataElements))
@@ -181,17 +184,28 @@ func formatValue(vr string, value []byte, maxLen int) string {
 	return formatValueIn(vr, value, maxLen, nil)
 }
 
-// display is the element's value as the table shows it: all of a short
-// one, and the start of a long one with how long it is.
-func (e DicomElement) display(maxLen int) string {
+// bulkVRs are the VRs whose values are bytes, words and floats in bulk. The
+// table gives their length and nothing of them.
+var bulkVRs = map[string]bool{"OB": true, "OW": true, "OF": true, "OD": true, "OL": true, "OV": true}
+
+// display is the element's value as show prints it. With a limit it is all
+// of a short value, and the start of a long one with how long it is. With
+// none, limit 0, it is the whole value.
+func (e DicomElement) display(limit int) string {
 	if e.Length == 0 {
 		return ""
 	}
-	value := e.Value
-	if len(value) > maxLen {
-		value = value[:maxLen]
+	if limit <= 0 {
+		if bulkVRs[strings.TrimSpace(e.VR)] {
+			return fmt.Sprintf("<%d bytes>", e.Length)
+		}
+		return formatValueRawIn(e.VR, e.Value, e.Encodings)
 	}
-	if e.Length > maxLen {
+	value := e.Value
+	if len(value) > limit {
+		value = value[:limit]
+	}
+	if e.Length > limit {
 		return fmt.Sprintf("%s... (%d bytes)", formatValueRawIn(e.VR, value, e.Encodings), e.Length)
 	}
 	return formatValueRawIn(e.VR, value, e.Encodings)
@@ -245,39 +259,12 @@ func formatValueRaw(vr string, value []byte) string {
 func formatValueRawIn(vr string, value []byte, encodings []string) string {
 	vr = strings.TrimSpace(vr)
 
-	// Binary VRs
-	if vr == "OB" || vr == "OW" || vr == "OF" || vr == "OD" || vr == "OL" {
+	// Bytes are counted, never printed.
+	if bulkVRs[vr] {
 		return fmt.Sprintf("<%d bytes>", len(value))
 	}
-
-	// Numeric VRs - format as numbers
-	switch vr {
-	case "UL": // Unsigned Long (4 bytes)
-		if len(value) == 4 {
-			return fmt.Sprintf("%d", binary.LittleEndian.Uint32(value))
-		}
-	case "US": // Unsigned Short (2 bytes)
-		if len(value) == 2 {
-			return fmt.Sprintf("%d", binary.LittleEndian.Uint16(value))
-		}
-	case "SL": // Signed Long (4 bytes)
-		if len(value) == 4 {
-			return fmt.Sprintf("%d", int32(binary.LittleEndian.Uint32(value)))
-		}
-	case "SS": // Signed Short (2 bytes)
-		if len(value) == 2 {
-			return fmt.Sprintf("%d", int16(binary.LittleEndian.Uint16(value)))
-		}
-	case "FD": // Floating Point Double (8 bytes)
-		if len(value) == 8 {
-			bits := binary.LittleEndian.Uint64(value)
-			return fmt.Sprintf("%f", math.Float64frombits(bits))
-		}
-	case "FL": // Floating Point Single (4 bytes)
-		if len(value) == 4 {
-			bits := binary.LittleEndian.Uint32(value)
-			return fmt.Sprintf("%f", math.Float32frombits(bits))
-		}
+	if text, _, ok := formatNumbers(vr, value); ok {
+		return text
 	}
 
 	// Text-based VRs with charset support

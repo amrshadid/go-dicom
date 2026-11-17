@@ -32,6 +32,8 @@ type displayScope struct {
 	// source is the file the elements were read from, for the start of a
 	// value that was left in it. Nil when every value was read.
 	source io.ReaderAt
+	// whole asks for all of such a value, where it is one that is printed.
+	whole bool
 }
 
 // decidingTags are the attributes dataset.ResolveVR consults. Each is read
@@ -55,7 +57,7 @@ func newDisplayScope(elements []*filereader.DataElementValue, outer *displayScop
 	if outer != nil {
 		scope.enclosing = append([]*dataset.Dataset{outer.deciding}, outer.enclosing...)
 		inherited = outer.encodings
-		scope.source = outer.source
+		scope.source, scope.whole = outer.source, outer.whole
 	}
 	scope.encodings = filereader.TextEncodings(elements, inherited)
 	return scope
@@ -105,7 +107,13 @@ func (s *displayScope) shown(e *filereader.DataElementValue) []byte {
 	if !e.ValueSkipped || s.source == nil {
 		return e.Value
 	}
-	start := make([]byte, min(valueBytes(e), shownBytes))
+	length := min(valueBytes(e), shownBytes)
+	// A value of UN, or of no known VR, was left in the file for being long,
+	// and is printed when it reads as text. Bulk binary is never printed.
+	if s.whole && !bulkVRs[s.vr(e)] {
+		length = valueBytes(e)
+	}
+	start := make([]byte, length)
 	if _, err := s.source.ReadAt(start, e.Position.ValueOffset); err != nil {
 		return nil
 	}

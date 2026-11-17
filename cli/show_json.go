@@ -260,17 +260,9 @@ func displayValue(vr string, raw []byte, encodings []string) (text string, vm in
 	if len(raw) == 0 {
 		return "", 0, true
 	}
-	number := func(size int, format func([]byte) string) (string, int, bool) {
-		if len(raw)%size != 0 {
-			return "", 1, false
-		}
-		values := make([]string, 0, len(raw)/size)
-		for i := 0; i < len(raw); i += size {
-			values = append(values, format(raw[i:i+size]))
-		}
-		return strings.Join(values, `\`), len(values), true
+	if text, vm, ok := formatNumbers(vr, raw); ok {
+		return text, vm, true
 	}
-	le := binary.LittleEndian
 	switch vr {
 	case "OB", "OW", "OF", "OD", "OL", "OV", "UN":
 		return "", 1, false
@@ -286,24 +278,9 @@ func displayValue(vr string, raw []byte, encodings []string) (text string, vm in
 			}
 		}
 		return text, 1, true
-	case "US":
-		return number(2, func(b []byte) string { return fmt.Sprint(le.Uint16(b)) })
-	case "SS":
-		return number(2, func(b []byte) string { return fmt.Sprint(int16(le.Uint16(b))) })
-	case "UL":
-		return number(4, func(b []byte) string { return fmt.Sprint(le.Uint32(b)) })
-	case "SL":
-		return number(4, func(b []byte) string { return fmt.Sprint(int32(le.Uint32(b))) })
-	case "UV":
-		return number(8, func(b []byte) string { return fmt.Sprint(le.Uint64(b)) })
-	case "SV":
-		return number(8, func(b []byte) string { return fmt.Sprint(int64(le.Uint64(b))) })
-	case "FL":
-		return number(4, func(b []byte) string { return fmt.Sprint(math.Float32frombits(le.Uint32(b))) })
-	case "FD":
-		return number(8, func(b []byte) string { return fmt.Sprint(math.Float64frombits(le.Uint64(b))) })
-	case "AT":
-		return number(4, func(b []byte) string { return tag.New(le.Uint16(b), le.Uint16(b[2:])).String() })
+	case "US", "SS", "UL", "SL", "UV", "SV", "FL", "FD", "AT":
+		// A number VR whose length is not a whole number of values.
+		return "", 1, false
 	}
 	text = strings.TrimRight(decodeTextWithCharset(raw, vr, encodings), " \x00")
 	switch vr {
@@ -312,4 +289,47 @@ func displayValue(vr string, raw []byte, encodings []string) (text string, vm in
 		return text, 1, true
 	}
 	return text, strings.Count(text, `\`) + 1, true
+}
+
+// formatNumbers is the values of a binary number VR as text, with a
+// backslash between them as DICOM writes a list, and how many there are. It
+// reports false for any other VR, and for a value that is not a whole number
+// of values long.
+//
+// One function for both forms of show: the table printed a number only when
+// there was exactly one, and `<6 bytes>` for three (#282).
+func formatNumbers(vr string, raw []byte) (text string, count int, ok bool) {
+	le := binary.LittleEndian
+	var size int
+	var format func([]byte) string
+	switch vr {
+	case "US":
+		size, format = 2, func(b []byte) string { return fmt.Sprint(le.Uint16(b)) }
+	case "SS":
+		size, format = 2, func(b []byte) string { return fmt.Sprint(int16(le.Uint16(b))) }
+	case "UL":
+		size, format = 4, func(b []byte) string { return fmt.Sprint(le.Uint32(b)) }
+	case "SL":
+		size, format = 4, func(b []byte) string { return fmt.Sprint(int32(le.Uint32(b))) }
+	case "UV":
+		size, format = 8, func(b []byte) string { return fmt.Sprint(le.Uint64(b)) }
+	case "SV":
+		size, format = 8, func(b []byte) string { return fmt.Sprint(int64(le.Uint64(b))) }
+	case "FL":
+		size, format = 4, func(b []byte) string { return fmt.Sprint(math.Float32frombits(le.Uint32(b))) }
+	case "FD":
+		size, format = 8, func(b []byte) string { return fmt.Sprint(math.Float64frombits(le.Uint64(b))) }
+	case "AT":
+		size, format = 4, func(b []byte) string { return tag.New(le.Uint16(b), le.Uint16(b[2:])).String() }
+	default:
+		return "", 0, false
+	}
+	if len(raw) == 0 || len(raw)%size != 0 {
+		return "", 0, false
+	}
+	values := make([]string, 0, len(raw)/size)
+	for i := 0; i < len(raw); i += size {
+		values = append(values, format(raw[i:i+size]))
+	}
+	return strings.Join(values, `\`), len(values), true
 }

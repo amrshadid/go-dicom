@@ -25,7 +25,8 @@ func main() {
 
 ```bash
 go-dicom show patient.dcm                    # Display file contents
-go-dicom show patient.dcm::PatientName       # Show specific element
+go-dicom show patient.dcm::PatientName       # One element, its whole value
+go-dicom show patient.dcm --full             # The table with whole values, not the first 100 bytes
 go-dicom show patient.dcm --json             # Every element with its byte offsets in the file
 go-dicom info -verbose -stats patient.dcm    # File metadata
 go-dicom convert patient.dcm output.json     # Convert to JSON
