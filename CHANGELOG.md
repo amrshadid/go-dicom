@@ -51,6 +51,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the answers agree with pydicom's reading of the files, with a C-FIND on
   the same archive, and with Orthanc holding the same files.
 
+- **The archive is retrieved from over HTTP** (#294). The DICOMweb server
+  gains WADO-RS (PS3.18 10.4): a study, a series or an instance as
+  `multipart/related; type="application/dicom"`, and `/metadata` for each
+  as DICOM JSON without its bulk data. With `transfer-syntax=*`, or a
+  request that accepts anything, an instance is the file the archive holds,
+  byte for byte. A request that names no transfer syntax asks for Explicit
+  VR Little Endian, and an instance held compressed is decoded for it. Any
+  other syntax is given the instances already in it: 206 when some are
+  not, 406 when none is. One instance asked for as `application/dicom` is
+  the file itself, which is what `curl -O` wants. A search result now
+  carries its Retrieve URL. `dicomweb.Backend` gains `Locate` and `Open`,
+  which `dcmstore.Store` has. In the interoperability suite, files stored
+  by pynetdicom are retrieved by urllib: the pixel data is what was sent,
+  an RLE image decoded for the default syntax has the pixels pydicom
+  decodes, the metadata has every attribute Orthanc's has with the same
+  values, and `go-dicom wado` writes the bytes the server sent.
+
 - **`show` prints a whole value when asked for one, and `--full` prints
   them all** (#282). The table printed the first hundred bytes of a value,
   and so did `show file::Element`, so a long text value or a list of numbers

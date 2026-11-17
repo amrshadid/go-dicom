@@ -1,9 +1,12 @@
 package dcmstore_test
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -205,5 +208,82 @@ func TestWebSearchReadsANameOutsideASCII(t *testing.T) {
 	item, _ := seq.Get(0)
 	if got := webText(t, item.(*dataset.Dataset), tagStepDescriptor); got != "Thorax après injection" {
 		t.Errorf("the step description is %q", got)
+	}
+}
+
+// TestLocateNamesWhatIsHeld checks what a retrieve asks the store: the
+// instances of a study, of one of its series, one instance, and nothing for
+// what it does not hold, or holds under another study.
+func TestLocateNamesWhatIsHeld(t *testing.T) {
+	store := openWithCorpus(t)
+	cases := []struct {
+		study, series, instance string
+		want                    string
+	}{
+		{"1.2.1", "", "", "1.2.1.1.1 1.2.1.1.2 1.2.1.2.1"},
+		{"1.2.1", "1.2.1.1", "", "1.2.1.1.1 1.2.1.1.2"},
+		{"1.2.1", "1.2.1.1", "1.2.1.1.2", "1.2.1.1.2"},
+		{"1.2.9", "", "", ""},
+		{"1.2.1", "1.2.2.1", "", ""},
+		{"1.2.2", "1.2.1.1", "1.2.1.1.2", ""},
+	}
+	for _, c := range cases {
+		uids, err := store.Locate(context.Background(), c.study, c.series, c.instance)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Strings(uids)
+		if got := strings.Join(uids, " "); got != c.want {
+			t.Errorf("%s %s %s: located %q, want %q", c.study, c.series, c.instance, got, c.want)
+		}
+	}
+	if _, err := store.Locate(context.Background(), "", "", ""); err == nil {
+		t.Error("a retrieve that names no study was answered")
+	}
+}
+
+// TestWebRetrieveReturnsTheStoredFile checks retrieval through the service
+// against the store's own files: each instance of a study comes back as the
+// bytes on disk, and one that is not held is an error.
+func TestWebRetrieveReturnsTheStoredFile(t *testing.T) {
+	store := openWithCorpus(t)
+	client := webClient(t, store)
+
+	got := map[string][]byte{}
+	err := client.RetrieveEach(context.Background(), "1.2.1", "", "", func(p dicomweb.Part) error {
+		ds, err := p.Dataset()
+		if err != nil {
+			return err
+		}
+		got[webText(t, ds, tag.New(0x0008, 0x0018))] = p.Data
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("%d instances retrieved, want 3", len(got))
+	}
+	for uid, data := range got {
+		inst, ok := store.Instance(uid)
+		if !ok {
+			t.Fatalf("retrieved %s, which the store does not hold", uid)
+		}
+		onDisk, err := os.ReadFile(filepath.Join(store.Root(), filepath.FromSlash(inst.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, onDisk) {
+			t.Errorf("%s: what was retrieved is not the file in the store", uid)
+		}
+	}
+
+	if _, err := client.RetrieveInstance(context.Background(), "1.2.1", "1.2.1.1", "1.2.404"); err == nil {
+		t.Error("an instance the store does not hold was retrieved")
+	}
+
+	metadata, err := client.RetrieveMetadata(context.Background(), "1.2.2", "", "")
+	if err != nil || len(metadata) != 1 || webText(t, metadata[0], tagName) != "JONES^JANE" {
+		t.Errorf("metadata of the other study: %d, %v", len(metadata), err)
 	}
 }

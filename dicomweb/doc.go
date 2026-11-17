@@ -5,7 +5,7 @@
 // [Client] is what a program uses to reach an archive, a cloud imaging store
 // or a viewer's back end that speaks HTTP, where the network package reaches
 // one that speaks DIMSE. [Server] is the other side: an http.Handler that
-// answers the search service over an archive.
+// answers the search and retrieve services over an archive.
 //
 // # Quick start
 //
@@ -55,10 +55,10 @@
 //
 // # Serving
 //
-// [NewServer] returns a handler for the search service over a [Backend],
-// which is the archive: it is asked what a C-FIND would ask, so a study that
-// matches over DIMSE matches over HTTP. A dcmstore.Store is a Backend as it
-// is.
+// [NewServer] returns a handler for the search and retrieve services over a
+// [Backend], which is the archive: a search asks it what a C-FIND would ask,
+// so a study that matches over DIMSE matches over HTTP, and a retrieve asks
+// it for the files it holds. A dcmstore.Store is a Backend as it is.
 //
 //	store, err := dcmstore.Open(dir)
 //	if err != nil {
@@ -73,9 +73,18 @@
 // attributes PS3.18 10.6.3.3 lists for its level that the archive has a value
 // for, and any asked for with includefield.
 //
+// A study, a series or an instance is retrieved as multipart/related;
+// type="application/dicom". With transfer-syntax=*, or a request that
+// accepts anything, each instance is the file the archive holds, byte for
+// byte. A request that names no transfer syntax asks for Explicit VR Little
+// Endian, and an instance held compressed is decoded for it. Any other
+// syntax is served only to the instances already in it. /metadata returns
+// the instances as DICOM JSON with Pixel Data and other bulk values named
+// and not carried.
+//
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves
 // whatever the archive holds to whoever reaches it, so a deployment wraps it
-// in a handler that decides who may. Retrieving and storing are not served
-// yet.
+// in a handler that decides who may. Frames, rendered images and bulk data
+// on their own are not served, and neither is storing, yet.
 package dicomweb

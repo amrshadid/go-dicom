@@ -1600,10 +1600,10 @@ fi
 # same archive, and, when there is an Orthanc holding the same files, against
 # what Orthanc answers. The token is checked the same way: from outside.
 # ---------------------------------------------------------------------------
-if python3 -c "import pydicom, pynetdicom" >/dev/null 2>&1; then
-  note "DICOMweb: the archive searched over HTTP by a client that is not this library"
+if python3 -c "import pydicom, pynetdicom, numpy" >/dev/null 2>&1; then
+  note "DICOMweb: the archive searched and retrieved from over HTTP by a client that is not this library"
   RAN_ANY=1
-  mkdir -p "$WORKDIR/webarc" "$WORKDIR/webarc_guarded"
+  mkdir -p "$WORKDIR/webarc" "$WORKDIR/webarc_guarded" "$WORKDIR/webarc_back"
   start_server "$WORKDIR" "$WORKDIR/webarc.log" \
     "$GODICOM" qrscp -port 11740 -web 18740 -output "$WORKDIR/webarc"
   WEBARC_PID=$SERVER_PID
@@ -1611,8 +1611,9 @@ if python3 -c "import pydicom, pynetdicom" >/dev/null 2>&1; then
     "$GODICOM" qrscp -port 11741 -web 18741 -web-token interop-token -output "$WORKDIR/webarc_guarded"
   WEBARC_GUARDED_PID=$SERVER_PID
   if wait_for_port 11740 && wait_for_port 18740 && wait_for_port 18741; then
-    if webarc=$(python3 - "${ORTHANC_URL:-}" <<'PY'
-import json, sys, urllib.error, urllib.parse, urllib.request
+    if webarc=$(python3 - "${ORTHANC_URL:-}" "$GODICOM" "$WORKDIR/webarc_back" <<'PY'
+import io, json, os, re, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import numpy
 import pydicom
 from pydicom.data import get_testdata_file
 from pydicom.dataset import Dataset
@@ -1620,7 +1621,25 @@ from pynetdicom import AE
 from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelFind as FIND
 
 orthanc = sys.argv[1].rstrip("/")
+go, back = sys.argv[2], sys.argv[3]
 ours = "http://127.0.0.1:18740/dicom-web"
+EXPLICIT = "1.2.840.10008.1.2.1"
+DICOM = 'multipart/related; type="application/dicom"'
+
+def retrieve(base, path, accept):
+    # The parts of a multipart answer, taken apart by hand: this is the
+    # check that the body is what PS3.18 8.6 says, not what our reader takes.
+    request = urllib.request.Request(base + path, headers={"Accept": accept})
+    with urllib.request.urlopen(request, timeout=60) as r:
+        content_type, body = r.headers["Content-Type"], r.read()
+    boundary = re.search(r'boundary="?([^";]+)"?', content_type).group(1).encode()
+    parts = []
+    for chunk in body.split(b"--" + boundary)[1:]:
+        if chunk.startswith(b"--"):
+            break
+        header, _, data = chunk.partition(b"\r\n\r\n")
+        parts.append((header.decode(), data[:-2] if data.endswith(b"\r\n") else data))
+    return parts
 
 def get(base, path, query=None, token=None):
     url = base + path + ("?" + urllib.parse.urlencode(query) if query else "")
@@ -1682,6 +1701,77 @@ for name, ds in zip(names, files):
         sys.exit("%s: the instance is %r, pydicom reads %r" % (
             name, size, (ds.Rows, ds.Columns, ds.BitsAllocated, ds.SOPClassUID)))
 
+    # Retrieved as stored: one part, the same instance, in the syntax the
+    # archive keeps it in, with the pixel data it was sent.
+    path = "/studies/%s/series/%s/instances/%s" % (study, series, sop)
+    stored = retrieve(ours, path, DICOM + "; transfer-syntax=*")
+    if len(stored) != 1:
+        sys.exit("%s: retrieved %d parts" % (name, len(stored)))
+    kept = pydicom.dcmread(io.BytesIO(stored[0][1]))
+    sent = ds.file_meta.TransferSyntaxUID
+    want_syntax = sent if sent.is_compressed else EXPLICIT
+    if kept.SOPInstanceUID != sop or kept.file_meta.TransferSyntaxUID != want_syntax:
+        sys.exit("%s: retrieved %s in %s" % (name, kept.SOPInstanceUID, kept.file_meta.TransferSyntaxUID))
+    if "transfer-syntax=%s" % want_syntax not in stored[0][0]:
+        sys.exit("%s: the part is labeled %r" % (name, stored[0][0]))
+    if kept.PixelData != ds.PixelData:
+        sys.exit("%s: the pixel data retrieved is not the pixel data stored" % name)
+
+    # Retrieved with no syntax named, which asks for Explicit VR Little
+    # Endian: decoded by the archive, and the same pixels as pydicom decodes.
+    plain = retrieve(ours, path, DICOM)
+    decoded = pydicom.dcmread(io.BytesIO(plain[0][1]))
+    if decoded.file_meta.TransferSyntaxUID != EXPLICIT:
+        sys.exit("%s: the default syntax came back as %s" % (name, decoded.file_meta.TransferSyntaxUID))
+    if not numpy.array_equal(decoded.pixel_array, ds.pixel_array):
+        sys.exit("%s: decoded for the default syntax, the pixels differ from pydicom's" % name)
+
+    # The whole study by this library's own command: the same bytes.
+    out = os.path.join(back, sop)
+    got = subprocess.run([go, "wado", "-study", study, ours, out], capture_output=True, text=True)
+    if got.returncode != 0:
+        sys.exit("%s: wado: %s" % (name, got.stderr[-300:]))
+    with open(os.path.join(out, sop + ".dcm"), "rb") as f:
+        if f.read() != stored[0][1]:
+            sys.exit("%s: wado wrote a file that is not the part the server sent" % name)
+
+    # Metadata: the attributes without the pixel data, as pydicom reads them.
+    status, metadata = get(ours, path + "/metadata")
+    if status != 200 or len(metadata) != 1:
+        sys.exit("%s: metadata answered %d with %d results" % (name, status, len(metadata)))
+    described = pydicom.Dataset.from_json(metadata[0])
+    for keyword in ("PatientName", "Rows", "Columns", "SOPClassUID", "PhotometricInterpretation"):
+        if described[keyword].value != ds[keyword].value:
+            sys.exit("%s: metadata %s is %r, the file has %r" % (name, keyword, described[keyword].value, ds[keyword].value))
+    if set(metadata[0].get("7FE00010", {})) - {"vr"}:
+        sys.exit("%s: the metadata carries the pixel data" % name)
+    if any(key.startswith("0002") for key in metadata[0]):
+        sys.exit("%s: the metadata carries the file's meta information" % name)
+    if orthanc:
+        _, theirs = get(orthanc, path + "/metadata")
+        # A DS or an IS may be a JSON number or a string (PS3.18 F.2.3.1),
+        # and the two servers choose differently, so numbers are compared
+        # by their value.
+        def plain(values):
+            if values is None or any(isinstance(v, dict) for v in values):
+                return values
+            out = []
+            for v in values:
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    out.append(v)
+            return out
+        # Specific Character Set is left out: DICOM JSON is UTF-8, which this
+        # server says (ISO_IR 192), where Orthanc repeats what the file said.
+        for tag in set(metadata[0]) & set(theirs[0]) - {"00080005"}:
+            a, b = plain(metadata[0][tag].get("Value")), plain(theirs[0][tag].get("Value"))
+            if a is not None and b is not None and a != b:
+                sys.exit("%s: metadata %s is %r against Orthanc's %r" % (name, tag, a, b))
+        missing = [t for t in theirs[0] if t not in metadata[0]]
+        if missing:
+            sys.exit("%s: Orthanc's metadata has %s and ours does not" % (name, missing[:5]))
+
     # Against Orthanc, which the earlier step gave the same files: every
     # attribute both return has the same value.
     if orthanc:
@@ -1728,7 +1818,7 @@ if get(guarded, "/studies")[0] != 401 or get(guarded, "/studies", token="wrong")
 if get(guarded, "/studies", token="interop-token")[0] != 204:
     sys.exit("the guarded archive refused its own token")
 
-print("%d files stored over DIMSE and found over HTTP at three levels%s; C-FIND and HTTP agree; the token is enforced"
+print("%d files stored over DIMSE, found over HTTP at three levels%s, retrieved as stored and decoded, and described; C-FIND and HTTP agree; the token is enforced"
       % (len(files), ", as Orthanc answers" if orthanc else ""))
 PY
     ); then
