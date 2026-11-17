@@ -117,11 +117,11 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	})
 
 	handler := dcmstore.NewHandler(store)
-	handler.OnStored = func(_ context.Context, inst *dcmstore.Instance) error {
+	handler.OnStored = func(ctx context.Context, inst *dcmstore.Instance) error {
 		fmt.Printf("  Stored: %s -> %s\n", inst.SOPInstanceUID, inst.Path)
 		// The path is the store's own, made from a UID it has already checked.
 		kept := filepath.Join(c.outputDir, inst.Path)
-		c.events.stored(inst.SOPClassUID, inst.SOPInstanceUID, kept)
+		c.events.stored(ctx, inst.SOPClassUID, inst.SOPInstanceUID, kept)
 		return nil
 	}
 	scp.SetHandler(handler)

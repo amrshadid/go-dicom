@@ -62,6 +62,15 @@ func (t *Transport) observed() *observer {
 	return t.obs
 }
 
+// associationID is the number this connection's events carry, 0 when it
+// reports none.
+func (t *Transport) associationID() uint64 {
+	if o := t.observed(); o != nil {
+		return o.id
+	}
+	return 0
+}
+
 // emit reports an event with no PDU of its own: the connection opening or
 // closing.
 func (t *Transport) emit(eventType EventType) {
