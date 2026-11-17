@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A JPEG 2000 lossless encoder** (#308). `compress/jpeg2000` decoded and
+  nothing wrote the format. `jpeg2000.Encode` now writes an image as a
+  lossless codestream (ISO/IEC 15444-1): the reversible 5/3 wavelet, and
+  the reversible component transform for three components, at 1 to 16
+  bits, signed or unsigned. One tile, one quality layer, code-blocks of
+  64 by 64. Each stage is the mirror of a decoder stage and is tested
+  against it: the MQ coder, the wavelet transform, the block coder
+  (`EncodeBlock`) and the packet headers, with the rules for a
+  coefficient's context shared by both so they cannot differ. OpenJPEG
+  decodes what it writes: across 360 images of every depth, sign and shape
+  tried, `opj_decompress` returned each sample as it was encoded. The data
+  set and network side, which make `1.2.840.10008.1.2.4.90` something a
+  file or a send can be compressed to, follow.
+
 - **A DICOMweb search service** (#294). Package `dicomweb` was a client; it
   now has the server's side of QIDO-RS (PS3.18 10.6).
   `dicomweb.NewServer(backend)` is an `http.Handler` for `/studies`,
