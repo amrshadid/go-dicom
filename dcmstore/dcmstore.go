@@ -443,7 +443,11 @@ func (s *Store) readInstance(path string) (*Instance, error) {
 // 2: text is UTF-8. Before, an instance indexed as it arrived held the bytes
 // of whatever character set it declared (#297). That form had no version: the
 // file was the instances alone, which is how it is told apart.
-const indexVersion = 2
+//
+// 3: the index also holds the attributes a DICOMweb search returns: the size
+// of an image, its frames, its timezone and when its procedure step began
+// (#294). An index without them would answer as if no instance had any.
+const indexVersion = 3
 
 // indexFile is the index as it is written.
 type indexFile struct {

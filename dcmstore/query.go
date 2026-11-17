@@ -15,7 +15,8 @@ import (
 // The attributes a query can match on, and the hierarchy it walks.
 //
 // PS3.4 C.6.1.1 and C.6.2.1 define the keys for each level of the Patient Root
-// and Study Root information models. Only these are indexed: an archive that
+// and Study Root information models, and PS3.18 10.6.3.3 the attributes a
+// DICOMweb search returns for each. Only these are indexed: an archive that
 // indexed every attribute of every instance would hold the whole data set in
 // memory, which is what storing the files was meant to avoid.
 
@@ -47,6 +48,16 @@ var (
 	tagSeriesNumber      = tag.New(0x0020, 0x0011)
 
 	tagInstanceNumber = tag.New(0x0020, 0x0013)
+
+	// Returned by a DICOMweb search and not keys of PS3.4 (PS3.18 10.6.3.3).
+	tagInstanceAvailability            = tag.New(0x0008, 0x0056)
+	tagTimezoneOffsetFromUTC           = tag.New(0x0008, 0x0201)
+	tagPerformedProcedureStepStartDate = tag.New(0x0040, 0x0244)
+	tagPerformedProcedureStepStartTime = tag.New(0x0040, 0x0245)
+	tagNumberOfFrames                  = tag.New(0x0028, 0x0008)
+	tagRows                            = tag.New(0x0028, 0x0010)
+	tagColumns                         = tag.New(0x0028, 0x0011)
+	tagBitsAllocated                   = tag.New(0x0028, 0x0100)
 
 	tagNumberOfStudyRelatedSeries     = tag.New(0x0020, 0x1206)
 	tagNumberOfStudyRelatedInstances  = tag.New(0x0020, 0x1208)
@@ -100,13 +111,23 @@ var indexedTags = func() map[tag.Tag]dataelem.VR {
 		tagSOPClassUID:            dataelem.UI,
 		tagSOPInstanceUID:         dataelem.UI,
 		tagInstanceNumber:         dataelem.IS,
+
+		tagTimezoneOffsetFromUTC:           dataelem.SH,
+		tagPerformedProcedureStepStartDate: dataelem.DA,
+		tagPerformedProcedureStepStartTime: dataelem.TM,
+		tagNumberOfFrames:                  dataelem.IS,
+		tagRows:                            dataelem.US,
+		tagColumns:                         dataelem.US,
+		tagBitsAllocated:                   dataelem.US,
 	}
 	return vrs
 }()
 
 // computedKeys are returned from the index rather than read from an instance:
-// they count what the store holds, so no single instance carries them.
+// they count what the store holds, or say how it holds it, so no single
+// instance carries them.
 var computedKeys = map[tag.Tag]bool{
+	tagInstanceAvailability:           true,
 	tagNumberOfStudyRelatedSeries:     true,
 	tagNumberOfStudyRelatedInstances:  true,
 	tagNumberOfSeriesRelatedInstances: true,
@@ -462,7 +483,7 @@ func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Inst
 			continue
 		}
 
-		_ = response.Add(dataelem.NewDataElement(t, vr, representative.value(t)))
+		_ = response.Add(indexedElement(t, vr, representative.value(t)))
 	}
 
 	return response
@@ -485,6 +506,11 @@ func (s *Store) computed(t tag.Tag, group []*Instance) string {
 	case tagModalitiesInStudy:
 		return strings.Join(modalitiesInStudy(s, group), `\`)
 
+	case tagInstanceAvailability:
+		// What the index lists is a file in the store, which can be sent at
+		// once (PS3.3 C.4.23.1.1).
+		return "ONLINE"
+
 	default:
 		return ""
 	}
@@ -492,7 +518,7 @@ func (s *Store) computed(t tag.Tag, group []*Instance) string {
 
 // computedVR is the VR each computed attribute is returned with.
 func computedVR(t tag.Tag) dataelem.VR {
-	if t == tagModalitiesInStudy {
+	if t == tagModalitiesInStudy || t == tagInstanceAvailability {
 		return dataelem.CS
 	}
 	return dataelem.IS

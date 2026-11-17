@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   studies with no date, and a name, which Orthanc matches without regard to
   case. Retrieving and storing are not served yet.
 
+- **The archive answers with the size of an image** (#294). The index held
+  the C-FIND keys of PS3.4. It now also holds what a DICOMweb search
+  returns for each level (PS3.18 10.6.3.3): Rows, Columns, Bits Allocated,
+  Number of Frames, Timezone Offset From UTC and Performed Procedure Step
+  Start Date and Time, and Instance Availability is answered `ONLINE`.
+  They are return keys of a C-FIND as well, and can be matched on: a
+  number is matched whether a query carries it as bytes or, from a URL, as
+  text, and is answered as a number of its VR. The index file is version
+  3, so an index written before is rebuilt once on opening. Against
+  Orthanc over the same 77 files, a search now returns every attribute
+  Orthanc does but the Retrieve URL, which comes with retrieval.
+
 - **`show` prints a whole value when asked for one, and `--full` prints
   them all** (#282). The table printed the first hundred bytes of a value,
   and so did `show file::Element`, so a long text value or a list of numbers
