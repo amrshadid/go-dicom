@@ -46,6 +46,19 @@ type DCMFileReader struct {
 	elementCount int              // Count of elements read
 	metaWarnings []string         // Non-fatal issues found while reading the meta header
 
+	// implicitElements counts the elements found written without a VR in a
+	// data set that declares explicit VR, and firstImplicit is the first.
+	// They become one warning: a file written that way throughout has
+	// thousands of them.
+	implicitElements int
+	firstImplicit    string
+
+	// insideUnknown is how many elements of VR UN and undefined length the
+	// reader is inside. What such an element holds is implicit VR by rule
+	// (PS3.5 6.2.2 Note 5), so an element without a VR there is as it
+	// should be and is not counted.
+	insideUnknown int
+
 	// Total size of the underlying stream, measured once and reused to bound
 	// every declared element length. streamSizeErr records a non-seekable
 	// source so the measurement is not retried per element.
@@ -529,7 +542,16 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 			}
 			element.VR = tagValue.GetVR()
 
-			config.Logger.Warn("filereader: element is implicitly encoded in an explicit VR data set",
+			// Counted for the file's warnings, which is where a program
+			// learns of it. The log has each one, for someone reading a
+			// file element by element.
+			if dfr.insideUnknown == 0 {
+				if dfr.implicitElements == 0 {
+					dfr.firstImplicit = element.Tag.String()
+				}
+				dfr.implicitElements++
+			}
+			config.Logger.Debug("filereader: element is implicitly encoded in an explicit VR data set",
 				"tag", element.Tag.String(), "vr", element.VR)
 
 			// An element encoded this way sits in a data set the writer was
@@ -616,7 +638,13 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 			return nil, fmt.Errorf("sequence nesting exceeds maximum depth %d at tag %s",
 				MaxSequenceDepth, element.Tag.String())
 		}
+		if element.VR == "UN" {
+			dfr.insideUnknown++
+		}
 		items, delimiter, err := dfr.readSequenceItems(explicitVR && !elementIsImplicit, depth+1, element.Length)
+		if element.VR == "UN" {
+			dfr.insideUnknown--
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to read undefined-length sequence %s: %w",
 				element.Tag.String(), err)
@@ -1676,6 +1704,17 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 		}
 
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
+	}
+
+	// A file that declares explicit VR and holds elements without one is
+	// not conformant, and readable: the reader took each as implicit, with
+	// its VR from the dictionary, as pydicom does. Said once, with how many.
+	if dfr.implicitElements > 0 {
+		warning := fmt.Sprintf("%d element(s) are written without a VR in a data set that declares "+
+			"explicit VR, the first at %s; each was read as implicit VR, with its VR from the dictionary",
+			dfr.implicitElements, dfr.firstImplicit)
+		config.Logger.Warn("filereader: " + warning)
+		dfr.warn("%s", warning)
 	}
 
 	// The warnings recorded while the data set was parsed, which the copy above
