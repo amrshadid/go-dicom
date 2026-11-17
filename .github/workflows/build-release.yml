@@ -1,17 +1,72 @@
 name: Build and Release Binaries
 
 
+# A release is published in one of two ways.
+#
+# A release merged into main publishes itself. It used to wait for someone to
+# tag the right commit by hand, and three releases running sat merged and
+# unpublished until that was done (#287). The `decide` job reads main.go's
+# version; when that version has no tag and the changelog has its section,
+# this run builds and publishes, and the release it creates carries the tag.
+# A job that only pushed the tag would publish nothing: a tag pushed with the
+# workflow's own token starts no workflow.
+#
+# A tag pushed by hand still works, as it always did: a release candidate cut
+# from develop is made that way.
+#
+# Started by hand (workflow_dispatch), it builds every binary and publishes
+# nothing, which is how a change to this file is tried from a branch.
 on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
 
+# One at a time: a tag pushed by hand while main's own run is under way must
+# not race it to the same release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  decide:
+    name: Decide whether this is a release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.decide.outputs.tag }}
+      build: ${{ steps.decide.outputs.build }}
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      # With every tag: whether this version is new is decided by whether it
+      # has one.
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Decide
+        id: decide
+        run: |
+          case "${{ github.event_name }}" in
+            workflow_dispatch) ./scripts/release-tag.sh dispatch >> "$GITHUB_OUTPUT" ;;
+            push)
+              case "${{ github.ref }}" in
+                refs/tags/*) ./scripts/release-tag.sh tag "${{ github.ref_name }}" >> "$GITHUB_OUTPUT" ;;
+                *)           ./scripts/release-tag.sh main >> "$GITHUB_OUTPUT" ;;
+              esac ;;
+          esac
+          cat "$GITHUB_OUTPUT"
+
   build-binaries:
     name: Build ${{ matrix.os }} - ${{ matrix.arch }}
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
     runs-on: ${{ matrix.runs-on }}
     strategy:
       matrix:
@@ -53,9 +108,10 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # github.ref_name is exactly the tag that triggered this run. Using it
-      # instead of `git describe` avoids depending on tag history being present
-      # in the default shallow checkout, and cannot produce a "-N-gHASH" suffix.
+      # The tag the decide job settled on: the one that was pushed, or the one
+      # this release will be given. Not `git describe`, which depends on tag
+      # history being present in the default shallow checkout and can produce
+      # a "-N-gHASH" suffix.
       # The Linux binaries are built without cgo, so they are static: a
       # binary linked against glibc does not start on a musl system such as
       # Alpine. -trimpath and -s -w drop the build machine's paths and the
@@ -68,7 +124,7 @@ jobs:
           GOARCH: ${{ matrix.arch }}
         run: |
           if [ "$GOOS" = linux ]; then export CGO_ENABLED=0; fi
-          go build -trimpath -ldflags "-s -w -X main.Version=${{ github.ref_name }}" -o ${{ matrix.output }} .
+          go build -trimpath -ldflags "-s -w -X main.Version=${{ needs.decide.outputs.tag }}" -o ${{ matrix.output }} .
 
       # The 386 binary is run where it is meant to run: a 32-bit musl system.
       - name: Run the 386 binary on 32-bit Alpine
@@ -77,6 +133,8 @@ jobs:
 
       - name: Verify the version was stamped
         if: matrix.os == 'linux' && matrix.arch == 'amd64'
+        env:
+          TAG: ${{ needs.decide.outputs.tag }}
         run: |
           # The tag is "v1.5.0"; the version the CLI reports is "1.5.0". Those are the
           # same version written two ways — the first is how git names tags, the second
@@ -88,7 +146,7 @@ jobs:
           # This check compared against the raw tag, so it encoded that inconsistency
           # and failed the build when it was fixed. Comparing against the tag with the
           # prefix removed still verifies the stamp happened, which is what it is for.
-          expected="${GITHUB_REF_NAME#v}"
+          expected="${TAG#v}"
           stamped=$(./${{ matrix.output }} -v)
           echo "$stamped"
           case "$stamped" in
@@ -105,7 +163,8 @@ jobs:
   create-release:
     name: Create Release with Binaries
     runs-on: ubuntu-latest
-    needs: build-binaries
+    needs: [decide, build-binaries]
+    if: needs.decide.outputs.publish == 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -131,7 +190,7 @@ jobs:
       - name: Get version
         id: version
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ needs.decide.outputs.tag }}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           case "${TAG#v}" in
             *-*) echo "prerelease=true" >> $GITHUB_OUTPUT ;;
@@ -144,7 +203,7 @@ jobs:
       - name: Extract changelog notes
         id: changelog
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ needs.decide.outputs.tag }}"
           VERSION="${TAG#v}"
           # Drop the section's own "## [1.2.3] - date" heading. GitHub already
           # shows the version as the release title and the date as the release
@@ -190,10 +249,13 @@ jobs:
             fi
           done
 
+      # Where the tag does not exist yet, which is a release that reached
+      # main, creating the release creates it, at the commit this run built.
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.version.outputs.tag }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.version.outputs.prerelease != 'true' }}
