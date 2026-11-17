@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A release merged into `main` publishes itself** (#287). The release
+  workflow ran only for a pushed tag, so a release sat merged and
+  unpublished until someone tagged the right commit by hand. It now also
+  runs on a push to `main`: when `main.go`'s version has no tag and the
+  changelog has that version's section, it builds and publishes, and the
+  release carries the tag. Any other push to `main` builds nothing. A tag
+  pushed by hand is released as before, and starting the workflow by hand
+  builds every binary and publishes nothing.
+
 ## [1.9.1] - 2026-11-15
 
 `show` is what other programs read a file through, and this release makes
