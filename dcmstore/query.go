@@ -121,6 +121,7 @@ var computedKeys = map[tag.Tag]bool{
 // keeps a query against this store consistent with a query against the file.
 func indexKeys(ds *dataset.Dataset) map[string]IndexedValue {
 	keys := make(map[string]IndexedValue, len(indexedTags))
+	encodings := textEncodings(ds, nil)
 
 	for t, fallback := range indexedTags {
 		elem, ok := ds.Get(t)
@@ -133,7 +134,7 @@ func indexKeys(ds *dataset.Dataset) map[string]IndexedValue {
 			vr = fallback
 		}
 
-		keys[t.String()] = IndexedValue{VR: string(vr), Value: elementString(elem)}
+		keys[t.String()] = IndexedValue{VR: string(vr), Value: elementText(elem, vr, encodings)}
 	}
 
 	return keys
@@ -223,6 +224,10 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 	// rather than in a value, so they cannot be reduced to a string comparison.
 	var sequenceKeys []*dataelem.DataElement
 
+	// The query's text is in the character set the query declares, which
+	// need not be the one any instance arrived in.
+	encodings := textEncodings(query, nil)
+
 	for _, elem := range query.GetAll() {
 		t, ok := elem.Tag()
 		if !ok || t == tagQueryRetrieveLevel || computedKeys[t] {
@@ -241,8 +246,7 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 			continue
 		}
 
-		value := elementString(elem)
-		if trimPadding(value) == "" {
+		if trimPadding(elementString(elem)) == "" {
 			// Universal matching: it selects nothing and is returned in the
 			// response, which buildResponses handles.
 			continue
@@ -260,7 +264,7 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 			vr = elemVR
 		}
 
-		criteria = append(criteria, criterion{vr: vr, tag: t, value: value})
+		criteria = append(criteria, criterion{vr: vr, tag: t, value: elementText(elem, vr, encodings)})
 	}
 
 	s.mu.RLock()
@@ -303,7 +307,7 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 				if !ok {
 					continue
 				}
-				if !matchSequence(seqElem, inst, seqTag) {
+				if !matchSequence(seqElem, inst, seqTag, encodings) {
 					keep = false
 					break
 				}
@@ -383,9 +387,12 @@ func (s *Store) buildResponses(query *dataset.Dataset, level Level, matched []*I
 		groups[id] = append(groups[id], inst)
 	}
 
+	encodings := textEncodings(query, nil)
 	responses := make([]*dataset.Dataset, 0, len(order))
 	for _, id := range order {
-		responses = append(responses, s.buildResponse(query, level, groups[id]))
+		response := s.buildResponse(query, level, groups[id], encodings)
+		declareCharacterSet(response)
+		responses = append(responses, response)
 	}
 	return responses
 }
@@ -394,8 +401,15 @@ func (s *Store) buildResponses(query *dataset.Dataset, level Level, matched []*I
 //
 // It carries QueryRetrieveLevel, the unique key of every level down to this one —
 // which is what lets the requestor use the result as the query for the next level
-// down — and every attribute the query asked for.
-func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Instance) *dataset.Dataset {
+// down — and every attribute the query asked for. The query's encodings are
+// what the criteria inside its sequences are read with.
+//
+// Specific Character Set is not among them: in a query it says how the query
+// is written, and the answer's own is declareCharacterSet's to give. Treated
+// as a key it came back empty, which tells a peer there is a character set to
+// apply and does not name it.
+func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Instance,
+	encodings []string) *dataset.Dataset {
 	response := dataset.NewDataset()
 	representative := group[0]
 
@@ -417,7 +431,7 @@ func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Inst
 	// Then everything the query asked for.
 	for _, elem := range query.GetAll() {
 		t, ok := elem.Tag()
-		if !ok || t == tagQueryRetrieveLevel || response.Contains(t) {
+		if !ok || t == tagQueryRetrieveLevel || t == tagSpecificCharacterSet || response.Contains(t) {
 			continue
 		}
 
@@ -432,7 +446,7 @@ func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Inst
 		// response describes the step the query was about rather than whichever
 		// item happened to be first.
 		if elem.GetVR() == dataelem.SQ && isIndexedSequence(t) {
-			_ = response.Add(buildSequenceResponse(elem, representative, t))
+			_ = response.Add(buildSequenceResponse(elem, representative, t, encodings))
 			continue
 		}
 
