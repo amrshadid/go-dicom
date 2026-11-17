@@ -1,10 +1,11 @@
-// Package dicomweb is a client for DICOMweb, the HTTP services of DICOM
-// PS3.18: searching a service for studies, series and instances (QIDO-RS),
-// retrieving them (WADO-RS) and storing them (STOW-RS).
+// Package dicomweb is DICOMweb, the HTTP services of DICOM PS3.18: searching
+// a service for studies, series and instances (QIDO-RS), retrieving them
+// (WADO-RS) and storing them (STOW-RS).
 //
-// It is what a program uses to reach an archive, a cloud imaging store or a
-// viewer's back end that speaks HTTP, where the network package reaches one
-// that speaks DIMSE.
+// [Client] is what a program uses to reach an archive, a cloud imaging store
+// or a viewer's back end that speaks HTTP, where the network package reaches
+// one that speaks DIMSE. [Server] is the other side: an http.Handler that
+// answers the search service over an archive.
 //
 // # Quick start
 //
@@ -49,6 +50,32 @@
 // carries the start of the server's explanation.
 //
 // The client asks for DICOM files and DICOM JSON. Retrieving frames, rendered
-// images and bulk data on their own, the XML encoding, worklists (UPS-RS) and
-// the server side of these services are not implemented.
+// images and bulk data on their own, the XML encoding and worklists (UPS-RS)
+// are not implemented.
+//
+// # Serving
+//
+// [NewServer] returns a handler for the search service over a [Backend],
+// which is the archive: it is asked what a C-FIND would ask, so a study that
+// matches over DIMSE matches over HTTP. A dcmstore.Store is a Backend as it
+// is.
+//
+//	store, err := dcmstore.Open(dir)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	http.Handle("/dicom-web/", http.StripPrefix("/dicom-web", dicomweb.NewServer(store)))
+//
+// A search names the attributes to match by keyword or by tag, as
+// /studies?PatientName=Doe*&StudyDate=20240101-20241231, with includefield,
+// limit and offset; an attribute inside a sequence is Sequence.Attribute. The
+// answer is DICOM JSON, or 204 when nothing matches. Each result holds the
+// attributes PS3.18 10.6.3.3 lists for its level that the archive has a value
+// for, and any asked for with includefield.
+//
+// The server matches literally: a request for fuzzy matching is answered
+// with a warning that says so. It does not authenticate, and it serves
+// whatever the archive holds to whoever reaches it, so a deployment wraps it
+// in a handler that decides who may. Retrieving and storing are not served
+// yet.
 package dicomweb
