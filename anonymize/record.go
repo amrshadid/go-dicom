@@ -42,7 +42,16 @@ func (a *Anonymizer) recordMethod(ds *dataset.Dataset) error {
 	if hasMethodCode(ds, cleanPixelDataCode) {
 		codes = append(codes, cleanPixelDataCode)
 	}
-	return writeMethod(ds, codes, true)
+	// So is an automatic redaction, which has no code: it is said in words,
+	// and the words are put back after the codes' meanings replace them.
+	automatic := hasAutomaticNote(ds)
+	if err := writeMethod(ds, codes, true); err != nil {
+		return err
+	}
+	if automatic {
+		return noteAutomaticRedaction(ds)
+	}
+	return nil
 }
 
 // writeMethod writes the method codes, and Patient Identity Removed when the
