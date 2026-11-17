@@ -190,6 +190,23 @@ store holds it under the SOP Class named and its file is on disk. Otherwise it
 fails with 0112H (not held), 0119H (held under another class) or 0110H (file
 missing), the Failure Reasons of PS3.3 C.14.1.1.
 
+### 2.7 Matching in the archive
+
+`dcmstore`, and so `qrscp`, matches by the rules of PS3.4 C.2.2: universal,
+single value, list of UID, wildcard, range and sequence matching. Where the
+standard leaves the choice to the SCP:
+
+| Choice | What the archive does |
+|---|---|
+| Case of a person name (C.2.2.2.1) | Ignored for PN, in single value and wildcard matching: `smith*` finds `SMITH^JOHN`. Every other VR is matched as written. |
+| Accents | Kept: `Jerome` does not match `Jérôme`. |
+| Fuzzy matching of names | Not offered. |
+| Character set of a query | The query is read in the Specific Character Set it declares, and the index is UTF-8, so a name matches however the query and the instance were each written. |
+| Character set of an answer | `ISO_IR 192` when the answer holds anything outside ASCII; none when it does not (C.4.1.1.3.2). |
+| A date or time in its ACR-NEMA form | `1997.04.24` and `09:30:00` are read as `19970424` and `093000`, in a stored value and in a query. The stored value is returned as it is. |
+| An attribute with no value in an instance | Matches universal matching only. A range does not match a study with no date. |
+| A key the index does not hold | Not matched on, and returned with no value (C.2.2.1.2). |
+
 ---
 
 ## 3. Presentation contexts and transfer syntaxes

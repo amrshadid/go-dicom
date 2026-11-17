@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The archive matches a person name whatever its case** (#301). A C-FIND
+  for `smith*` did not find `SMITH^JOHN`. PS3.4 C.2.2.2.1 lets an SCP
+  ignore case for person names, Orthanc and dcm4chee do, and modalities
+  disagree on how they write one, so matching as written found only some
+  of a patient's studies. Single value and wildcard matching of a PN now
+  ignore case. Every other VR is matched as before, and accents are kept:
+  `Jerome` does not match `Jérôme`. CONFORMANCE.md section 2.7 lists this
+  and the archive's other choices in matching.
+
 - **A release merged into `main` publishes itself** (#287). The release
   workflow ran only for a pushed tag, so a release sat merged and
   unpublished until someone tagged the right commit by hand. It now also
@@ -99,6 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is unchanged, except that a query which declared a character set no
   longer gets an empty one back. The index file has a version, and an
   index written before is rebuilt from the files once, on opening.
+
+- **A date written `1997.04.24` matches a date range** (#300). That is the
+  date form of ACR-NEMA 300, which older equipment still writes and PS3.5
+  lets a reader accept. The archive read the old form of a time and not
+  of a date, so such a study matched no range and no `19970424`. Found by
+  asking Orthanc and the archive for the same range over the same files.
 
 ## [1.9.1] - 2026-11-15
 

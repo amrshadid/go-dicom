@@ -352,3 +352,61 @@ func TestWildcardQuestionMarkIsOneCharacter(t *testing.T) {
 		}
 	}
 }
+
+// TestPersonNamesMatchWhateverTheirCase checks that a PN is matched without
+// regard to case, alone and with wildcards, and that nothing else is: PS3.4
+// C.2.2.2.1 allows it for person names, where one modality writes SMITH and
+// the next Smith, and a code string or an identifier that differs in case is
+// a different value (#301).
+func TestPersonNamesMatchWhateverTheirCase(t *testing.T) {
+	cases := []struct {
+		vr            dataelem.VR
+		query, stored string
+		want          bool
+		why           string
+	}{
+		{dataelem.PN, "smith^john", "SMITH^JOHN", true, "a name in another case"},
+		{dataelem.PN, "SMITH^JOHN", "Smith^John", true, "the stored name in mixed case"},
+		{dataelem.PN, "smi*", "SMITH^JOHN", true, "a wildcard in another case"},
+		{dataelem.PN, "*A*", "Anonymized", true, "a wildcard either side"},
+		{dataelem.PN, "sm?th*", "SMITH^JOHN", true, "a single character wildcard"},
+		{dataelem.PN, "buc^jérôme", "Buc^JÉRÔME", true, "case outside ASCII"},
+		{dataelem.PN, "Buc^Jerome", "Buc^Jérôme", false, "an accent is not case"},
+		{dataelem.PN, "smyth*", "SMITH^JOHN", false, "another name"},
+		{dataelem.LO, "p1", "P1", false, "a patient ID is matched as written"},
+		{dataelem.LO, "p*", "P1", false, "a patient ID with a wildcard"},
+		{dataelem.CS, "ct", "CT", false, "a code string"},
+		{dataelem.SH, "acc*", "ACC1", false, "an accession number"},
+	}
+	for _, tc := range cases {
+		if got := matchValue(tc.vr, tc.query, tc.stored); got != tc.want {
+			t.Errorf("%s %q against %q: got %v, want %v (%s)", tc.vr, tc.query, tc.stored, got, tc.want, tc.why)
+		}
+	}
+}
+
+// TestDatesInTheFormBeforeDICOMAreRead checks that YYYY.MM.DD, the date of
+// ACR-NEMA 300 that older equipment still writes, is read as its date for
+// equality and for ranges, as the old form of a time already is (#300).
+func TestDatesInTheFormBeforeDICOMAreRead(t *testing.T) {
+	cases := []struct {
+		query, stored string
+		want          bool
+		why           string
+	}{
+		{"19970424", "1997.04.24", true, "the same day in the other form"},
+		{"1997.04.24", "19970424", true, "the old form in the query"},
+		{"-20080504", "1997.04.24", true, "before the end of an open range"},
+		{"19970101-19971231", "1997.04.24", true, "inside a range"},
+		{"19980101-", "1997.04.24", false, "before the start of a range"},
+		{"19970425", "1997.04.24", false, "another day"},
+		{"1997.04.01-1997.04.30", "19970424", true, "a range written in the old form"},
+		{"19970424", "1997.4.24", false, "not that form: a month of one digit"},
+		{"19970424", "1997-04-24", false, "not that form: a hyphen is a range"},
+	}
+	for _, tc := range cases {
+		if got := matchValue(dataelem.DA, tc.query, tc.stored); got != tc.want {
+			t.Errorf("DA %q against %q: got %v, want %v (%s)", tc.query, tc.stored, got, tc.want, tc.why)
+		}
+	}
+}
