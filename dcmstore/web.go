@@ -58,3 +58,10 @@ func (s *Store) Open(_ context.Context, sopInstanceUID string) (io.ReadSeekClose
 	}
 	return file, nil
 }
+
+// Put keeps an instance, as Store does, for a caller that has no use for
+// the index entry.
+func (s *Store) Put(ctx context.Context, instance *dataset.Dataset) error {
+	_, err := s.Store(ctx, instance)
+	return err
+}

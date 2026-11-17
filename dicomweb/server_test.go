@@ -34,6 +34,11 @@ type recorder struct {
 	files   map[string][]byte
 	order   []string
 	located [3]string
+
+	// put are the instances it was given to keep, and refuses the SOP
+	// Instance UIDs it will not.
+	put     []*dataset.Dataset
+	refuses map[string]bool
 }
 
 func (r *recorder) hold(uid string, file []byte) {
@@ -53,6 +58,15 @@ func (r *recorder) Locate(_ context.Context, study, series, instance string) ([]
 		return []string{instance}, r.err
 	}
 	return nil, r.err
+}
+
+func (r *recorder) Put(_ context.Context, instance *dataset.Dataset) error {
+	uid := text(instance, tagSOPInstance)
+	if r.refuses[uid] {
+		return errors.New("disk full at /srv/archive")
+	}
+	r.put = append(r.put, instance)
+	return nil
 }
 
 func (r *recorder) Open(_ context.Context, uid string) (io.ReadSeekCloser, error) {
@@ -259,7 +273,7 @@ func TestSearchRefusals(t *testing.T) {
 		{"a study that hides a path", "GET", "/studies/..%2F..%2Fetc/series", nil, http.StatusNotFound},
 		{"a UID with an empty component", "GET", "/studies/1..2/series", nil, http.StatusBadRequest},
 		{"a UID that is too long", "GET", "/studies/" + strings.Repeat("1.", 40) + "1/series", nil, http.StatusBadRequest},
-		{"another method", "DELETE", "/studies", nil, http.StatusMethodNotAllowed},
+		{"another method", "DELETE", "/series", nil, http.StatusMethodNotAllowed},
 		{"an unknown attribute", "GET", "/studies?PatientNmae=Doe", nil, http.StatusBadRequest},
 		{"a tag the dictionary lacks", "GET", "/studies?00091001=x", nil, http.StatusBadRequest},
 		{"an attribute given twice", "GET", "/studies?PatientName=A&00100010=B", nil, http.StatusBadRequest},

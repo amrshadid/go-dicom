@@ -5,7 +5,7 @@
 // [Client] is what a program uses to reach an archive, a cloud imaging store
 // or a viewer's back end that speaks HTTP, where the network package reaches
 // one that speaks DIMSE. [Server] is the other side: an http.Handler that
-// answers the search and retrieve services over an archive.
+// answers the three services over an archive.
 //
 // # Quick start
 //
@@ -55,10 +55,11 @@
 //
 // # Serving
 //
-// [NewServer] returns a handler for the search and retrieve services over a
-// [Backend], which is the archive: a search asks it what a C-FIND would ask,
-// so a study that matches over DIMSE matches over HTTP, and a retrieve asks
-// it for the files it holds. A dcmstore.Store is a Backend as it is.
+// [NewServer] returns a handler for the three services over a [Backend],
+// which is the archive: a search asks it what a C-FIND would ask, so a study
+// that matches over DIMSE matches over HTTP, a retrieve asks it for the
+// files it holds, and a store gives it instances to keep. A dcmstore.Store
+// is a Backend as it is.
 //
 //	store, err := dcmstore.Open(dir)
 //	if err != nil {
@@ -86,5 +87,12 @@
 // with a warning that says so. It does not authenticate, and it serves
 // whatever the archive holds to whoever reaches it, so a deployment wraps it
 // in a handler that decides who may. Frames, rendered images and bulk data
-// on their own are not served, and neither is storing, yet.
+// on their own are not served.
+//
+// Instances are stored as the application/dicom parts of a multipart
+// request, to /studies or into a study. Each is kept or refused on its own,
+// and the answer lists both: 200 when all were kept, 202 when some were, 409
+// when none was. An instance sent into a study it is not of is refused
+// (A900H). A request is read up to [DefaultMaxStoreBytes] unless
+// [WithMaxStoreBytes] says otherwise.
 package dicomweb
