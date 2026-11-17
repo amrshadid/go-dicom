@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A handler knows which association it is answering, and `STORED` says
+  so** (#284). The events of an association carry an id, and a handler's
+  context did not, so `storescp` and `qrscp` wrote their `STORED` line with
+  none and a reader paired it with the `EVT_C_STORE` before it by SOP
+  Instance UID, which two associations sending the same instance at once
+  make ambiguous. `network.AssociationInfo.ID` is that id, and the `STORED`
+  line now has `associationId`, `role` and the AE titles and addresses, as
+  the association's own events do.
+
 ### Fixed
 
 - **The commands print their own output and not the library's log** (#283).

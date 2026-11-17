@@ -135,7 +135,7 @@ func TestEventsToStandardOutputAndNowhere(t *testing.T) {
 		t.Fatalf("with no -events: %v, %v", manager, err)
 	}
 	done()
-	none.stored("1.2", "3.4", "x")
+	none.stored(context.Background(), "1.2", "3.4", "x")
 
 	var out bytes.Buffer
 	writer := &eventWriter{out: &out}
@@ -168,5 +168,35 @@ func TestEveryNetworkCommandTakesEvents(t *testing.T) {
 		if fs.Lookup("events") == nil || fs.Lookup("events-pdu-bytes") == nil {
 			t.Errorf("%s has no -events", cmd.Name())
 		}
+	}
+}
+
+// The STORED line names the association the instance came on, as the
+// handler's context gives it (#284).
+func TestStoredLineNamesItsAssociation(t *testing.T) {
+	var out bytes.Buffer
+	events := eventsFlag{writer: &eventWriter{out: &out}}
+	ctx := network.ContextWithAssociationInfo(context.Background(), &network.AssociationInfo{
+		ID: 7, CallingAE: "SENDER", CalledAE: "ARCHIVE",
+	})
+	events.stored(ctx, "1.2.840.10008.5.1.4.1.1.2", "1.2.284.9", "/data/1.2.284.9.dcm")
+
+	var record eventRecord
+	if err := json.Unmarshal(out.Bytes(), &record); err != nil {
+		t.Fatalf("not one JSON line: %v %q", err, out.String())
+	}
+	if record.Event != "STORED" || record.AssociationID != 7 || record.Role != "SCP" ||
+		record.LocalAE != "ARCHIVE" || record.RemoteAE != "SENDER" ||
+		record.Stored == nil || record.Stored.SOPInstanceUID != "1.2.284.9" || record.Stored.Path != "/data/1.2.284.9.dcm" {
+		t.Errorf("the line is %+v, stored %+v", record, record.Stored)
+	}
+
+	// Outside an association there is none to name, and the line still says
+	// what was kept.
+	out.Reset()
+	events.stored(context.Background(), "1.2", "3.4", "x")
+	record = eventRecord{}
+	if err := json.Unmarshal(out.Bytes(), &record); err != nil || record.AssociationID != 0 || record.Stored == nil {
+		t.Errorf("with no association the line is %q (%v)", out.String(), err)
 	}
 }
