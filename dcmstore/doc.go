@@ -58,6 +58,18 @@
 // index of every attribute of every instance would hold the whole archive in
 // memory, which is what storing the files was meant to avoid.
 //
+// # Text
+//
+// The index holds text as UTF-8, whatever Specific Character Set (0008,0005)
+// an instance arrived in; the file is kept as it was sent. A query's text is
+// read in the character set the query declares, so a name matches however the
+// two were written. An answer with anything outside ASCII declares ISO_IR 192,
+// and one in the default repertoire declares nothing (PS3.4 C.4.1.1.3.2).
+//
+// The index file carries a version. One written in an earlier form, where an
+// instance was indexed in the bytes it arrived with, is rebuilt from the files
+// the first time the store is opened.
+//
 // # Matching
 //
 // [Store.Query] implements the matching rules of PS3.4 C.2.2:

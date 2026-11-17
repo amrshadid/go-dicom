@@ -436,17 +436,37 @@ func (s *Store) readInstance(path string) (*Instance, error) {
 	}, nil
 }
 
-// loadIndex reads the index file.
+// indexVersion is the form of the index file. It is raised when what the
+// index holds for the same files changes, so that an index written before is
+// rebuilt from the files and not read as if it were current.
+//
+// 2: text is UTF-8. Before, an instance indexed as it arrived held the bytes
+// of whatever character set it declared (#297). That form had no version: the
+// file was the instances alone, which is how it is told apart.
+const indexVersion = 2
+
+// indexFile is the index as it is written.
+type indexFile struct {
+	Version   int                  `json:"version"`
+	Instances map[string]*Instance `json:"instances"`
+}
+
+// loadIndex reads the index file. An index of another version is an error,
+// which Open answers by rebuilding.
 func (s *Store) loadIndex() error {
 	data, err := os.ReadFile(filepath.Join(s.root, indexFileName))
 	if err != nil {
 		return err
 	}
 
-	var loaded map[string]*Instance
-	if err := json.Unmarshal(data, &loaded); err != nil {
+	var file indexFile
+	if err := json.Unmarshal(data, &file); err != nil {
 		return err
 	}
+	if file.Version != indexVersion {
+		return fmt.Errorf("the index is version %d and this store reads version %d", file.Version, indexVersion)
+	}
+	loaded := file.Instances
 	if loaded == nil {
 		loaded = make(map[string]*Instance)
 	}
@@ -471,7 +491,7 @@ func (s *Store) saveIndex() error {
 	defer s.saving.Unlock()
 
 	s.mu.RLock()
-	data, err := json.MarshalIndent(s.instances, "", "  ")
+	data, err := json.MarshalIndent(indexFile{Version: indexVersion, Instances: s.instances}, "", "  ")
 	s.mu.RUnlock()
 	if err != nil {
 		return fmt.Errorf("encoding the index: %w", err)

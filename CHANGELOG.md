@@ -60,6 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was printed with `"value": ""`, the only place such a VR had a value, and
   now has none, as when it holds bytes.
 
+- **A C-FIND answer says which character set it is in** (#297). The archive
+  indexed an instance's text as the bytes it arrived with and answered a
+  C-FIND with them and no Specific Character Set, so a peer could not read
+  a name outside ASCII: of seven such names in pydicom's character set
+  files, pynetdicom read none correctly when `go-dicom storescu` had sent
+  them and two when dcmtk had. The index now holds text as UTF-8 however
+  an instance arrived, a query is read in the character set it declares,
+  so `Jérôme` in UTF-8 finds a name stored in ISO_IR 100, and an answer
+  with anything outside ASCII declares `ISO_IR 192`. All seven names now
+  read back as they are in the files, for both senders. An answer in ASCII
+  is unchanged, except that a query which declared a character set no
+  longer gets an empty one back. The index file has a version, and an
+  index written before is rebuilt from the files once, on opening.
+
 ## [1.9.1] - 2026-11-15
 
 `show` is what other programs read a file through, and this release makes
