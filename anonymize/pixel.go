@@ -41,6 +41,24 @@ func (a *Anonymizer) CleanPixelData(ds *dataset.Dataset, regions ...dataset.Pixe
 	if ds == nil {
 		return fmt.Errorf("dataset is nil")
 	}
+	if err := redactRegions(ds, regions); err != nil {
+		return err
+	}
+
+	ds.Remove(tagBurnedInAnnotation)
+	if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
+		return fmt.Errorf("setting Burned In Annotation: %w", err)
+	}
+	if hasMethodCode(ds, cleanPixelDataCode) {
+		return nil
+	}
+	_, identityRemoved := ds.Get(tag.New(0x0012, 0x0062))
+	return writeMethod(ds, append(recordedMethodCodes(ds), cleanPixelDataCode), identityRemoved)
+}
+
+// redactRegions fills the regions with black in every frame of ds,
+// decompressing it first when it is compressed.
+func redactRegions(ds *dataset.Dataset, regions []dataset.PixelRegion) error {
 	// On a copy, so a region that turns out to miss the image does not leave
 	// the caller's data set decompressed and uncleaned.
 	work := ds.Clone()
@@ -61,16 +79,66 @@ func (a *Anonymizer) CleanPixelData(ds *dataset.Dataset, regions ...dataset.Pixe
 		}
 	}
 	ds.SetTransferSyntaxUID(work.TransferSyntaxUID())
+	return nil
+}
 
-	ds.Remove(tagBurnedInAnnotation)
-	if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
-		return fmt.Errorf("setting Burned In Annotation: %w", err)
+// AutomaticRedactionNote is what De-identification Method (0012,0063) says
+// of an image whose text was found by a detector and not by a person.
+const AutomaticRedactionNote = "Burned-in text redacted where detected, unverified"
+
+// RedactDetectedText fills with black, in every frame, the regions in which
+// detector finds lettering, and returns them. A nil detector is the one
+// NewTextDetector returns.
+//
+// It is CleanPixelData without CleanPixelData's claim. That one is told
+// where the text is by someone who looked, so it sets Burned In Annotation
+// to NO and records the Clean Pixel Data Option. A detector can miss, so
+// this sets neither: Burned In Annotation is left as it was, and what was
+// done is said in De-identification Method (0012,0063) with
+// AutomaticRedactionNote, which Anonymize keeps when it runs afterwards.
+// An image is clean when a person has looked at it.
+//
+// When nothing is found, nothing is changed and no regions are returned.
+func (a *Anonymizer) RedactDetectedText(ds *dataset.Dataset, detector TextDetector) ([]dataset.PixelRegion, error) {
+	if ds == nil {
+		return nil, fmt.Errorf("dataset is nil")
 	}
-	if hasMethodCode(ds, cleanPixelDataCode) {
+	regions, err := DetectBurnedInText(ds, detector)
+	if err != nil || len(regions) == 0 {
+		return nil, err
+	}
+	if err := redactRegions(ds, regions); err != nil {
+		return nil, err
+	}
+	return regions, noteAutomaticRedaction(ds)
+}
+
+// hasAutomaticNote reports whether ds says its text was redacted
+// automatically.
+func hasAutomaticNote(ds *dataset.Dataset) bool {
+	for _, value := range strings.Split(textOf(ds, tagMethod), `\`) {
+		if strings.TrimSpace(value) == AutomaticRedactionNote {
+			return true
+		}
+	}
+	return false
+}
+
+// noteAutomaticRedaction adds AutomaticRedactionNote to De-identification
+// Method, beside whatever it already says.
+func noteAutomaticRedaction(ds *dataset.Dataset) error {
+	if hasAutomaticNote(ds) {
 		return nil
 	}
-	_, identityRemoved := ds.Get(tag.New(0x0012, 0x0062))
-	return writeMethod(ds, append(recordedMethodCodes(ds), cleanPixelDataCode), identityRemoved)
+	value := AutomaticRedactionNote
+	if existing := textOf(ds, tagMethod); existing != "" {
+		value = existing + `\` + value
+	}
+	ds.Remove(tagMethod)
+	if err := ds.Add(dataelem.NewDataElement(tagMethod, dataelem.LO, value)); err != nil {
+		return fmt.Errorf("recording the automatic redaction: %w", err)
+	}
+	return nil
 }
 
 // recordedMethodCodes returns the methods ds already records.

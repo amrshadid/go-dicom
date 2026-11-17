@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/amrshadid/go-dicom/anonymize"
@@ -25,34 +24,10 @@ import (
 type AnonymizeCommand struct {
 	profile       string
 	uidMap        string
-	redact        regionList
+	redact        redaction
+	detect        bool
 	allowBurnedIn bool
 	help          bool
-}
-
-// regionList collects each -redact x,y,w,h.
-type regionList []dataset.PixelRegion
-
-func (r *regionList) String() string { return fmt.Sprint(len(*r), " region(s)") }
-
-func (r *regionList) Set(value string) error {
-	var region dataset.PixelRegion
-	parts := strings.Split(value, ",")
-	if len(parts) != 4 {
-		return fmt.Errorf("a region is x,y,width,height")
-	}
-	for i, field := range []*int{&region.X, &region.Y, &region.Width, &region.Height} {
-		n, err := strconv.Atoi(strings.TrimSpace(parts[i]))
-		if err != nil {
-			return fmt.Errorf("a region is x,y,width,height in whole pixels")
-		}
-		*field = n
-	}
-	if region.Width <= 0 || region.Height <= 0 {
-		return fmt.Errorf("a region needs a width and a height above zero")
-	}
-	*r = append(*r, region)
-	return nil
 }
 
 // anonymizeProfiles names the option each -profile value applies on top of the
@@ -94,7 +69,8 @@ func (ac *AnonymizeCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&ac.help, "help", false, "Show help for this command")
 	fs.StringVar(&ac.profile, "profile", "basic", "Profile: "+profileNames())
 	fs.StringVar(&ac.uidMap, "uid-map", "", "Write the original-to-new UID mapping to this file as JSON")
-	fs.Var(&ac.redact, "redact", "Fill the rectangle x,y,width,height with black in every frame (repeatable)")
+	fs.Var(&ac.redact, "redact", "Fill the rectangle x,y,width,height with black in every frame (repeatable), or auto for what a detector finds")
+	fs.BoolVar(&ac.detect, "detect", false, "Print the regions in which a detector finds text in one file, and write nothing")
 	fs.BoolVar(&ac.allowBurnedIn, "allow-burned-in", false, "Write images that may hold burned-in text without -redact")
 }
 
@@ -108,6 +84,15 @@ func (ac *AnonymizeCommand) Execute(args []string) error {
 	}
 	if ac.help {
 		ac.showHelp()
+		return nil
+	}
+	if ac.detect {
+		if len(positional) != 1 {
+			return fmt.Errorf("anonymize: -detect takes one file and writes nothing")
+		}
+		if err := printDetected(positional[0]); err != nil {
+			return fmt.Errorf("anonymize: %w", err)
+		}
 		return nil
 	}
 	if len(positional) != 2 {
@@ -259,15 +244,26 @@ func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, inpu
 	// that may hold text nobody has answered for, is not written at all.
 	if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
 		switch {
-		case len(ac.redact) > 0:
-			if err := anonymizer.CleanPixelData(ds, ac.redact...); err != nil {
-				return err
+		case ac.redact.asked():
+			if len(ac.redact.regions) > 0 {
+				if err := anonymizer.CleanPixelData(ds, ac.redact.regions...); err != nil {
+					return err
+				}
+			}
+			if ac.redact.auto {
+				// The detector's regions, filled and recorded as its own:
+				// nothing here says the image is now clean.
+				regions, err := anonymizer.RedactDetectedText(ds, nil)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("  %s: %d region(s) detected and filled\n", filepath.Base(input), len(regions))
 			}
 		case !ac.allowBurnedIn:
 			if risk, reason := anonymize.BurnedInRisk(ds); risk {
 				return fmt.Errorf("it may hold text burned into the pixels: %s. "+
-					"Give -redact x,y,width,height for where the text is, "+
-					"or -allow-burned-in if there is none", reason)
+					"Give -redact x,y,width,height for where the text is, -redact auto "+
+					"to fill what a detector finds, or -allow-burned-in if there is none", reason)
 			}
 		}
 	}
@@ -380,6 +376,12 @@ OPTIONS:
                      image, counted in pixels from the top left. Repeat it
                      for more rectangles. Sets Burned In Annotation to NO and
                      records the Clean Pixel Data Option.
+  -redact auto       Fill the regions in which a detector finds text. It can
+                     miss: Burned In Annotation is left as it was, and the
+                     method records that the redaction was automatic and
+                     unverified. Look at each image before it leaves you.
+  -detect            Print those regions for one file, as -redact takes
+                     them, and write nothing: go-dicom anonymize -detect x.dcm
   -allow-burned-in   Write images that may hold burned-in text as they are.
   -h, -help          Show this help message
 
@@ -393,8 +395,11 @@ BURNED-IN TEXT:
   the patient's name drawn into the image, where no attribute holds it. An
   image whose Burned In Annotation is YES, or that is of such a kind and does
   not say NO, is refused unless -redact says where the text is or
-  -allow-burned-in says there is none. The command does not find text: the
-  rectangles are yours to get right. A compressed image that is redacted
+  -allow-burned-in says there is none. With rectangles the command does not
+  find text: they are yours to get right. -redact auto finds it for you and
+  is not a promise: a detector misses text that is faint, very small, hand
+  written or drawn over a busy part of the picture, and only a person
+  looking confirms an image is clean. A compressed image that is redacted
   is written uncompressed: nothing is encoded again, so no quality is lost,
   and the file is larger.
 
@@ -408,5 +413,7 @@ EXAMPLES:
   go-dicom anonymize study/ clean-study/
   go-dicom anonymize -profile retain-dates study/ clean-study/
   go-dicom anonymize -redact 0,0,640,40 ultrasound.dcm clean.dcm
+  go-dicom anonymize -detect ultrasound.dcm
+  go-dicom anonymize -redact auto ultrasound.dcm clean.dcm
 `)
 }

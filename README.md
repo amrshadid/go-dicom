@@ -303,6 +303,8 @@ go build -o go-dicom .
 ./go-dicom codify patient.dcm         # Go source that recreates the file
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
+./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at
+./go-dicom anonymize -redact auto us.dcm clean.dcm  # Black out what it finds; it can miss, so look
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
@@ -745,7 +747,9 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 
 - **Basic Profile** - Standard tag removal/replacement
 - **Clean Descriptors** - Remove text descriptions
-- **Clean Graphics** - Remove burned-in annotations
+- **Clean Graphics** - Remove overlays and graphic annotations held as attributes
+
+Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. `share -preview` and `-detect` show what it finds before anything is changed.
 - **Retain Long Full Dates** - Keep dates for longitudinal studies
 - **Retain Patient Characteristics** - Keep age, sex, size, weight
 - **Retain Device Identity** - Keep device information
