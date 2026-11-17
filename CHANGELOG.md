@@ -25,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   valid UTF-8. The table now formats numbers with the function `--json`
   uses, so the two agree. Floats are printed as `--json` prints them, `2`
   and `0.5` where the table had `2.000000` and `0.500000`. Across pydicom's
-  corpus 289 of 9,117 rows change, all of them numbers; `--json` is the
-  same byte for byte.
+  corpus 289 of 9,117 rows change, all of them numbers. `--json` is the
+  same byte for byte but for one thing: an empty value of a bulk binary VR
+  was printed with `"value": ""`, the only place such a VR had a value, and
+  now has none, as when it holds bytes.
 
 ## [1.9.1] - 2026-11-15
 

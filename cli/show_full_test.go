@@ -130,3 +130,34 @@ func TestShowPrintsEveryValueOfANumber(t *testing.T) {
 		}
 	}
 }
+
+// A bulk binary VR has no value in --json, whether it holds bytes or is
+// empty: an empty OF was printed with "value": "", the one place such a VR
+// had one.
+func TestShowJSONOfAnEmptyBinaryValue(t *testing.T) {
+	const syntax = "1.2.840.10008.1.2.1\x00"
+	var meta bytes.Buffer
+	meta.Write([]byte{0x02, 0x00, 0x10, 0x00, 'U', 'I', byte(len(syntax)), 0})
+	meta.WriteString(syntax)
+	var f bytes.Buffer
+	f.Write(make([]byte, 128))
+	f.WriteString("DICM")
+	f.Write([]byte{0x02, 0x00, 0x00, 0x00, 'U', 'L', 4, 0})
+	f.Write(binary.LittleEndian.AppendUint32(nil, uint32(meta.Len())))
+	f.Write(meta.Bytes())
+	f.Write([]byte{0x10, 0x00, 0x10, 0x00, 'P', 'N', 0, 0})             // an empty name
+	f.Write([]byte{0x64, 0x00, 0x09, 0x00, 'O', 'F', 0, 0, 0, 0, 0, 0}) // an empty Vector Grid Data
+	path := filepath.Join(t.TempDir(), "empty.dcm")
+	if err := os.WriteFile(path, f.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	doc := showJSON(t, path)
+	name, grid := doc.DataSet[0], doc.DataSet[1]
+	if name.Value == nil || *name.Value != "" || name.VM != 0 {
+		t.Errorf("the empty name is %v with vm %d, want an empty string", name.Value, name.VM)
+	}
+	if grid.VR != "OF" || grid.Value != nil || grid.VM != 0 || grid.ValueLength != 0 {
+		t.Errorf("the empty OF is %v with vm %d, want no value", grid.Value, grid.VM)
+	}
+}

@@ -258,7 +258,11 @@ func describeElement(e *filereader.DataElementValue, scope *displayScope) showEl
 // it is one to show at all: bulk binary is given by its position alone.
 func displayValue(vr string, raw []byte, encodings []string) (text string, vm int, show bool) {
 	if len(raw) == 0 {
-		return "", 0, true
+		// An empty value is no values. For a text or number VR that is an
+		// empty string. For bulk binary nothing is shown, as when it holds
+		// bytes: a reader told that such a VR never has a value should not
+		// meet one because the element happens to be empty.
+		return "", 0, !bulkVRs[vr] && vr != "UN"
 	}
 	if text, vm, ok := formatNumbers(vr, raw); ok {
 		return text, vm, true
