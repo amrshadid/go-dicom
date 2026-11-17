@@ -1512,6 +1512,85 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# DICOMweb against a server that is not this library (#285)
+#
+# The client had its own test server and nothing else in CI. Checked by hand
+# against Orthanc for 1.8.0, it turned out that Orthanc answers 400, not 409
+# or 202, for a store it kept part of, which no test server written from the
+# standard would have done. So: stow, qido and wado against Orthanc, and what
+# they return held against what Python reads from the same server.
+#
+# ORTHANC_URL is the service's DICOMweb root, http://127.0.0.1:8042/dicom-web
+# in CI. Without one the step is skipped, as for every other peer.
+# ---------------------------------------------------------------------------
+if [ -n "${ORTHANC_URL:-}" ] && python3 -c "import urllib.request, sys; urllib.request.urlopen(sys.argv[1] + '/studies', timeout=5)" "$ORTHANC_URL" >/dev/null 2>&1; then
+  note "DICOMweb: go-dicom stow, qido and wado against Orthanc"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/web_src" "$WORKDIR/web_back"
+  if web=$(python3 - "$GODICOM" "$ORTHANC_URL" "$WORKDIR/web_src" "$WORKDIR/web_back" <<'PY'
+import json, os, shutil, subprocess, sys, urllib.request
+import pydicom
+from pydicom.data import get_testdata_file
+
+go, url, src, back = sys.argv[1:5]
+
+def run(*args):
+    return subprocess.run([go, *args], capture_output=True, text=True)
+
+# Three transfer syntaxes, and a file that is not DICOM, which stow passes over.
+names = ["CT_small.dcm", "MR_small.dcm", "SC_rgb_rle.dcm"]
+for name in names:
+    shutil.copy(get_testdata_file(name), src)
+with open(os.path.join(src, "notes.txt"), "w") as f:
+    f.write("not an image")
+
+stored = run("stow", url, src)
+if stored.returncode != 0 or "Stored 3 instance(s)" not in stored.stdout:
+    sys.exit("stow: %s%s" % (stored.stdout[-300:], stored.stderr[-300:]))
+
+for name in names:
+    path = os.path.join(src, name)
+    ds = pydicom.dcmread(path, stop_before_pixels=True)
+    study, series, sop = str(ds.StudyInstanceUID), str(ds.SeriesInstanceUID), str(ds.SOPInstanceUID)
+
+    # The search, as this library makes it and as Python does.
+    found = run("qido", "-level", "instance", "-study", study, "-series", series,
+                "-match", "SOPInstanceUID=" + sop, "-json", url)
+    if found.returncode != 0:
+        sys.exit("qido %s: %s" % (name, found.stderr[-300:]))
+    ours = json.loads(found.stdout)
+    request = urllib.request.Request(
+        "%s/studies/%s/series/%s/instances?SOPInstanceUID=%s" % (url, study, series, sop),
+        headers={"Accept": "application/dicom+json"})
+    theirs = json.loads(urllib.request.urlopen(request, timeout=30).read())
+    uid = lambda results: [r["00080018"]["Value"][0] for r in results]
+    if uid(ours) != [sop] or uid(ours) != uid(theirs):
+        sys.exit("qido %s: found %r, Python found %r" % (name, uid(ours), uid(theirs)))
+
+    # The retrieve: the file that was stored, byte for byte.
+    got = run("wado", "-study", study, "-series", series, "-instance", sop, url, back)
+    if got.returncode != 0:
+        sys.exit("wado %s: %s" % (name, got.stderr[-300:]))
+    with open(path, "rb") as a, open(os.path.join(back, sop + ".dcm"), "rb") as b:
+        if a.read() != b.read():
+            sys.exit("wado %s: the file that came back is not the file that was stored" % name)
+
+# A store the server refuses fails the command, and says which instance.
+refused = run("stow", "-study", "1.2.3.4.5", url, os.path.join(src, names[0]))
+if refused.returncode == 0 or "refused" not in refused.stdout + refused.stderr:
+    sys.exit("a store into the wrong study was reported as stored: %s" % refused.stdout[-200:])
+print("%d files stored, found and retrieved byte for byte; a refusal reported" % len(names))
+PY
+  ); then
+    pass "stow, qido and wado agree with Orthanc and with Python — $web"
+  else
+    fail "DICOMweb against Orthanc: $web"
+  fi
+else
+  skip "DICOMweb needs an Orthanc: set ORTHANC_URL to its DICOMweb root"
+fi
+
+# ---------------------------------------------------------------------------
 # show --json: where each element sits in the file (#259)
 #
 # pydicom records where it found every value it read (file_tell). The

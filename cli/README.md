@@ -43,6 +43,16 @@ go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # D
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
 ```
 
+## The library's log
+
+A command prints its own output. What the library logs as it reads a file (a
+retired attribute, an element written without its VR) is kept off the terminal
+unless it is an error. To see it while working out what is odd about a file:
+
+```bash
+GODICOM_LOG=warn go-dicom show odd.dcm      # or info, or debug
+```
+
 ## The event log
 
 Every network command (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`,
@@ -61,7 +71,7 @@ the file can be followed while the command runs:
 | `EVT_REQUESTED`, `EVT_ACCEPTED`, `EVT_ESTABLISHED`, `EVT_REJECTED`, `EVT_RELEASED`, `EVT_ABORTED` | the association's own events | the PDU that caused it; on accepted and established, `presentationContexts`: each as proposed and as answered |
 | `EVT_DIMSE_SENT`, `EVT_DIMSE_RECV` | every DIMSE message, either way | `dimse`: command, message ID, SOP class and instance UIDs, status, and the remaining, completed, failed and warning counts of a C-GET or C-MOVE |
 | `EVT_C_ECHO`, `EVT_C_STORE`, `EVT_C_FIND`, `EVT_C_GET`, `EVT_C_MOVE`, `EVT_N_…` | a request arrives | `dimse` |
-| `STORED` | `storescp` or `qrscp` kept an instance | `stored`: its UIDs and the file's path. The command's own line, not a network event |
+| `STORED` | `storescp` or `qrscp` kept an instance | `stored`: its UIDs and the file's path, with the `associationId` of the association it came on. The command's own line, not a network event |
 
 `role` is `SCU` on the side that requested the association and `SCP` on the
 side that accepted it. `associationId` tells one association from another

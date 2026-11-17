@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -20,7 +19,6 @@ import (
 	"time"
 
 	"github.com/amrshadid/go-dicom/charset"
-	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/dicomweb"
@@ -66,11 +64,6 @@ func (w *webFlags) add(fs *flag.FlagSet) {
 
 // client builds the client for a service URL.
 func (w *webFlags) client(base string, more ...dicomweb.Option) (*dicomweb.Client, error) {
-	// A server's answer may hold retired attributes, which the library warns
-	// of as it builds a data set. They are the server's, not something the
-	// person searching can act on.
-	config.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
-
 	var options []dicomweb.Option
 	if w.ca != "" || w.insecure {
 		transport := http.DefaultTransport.(*http.Transport).Clone()

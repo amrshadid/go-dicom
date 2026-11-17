@@ -10,6 +10,11 @@ import (
 // about the current association (e.g., who is connecting) without changing
 // the Handler interface.
 type AssociationInfo struct {
+	// ID is the number the association's events carry (Event.AssociationID),
+	// so that what a handler does can be tied to the association it was
+	// asked on. It is 0 when the association reports no events.
+	ID uint64
+
 	// CallingAE is the AE title of the remote peer (the SCU).
 	CallingAE string
 
