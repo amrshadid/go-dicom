@@ -54,9 +54,25 @@
 // skipped with a warning, so one corrupt instance does not make the rest
 // unqueryable.
 //
-// Only the attributes PS3.4 C.6.1.1 and C.6.2.1 define as keys are indexed. An
-// index of every attribute of every instance would hold the whole archive in
-// memory, which is what storing the files was meant to avoid.
+// Only the attributes PS3.4 C.6.1.1 and C.6.2.1 define as keys are indexed,
+// and those a DICOMweb search returns for each level (PS3.18 10.6.3.3): the
+// rows, columns, bits allocated and number of frames of an image, its
+// timezone offset, and when its performed procedure step began. An index of
+// every attribute of every instance would hold the whole archive in memory,
+// which is what storing the files was meant to avoid. Instance Availability
+// (0008,0056) is answered ONLINE: what the index lists is a file in the store.
+//
+// # Text
+//
+// The index holds text as UTF-8, whatever Specific Character Set (0008,0005)
+// an instance arrived in; the file is kept as it was sent. A query's text is
+// read in the character set the query declares, so a name matches however the
+// two were written. An answer with anything outside ASCII declares ISO_IR 192,
+// and one in the default repertoire declares nothing (PS3.4 C.4.1.1.3.2).
+//
+// The index file carries a version. One written in an earlier form, where an
+// instance was indexed in the bytes it arrived with, is rebuilt from the files
+// the first time the store is opened.
 //
 // # Matching
 //
@@ -67,7 +83,9 @@
 //
 //   - Single value (C.2.2.2.1) — equality, with the padding PS3.5 6.2 permits
 //     ignored, and dates and times compared at whatever precision each was
-//     written to.
+//     written to. A person name is matched whatever its case, here and with
+//     wildcards, so "smith*" finds SMITH^JOHN; every other VR is matched as
+//     written, and accents are kept.
 //
 //   - List of UID (C.2.2.2.2) — a backslash-separated list of UIDs.
 //
@@ -76,7 +94,9 @@
 //
 //   - Range (C.2.2.2.5) — "lower-upper" for DA, TM and DT, either end optional,
 //     both inclusive. A partial bound covers the period it names, so
-//     "2024-2024" is the whole year.
+//     "2024-2024" is the whole year. A date written 1997.04.24 or a time
+//     written 09:30:00, the forms of ACR-NEMA that older equipment still
+//     writes, is read as the date or time it is.
 //
 //   - Sequence (C.2.2.2.6) — a query sequence whose single item holds attributes
 //     to match against the items of the stored sequence. It matches if any one

@@ -107,7 +107,7 @@ func TestReversibleFilterIsExact(t *testing.T) {
 
 			coefficients := make([]float32, length)
 			copy(coefficients, original)
-			forward53(coefficients, i0, i1)
+			analyze53(coefficients, i0, i1, nil)
 
 			// A transform that did nothing would round trip too, so make sure
 			// there was one: over a random signal of any real length the
@@ -138,58 +138,97 @@ func sameSamples(a, b []float32) bool {
 	return true
 }
 
-// forward53 is the analysis half of the 5/3 filter (F.4.8.1), for the round
-// trip above. It exists only in this test: the library never encodes.
-func forward53(x []float32, i0, i1 int) {
-	n := i1 - i0
-	if n == 1 {
-		if i0%2 != 0 {
-			x[0] *= 2
-		}
-		return
-	}
-
-	const pad = 2
-	buf := make([]int32, n+2*pad)
-	for k := range buf {
-		buf[k] = int32(extended(x, i0, i1, i0-pad+k))
-	}
-	at := func(i int) int { return i - i0 + pad }
-
-	// The odd samples become the detail, then the even ones the average.
-	odd := make(map[int]int32, n)
-	for i := i0 - 1; i <= i1; i++ {
-		if isEven(i) {
-			continue
-		}
-		odd[i] = buf[at(i)] - ((buf[at(i-1)] + buf[at(i+1)]) >> 1)
-	}
-	for i := i0 - 1; i <= i1; i++ {
-		if !isEven(i) {
-			continue
-		}
-		left, right := odd[i-1], odd[i+1]
-		if i-1 < i0-1 {
-			left = odd[i+1]
-		}
-		if i+1 > i1 {
-			right = odd[i-1]
-		}
-		buf[at(i)] += (left + right + 2) >> 2
-	}
-	for i := range odd {
-		if i >= i0 && i < i1 {
-			buf[at(i)] = odd[i]
-		}
-	}
-	for k := 0; k < n; k++ {
-		x[k] = float32(buf[pad+k])
-	}
-}
-
 func abs(v int) int {
 	if v < 0 {
 		return -v
 	}
 	return v
+}
+
+// tileComponentOf builds the geometry of a tile-component covering a
+// rectangle of the reference grid, with the given number of decomposition
+// levels, as TileComponentFor does for one read from a codestream.
+func tileComponentOf(x0, y0, x1, y1, levels int) TileComponent {
+	tc := TileComponent{X0: x0, Y0: y0, X1: x1, Y1: y1}
+	for r := 0; r <= levels; r++ {
+		shift := levels - r
+		tc.Resolutions = append(tc.Resolutions, Resolution{
+			Index: r,
+			X0:    ceilDivPow2(x0, shift), Y0: ceilDivPow2(y0, shift),
+			X1: ceilDivPow2(x1, shift), Y1: ceilDivPow2(y1, shift),
+			Bands: bandsOf(tc, r, levels),
+		})
+	}
+	return tc
+}
+
+// TestForwardTransformIsInvertedExactly checks the forward transform against
+// the inverse the decoder uses: random samples, decomposed and rebuilt, come
+// back as they were, for sizes down to one sample, origins of either parity
+// on each axis, and every number of levels up to more than the size allows.
+// The origins matter: the parity of a coordinate decides which samples are
+// low-pass, and an image is not always at the origin of the grid.
+func TestForwardTransformIsInvertedExactly(t *testing.T) {
+	seed := uint64(11)
+	next := func() float32 {
+		seed = seed*6364136223846793005 + 1442695040888963407
+		return float32(int32(seed>>33)%65536 - 32768)
+	}
+	sizes := [][2]int{{1, 1}, {1, 7}, {7, 1}, {2, 2}, {3, 5}, {8, 8}, {17, 13}, {64, 33}, {65, 64}}
+	origins := [][2]int{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {6, 9}, {101, 100}}
+	for _, size := range sizes {
+		for _, origin := range origins {
+			for levels := 0; levels <= 6; levels++ {
+				x0, y0 := origin[0], origin[1]
+				tc := tileComponentOf(x0, y0, x0+size[0], y0+size[1], levels)
+				original := make([]float32, size[0]*size[1])
+				for i := range original {
+					original[i] = next()
+				}
+
+				bands, err := forwardDWT(tc, original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Every sample went into a band: the bands hold as many
+				// coefficients as the image holds samples.
+				held := 0
+				for _, resolution := range bands {
+					for _, band := range resolution {
+						held += len(band.values)
+					}
+				}
+				if held != len(original) {
+					t.Fatalf("%dx%d at (%d,%d), %d levels: the bands hold %d coefficients for %d samples",
+						size[0], size[1], x0, y0, levels, held, len(original))
+				}
+
+				rebuilt, err := inverseDWT(tc, bands, true)
+				if err != nil {
+					t.Fatalf("%dx%d at (%d,%d), %d levels: %v", size[0], size[1], x0, y0, levels, err)
+				}
+				if !sameSamples(rebuilt, original) {
+					t.Fatalf("%dx%d at (%d,%d), %d levels: the samples did not come back",
+						size[0], size[1], x0, y0, levels)
+				}
+				// A transform that did nothing would round trip too. Where
+				// there is a low-pass band of any size, it is not the samples.
+				if ll := bands[0][BandLL].values; levels > 0 && len(ll) > 2 && sameSamples(ll, original[:len(ll)]) {
+					t.Fatalf("%dx%d at (%d,%d), %d levels: the transform changed nothing",
+						size[0], size[1], x0, y0, levels)
+				}
+			}
+		}
+	}
+}
+
+// TestForwardTransformRefusesWhatItCannotHold checks the two inputs that
+// are not a tile-component's samples.
+func TestForwardTransformRefusesWhatItCannotHold(t *testing.T) {
+	if _, err := forwardDWT(TileComponent{}, nil); err == nil {
+		t.Error("a tile-component with no resolutions was decomposed")
+	}
+	if _, err := forwardDWT(tileComponentOf(0, 0, 4, 4, 1), make([]float32, 15)); err == nil {
+		t.Error("15 samples were taken for a 4 by 4 tile-component")
+	}
 }

@@ -134,23 +134,32 @@ Use the feature request template. Describe the use case and proposed approach.
 
 ## Releasing
 
-Releases are cut by pushing a tag. The `build-release.yml` workflow does the
-rest: it cross-compiles the CLI for five platforms, generates `SHA256SUMS`,
-extracts the release notes from `CHANGELOG.md`, and publishes the GitHub
-release with the binaries attached.
+A release is published when it reaches `main`. The `build-release.yml`
+workflow does the rest: it cross-compiles the CLI for six platforms, generates
+`SHA256SUMS`, extracts the release notes from `CHANGELOG.md`, and publishes the
+GitHub release with the binaries attached, creating the tag `vX.Y.Z` at the
+commit it built.
 
 1. **Update `CHANGELOG.md`.** Add a section headed exactly `## [X.Y.Z] - YYYY-MM-DD`
    and a comparison link at the bottom of the file. The workflow extracts the
    release notes by matching this heading, so the format matters.
 2. **Update `Version` in `main.go`** to `X.Y.Z`.
 3. **Merge to `main`** via a pull request, and wait for CI to pass.
-4. **Tag the merge commit on `main`:**
-   ```bash
-   git checkout main && git pull
-   git tag -a vX.Y.Z -m "vX.Y.Z — short summary"
-   git push origin vX.Y.Z
-   ```
-5. **Watch the release workflow.** It publishes the release itself.
+4. **Watch the release workflow.** On the push to `main` it sees a version
+   with no tag and a changelog section for it, and publishes. A push to `main`
+   that is not a new version with its notes builds nothing;
+   `scripts/release-tag.sh` is the rule, and `release_tag_test.go` tests it.
+
+A tag can still be pushed by hand, and is released as before. That is how a
+release candidate is cut, since it never reaches `main`:
+
+```bash
+git tag -a vX.Y.Z-rc.1 -m "vX.Y.Z-rc.1" && git push origin vX.Y.Z-rc.1
+```
+
+To try a change to the workflow, start it by hand from the branch
+(`gh workflow run build-release.yml --ref <branch>`): it builds every binary
+and publishes nothing.
 
 ### Tag naming
 

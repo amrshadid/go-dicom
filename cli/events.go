@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -57,14 +58,31 @@ func (f *eventsFlag) open() (*network.EventManager, func(), error) {
 
 // stored records that the command kept an instance it was sent, and where.
 // It is the command's own line, not one of the EVT_* events.
-func (f *eventsFlag) stored(sopClassUID, sopInstanceUID, path string) {
+//
+// ctx is the handler's, which says which association the instance came on.
+// Without that a reader had to pair the line with the EVT_C_STORE before it
+// by SOP Instance UID, which two associations sending the same instance at
+// once make ambiguous (#284).
+func (f *eventsFlag) stored(ctx context.Context, sopClassUID, sopInstanceUID, path string) {
 	if f.writer == nil {
 		return
 	}
-	f.writer.write(eventRecord{
+	record := eventRecord{
 		Event: "STORED", Time: eventTime(time.Now()),
 		Stored: &storedRecord{SOPClassUID: sopClassUID, SOPInstanceUID: sopInstanceUID, Path: path},
-	})
+	}
+	if info := network.AssociationInfoFromContext(ctx); info != nil {
+		// As the association's own events say it: this side accepted it.
+		record.AssociationID, record.Role = info.ID, "SCP"
+		record.LocalAE, record.RemoteAE = info.CalledAE, info.CallingAE
+		if info.LocalAddr != nil {
+			record.LocalAddr = info.LocalAddr.String()
+		}
+		if info.RemoteAddr != nil {
+			record.RemoteAddr = info.RemoteAddr.String()
+		}
+	}
+	f.writer.write(record)
 }
 
 // eventWriter writes each event as one line. A line is written whole and at

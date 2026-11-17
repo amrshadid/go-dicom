@@ -1512,6 +1512,589 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG 2000 encoding: go-dicom compresses, OpenJPEG decompresses (#308)
+#
+# The encoder is lossless, so the check is equality, and the decoder has to
+# be one that does not share this library's reading of the standard. Each
+# uncompressed corpus file with an image is written as JPEG 2000 Lossless,
+# its frames are taken out of the file and given to opj_decompress, and what
+# comes back is held against the source's pixel data, sample for sample.
+# dcmtk has to read the file as well: it does not decode JPEG 2000, and it
+# does say when the structure around the codestream is wrong.
+#
+# The samples are compared as numbers and without numpy, which the
+# interoperability venv does not have.
+# ---------------------------------------------------------------------------
+if command -v opj_decompress >/dev/null 2>&1 && python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "JPEG 2000 encoding: go-dicom encoder, OpenJPEG decoder"
+  RAN_ANY=1
+  j2k_src="$WORKDIR/j2k-src"
+  j2k_out="$WORKDIR/j2k-out"
+  mkdir -p "$j2k_src" "$j2k_out" "$WORKDIR/j2k-frames"
+  if python3 - "$j2k_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom
+import pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    path = os.path.join(corpus, name)
+    try:
+        ds = pydicom.dcmread(path)
+        if "PixelData" not in ds or ds.file_meta.TransferSyntaxUID.is_compressed:
+            continue
+        if int(ds.BitsAllocated) not in (8, 16):
+            continue
+    except Exception:
+        continue
+    shutil.copy(path, sys.argv[1])
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check -jpeg2000 "$j2k_src" "$j2k_out" > "$WORKDIR/j2k.log" 2>&1; then
+      j2k_unread=0
+      for written in "$j2k_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>"$WORKDIR/j2k-dump.err" || [ -s "$WORKDIR/j2k-dump.err" ]; then
+          # A complaint the source also draws is the source's, not the encoder's.
+          "$DCMTK_BIN/dcmdump" "$j2k_src/$(basename "$written")" >/dev/null 2>"$WORKDIR/j2k-src.err" || true
+          if ! diff -q "$WORKDIR/j2k-dump.err" "$WORKDIR/j2k-src.err" >/dev/null 2>&1; then
+            j2k_unread=$((j2k_unread + 1))
+            echo "   dcmtk on $(basename "$written"): $(head -1 "$WORKDIR/j2k-dump.err")" >&2
+          fi
+        fi
+      done
+      if j2k=$(python3 - "$j2k_src" "$j2k_out" "$WORKDIR/j2k-frames" <<'PYEOF'
+import os, struct, subprocess, sys
+import pydicom
+from pydicom.encaps import generate_pixel_data_frame
+
+src, out, work = sys.argv[1:4]
+
+def pgx(path):
+    """One component as OpenJPEG writes it: a text header, then big endian samples."""
+    with open(path, "rb") as f:
+        header = f.readline().split()
+        data = f.read()
+    signed, depth, width, height = header[2] == b"-", int(header[3]), int(header[4]), int(header[5])
+    size = 1 if depth <= 8 else 2
+    code = ">" + str(width * height) + ("b" if size == 1 else "h") if signed else \
+           ">" + str(width * height) + ("B" if size == 1 else "H")
+    return struct.unpack(code, data[:width * height * size])
+
+def source_samples(ds):
+    """The source's samples as numbers, frame by frame, pixel by pixel."""
+    rows, cols, spp = int(ds.Rows), int(ds.Columns), int(ds.SamplesPerPixel)
+    frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    size = int(ds.BitsAllocated) // 8
+    signed = int(ds.PixelRepresentation) == 1
+    order = "<" if ds.file_meta.TransferSyntaxUID.is_little_endian else ">"
+    n = rows * cols * spp * frames
+    code = order + str(n) + ({1: "b", 2: "h"} if signed else {1: "B", 2: "H"})[size]
+    raw = bytes(ds.PixelData)
+    if size == 1 and order == ">" and ds["PixelData"].VR == "OW":
+        # 8-bit samples in 16-bit words, big endian: each pair is swapped
+        # (PS3.5 8.2 and Annex D).
+        swapped = bytearray(raw)
+        swapped[0::2], swapped[1::2] = raw[1::2], raw[0:len(raw) - len(raw) % 2:2]
+        raw = bytes(swapped)
+    values = struct.unpack(code, raw[:n * size])
+    per = rows * cols * spp
+    for f in range(frames):
+        frame = values[f * per:(f + 1) * per]
+        if spp > 1 and int(getattr(ds, "PlanarConfiguration", 0)) == 1:
+            plane = rows * cols
+            frame = tuple(frame[c * plane + i] for i in range(plane) for c in range(spp))
+        yield frame
+
+checked, frames_checked, bad = 0, 0, []
+for name in sorted(os.listdir(out)):
+    if not name.endswith(".dcm"):
+        continue
+    want = pydicom.dcmread(os.path.join(src, name))
+    got = pydicom.dcmread(os.path.join(out, name))
+    spp = int(want.SamplesPerPixel)
+    frames = int(getattr(want, "NumberOfFrames", 1) or 1)
+    # A source that holds fewer bytes than its own header describes says
+    # nothing about the encoder.
+    if len(want.PixelData) < int(want.Rows) * int(want.Columns) * spp * frames * int(want.BitsAllocated) // 8:
+        continue
+    if got.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.90":
+        bad.append("%s was written as %s" % (name, got.file_meta.TransferSyntaxUID))
+        continue
+    # What the data set must say of an image coded this way (PS3.5 8.2.4).
+    if spp == 3 and want.PhotometricInterpretation == "RGB" and got.PhotometricInterpretation != "YBR_RCT":
+        bad.append("%s: an RGB image is described as %s" % (name, got.PhotometricInterpretation))
+        continue
+    if spp > 1 and int(got.PlanarConfiguration) != 0:
+        bad.append("%s: Planar Configuration is %s" % (name, got.PlanarConfiguration))
+        continue
+    coded = list(generate_pixel_data_frame(got.PixelData, frames))
+    if len(coded) != frames:
+        bad.append("%s holds %d frames of %d" % (name, len(coded), frames))
+        continue
+    ok = True
+    for index, (codestream, original) in enumerate(zip(coded, source_samples(want))):
+        base = os.path.join(work, "frame")
+        for stale in os.listdir(work):
+            os.remove(os.path.join(work, stale))
+        with open(base + ".j2k", "wb") as f:
+            f.write(codestream)
+        run = subprocess.run(["opj_decompress", "-i", base + ".j2k", "-o", base + ".pgx"], capture_output=True)
+        if run.returncode != 0:
+            bad.append("%s frame %d: OpenJPEG refuses it: %s" % (name, index, run.stderr.decode()[-200:]))
+            ok = False
+            break
+        files = [base + ".pgx"] if spp == 1 and os.path.exists(base + ".pgx") else \
+                [base + "_%d.pgx" % c for c in range(spp)]
+        planes = [pgx(p) for p in files]
+        decoded = tuple(planes[c][i] for i in range(len(planes[0])) for c in range(spp))
+        if decoded != tuple(original):
+            bad.append("%s frame %d: OpenJPEG decodes other samples" % (name, index))
+            ok = False
+            break
+        frames_checked += 1
+    checked += ok
+for line in bad:
+    print("   " + line, file=sys.stderr)
+print("%d files, %d frames" % (checked, frames_checked))
+raise SystemExit(1 if bad or not checked else 0)
+PYEOF
+      ) && [ "$j2k_unread" -eq 0 ]; then
+        pass "JPEG 2000 encoding — OpenJPEG decodes every frame to the original samples, and dcmtk reads each file — $j2k"
+
+        # And over the network: a file this encoder wrote, sent to dcmtk,
+        # which takes it in JPEG 2000 Lossless and keeps the codestream.
+        if [ -x "$DCMTK_BIN/storescp" ]; then
+          mkdir -p "$WORKDIR/j2k-recv"
+          start_server "$WORKDIR/j2k-recv" "$WORKDIR/j2k_scp.log" \
+            "$DCMTK_BIN/storescp" +xv -od "$WORKDIR/j2k-recv" 11750
+          J2K_SCP_PID=$SERVER_PID
+          j2k_sent="$j2k_out/CT_small.dcm"
+          if wait_for_port 11750 && "$GODICOM" storescu 127.0.0.1:11750 "$j2k_sent" >"$WORKDIR/j2k_scu.log" 2>&1 &&
+            python3 - "$j2k_sent" "$WORKDIR/j2k-recv" <<'PYEOF'
+import os, sys
+import pydicom
+
+sent = pydicom.dcmread(sys.argv[1])
+received = [os.path.join(sys.argv[2], n) for n in os.listdir(sys.argv[2]) if not n.endswith(".log")]
+if len(received) != 1:
+    sys.exit("dcmtk kept %d files" % len(received))
+got = pydicom.dcmread(received[0])
+if got.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.90":
+    sys.exit("dcmtk received it as %s" % got.file_meta.TransferSyntaxUID)
+if bytes(got.PixelData) != bytes(sent.PixelData):
+    sys.exit("the codestream dcmtk kept is not the one that was sent")
+PYEOF
+          then
+            pass "JPEG 2000 over the network — dcmtk storescp receives the file in 1.2.840.10008.1.2.4.90 with its codestream intact"
+          else
+            fail "dcmtk did not receive a JPEG 2000 Lossless file as sent: $(tail -2 "$WORKDIR/j2k_scu.log")"
+          fi
+          stop_server "$J2K_SCP_PID"
+        fi
+      else
+        fail "this encoder's JPEG 2000 does not survive OpenJPEG or dcmtk: $j2k"
+      fi
+    else
+      fail "the JPEG 2000 encoding harness failed"
+      sed -n '1,20p' "$WORKDIR/j2k.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+else
+  skip "JPEG 2000 encoding needs opj_decompress (OpenJPEG) and pydicom"
+fi
+
+# ---------------------------------------------------------------------------
+# DICOMweb against a server that is not this library (#285)
+#
+# The client had its own test server and nothing else in CI. Checked by hand
+# against Orthanc for 1.8.0, it turned out that Orthanc answers 400, not 409
+# or 202, for a store it kept part of, which no test server written from the
+# standard would have done. So: stow, qido and wado against Orthanc, and what
+# they return held against what Python reads from the same server.
+#
+# ORTHANC_URL is the service's DICOMweb root, http://127.0.0.1:8042/dicom-web
+# in CI. Without one the step is skipped, as for every other peer.
+# ---------------------------------------------------------------------------
+if [ -n "${ORTHANC_URL:-}" ] && python3 -c "import urllib.request, sys; urllib.request.urlopen(sys.argv[1] + '/studies', timeout=5)" "$ORTHANC_URL" >/dev/null 2>&1; then
+  note "DICOMweb: go-dicom stow, qido and wado against Orthanc"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/web_src" "$WORKDIR/web_back"
+  if web=$(python3 - "$GODICOM" "$ORTHANC_URL" "$WORKDIR/web_src" "$WORKDIR/web_back" <<'PY'
+import json, os, shutil, subprocess, sys, urllib.request
+import pydicom
+from pydicom.data import get_testdata_file
+
+go, url, src, back = sys.argv[1:5]
+
+def run(*args):
+    return subprocess.run([go, *args], capture_output=True, text=True)
+
+# Three transfer syntaxes, and a file that is not DICOM, which stow passes over.
+names = ["CT_small.dcm", "MR_small.dcm", "SC_rgb_rle.dcm"]
+for name in names:
+    shutil.copy(get_testdata_file(name), src)
+with open(os.path.join(src, "notes.txt"), "w") as f:
+    f.write("not an image")
+
+stored = run("stow", url, src)
+if stored.returncode != 0 or "Stored 3 instance(s)" not in stored.stdout:
+    sys.exit("stow: %s%s" % (stored.stdout[-300:], stored.stderr[-300:]))
+
+for name in names:
+    path = os.path.join(src, name)
+    ds = pydicom.dcmread(path, stop_before_pixels=True)
+    study, series, sop = str(ds.StudyInstanceUID), str(ds.SeriesInstanceUID), str(ds.SOPInstanceUID)
+
+    # The search, as this library makes it and as Python does.
+    found = run("qido", "-level", "instance", "-study", study, "-series", series,
+                "-match", "SOPInstanceUID=" + sop, "-json", url)
+    if found.returncode != 0:
+        sys.exit("qido %s: %s" % (name, found.stderr[-300:]))
+    ours = json.loads(found.stdout)
+    request = urllib.request.Request(
+        "%s/studies/%s/series/%s/instances?SOPInstanceUID=%s" % (url, study, series, sop),
+        headers={"Accept": "application/dicom+json"})
+    theirs = json.loads(urllib.request.urlopen(request, timeout=30).read())
+    uid = lambda results: [r["00080018"]["Value"][0] for r in results]
+    if uid(ours) != [sop] or uid(ours) != uid(theirs):
+        sys.exit("qido %s: found %r, Python found %r" % (name, uid(ours), uid(theirs)))
+
+    # The retrieve: the file that was stored, byte for byte.
+    got = run("wado", "-study", study, "-series", series, "-instance", sop, url, back)
+    if got.returncode != 0:
+        sys.exit("wado %s: %s" % (name, got.stderr[-300:]))
+    with open(path, "rb") as a, open(os.path.join(back, sop + ".dcm"), "rb") as b:
+        if a.read() != b.read():
+            sys.exit("wado %s: the file that came back is not the file that was stored" % name)
+
+# A store the server refuses fails the command, and says which instance.
+refused = run("stow", "-study", "1.2.3.4.5", url, os.path.join(src, names[0]))
+if refused.returncode == 0 or "refused" not in refused.stdout + refused.stderr:
+    sys.exit("a store into the wrong study was reported as stored: %s" % refused.stdout[-200:])
+print("%d files stored, found and retrieved byte for byte; a refusal reported" % len(names))
+PY
+  ); then
+    pass "stow, qido and wado agree with Orthanc and with Python — $web"
+  else
+    fail "DICOMweb against Orthanc: $web"
+  fi
+else
+  skip "DICOMweb needs an Orthanc: set ORTHANC_URL to its DICOMweb root"
+fi
+
+# ---------------------------------------------------------------------------
+# The archive over DICOMweb (#294)
+#
+# qrscp -web serves the store a DIMSE peer writes to. So: pynetdicom stores
+# three files over DIMSE, and a client that is not this library (urllib)
+# searches for them over HTTP. What each search returns is held against what
+# pydicom reads from the file, against what pynetdicom finds by C-FIND on the
+# same archive, and, when there is an Orthanc holding the same files, against
+# what Orthanc answers. The token is checked the same way: from outside.
+# ---------------------------------------------------------------------------
+if python3 -c "import pydicom, pynetdicom, numpy" >/dev/null 2>&1; then
+  note "DICOMweb: the archive searched, retrieved from and stored to over HTTP by a client that is not this library"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/webarc" "$WORKDIR/webarc_guarded" "$WORKDIR/webarc_back"
+  start_server "$WORKDIR" "$WORKDIR/webarc.log" \
+    "$GODICOM" qrscp -port 11740 -web 18740 -output "$WORKDIR/webarc"
+  WEBARC_PID=$SERVER_PID
+  start_server "$WORKDIR" "$WORKDIR/webarc_guarded.log" \
+    "$GODICOM" qrscp -port 11741 -web 18741 -web-token interop-token -output "$WORKDIR/webarc_guarded"
+  WEBARC_GUARDED_PID=$SERVER_PID
+  if wait_for_port 11740 && wait_for_port 18740 && wait_for_port 18741; then
+    if webarc=$(python3 - "${ORTHANC_URL:-}" "$GODICOM" "$WORKDIR/webarc_back" <<'PY'
+import io, json, os, re, subprocess, sys, urllib.error, urllib.parse, urllib.request
+import numpy
+import pydicom
+from pydicom.data import get_testdata_file
+from pydicom.dataset import Dataset
+from pynetdicom import AE
+from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelFind as FIND
+
+orthanc = sys.argv[1].rstrip("/")
+go, back = sys.argv[2], sys.argv[3]
+ours = "http://127.0.0.1:18740/dicom-web"
+EXPLICIT = "1.2.840.10008.1.2.1"
+DICOM = 'multipart/related; type="application/dicom"'
+
+def retrieve(base, path, accept):
+    # The parts of a multipart answer, taken apart by hand: this is the
+    # check that the body is what PS3.18 8.6 says, not what our reader takes.
+    request = urllib.request.Request(base + path, headers={"Accept": accept})
+    with urllib.request.urlopen(request, timeout=60) as r:
+        content_type, body = r.headers["Content-Type"], r.read()
+    boundary = re.search(r'boundary="?([^";]+)"?', content_type).group(1).encode()
+    parts = []
+    for chunk in body.split(b"--" + boundary)[1:]:
+        if chunk.startswith(b"--"):
+            break
+        header, _, data = chunk.partition(b"\r\n\r\n")
+        parts.append((header.decode(), data[:-2] if data.endswith(b"\r\n") else data))
+    return parts
+
+def get(base, path, query=None, token=None):
+    url = base + path + ("?" + urllib.parse.urlencode(query) if query else "")
+    headers = {"Accept": "application/dicom+json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+            body = r.read()
+            return r.status, json.loads(body) if body.strip() else []
+    except urllib.error.HTTPError as e:
+        return e.code, []
+
+def first(result, tag):
+    values = result.get(tag, {}).get("Value") or [None]
+    v = values[0]
+    return v.get("Alphabetic") if isinstance(v, dict) else v
+
+# Stored over DIMSE, by pynetdicom.
+names = ["CT_small.dcm", "MR_small.dcm", "SC_rgb_rle.dcm"]
+files = [pydicom.dcmread(get_testdata_file(n)) for n in names]
+ae = AE()
+# Each file in the transfer syntax it is in: the archive keeps it as sent.
+for ds in files:
+    ae.add_requested_context(ds.SOPClassUID, ds.file_meta.TransferSyntaxUID)
+ae.add_requested_context(FIND)
+assoc = ae.associate("127.0.0.1", 11740, ae_title="QRSCP")
+if not assoc.is_established:
+    sys.exit("pynetdicom could not associate with qrscp")
+for ds in files:
+    status = assoc.send_c_store(ds)
+    if not status or status.Status != 0:
+        sys.exit("pynetdicom could not store %s" % ds.SOPInstanceUID)
+
+# Each file, found at each level over HTTP, with the values pydicom reads.
+for name, ds in zip(names, files):
+    study, series, sop = str(ds.StudyInstanceUID), str(ds.SeriesInstanceUID), str(ds.SOPInstanceUID)
+    status, studies = get(ours, "/studies", {"StudyInstanceUID": study})
+    if status != 200 or len(studies) != 1:
+        sys.exit("%s: /studies answered %d with %d results" % (name, status, len(studies)))
+    want = {"00100010": str(ds.PatientName), "00100020": str(ds.PatientID),
+            "00080020": str(ds.get("StudyDate", "")) or None}
+    for tag, value in want.items():
+        if value and first(studies[0], tag) != value:
+            sys.exit("%s: study %s is %r, pydicom reads %r" % (name, tag, first(studies[0], tag), value))
+    if first(studies[0], "00201208") != 1 or first(studies[0], "00080061") != str(ds.Modality):
+        sys.exit("%s: the study's counts are %r" % (name, studies[0]))
+
+    status, serieses = get(ours, "/studies/%s/series" % study)
+    if [first(s, "0020000E") for s in serieses] != [series] or first(serieses[0], "00080060") != str(ds.Modality):
+        sys.exit("%s: /series answered %r" % (name, serieses))
+
+    status, instances = get(ours, "/studies/%s/series/%s/instances" % (study, series))
+    if [first(i, "00080018") for i in instances] != [sop]:
+        sys.exit("%s: /instances answered %r" % (name, instances))
+    got = instances[0]
+    size = (first(got, "00280010"), first(got, "00280011"), first(got, "00280100"), first(got, "00080016"))
+    if size != (int(ds.Rows), int(ds.Columns), int(ds.BitsAllocated), str(ds.SOPClassUID)):
+        sys.exit("%s: the instance is %r, pydicom reads %r" % (
+            name, size, (ds.Rows, ds.Columns, ds.BitsAllocated, ds.SOPClassUID)))
+
+    # Retrieved as stored: one part, the same instance, in the syntax the
+    # archive keeps it in, with the pixel data it was sent.
+    path = "/studies/%s/series/%s/instances/%s" % (study, series, sop)
+    stored = retrieve(ours, path, DICOM + "; transfer-syntax=*")
+    if len(stored) != 1:
+        sys.exit("%s: retrieved %d parts" % (name, len(stored)))
+    kept = pydicom.dcmread(io.BytesIO(stored[0][1]))
+    sent = ds.file_meta.TransferSyntaxUID
+    want_syntax = sent if sent.is_compressed else EXPLICIT
+    if kept.SOPInstanceUID != sop or kept.file_meta.TransferSyntaxUID != want_syntax:
+        sys.exit("%s: retrieved %s in %s" % (name, kept.SOPInstanceUID, kept.file_meta.TransferSyntaxUID))
+    if "transfer-syntax=%s" % want_syntax not in stored[0][0]:
+        sys.exit("%s: the part is labeled %r" % (name, stored[0][0]))
+    if kept.PixelData != ds.PixelData:
+        sys.exit("%s: the pixel data retrieved is not the pixel data stored" % name)
+
+    # Retrieved with no syntax named, which asks for Explicit VR Little
+    # Endian: decoded by the archive, and the same pixels as pydicom decodes.
+    plain = retrieve(ours, path, DICOM)
+    decoded = pydicom.dcmread(io.BytesIO(plain[0][1]))
+    if decoded.file_meta.TransferSyntaxUID != EXPLICIT:
+        sys.exit("%s: the default syntax came back as %s" % (name, decoded.file_meta.TransferSyntaxUID))
+    if not numpy.array_equal(decoded.pixel_array, ds.pixel_array):
+        sys.exit("%s: decoded for the default syntax, the pixels differ from pydicom's" % name)
+
+    # The whole study by this library's own command: the same bytes.
+    out = os.path.join(back, sop)
+    got = subprocess.run([go, "wado", "-study", study, ours, out], capture_output=True, text=True)
+    if got.returncode != 0:
+        sys.exit("%s: wado: %s" % (name, got.stderr[-300:]))
+    with open(os.path.join(out, sop + ".dcm"), "rb") as f:
+        if f.read() != stored[0][1]:
+            sys.exit("%s: wado wrote a file that is not the part the server sent" % name)
+
+    # Metadata: the attributes without the pixel data, as pydicom reads them.
+    status, metadata = get(ours, path + "/metadata")
+    if status != 200 or len(metadata) != 1:
+        sys.exit("%s: metadata answered %d with %d results" % (name, status, len(metadata)))
+    described = pydicom.Dataset.from_json(metadata[0])
+    for keyword in ("PatientName", "Rows", "Columns", "SOPClassUID", "PhotometricInterpretation"):
+        if described[keyword].value != ds[keyword].value:
+            sys.exit("%s: metadata %s is %r, the file has %r" % (name, keyword, described[keyword].value, ds[keyword].value))
+    if set(metadata[0].get("7FE00010", {})) - {"vr"}:
+        sys.exit("%s: the metadata carries the pixel data" % name)
+    if any(key.startswith("0002") for key in metadata[0]):
+        sys.exit("%s: the metadata carries the file's meta information" % name)
+    if orthanc:
+        _, theirs = get(orthanc, path + "/metadata")
+        # A DS or an IS may be a JSON number or a string (PS3.18 F.2.3.1),
+        # and the two servers choose differently, so numbers are compared
+        # by their value.
+        def plain(values):
+            if values is None or any(isinstance(v, dict) for v in values):
+                return values
+            out = []
+            for v in values:
+                try:
+                    out.append(float(v))
+                except (TypeError, ValueError):
+                    out.append(v)
+            return out
+        # Specific Character Set is left out: DICOM JSON is UTF-8, which this
+        # server says (ISO_IR 192), where Orthanc repeats what the file said.
+        for tag in set(metadata[0]) & set(theirs[0]) - {"00080005"}:
+            a, b = plain(metadata[0][tag].get("Value")), plain(theirs[0][tag].get("Value"))
+            if a is not None and b is not None and a != b:
+                sys.exit("%s: metadata %s is %r against Orthanc's %r" % (name, tag, a, b))
+        missing = [t for t in theirs[0] if t not in metadata[0]]
+        if missing:
+            sys.exit("%s: Orthanc's metadata has %s and ours does not" % (name, missing[:5]))
+
+    # Against Orthanc, which the earlier step gave the same files: every
+    # attribute both return has the same value.
+    if orthanc:
+        for path in ("/studies?StudyInstanceUID=" + study, "/studies/%s/series" % study,
+                     "/studies/%s/series/%s/instances" % (study, series)):
+            _, mine = get(ours, path)
+            _, theirs = get(orthanc, path)
+            if len(mine) != 1 or len(theirs) != 1:
+                sys.exit("%s %s: %d results against Orthanc's %d" % (name, path, len(mine), len(theirs)))
+            for tag in set(mine[0]) & set(theirs[0]) - {"00081190"}:
+                a, b = mine[0][tag].get("Value"), theirs[0][tag].get("Value")
+                if a != b:
+                    sys.exit("%s %s %s: %r against Orthanc's %r" % (name, path, tag, a, b))
+
+# Stored over HTTP by urllib, the multipart written by hand, and then found
+# over DIMSE: the other direction through the same archive.
+def stow(base, path, blobs):
+    boundary = b"interop-boundary"
+    body = b"".join(b"--" + boundary + b"\r\nContent-Type: application/dicom\r\n\r\n" + blob + b"\r\n"
+                    for blob in blobs) + b"--" + boundary + b"--\r\n"
+    request = urllib.request.Request(base + path, data=body, method="POST", headers={
+        "Content-Type": 'multipart/related; type="application/dicom"; boundary=' + boundary.decode(),
+        "Accept": "application/dicom+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        text = e.read()
+        return e.code, json.loads(text) if text.strip().startswith(b"{") else {}
+
+extra_path = get_testdata_file("JPEG2000.dcm")
+extra = pydicom.dcmread(extra_path)
+with open(extra_path, "rb") as f:
+    extra_bytes = f.read()
+status, answer = stow(ours, "/studies", [extra_bytes])
+kept = [i["00081155"]["Value"][0] for i in answer.get("00081199", {}).get("Value", [])]
+if status != 200 or kept != [str(extra.SOPInstanceUID)]:
+    sys.exit("a store over HTTP answered %d and kept %r" % (status, kept))
+status, answer = stow(ours, "/studies/1.2.3.4.5", [extra_bytes])
+reasons = [i["00081197"]["Value"][0] for i in answer.get("00081198", {}).get("Value", [])]
+if status != 409 or reasons != [0xA900]:
+    sys.exit("a store into the wrong study answered %d with %r" % (status, reasons))
+status, answer = stow(ours, "/studies", [b"not an image", extra_bytes])
+if status != 202 or len(answer.get("00081199", {}).get("Value", [])) != 1:
+    sys.exit("a store of one instance and one stray part answered %d" % status)
+
+find = Dataset()
+find.QueryRetrieveLevel = "IMAGE"
+find.StudyInstanceUID = str(extra.StudyInstanceUID)
+find.SeriesInstanceUID = str(extra.SeriesInstanceUID)
+find.SOPInstanceUID = str(extra.SOPInstanceUID)
+found = [i for s, i in assoc.send_c_find(find, FIND) if i is not None]
+if len(found) != 1:
+    sys.exit("what was stored over HTTP was found %d times over DIMSE" % len(found))
+came_back = retrieve(ours, "/studies/%s/series/%s/instances/%s" % (
+    extra.StudyInstanceUID, extra.SeriesInstanceUID, extra.SOPInstanceUID), DICOM + "; transfer-syntax=*")
+if pydicom.dcmread(io.BytesIO(came_back[0][1])).PixelData != extra.PixelData:
+    sys.exit("what was stored over HTTP came back with other pixel data")
+files.append(extra)
+
+# And by this library's own command, which reports what the server kept.
+sent = subprocess.run([go, "stow", ours, get_testdata_file("MR_small.dcm")], capture_output=True, text=True)
+if sent.returncode != 0 or "Stored 1 instance(s)" not in sent.stdout:
+    sys.exit("go-dicom stow to the archive: %s%s" % (sent.stdout[-200:], sent.stderr[-200:]))
+
+# The same archive by C-FIND and by HTTP: the same studies, the same names.
+query = Dataset()
+query.QueryRetrieveLevel = "STUDY"
+query.StudyInstanceUID = ""
+query.PatientName = ""
+by_find = sorted((str(i.StudyInstanceUID), str(i.PatientName))
+                 for s, i in assoc.send_c_find(query, FIND) if i is not None)
+assoc.release()
+_, studies = get(ours, "/studies")
+by_http = sorted((first(s, "0020000D"), first(s, "00100010")) for s in studies)
+if by_find != by_http or len(by_http) != len({str(d.StudyInstanceUID) for d in files}):
+    sys.exit("C-FIND found %r and HTTP found %r" % (by_find, by_http))
+
+# A name is matched whatever its case, and nothing found is 204.
+name = str(files[0].PatientName)
+status, found = get(ours, "/studies", {"PatientName": name[:3].lower() + "*"})
+if status != 200 or name not in [first(s, "00100010") for s in found]:
+    sys.exit("a search for %r in lower case did not find it" % name)
+status, found = get(ours, "/studies", {"PatientName": "NOBODY^AT^ALL"})
+if status != 204:
+    sys.exit("a search that matches nothing answered %d" % status)
+status, _ = get(ours, "/studies", {"PatientNmae": "x"})
+if status != 400:
+    sys.exit("an attribute that does not exist answered %d" % status)
+
+# The token: asked for, and nothing without it.
+guarded = "http://127.0.0.1:18741/dicom-web"
+if get(guarded, "/studies")[0] != 401 or get(guarded, "/studies", token="wrong")[0] != 401:
+    sys.exit("the guarded archive answered a request with no token, or a wrong one")
+if get(guarded, "/studies", token="interop-token")[0] != 204:
+    sys.exit("the guarded archive refused its own token")
+
+print("%d files stored over DIMSE and HTTP, found at three levels%s, retrieved as stored and decoded, and described; C-FIND and HTTP agree; a wrong study is refused; the token is enforced"
+      % (len(files), ", as Orthanc answers" if orthanc else ""))
+PY
+    ); then
+      pass "qrscp -web answers as pydicom, pynetdicom and Orthanc read the same files — $webarc"
+    else
+      fail "the archive over DICOMweb: $webarc"
+    fi
+  else
+    fail "qrscp -web did not start: $(tail -3 "$WORKDIR/webarc.log")"
+  fi
+  stop_server "$WEBARC_PID"
+  stop_server "$WEBARC_GUARDED_PID"
+  # An address other machines can reach, with no token, is refused outright.
+  if "$GODICOM" qrscp -port 11742 -web 0.0.0.0:18742 -output "$WORKDIR/webarc" >"$WORKDIR/webarc_open.log" 2>&1; then
+    fail "qrscp served an archive on every interface with no token"
+  elif grep -q -- "-web-token" "$WORKDIR/webarc_open.log"; then
+    pass "qrscp -web refuses to listen beyond this machine without a token"
+  else
+    fail "qrscp -web 0.0.0.0 failed for another reason: $(tail -2 "$WORKDIR/webarc_open.log")"
+  fi
+else
+  skip "the archive over DICOMweb needs pydicom and pynetdicom"
+fi
+
+# ---------------------------------------------------------------------------
 # show --json: where each element sits in the file (#259)
 #
 # pydicom records where it found every value it read (file_tell). The

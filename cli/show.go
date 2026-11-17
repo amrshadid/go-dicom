@@ -16,6 +16,7 @@ type ShowCommand struct {
 	topLevelOnly   bool
 	quiet          bool
 	json           bool
+	full           bool
 	help           bool
 	// out is where --json writes; nil means standard output.
 	out io.Writer
@@ -44,6 +45,7 @@ func (sc *ShowCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&sc.topLevelOnly, "top", false, "Only show top-level elements")
 	fs.BoolVar(&sc.quiet, "quiet", false, "Minimal output")
 	fs.BoolVar(&sc.json, "json", false, "Print every element as JSON with its byte offsets in the file")
+	fs.BoolVar(&sc.full, "full", false, "Print whole values in the table, where it prints the first 100 bytes")
 }
 
 // Execute runs the show command.
@@ -91,16 +93,25 @@ func (sc *ShowCommand) Execute(args []string) error {
 
 	// With the group length that opens the file meta group: show lists what
 	// is in the file, as --json does.
-	elements, err := readDICOMElements(sc.filespec, true)
+	//
+	// One element asked for by name is asked for whole. The table is read in
+	// a terminal and prints the start of a long value unless told --full.
+	whole := sc.full || sc.element != ""
+	elements, err := readDICOMElements(sc.filespec, true, whole)
 	if err != nil {
 		return fmt.Errorf("show: failed to read DICOM file: %v", err)
+	}
+	out := orStdout(sc.out)
+	limit, quietLimit := shownBytes, 50
+	if whole {
+		limit, quietLimit = 0, 0
 	}
 
 	if sc.element != "" {
 		for _, elem := range elements {
 			if strings.EqualFold(strings.ToLower(elem.Name), strings.ToLower(sc.element)) ||
 				strings.EqualFold(strings.ToLower(elem.Tag), strings.ToLower(sc.element)) {
-				sc.displayElement(elem)
+				displayElement(out, elem, limit)
 				return nil
 			}
 		}
@@ -108,9 +119,9 @@ func (sc *ShowCommand) Execute(args []string) error {
 	}
 
 	if !sc.quiet {
-		fmt.Printf("=== DICOM File: %s ===\n", sc.filespec)
-		fmt.Println("Tag          VR  Length  Value")
-		fmt.Println("─────────────────────────────────────────────")
+		fmt.Fprintf(out, "=== DICOM File: %s ===\n", sc.filespec)
+		fmt.Fprintln(out, "Tag          VR  Length  Value")
+		fmt.Fprintln(out, "─────────────────────────────────────────────")
 	}
 
 	for _, elem := range elements {
@@ -123,23 +134,24 @@ func (sc *ShowCommand) Execute(args []string) error {
 		}
 
 		if sc.quiet {
-			fmt.Printf("%s: %s\n", elem.Tag, elem.display(50))
+			fmt.Fprintf(out, "%s: %s\n", elem.Tag, elem.display(quietLimit))
 		} else {
-			sc.displayElement(elem)
+			displayElement(out, elem, limit)
 		}
 	}
 
 	return nil
 }
 
-// displayElement displays a single element in formatted output.
-func (sc *ShowCommand) displayElement(elem DicomElement) {
-	value := elem.display(shownBytes)
+// displayElement prints one row of the table: the value up to limit bytes,
+// or whole when limit is 0.
+func displayElement(out io.Writer, elem DicomElement, limit int) {
+	value := elem.display(limit)
 
 	// Indent by nesting level so elements inside a sequence item are
 	// distinguishable from those at the top of the data set.
 	indent := strings.Repeat("  ", elem.Depth)
-	fmt.Printf("%-12s %-3s %-7d %s%s\n", elem.Tag, elem.VR, elem.Length, indent, value)
+	fmt.Fprintf(out, "%-12s %-3s %-7d %s%s\n", elem.Tag, elem.VR, elem.Length, indent, value)
 }
 
 // showHelp displays help information for the show command.
@@ -157,6 +169,11 @@ OPTIONS:
   --exclude-private    Exclude private tags
   --top                Show only top-level elements
   --quiet              Show minimal output
+  --full               Print whole values. The table prints the first 100
+                       bytes of a value and how long it is; asking for one
+                       element (file::Element) always prints it whole.
+                       Bulk binary such as Pixel Data is a count of bytes
+                       either way.
   --json               Describe the file as JSON: every element with its
                        value and where its tag, VR, length and value sit in
                        the file, nested items and delimiters included, and
@@ -170,6 +187,8 @@ EXAMPLES:
   go-dicom show patient.dcm --exclude-private
   go-dicom show patient.dcm --top --quiet
   go-dicom show patient.dcm --json
+  go-dicom show patient.dcm::ImageComments     One element, whole
+  go-dicom show patient.dcm --full
   go-dicom show -h
 `)
 }

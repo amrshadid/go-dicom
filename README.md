@@ -60,7 +60,7 @@ It is worth reading before piping anything to a shell — it is about a hundred 
 curl -fsSL -O https://raw.githubusercontent.com/amrshadid/go-dicom/main/install.sh
 less install.sh
 sh install.sh                          # the latest release
-sh install.sh v1.9.1                   # a specific one
+sh install.sh v1.10.0                   # a specific one
 PREFIX=/usr/local/bin sh install.sh    # somewhere of your choosing
 ```
 
@@ -303,6 +303,8 @@ go build -o go-dicom .
 ./go-dicom codify patient.dcm         # Go source that recreates the file
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
+./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at
+./go-dicom anonymize -redact auto us.dcm clean.dcm  # Black out what it finds; it can miss, so look
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
@@ -347,6 +349,15 @@ go build -o go-dicom .
 # sent, indexes it, answers C-FIND, C-MOVE and C-GET against it, and
 # commits what it holds (commitscu above works against it)
 ./go-dicom qrscp -port 11112 -output ./archive/
+
+# The same archive over HTTP as well: DICOMweb search, retrieve and store at
+# http://127.0.0.1:8080/dicom-web, on this machine only. To be reached from
+# other machines it must be given an address and a token
+./go-dicom qrscp -port 11112 -output ./archive/ -web 8080
+./go-dicom qido -match "PatientName=smith*" http://127.0.0.1:8080/dicom-web
+./go-dicom wado -study 1.2.3.4 http://127.0.0.1:8080/dicom-web ./retrieved/
+./go-dicom stow http://127.0.0.1:8080/dicom-web study/
+DICOMWEB_TOKEN=... ./go-dicom qrscp -output ./archive/ -web 0.0.0.0:8080
 
 # Any network command over TLS. With -tls-ca a server requires a client
 # certificate from that CA and a client verifies the server against it
@@ -468,7 +479,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Three syntaxes are compressed *to*: **RLE Lossless**, **JPEG-LS Lossless**, and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, and JPEG-LS Near-Lossless is refused. There is no JPEG 2000 encoder here. |
+| **Compressing pixel data** | Four syntaxes are compressed *to*: **RLE Lossless**, **JPEG-LS Lossless**, **JPEG 2000 Lossless** (`.90`, also with `Dataset.CompressJPEG2000LosslessInPlace`), and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, and JPEG-LS Near-Lossless and lossy JPEG 2000 (`.91`) are refused. |
 | **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
@@ -680,6 +691,12 @@ every push: **all 50** of the files in that corpus pydicom can decode decode
 here to the same samples, compared whole rather than by their leading values,
 with nothing skipped.
 
+**JPEG 2000 is written as well as read**, lossless: `jpeg2000.Encode` and
+`Dataset.CompressJPEG2000LosslessInPlace` produce `.90` with the reversible 5/3
+wavelet at 1 to 16 bits, signed or unsigned, gray or color, in pure Go. OpenJPEG
+decodes what they write to the samples that went in, which CI checks on every
+push over pydicom's corpus.
+
 **JPEG 2000 decodes too**, as of this version: `.90` and `.91`, both the 5/3
 reversible and 9/7 irreversible wavelets, with the reversible and irreversible
 component transforms. A reversible codestream matches pydicom sample for sample;
@@ -730,7 +747,9 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 
 - **Basic Profile** - Standard tag removal/replacement
 - **Clean Descriptors** - Remove text descriptions
-- **Clean Graphics** - Remove burned-in annotations
+- **Clean Graphics** - Remove overlays and graphic annotations held as attributes
+
+Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. `share -preview` and `-detect` show what it finds before anything is changed.
 - **Retain Long Full Dates** - Keep dates for longitudinal studies
 - **Retain Patient Characteristics** - Keep age, sex, size, weight
 - **Retain Device Identity** - Keep device information

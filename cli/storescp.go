@@ -78,7 +78,7 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 
 	received := 0
 	handler := &network.StorageHandler{
-		OnStore: func(_ context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {
+		OnStore: func(ctx context.Context, sopClassUID, sopInstanceUID string, ds *dataset.Dataset) uint16 {
 			received++
 			// The UID comes from the peer, so it decides the filename. Validate it
 			// before it becomes a path: joining it unchecked let a UID of
@@ -93,7 +93,7 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 				return network.StatusUnableToProcess
 			}
 			fmt.Printf("Received: %s (SOP Class: %s) -> %s\n", sopInstanceUID, sopClassUID, filename)
-			c.events.stored(sopClassUID, sopInstanceUID, filename)
+			c.events.stored(ctx, sopClassUID, sopInstanceUID, filename)
 			return network.StatusSuccess
 		},
 	}

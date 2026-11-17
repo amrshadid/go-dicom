@@ -19,6 +19,7 @@ import (
 type QRSCPCommand struct {
 	tls       tlsFlags
 	events    eventsFlag
+	web       webServeFlags
 	aeTitle   string
 	port      int
 	outputDir string
@@ -33,6 +34,7 @@ func (c *QRSCPCommand) Description() string { return "DICOM Query/Retrieve SCP (
 func (c *QRSCPCommand) AddFlags(fs *flag.FlagSet) {
 	addServerTLSFlags(fs, &c.tls)
 	c.events.add(fs)
+	c.web.add(fs)
 	fs.StringVar(&c.aeTitle, "aet", "QRSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 	fs.StringVar(&c.outputDir, "output", "./received", "Storage directory for received instances")
@@ -107,6 +109,27 @@ func (c *QRSCPCommand) Execute(args []string) error {
 		return err
 	}
 
+	// The same store over HTTP, when asked. Started before the DIMSE side
+	// so that an address that cannot be listened on stops the command.
+	webURL := ""
+	if c.web.address != "" {
+		address, token, err := c.web.resolve()
+		if err != nil {
+			return err
+		}
+		url, stopWeb, err := serveWeb(address, token, store, tlsCfg, func(line string) { fmt.Println(line) })
+		if err != nil {
+			return err
+		}
+		defer stopWeb()
+		webURL = url
+		if token != "" {
+			webURL += " (bearer token required)"
+		}
+	} else if c.web.token != "" {
+		return fmt.Errorf("-web-token was given without -web")
+	}
+
 	scp := network.NewSCP(network.SCPConfig{
 		TLS:              tlsCfg,
 		Events:           events,
@@ -117,11 +140,11 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	})
 
 	handler := dcmstore.NewHandler(store)
-	handler.OnStored = func(_ context.Context, inst *dcmstore.Instance) error {
+	handler.OnStored = func(ctx context.Context, inst *dcmstore.Instance) error {
 		fmt.Printf("  Stored: %s -> %s\n", inst.SOPInstanceUID, inst.Path)
 		// The path is the store's own, made from a UID it has already checked.
 		kept := filepath.Join(c.outputDir, inst.Path)
-		c.events.stored(inst.SOPClassUID, inst.SOPInstanceUID, kept)
+		c.events.stored(ctx, inst.SOPClassUID, inst.SOPInstanceUID, kept)
 		return nil
 	}
 	scp.SetHandler(handler)
@@ -157,6 +180,9 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	fmt.Printf("  Indexed:   %d instance(s) already present\n", store.Count())
 	fmt.Printf("  Services:  Verification, Storage, Query/Retrieve\n")
 	fmt.Printf("  SOP Classes: %d\n", len(abstractSyntaxes))
+	if webURL != "" {
+		fmt.Printf("  DICOMweb:  %s\n", webURL)
+	}
 	fmt.Println("Listening for associations... (Ctrl+C to stop)")
 
 	if err := scp.ListenAndServe(ctx); err != nil && ctx.Err() == nil {

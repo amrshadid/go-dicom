@@ -7,6 +7,276 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-17
+
+Three things the library could only do from the other side, it now does
+itself, and the command line is finished where programs and people lean on
+it:
+
+- **A DICOMweb server.** Package `dicomweb` was a client. `dicomweb.NewServer`
+  is the origin server: search (QIDO-RS), retrieve with metadata (WADO-RS)
+  and store (STOW-RS), over any backend, and `dcmstore.Store` is one. So
+  `qrscp -web <address>` serves one archive over DIMSE and over HTTP, on
+  this machine only unless a bearer token is given.
+  Frames, rendered images and bulk data URIs are not served.
+- **A JPEG 2000 lossless encoder.** `compress/jpeg2000` decoded and nothing
+  wrote the format. A data set is compressed to JPEG 2000 Lossless in
+  place, and a send is transcoded to it when that is what the peer accepts.
+  OpenJPEG returns every sample of what it writes. Lossy is not written.
+- **Text burned into the pixels is found.** `anonymize -redact auto` and
+  `share -redact auto` black out the lettering a pure Go detector finds,
+  `-detect` prints the regions, and `share -preview` shows them. A detector
+  can miss, so `auto` is never the default, what it did is recorded as
+  unverified, and only a person looking confirms an image is clean.
+- **The command line.** `show file::Element` prints a whole value and the
+  table has `--full`; the table prints every value of a number; `STORED`
+  carries its association's id; the commands print their own output and not
+  the library's log; a file with elements written without a VR says so in
+  its warnings.
+- **The archive.** Its index is UTF-8, so a C-FIND answer declares its
+  character set and non-Latin names match; a person name matches whatever
+  its case; a date written `1997.04.24` matches a range; an answer carries
+  the size of the image.
+- **Releases.** A release merged into `main` tags and publishes itself.
+
+Nothing in the format of `show --json` changes: `schemaVersion` is still 1.
+A program reading it sees two differences from 1.9.1: the new warning on a
+file that has elements written without a VR, and an empty value of a bulk
+binary VR, which was printed as `"value": ""` and now has none.
+
+For programs using the library there are additions and no changes; nothing
+is removed or renamed.
+
+### Added
+
+- **Text burned into the pixels is found** (#310). `-redact` took rectangles
+  a person had measured. `anonymize.NewTextDetector` now finds lettering in
+  a rendered frame: detection, not recognition, in pure Go, with no OCR
+  engine and no new dependency. It marks the pixels that stand out from
+  their surroundings, keeps the connected shapes that are drawn like
+  characters, and takes runs of them that line up, in one color, for
+  lines of text, at several scales. On the commands:
+  `anonymize -redact auto` and `share -redact auto` black out what it
+  finds; `-detect` prints the regions and writes nothing; `share -preview`
+  writes the picture with the regions outlined. A detector can miss, and
+  a missed name is a leak, so `auto` is never the default, an image at
+  risk is still refused unless something is asked for, an automatic
+  redaction is recorded in De-identification Method as "Burned-in text
+  redacted where detected, unverified", and Burned In Annotation is not
+  set to NO by it. Measured on pictures the tests draw, where every
+  letter's place is known: 24 of 24 lines of text covered whole, in five
+  sizes, four colors, on plain grounds and beside and over ultrasound-like
+  texture, with at most 3.9% of a picture marked beside the text, and a
+  picture of texture alone left unmarked. On the two ultrasound screens
+  in pydicom's corpus every caption block is found; in the one whose
+  lettering is six pixels tall and blurred, a clock and three two- and
+  three-letter labels are not. `anonymize.TextDetector` is an interface,
+  so a program with a recognition engine can use its own.
+
+- **A JPEG 2000 lossless encoder** (#308). `compress/jpeg2000` decoded and
+  nothing wrote the format. `jpeg2000.Encode` now writes an image as a
+  lossless codestream (ISO/IEC 15444-1): the reversible 5/3 wavelet, and
+  the reversible component transform for three components, at 1 to 16
+  bits, signed or unsigned. One tile, one quality layer, code-blocks of
+  64 by 64. Each stage is the mirror of a decoder stage and is tested
+  against it: the MQ coder, the wavelet transform, the block coder
+  (`EncodeBlock`) and the packet headers, with the rules for a
+  coefficient's context shared by both so they cannot differ. OpenJPEG
+  decodes what it writes: across 360 images of every depth, sign and shape
+  tried, `opj_decompress` returned each sample as it was encoded. The next
+  entry is what makes `1.2.840.10008.1.2.4.90` something a file or a send
+  can be compressed to.
+
+- **A file or a send can be compressed to JPEG 2000 Lossless** (#308).
+  `Dataset.CompressJPEG2000LosslessInPlace` replaces the Pixel Data with
+  `.90` frames and makes the data set say so: an RGB image becomes
+  `YBR_RCT` with Planar Configuration 0, as PS3.5 8.2.4 has it, and decodes
+  back to RGB. `1.2.840.10008.1.2.4.90` is now a transfer syntax a send
+  transcodes to, as RLE and JPEG-LS Lossless are, so a peer that accepts
+  only JPEG 2000 can be sent an uncompressed image. An image held in
+  another compressed syntax is decoded first. A frame is coded at Bits
+  Stored, or at Bits Allocated when a sample uses the bits above it, so
+  what was in the file is what comes back. `compress.EncodeJPEG2000Lossless`
+  codes one frame of native samples. Checked in the interoperability suite,
+  which now has OpenJPEG: every uncompressed image of pydicom's corpus is
+  written as `.90`, each frame is decoded by `opj_decompress` to the
+  samples of the source, dcmtk reads each file, and dcmtk receives one over
+  the network with its codestream intact.
+
+- **A DICOMweb search service** (#294). Package `dicomweb` was a client; it
+  now has the server's side of QIDO-RS (PS3.18 10.6).
+  `dicomweb.NewServer(backend)` is an `http.Handler` for `/studies`,
+  `/series`, `/instances` and the same within a study or a series. A search
+  is turned into the identifier a C-FIND would carry and put to the
+  archive, so what matches over DIMSE matches over HTTP: wildcards, date
+  ranges, lists of UIDs and attributes inside a sequence
+  (`RequestAttributesSequence.RequestedProcedureID=...`), with
+  `includefield`, `limit` and `offset`. The answer is DICOM JSON, or 204
+  when nothing matches. `dicomweb.Backend` is what the server asks of an
+  archive, and a `dcmstore.Store` is one as it is. Compared with Orthanc
+  over 77 files of pydicom's corpus, 25 of 26 searches return the same
+  results and the same values, once the matching fixes listed under Fixed
+  and Changed were in; the one left is a date range, where Orthanc also
+  returns the studies that have no date. The entries after this one add
+  the archive's side, the command, retrieving and storing.
+
+- **The archive answers with the size of an image** (#294). The index held
+  the C-FIND keys of PS3.4. It now also holds what a DICOMweb search
+  returns for each level (PS3.18 10.6.3.3): Rows, Columns, Bits Allocated,
+  Number of Frames, Timezone Offset From UTC and Performed Procedure Step
+  Start Date and Time, and Instance Availability is answered `ONLINE`.
+  They are return keys of a C-FIND as well, and can be matched on: a
+  number is matched whether a query carries it as bytes or, from a URL, as
+  text, and is answered as a number of its VR. The index file is version
+  3, so an index written before is rebuilt once on opening. Against
+  Orthanc over the same 77 files, a search returns every attribute
+  Orthanc does.
+
+- **`qrscp -web` serves the archive over HTTP as well** (#294).
+  `go-dicom qrscp -web 8080` adds a DICOMweb search service at
+  `http://127.0.0.1:8080/dicom-web` over the store its DIMSE side writes
+  to, so what a modality stores a web client finds. A port alone listens
+  on this machine only. An address other machines can reach is refused
+  unless `-web-token` or `DICOMWEB_TOKEN` gives a bearer token, which every
+  request must then carry. Under `-tls` the service is HTTPS with the same
+  certificate. Each request is printed with its method, path and status,
+  and never its query, which is where a search carries a patient's name.
+  The interoperability suite stores three files with pynetdicom over DIMSE
+  and searches for them over HTTP with a client that is not this library:
+  the answers agree with pydicom's reading of the files, with a C-FIND on
+  the same archive, and with Orthanc holding the same files.
+
+- **The archive is retrieved from over HTTP** (#294). The DICOMweb server
+  gains WADO-RS (PS3.18 10.4): a study, a series or an instance as
+  `multipart/related; type="application/dicom"`, and `/metadata` for each
+  as DICOM JSON without its bulk data. With `transfer-syntax=*`, or a
+  request that accepts anything, an instance is the file the archive holds,
+  byte for byte. A request that names no transfer syntax asks for Explicit
+  VR Little Endian, and an instance held compressed is decoded for it. Any
+  other syntax is given the instances already in it: 206 when some are
+  not, 406 when none is. One instance asked for as `application/dicom` is
+  the file itself, which is what `curl -O` wants. A search result now
+  carries its Retrieve URL. `dicomweb.Backend` gains `Locate` and `Open`,
+  which `dcmstore.Store` has. In the interoperability suite, files stored
+  by pynetdicom are retrieved by urllib: the pixel data is what was sent,
+  an RLE image decoded for the default syntax has the pixels pydicom
+  decodes, the metadata has every attribute Orthanc's has with the same
+  values, and `go-dicom wado` writes the bytes the server sent.
+
+- **The archive is stored to over HTTP** (#294). The DICOMweb server gains
+  STOW-RS (PS3.18 10.5), which completes it: `POST /studies` and
+  `POST /studies/{study}` take Part 10 files as the parts of one request.
+  Each instance is kept or refused on its own, and the answer lists both:
+  200 when all were kept, 202 when some were, 409 when none was. An
+  instance sent into a study it is not of is refused with A900H. A request
+  is bounded at 4 GiB unless `dicomweb.WithMaxStoreBytes` says otherwise.
+  `dicomweb.Backend` gains `Put`, which `dcmstore.Store` has. With this an
+  instance stored over HTTP is found by C-FIND, and one stored over DIMSE
+  is retrieved over HTTP: the interoperability suite does both with
+  pynetdicom and urllib, and `go-dicom stow` against the archive as well.
+
+- **`show` prints a whole value when asked for one, and `--full` prints
+  them all** (#282). The table printed the first hundred bytes of a value,
+  and so did `show file::Element`, so a long text value or a list of numbers
+  could be read from the command line only through `--json`. Asking for one
+  element now prints its value whole. The table keeps its cut, since it is
+  read in a terminal, and `--full` lifts it. Bulk binary such as Pixel Data
+  is a count of bytes either way, and stays in the file.
+
+- **A handler knows which association it is answering, and `STORED` says
+  so** (#284). The events of an association carry an id, and a handler's
+  context did not, so `storescp` and `qrscp` wrote their `STORED` line with
+  none and a reader paired it with the `EVT_C_STORE` before it by SOP
+  Instance UID, which two associations sending the same instance at once
+  make ambiguous. `network.AssociationInfo.ID` is that id, and the `STORED`
+  line now has `associationId`, `role` and the AE titles and addresses, as
+  the association's own events do.
+
+### Changed
+
+- **A file with elements written without a VR says so in its warnings**
+  (#305). A file that declares explicit VR and holds elements with none is
+  read, each such element as implicit, as pydicom reads it. That it
+  happened was said only in the library's log, which the commands silence
+  since #283, so nothing a program could read said the file is not
+  conformant. `DICOMFile.Warnings`, and so `warnings` in `show --json`, now
+  has one line for it: how many elements, and the first. The log keeps a
+  line for each at debug level. Elements inside a sequence written as UN
+  are not counted: there the rule is implicit VR (PS3.5 6.2.2). Across
+  pydicom's corpus the warning appears for the one file pydicom warns of
+  for the same reason, and `show --json` is otherwise unchanged.
+
+- **The archive matches a person name whatever its case** (#301). A C-FIND
+  for `smith*` did not find `SMITH^JOHN`. PS3.4 C.2.2.2.1 lets an SCP
+  ignore case for person names, Orthanc and dcm4chee do, and modalities
+  disagree on how they write one, so matching as written found only some
+  of a patient's studies. Single value and wildcard matching of a PN now
+  ignore case. Every other VR is matched as before, and accents are kept:
+  `Jerome` does not match `Jérôme`. CONFORMANCE.md section 2.7 lists this
+  and the archive's other choices in matching.
+
+- **A release merged into `main` publishes itself** (#287). The release
+  workflow ran only for a pushed tag, so a release sat merged and
+  unpublished until someone tagged the right commit by hand. It now also
+  runs on a push to `main`: when `main.go`'s version has no tag and the
+  changelog has that version's section, it builds and publishes, and the
+  release carries the tag. Any other push to `main` builds nothing. A tag
+  pushed by hand is released as before, and starting the workflow by hand
+  builds every binary and publishes nothing.
+
+### Fixed
+
+- **The commands print their own output and not the library's log** (#283).
+  The library logs what it notices as it reads: a retired attribute, an
+  element written without its VR. Under a command those lines went to the
+  terminal in the logger's format, among the command's output: over
+  pydicom's corpus `show`, `info`, `convert` and `codify` each printed
+  forty of them, and `anonymize` and `share` printed them too. A command
+  now logs the library's errors alone. `GODICOM_LOG=warn`, `info` or
+  `debug` brings the rest back to diagnose a file. A program that uses the
+  packages as a library keeps the logger it set.
+
+- **The table prints every value of a number** (#282). A binary number VR
+  was printed as a number only when it held exactly one: `256\0\16` came
+  out as `<6 bytes>`, and some came out blank or as bytes that are not
+  valid UTF-8. The table now formats numbers with the function `--json`
+  uses, so the two agree. Floats are printed as `--json` prints them, `2`
+  and `0.5` where the table had `2.000000` and `0.500000`. Across pydicom's
+  corpus 289 of 9,117 rows change, all of them numbers. `--json` is the
+  same byte for byte but for one thing: an empty value of a bulk binary VR
+  was printed with `"value": ""`, the only place such a VR had a value, and
+  now has none, as when it holds bytes.
+
+- **DICOM JSON carries the values of a data set built in memory** (#295).
+  `Dataset.ToDICOMJSON` wrote a value only when the element held it as
+  bytes, as the file reader leaves it. An element given a string, a list, a
+  number, a `PersonName` or a tag was written with its VR and no `Value`,
+  with no error, so a data set that wrote to disk and sent over DIMSE whole
+  came out of JSON empty. The JSON writer now renders a value with
+  `dataelem.ValueBytes`, as the file writer and the network encoder do, and
+  one that does not fit its VR is an error that names the element. The JSON
+  of a data set read from a file is unchanged.
+
+- **A C-FIND answer says which character set it is in** (#297). The archive
+  indexed an instance's text as the bytes it arrived with and answered a
+  C-FIND with them and no Specific Character Set, so a peer could not read
+  a name outside ASCII: of seven such names in pydicom's character set
+  files, pynetdicom read none correctly when `go-dicom storescu` had sent
+  them and two when dcmtk had. The index now holds text as UTF-8 however
+  an instance arrived, a query is read in the character set it declares,
+  so `Jérôme` in UTF-8 finds a name stored in ISO_IR 100, and an answer
+  with anything outside ASCII declares `ISO_IR 192`. All seven names now
+  read back as they are in the files, for both senders. An answer in ASCII
+  is unchanged, except that a query which declared a character set no
+  longer gets an empty one back. The index file has a version, and an
+  index written before is rebuilt from the files once, on opening.
+
+- **A date written `1997.04.24` matches a date range** (#300). That is the
+  date form of ACR-NEMA 300, which older equipment still writes and PS3.5
+  lets a reader accept. The archive read the old form of a time and not
+  of a date, so such a study matched no range and no `19970424`. Found by
+  asking Orthanc and the archive for the same range over the same files.
+
 ## [1.9.1] - 2026-11-15
 
 `show` is what other programs read a file through, and this release makes
@@ -2288,7 +2558,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...v1.10.0
 [1.9.1]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/amrshadid/go-dicom/compare/v1.7.0...v1.8.0

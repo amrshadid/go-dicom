@@ -65,6 +65,7 @@ var indexedSequences = map[tag.Tag]map[tag.Tag]dataelem.VR{
 // attributes per item.
 func indexSequences(ds *dataset.Dataset) map[string][]map[string]IndexedValue {
 	var indexed map[string][]map[string]IndexedValue
+	encodings := textEncodings(ds, nil)
 
 	for seqTag, attrs := range indexedSequences {
 		seq, err := ds.GetSequence(seqTag)
@@ -86,6 +87,9 @@ func indexSequences(ds *dataset.Dataset) map[string][]map[string]IndexedValue {
 				continue
 			}
 
+			// An item that declares no character set is in its data set's
+			// (PS3.3 C.12.1.1.2).
+			itemEncodings := textEncodings(itemDS, encodings)
 			values := make(map[string]IndexedValue, len(attrs))
 			for attrTag, fallback := range attrs {
 				elem, ok := itemDS.Get(attrTag)
@@ -96,7 +100,7 @@ func indexSequences(ds *dataset.Dataset) map[string][]map[string]IndexedValue {
 				if vr == "" || !dataelem.IsValidVR(vr) {
 					vr = fallback
 				}
-				values[attrTag.String()] = IndexedValue{VR: string(vr), Value: elementString(elem)}
+				values[attrTag.String()] = IndexedValue{VR: string(vr), Value: elementText(elem, vr, itemEncodings)}
 			}
 
 			// An item with none of the indexed attributes is still an item: a query
@@ -121,8 +125,9 @@ func indexSequences(ds *dataset.Dataset) map[string][]map[string]IndexedValue {
 //
 // The query element must have VR SQ. Its item — the standard permits at most one —
 // holds the attributes to match. An empty or absent item is universal matching:
-// it selects everything and asks for the sequence to be returned.
-func matchSequence(queryElem *dataelem.DataElement, inst *Instance, seqTag tag.Tag) bool {
+// it selects everything and asks for the sequence to be returned. encodings are
+// the query's, which the item's text is read with.
+func matchSequence(queryElem *dataelem.DataElement, inst *Instance, seqTag tag.Tag, encodings []string) bool {
 	queryItem, ok := sequenceQueryItem(queryElem)
 	if !ok {
 		// No item, or an item that is not a data set: universal matching, which
@@ -131,7 +136,7 @@ func matchSequence(queryElem *dataelem.DataElement, inst *Instance, seqTag tag.T
 		return true
 	}
 
-	criteria := sequenceCriteria(queryItem, seqTag)
+	criteria := sequenceCriteria(queryItem, seqTag, encodings)
 	if len(criteria) == 0 {
 		// An item holding only zero-length values is universal matching too.
 		return true
@@ -167,8 +172,9 @@ type sequenceCriterion struct {
 // An attribute the index does not hold for this sequence is skipped, for the same
 // reason an unindexed flat key is: matching on it would return nothing, which
 // reads as an empty archive rather than as an unsupported query.
-func sequenceCriteria(queryItem *dataset.Dataset, seqTag tag.Tag) []sequenceCriterion {
+func sequenceCriteria(queryItem *dataset.Dataset, seqTag tag.Tag, encodings []string) []sequenceCriterion {
 	indexedAttrs := indexedSequences[seqTag]
+	encodings = textEncodings(queryItem, encodings)
 
 	var criteria []sequenceCriterion
 	for _, elem := range queryItem.GetAll() {
@@ -177,8 +183,7 @@ func sequenceCriteria(queryItem *dataset.Dataset, seqTag tag.Tag) []sequenceCrit
 			continue
 		}
 
-		value := trimPadding(elementString(elem))
-		if value == "" {
+		if trimPadding(elementString(elem)) == "" {
 			// Universal matching on this attribute: it selects nothing.
 			continue
 		}
@@ -195,7 +200,7 @@ func sequenceCriteria(queryItem *dataset.Dataset, seqTag tag.Tag) []sequenceCrit
 			vr = fallback
 		}
 
-		criteria = append(criteria, sequenceCriterion{tag: t, vr: vr, value: value})
+		criteria = append(criteria, sequenceCriterion{tag: t, vr: vr, value: elementText(elem, vr, encodings)})
 	}
 
 	return criteria
@@ -260,7 +265,7 @@ func isIndexedSequence(t tag.Tag) bool {
 // sequence, which is how a universal sequence key is answered for an instance that
 // does not carry the sequence at all.
 func buildSequenceResponse(queryElem *dataelem.DataElement, inst *Instance,
-	seqTag tag.Tag) *dataelem.DataElement {
+	seqTag tag.Tag, encodings []string) *dataelem.DataElement {
 
 	seq := sequence.New()
 
@@ -271,7 +276,7 @@ func buildSequenceResponse(queryElem *dataelem.DataElement, inst *Instance,
 		// Prefer the item that matched, so a response describes the step the query
 		// was about rather than whichever came first.
 		if queryItem, ok := sequenceQueryItem(queryElem); ok {
-			criteria := sequenceCriteria(queryItem, seqTag)
+			criteria := sequenceCriteria(queryItem, seqTag, encodings)
 			for _, storedItem := range storedItems {
 				if itemSatisfies(storedItem, criteria) {
 					chosen = storedItem

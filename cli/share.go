@@ -14,7 +14,9 @@ import (
 // PNG or JPEG with none of the file's attributes, and not written at all
 // while the image may hold text nobody has answered for.
 type ShareCommand struct {
-	redact        regionList
+	redact        redaction
+	detect        bool
+	preview       bool
 	allowBurnedIn bool
 	window        string
 	frame         string
@@ -36,7 +38,9 @@ func (sc *ShareCommand) Description() string {
 func (sc *ShareCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&sc.help, "h", false, "Show help for this command")
 	fs.BoolVar(&sc.help, "help", false, "Show help for this command")
-	fs.Var(&sc.redact, "redact", "Fill the rectangle x,y,width,height with black in every frame (repeatable)")
+	fs.Var(&sc.redact, "redact", "Fill the rectangle x,y,width,height with black in every frame (repeatable), or auto for what a detector finds")
+	fs.BoolVar(&sc.detect, "detect", false, "Print the regions in which a detector finds text, and write nothing")
+	fs.BoolVar(&sc.preview, "preview", false, "Write the picture with those regions outlined and nothing redacted, to look at")
 	fs.BoolVar(&sc.allowBurnedIn, "allow-burned-in", false, "Render an image that may hold burned-in text without -redact")
 	fs.StringVar(&sc.window, "window", "", "Window as center,width (default: the file's)")
 	fs.StringVar(&sc.frame, "frame", "", "A frame number from 1, or all (default: 1)")
@@ -55,8 +59,20 @@ func (sc *ShareCommand) Execute(args []string) error {
 		sc.showHelp()
 		return nil
 	}
+	if sc.detect {
+		if len(positional) != 1 {
+			return fmt.Errorf("share: -detect takes one file and writes nothing")
+		}
+		if err := printDetected(positional[0]); err != nil {
+			return fmt.Errorf("share: %w", err)
+		}
+		return nil
+	}
 	if len(positional) != 2 {
 		return fmt.Errorf("share: expected an input and an output\nRun 'go-dicom share -h' for usage")
+	}
+	if sc.preview && sc.redact.asked() {
+		return fmt.Errorf("share: -preview shows what a detector finds and redacts nothing; give it without -redact")
 	}
 	input, output := positional[0], positional[1]
 
@@ -85,20 +101,39 @@ func (sc *ShareCommand) Execute(args []string) error {
 
 	// The pixels are all that leaves, so they are all that is checked: the
 	// same rule as anonymize, applied before anything is rendered.
+	detected := -1
 	switch {
-	case len(sc.redact) > 0:
+	case sc.preview:
+		// For looking at, not for handing on: the text is all still there.
+		regions, err := anonymize.DetectBurnedInText(ds, nil)
+		if err != nil {
+			return fmt.Errorf("share: %v", err)
+		}
+		opts.outline, detected = regions, len(regions)
+	case sc.redact.asked():
 		// Compressed pixel data is decoded first; nothing is written back,
 		// so the input keeps its form.
 		if err := ds.DecompressInPlace(); err != nil {
 			return fmt.Errorf("share: %v", err)
 		}
-		if err := ds.RedactPixelRegions(sc.redact...); err != nil {
-			return fmt.Errorf("share: %v", err)
+		regions := sc.redact.regions
+		if sc.redact.auto {
+			found, err := anonymize.DetectBurnedInText(ds, nil)
+			if err != nil {
+				return fmt.Errorf("share: %v", err)
+			}
+			regions, detected = append(regions, found...), len(found)
+		}
+		if len(regions) > 0 {
+			if err := ds.RedactPixelRegions(regions...); err != nil {
+				return fmt.Errorf("share: %v", err)
+			}
 		}
 	case !sc.allowBurnedIn:
 		if risk, reason := anonymize.BurnedInRisk(ds); risk {
 			return fmt.Errorf("share: %s may hold text burned into the pixels: %s. "+
-				"Give -redact x,y,width,height for where the text is, "+
+				"Give -redact x,y,width,height for where the text is, -redact auto to fill "+
+				"what a detector finds, -preview to see what it finds, "+
 				"or -allow-burned-in if there is none", input, reason)
 		}
 	}
@@ -111,7 +146,15 @@ func (sc *ShareCommand) Execute(args []string) error {
 		fmt.Printf("Wrote %s\n", name)
 	}
 	fmt.Println("The picture holds pixels only: no name, date or identifier from the file is in it.")
-	fmt.Println("Nothing looked at the picture itself. Text drawn into it is still there unless you redacted it.")
+	switch {
+	case sc.preview:
+		fmt.Printf("This is a preview: %d region(s) a detector found are outlined and nothing is redacted. "+
+			"Do not hand it on.\n", detected)
+	case detected >= 0:
+		fmt.Printf("%d region(s) a detector found were filled. %s\n", detected, detectorCaution)
+	default:
+		fmt.Println("Nothing looked at the picture itself. Text drawn into it is still there unless you redacted it.")
+	}
 	return nil
 }
 
@@ -129,6 +172,13 @@ USAGE:
 OPTIONS:
   -redact x,y,w,h    Fill a rectangle with black in every frame, counted in
                      pixels from the top left. Repeat it for more rectangles.
+  -redact auto       Fill the regions in which a detector finds text. It can
+                     miss: look at the picture before you hand it on.
+  -preview           Write the picture with those regions outlined and
+                     nothing redacted, to see what auto would fill. Not for
+                     handing on: the text is all still in it.
+  -detect            Print those regions, as -redact takes them, and write
+                     nothing: go-dicom share -detect ultrasound.dcm
   -allow-burned-in   Render an image that may hold burned-in text as it is.
   --window <c,w>     Window center and width (default: the file's own, or
                      the full range of the data when it has none).
@@ -142,12 +192,16 @@ BURNED-IN TEXT:
   which ultrasound, endoscopy, secondary captures and screen captures often
   have. An image whose Burned In Annotation is YES, or that is of such a kind
   and does not say NO, is refused unless -redact says where the text is or
-  -allow-burned-in says there is none. This command does not find text: look
-  at the picture before you send it.
+  -allow-burned-in says there is none. -redact auto finds text for you and is
+  not a promise: a detector misses text that is faint, very small, hand
+  written or drawn over a busy part of the picture. Look at the picture
+  before you send it.
 
 EXAMPLES:
   go-dicom share ct.dcm ct.png --window 40,400
   go-dicom share -redact 0,0,640,40 ultrasound.dcm ultrasound.png
+  go-dicom share -preview ultrasound.dcm check.png
+  go-dicom share -redact auto ultrasound.dcm ultrasound.png
   go-dicom share cine.dcm frame.jpg --frame all
 `)
 }

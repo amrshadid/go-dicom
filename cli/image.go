@@ -22,6 +22,9 @@ type imageOptions struct {
 	window  string // "center,width", or empty for the file's own
 	frame   string // a frame counted from 1, or "all"
 	quality int    // JPEG only
+	// outline is regions to draw a line around in each picture, for a
+	// preview of what a detector found.
+	outline []dataset.PixelRegion
 }
 
 // convertToImages renders the frames asked for and writes them, returning the
@@ -109,6 +112,9 @@ func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]strin
 	}
 
 	for i, img := range frames {
+		if len(opts.outline) > 0 {
+			img = outlined(img, opts.outline)
+		}
 		// Encoded before the file is created, so a failure leaves nothing.
 		var buf bytes.Buffer
 		if opts.format == "jpeg" {

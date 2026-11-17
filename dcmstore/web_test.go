@@ -1,0 +1,326 @@
+package dcmstore_test
+
+import (
+	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/dcmstore"
+	"github.com/amrshadid/go-dicom/dicomweb"
+	"github.com/amrshadid/go-dicom/tag"
+)
+
+// A store answers a DICOMweb search as it answers a C-FIND: the server in
+// package dicomweb builds the identifier from the URL and asks the store.
+// These tests put a real store behind that server and search it with the
+// package's own client, so they hold the two packages to each other.
+
+// The store is the server's archive as it is, with nothing between them.
+var _ dicomweb.Backend = (*dcmstore.Store)(nil)
+
+// webClient serves a store over HTTP, mounted under a prefix as a service
+// is, and returns a client for it.
+func webClient(t *testing.T, store *dcmstore.Store) *dicomweb.Client {
+	t.Helper()
+	service := httptest.NewServer(http.StripPrefix("/dicom-web", dicomweb.NewServer(store)))
+	t.Cleanup(service.Close)
+	client, err := dicomweb.NewClient(service.URL + "/dicom-web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// webText reads a value from a result the client returned. The client holds
+// a value as a file would, padded to an even length (PS3.5 6.2), so the
+// padding is taken off before it is compared.
+func webText(t *testing.T, ds *dataset.Dataset, at tag.Tag) string {
+	t.Helper()
+	return strings.TrimRight(textOf(t, ds, at), " \x00")
+}
+
+// valuesOf collects one attribute across results, sorted.
+func valuesOf(t *testing.T, results []*dataset.Dataset, at tag.Tag) []string {
+	t.Helper()
+	var out []string
+	for _, result := range results {
+		out = append(out, webText(t, result, at))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// TestWebSearchAtEachLevel checks the three levels over the corpus: what is
+// found, and the counts a study and a series are returned with.
+func TestWebSearchAtEachLevel(t *testing.T) {
+	client := webClient(t, openWithCorpus(t))
+	ctx := context.Background()
+
+	studies, err := client.SearchForStudies(ctx, dicomweb.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := valuesOf(t, studies, tagStudyUID); strings.Join(got, " ") != "1.2.1 1.2.2" {
+		t.Errorf("studies %v", got)
+	}
+	for _, study := range studies {
+		if webText(t, study, tagStudyUID) != "1.2.1" {
+			continue
+		}
+		// Counted over the store, as (0020,1206) and (0020,1208) are defined.
+		if series := webText(t, study, tag.New(0x0020, 0x1206)); series != "2" {
+			t.Errorf("the study has %s series, want 2", series)
+		}
+		if instances := webText(t, study, tag.New(0x0020, 0x1208)); instances != "3" {
+			t.Errorf("the study has %s instances, want 3", instances)
+		}
+		if modalities := webText(t, study, tag.New(0x0008, 0x0061)); modalities != "CT" {
+			t.Errorf("modalities in study %q", modalities)
+		}
+	}
+
+	series, err := client.SearchForSeries(ctx, "1.2.1", dicomweb.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := valuesOf(t, series, tag.New(0x0020, 0x000E)); strings.Join(got, " ") != "1.2.1.1 1.2.1.2" {
+		t.Errorf("series of the study %v", got)
+	}
+
+	instances, err := client.SearchForInstances(ctx, "1.2.1", "1.2.1.1", dicomweb.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := valuesOf(t, instances, tag.New(0x0008, 0x0018)); strings.Join(got, " ") != "1.2.1.1.1 1.2.1.1.2" {
+		t.Errorf("instances of the series %v", got)
+	}
+
+	all, err := client.SearchForInstances(ctx, "", "", dicomweb.Query{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != len(corpus) {
+		t.Errorf("%d instances across the service, want %d", len(all), len(corpus))
+	}
+}
+
+// TestWebSearchMatchesAsCFindDoes checks the kinds of matching a search
+// names in its URL against the store's own: a wildcard, a date range, a
+// list of UIDs, and nothing found.
+func TestWebSearchMatchesAsCFindDoes(t *testing.T) {
+	client := webClient(t, openWithCorpus(t))
+	cases := []struct {
+		name  string
+		match map[string]string
+		want  string
+	}{
+		{"a wildcard", map[string]string{"PatientName": "SMI*"}, "1.2.1"},
+		{"a name in another case", map[string]string{"PatientName": "smi*"}, "1.2.1"},
+		{"an identifier in another case", map[string]string{"PatientID": "p1"}, ""},
+		{"a date range", map[string]string{"StudyDate": "20240201-20240301"}, "1.2.2"},
+		{"an open date range", map[string]string{"00080020": "-20240131"}, "1.2.1"},
+		{"a list of UIDs", map[string]string{"StudyInstanceUID": "1.2.2,1.2.1"}, "1.2.1 1.2.2"},
+		{"modalities in the study", map[string]string{"ModalitiesInStudy": "MR"}, "1.2.2"},
+		{"two keys", map[string]string{"PatientID": "P1", "StudyDate": "20240115"}, "1.2.1"},
+		{"two keys that disagree", map[string]string{"PatientID": "P1", "StudyDate": "20240220"}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			studies, err := client.SearchForStudies(context.Background(), dicomweb.Query{Match: c.match})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(valuesOf(t, studies, tagStudyUID), " "); got != c.want {
+				t.Errorf("found %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestWebSearchPagesInAStableOrder checks that paging through the instances
+// one at a time returns each exactly once, which needs the order to be the
+// same on every request.
+func TestWebSearchPagesInAStableOrder(t *testing.T) {
+	client := webClient(t, openWithCorpus(t))
+	seen := map[string]int{}
+	for offset := 0; ; offset++ {
+		page, err := client.SearchForInstances(context.Background(), "", "",
+			dicomweb.Query{Limit: 1, Offset: offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		seen[webText(t, page[0], tag.New(0x0008, 0x0018))]++
+		if offset > len(corpus) {
+			t.Fatal("paging does not end")
+		}
+	}
+	if len(seen) != len(corpus) {
+		t.Errorf("paging returned %d different instances, want %d", len(seen), len(corpus))
+	}
+	for uid, times := range seen {
+		if times != 1 {
+			t.Errorf("%s was returned %d times", uid, times)
+		}
+	}
+}
+
+// TestWebSearchReadsANameOutsideASCII checks a name that arrived in
+// ISO_IR 100: it is found by its UTF-8 spelling in the URL, returned as
+// UTF-8, and the step description inside a sequence with it.
+func TestWebSearchReadsANameOutsideASCII(t *testing.T) {
+	client := webClient(t, storeLatin1(t))
+
+	studies, err := client.SearchForStudies(context.Background(),
+		dicomweb.Query{Match: map[string]string{"PatientName": "Buc^Jér*"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(studies) != 1 {
+		t.Fatalf("%d studies", len(studies))
+	}
+	if got := webText(t, studies[0], tagName); got != "Buc^Jérôme" {
+		t.Errorf("the name is %q", got)
+	}
+
+	series, err := client.SearchForSeries(context.Background(), "", dicomweb.Query{
+		Match: map[string]string{"RequestAttributesSequence.ScheduledProcedureStepDescription": "Thorax après*"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("%d series matched inside the sequence", len(series))
+	}
+	seq, err := series[0].GetSequence(tagRequestAttrs)
+	if err != nil || seq.Length() != 1 {
+		t.Fatalf("the result's Request Attributes Sequence: %v", err)
+	}
+	item, _ := seq.Get(0)
+	if got := webText(t, item.(*dataset.Dataset), tagStepDescriptor); got != "Thorax après injection" {
+		t.Errorf("the step description is %q", got)
+	}
+}
+
+// TestLocateNamesWhatIsHeld checks what a retrieve asks the store: the
+// instances of a study, of one of its series, one instance, and nothing for
+// what it does not hold, or holds under another study.
+func TestLocateNamesWhatIsHeld(t *testing.T) {
+	store := openWithCorpus(t)
+	cases := []struct {
+		study, series, instance string
+		want                    string
+	}{
+		{"1.2.1", "", "", "1.2.1.1.1 1.2.1.1.2 1.2.1.2.1"},
+		{"1.2.1", "1.2.1.1", "", "1.2.1.1.1 1.2.1.1.2"},
+		{"1.2.1", "1.2.1.1", "1.2.1.1.2", "1.2.1.1.2"},
+		{"1.2.9", "", "", ""},
+		{"1.2.1", "1.2.2.1", "", ""},
+		{"1.2.2", "1.2.1.1", "1.2.1.1.2", ""},
+	}
+	for _, c := range cases {
+		uids, err := store.Locate(context.Background(), c.study, c.series, c.instance)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Strings(uids)
+		if got := strings.Join(uids, " "); got != c.want {
+			t.Errorf("%s %s %s: located %q, want %q", c.study, c.series, c.instance, got, c.want)
+		}
+	}
+	if _, err := store.Locate(context.Background(), "", "", ""); err == nil {
+		t.Error("a retrieve that names no study was answered")
+	}
+}
+
+// TestWebRetrieveReturnsTheStoredFile checks retrieval through the service
+// against the store's own files: each instance of a study comes back as the
+// bytes on disk, and one that is not held is an error.
+func TestWebRetrieveReturnsTheStoredFile(t *testing.T) {
+	store := openWithCorpus(t)
+	client := webClient(t, store)
+
+	got := map[string][]byte{}
+	err := client.RetrieveEach(context.Background(), "1.2.1", "", "", func(p dicomweb.Part) error {
+		ds, err := p.Dataset()
+		if err != nil {
+			return err
+		}
+		got[webText(t, ds, tag.New(0x0008, 0x0018))] = p.Data
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("%d instances retrieved, want 3", len(got))
+	}
+	for uid, data := range got {
+		inst, ok := store.Instance(uid)
+		if !ok {
+			t.Fatalf("retrieved %s, which the store does not hold", uid)
+		}
+		onDisk, err := os.ReadFile(filepath.Join(store.Root(), filepath.FromSlash(inst.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(data, onDisk) {
+			t.Errorf("%s: what was retrieved is not the file in the store", uid)
+		}
+	}
+
+	if _, err := client.RetrieveInstance(context.Background(), "1.2.1", "1.2.1.1", "1.2.404"); err == nil {
+		t.Error("an instance the store does not hold was retrieved")
+	}
+
+	metadata, err := client.RetrieveMetadata(context.Background(), "1.2.2", "", "")
+	if err != nil || len(metadata) != 1 || webText(t, metadata[0], tagName) != "JONES^JANE" {
+		t.Errorf("metadata of the other study: %d, %v", len(metadata), err)
+	}
+}
+
+// TestWebStoreReachesTheStore checks storing through the service: the
+// instance is in the store afterwards, found by a search, and retrieved
+// with the attributes it was sent with.
+func TestWebStoreReachesTheStore(t *testing.T) {
+	store, err := dcmstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := webClient(t, store)
+	ctx := context.Background()
+
+	result, err := client.StoreDatasets(ctx, "", corpus[0].dataset(), corpus[3].dataset())
+	if err != nil || len(result.Stored) != 2 || len(result.Failed) != 0 {
+		t.Fatalf("Store: %+v, %v", result, err)
+	}
+	if store.Count() != 2 {
+		t.Fatalf("the store holds %d instances", store.Count())
+	}
+
+	studies, err := client.SearchForStudies(ctx, dicomweb.Query{Match: map[string]string{"PatientName": "jones*"}})
+	if err != nil || len(studies) != 1 || webText(t, studies[0], tagStudyUID) != "1.2.2" {
+		t.Errorf("searching for what was stored: %d studies, %v", len(studies), err)
+	}
+	back, err := client.RetrieveInstance(ctx, "1.2.1", "1.2.1.1", "1.2.1.1.1")
+	if err != nil || webText(t, back, tagName) != "SMITH^JOHN" {
+		t.Errorf("retrieving what was stored: %v", err)
+	}
+
+	// Into a study it is not of: refused, and not in the store.
+	if _, err := client.StoreDatasets(ctx, "1.2.2", corpus[1].dataset()); err == nil {
+		t.Error("an instance was stored into another study")
+	}
+	if store.Count() != 2 {
+		t.Errorf("the store holds %d instances after a refusal", store.Count())
+	}
+}

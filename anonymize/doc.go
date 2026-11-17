@@ -127,13 +127,25 @@
 //     an attribute, and Anonymize does not look for it. [BurnedInRisk] says
 //     whether an image is of a kind that commonly carries it, and
 //     [Anonymizer.CleanPixelData] fills the rectangles the caller names and
-//     records the Clean Pixel Data Option. Finding the text is still the
-//     caller's part: nothing here reads the pixels.
+//     records the Clean Pixel Data Option.
+//
+//     [NewTextDetector] finds lettering in the pixels, and
+//     [Anonymizer.RedactDetectedText] fills what it finds. It is detection,
+//     not recognition, in pure Go, and it can miss: text that is faint, very
+//     small, hand written, or drawn over a busy part of the picture, and
+//     short labels of two or three blurred characters. So an automatic
+//     redaction is recorded as automatic and unverified, Burned In
+//     Annotation is not set to NO, and an image is clean when a person has
+//     looked at it. A program with a better detector supplies it through
+//     the [TextDetector] interface.
+//
 //   - Private tags that were deliberately retained. The basic profile removes
 //     private attributes outside the safe list, but one kept on purpose may
 //     carry identity.
+//
 //   - Free text in reports and comments, unless a cleaning profile is used —
 //     and cleaning is heuristic.
+//
 //   - Identity inferable from the data itself: a facial reconstruction from a
 //     head CT, or a rare diagnosis in a small cohort.
 //

@@ -16,8 +16,8 @@ the library falls short of the standard, that appears in
 | | |
 |---|---|
 | Implementation Class UID | `1.2.826.0.1.3680043.10.511` |
-| Implementation Version Name | `GO-DICOM-1.9.1` |
-| Documented against | `v1.9.1` |
+| Implementation Version Name | `GO-DICOM-1.10.0` |
+| Documented against | `v1.10.0` |
 | Last verified | 2026-08-15 |
 
 ---
@@ -190,6 +190,23 @@ store holds it under the SOP Class named and its file is on disk. Otherwise it
 fails with 0112H (not held), 0119H (held under another class) or 0110H (file
 missing), the Failure Reasons of PS3.3 C.14.1.1.
 
+### 2.7 Matching in the archive
+
+`dcmstore`, and so `qrscp`, matches by the rules of PS3.4 C.2.2: universal,
+single value, list of UID, wildcard, range and sequence matching. Where the
+standard leaves the choice to the SCP:
+
+| Choice | What the archive does |
+|---|---|
+| Case of a person name (C.2.2.2.1) | Ignored for PN, in single value and wildcard matching: `smith*` finds `SMITH^JOHN`. Every other VR is matched as written. |
+| Accents | Kept: `Jerome` does not match `Jérôme`. |
+| Fuzzy matching of names | Not offered. |
+| Character set of a query | The query is read in the Specific Character Set it declares, and the index is UTF-8, so a name matches however the query and the instance were each written. |
+| Character set of an answer | `ISO_IR 192` when the answer holds anything outside ASCII; none when it does not (C.4.1.1.3.2). |
+| A date or time in its ACR-NEMA form | `1997.04.24` and `09:30:00` are read as `19970424` and `093000`, in a stored value and in a query. The stored value is returned as it is. |
+| An attribute with no value in an instance | Matches universal matching only. A range does not match a study with no date. |
+| A key the index does not hold | Not matched on, and returned with no value (C.2.2.1.2). |
+
 ---
 
 ## 3. Presentation contexts and transfer syntaxes
@@ -283,13 +300,33 @@ selection, and user identity negotiation. The window defaults to one.
 ### 4.1 DICOMweb
 
 The `dicomweb` package and the `qido`, `wado` and `stow` commands are a user
-agent for the HTTP services of PS3.18. There is no origin server.
+agent for the HTTP services of PS3.18. `dicomweb.Server`, and `qrscp -web`
+over its store, are an origin server for the same three services; see
+below.
 
 | Service | Supported | Not supported |
 |---------|-----------|---------------|
 | QIDO-RS | Search for studies, series and instances, with matching, `includefield`, `limit`, `offset` and `fuzzymatching`; results as DICOM JSON | XML results |
 | WADO-RS | Study, series and instance as `application/dicom` in `multipart/related`, in a named transfer syntax or as stored; metadata as DICOM JSON | Frames, rendered images, thumbnails and bulk data retrieved on their own |
 | STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons | Metadata with separate bulk data |
+
+As an origin server (`dicomweb.NewServer`, `qrscp -web`):
+
+| Service | Supported | Not supported |
+|---------|-----------|---------------|
+| QIDO-RS | `/studies`, `/series`, `/instances` and the same within a study or a series. Matching is the archive's own (section 2.7), so a search matches what a C-FIND does: single value, wildcard, range, list of UID, and `Sequence.Attribute` for an attribute inside a sequence. `includefield`, `limit`, `offset`. Results as DICOM JSON in UTF-8, each with the attributes of PS3.18 10.6.3.3 the archive holds a value for; 204 when nothing matches | XML results. Fuzzy matching: `fuzzymatching=true` is answered by literal matching and a `Warning: 299`. `includefield=all` returns the default attributes |
+| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON | Frames, rendered images, thumbnails, bulk data on its own. Metadata names a bulk value by its VR and gives no `BulkDataURI`. Encoding into a compressed syntax on request |
+| STOW-RS | `application/dicom` parts in `multipart/related`, to `/studies` or into a study. Each instance kept or refused on its own: 200 when all were kept, 202 when some were, 409 when none was, with Referenced SOP Sequence and Failed SOP Sequence in the answer. Failure reasons: A900H for an instance sent into a study it is not of, 0110H when the archive could not keep it. A compressed instance is kept in the syntax it came in. A request is bounded (4 GiB unless set), 413 beyond | Metadata with separate bulk data (415). A part that is not a DICOM file has no UID to be listed under, and shows in the status alone |
+
+`qrscp -web` serves under `/dicom-web`. A port alone listens on this machine
+only. An address other machines can reach is refused without `-web-token` (or
+`DICOMWEB_TOKEN`), which every request must then carry as a bearer token.
+Under `-tls` the service is HTTPS with the same certificate, and asks for a
+client certificate when `-tls-ca` is given. Checked in
+`scripts/interop-test.sh`: files stored by pynetdicom over DIMSE are searched
+for over HTTP by a client that is not this library, and the answers held
+against pydicom's reading of the files, a C-FIND on the same archive, and
+Orthanc holding the same files.
 
 UPS-RS and the capabilities service are not implemented. Bulk data that
 metadata refers to by URI is not fetched: the element is kept, empty.
@@ -301,8 +338,10 @@ and one that runs past it is an error.
 
 Search and retrieve are checked against a public Orthanc server, read-only,
 and return what Python's requests and pydicom do for the same requests, the
-retrieved file byte for byte. Store is checked against a local Orthanc:
-files of several transfer syntaxes come back byte for byte, and a refusal is
+retrieved file byte for byte. Store, search and retrieve are checked against
+Orthanc in continuous integration, by `scripts/interop-test.sh`: files of
+several transfer syntaxes are stored, found, and come back byte for byte, the
+search agrees with Python's reading of the same server, and a refusal is
 reported instance by instance. Orthanc answers 400 for a request it kept part
 of, and does not name a file it could not read; both are counted as refused.
 
@@ -514,10 +553,28 @@ how decoded samples are shaped and coloured, and the one tolerance.
   and pydicom decode what it writes, to the quality and size libjpeg gives at
   the same setting.
 
+  **JPEG 2000 Lossless (`.90`)** is written by `jpeg2000.Encode`, in pure Go:
+  the reversible 5/3 wavelet with no quantization, every bit plane coded, one
+  tile, one quality layer, code-blocks of 64 by 64, at 1 to 16 bits, signed or
+  unsigned. An RGB image is coded with the reversible component transform and
+  the data set then says `YBR_RCT`, with Planar Configuration 0 (PS3.5 8.2.4);
+  three samples that are not red, green and blue are coded component by
+  component. A frame is coded at Bits Stored, or at Bits Allocated when a
+  sample uses the bits above Bits Stored, so that what was in the file comes
+  back. `Dataset.CompressJPEG2000LosslessInPlace` is the same encoder for
+  files, and it is what a send uses when a peer accepts only this syntax.
+  Lossy JPEG 2000 (`.91`) is not written.
+
+  *Verified:* OpenJPEG, which shares no code with this library, decodes what
+  the encoder writes. `opj_decompress` returns every sample of 360 generated
+  images of each depth, sign and shape, and of every uncompressed image in
+  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
+  receives one over the network with its codestream intact. Both run in CI.
+
   Every other compressed target fails, naming the syntax asked for. There is no
-  JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send that
-  cannot be satisfied fails rather than putting bytes on the wire described as
-  something they are not, which the receiver could not detect.
+  lossy JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send
+  that cannot be satisfied fails rather than putting bytes on the wire
+  described as something they are not, which the receiver could not detect.
 
   *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
   shares no code with this library. A round trip through this package's own
