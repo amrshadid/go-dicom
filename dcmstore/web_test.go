@@ -119,7 +119,8 @@ func TestWebSearchMatchesAsCFindDoes(t *testing.T) {
 		want  string
 	}{
 		{"a wildcard", map[string]string{"PatientName": "SMI*"}, "1.2.1"},
-		{"a wildcard that is case sensitive", map[string]string{"PatientName": "smi*"}, ""},
+		{"a name in another case", map[string]string{"PatientName": "smi*"}, "1.2.1"},
+		{"an identifier in another case", map[string]string{"PatientID": "p1"}, ""},
 		{"a date range", map[string]string{"StudyDate": "20240201-20240301"}, "1.2.2"},
 		{"an open date range", map[string]string{"00080020": "-20240131"}, "1.2.1"},
 		{"a list of UIDs", map[string]string{"StudyInstanceUID": "1.2.2,1.2.1"}, "1.2.1 1.2.2"},

@@ -70,6 +70,15 @@ func matchValue(vr dataelem.VR, query, stored string) bool {
 		return true
 	}
 
+	// A person name is matched whatever its case, as PS3.4 C.2.2.2.1 allows:
+	// one modality writes SMITH^JOHN and the next Smith^John, and matched as
+	// written a search finds only some of a patient's studies (#301). Nothing
+	// else is: a code string or an identifier in another case is another
+	// value. Accents are kept, so Jerome is not Jérôme.
+	if vr == dataelem.PN {
+		query, stored = strings.ToLower(query), strings.ToLower(stored)
+	}
+
 	switch {
 	case vr == dataelem.UI:
 		return matchUIDList(query, stored)
@@ -249,7 +258,7 @@ func normalizeTemporal(vr dataelem.VR, value string, toUpper bool) (string, bool
 
 	switch vr {
 	case dataelem.DA:
-		return padTemporal(value, daFields, toUpper)
+		return padTemporal(stripDateSeparators(value), daFields, toUpper)
 	case dataelem.TM:
 		return padTemporal(stripTimeSeparators(value), tmFields, toUpper)
 	case dataelem.DT:
@@ -349,6 +358,20 @@ func padTemporal(value string, fields []temporalField, toUpper bool) (string, bo
 		return "", false
 	}
 	return out.String(), true
+}
+
+// stripDateSeparators reads a date written YYYY.MM.DD, the form of ACR-NEMA
+// 300, as the YYYYMMDD that replaced it.
+//
+// PS3.5 Table 6.2-1 forbids writing the old form and notes that it may still
+// be read, and older equipment wrote it: such a study matched no date range
+// at all (#300). Only that exact shape is taken for it, so anything else with
+// a dot in it is still not a date.
+func stripDateSeparators(value string) string {
+	if len(value) != 10 || value[4] != '.' || value[7] != '.' {
+		return value
+	}
+	return value[:4] + value[5:7] + value[8:]
 }
 
 // stripTimeSeparators removes the colons a TM or DT may carry.

@@ -79,7 +79,9 @@
 //
 //   - Single value (C.2.2.2.1) — equality, with the padding PS3.5 6.2 permits
 //     ignored, and dates and times compared at whatever precision each was
-//     written to.
+//     written to. A person name is matched whatever its case, here and with
+//     wildcards, so "smith*" finds SMITH^JOHN; every other VR is matched as
+//     written, and accents are kept.
 //
 //   - List of UID (C.2.2.2.2) — a backslash-separated list of UIDs.
 //
@@ -88,7 +90,9 @@
 //
 //   - Range (C.2.2.2.5) — "lower-upper" for DA, TM and DT, either end optional,
 //     both inclusive. A partial bound covers the period it names, so
-//     "2024-2024" is the whole year.
+//     "2024-2024" is the whole year. A date written 1997.04.24 or a time
+//     written 09:30:00, the forms of ACR-NEMA that older equipment still
+//     writes, is read as the date or time it is.
 //
 //   - Sequence (C.2.2.2.6) — a query sequence whose single item holds attributes
 //     to match against the items of the stored sequence. It matches if any one
