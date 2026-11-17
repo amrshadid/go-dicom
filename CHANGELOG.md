@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A DICOMweb search service** (#294). Package `dicomweb` was a client; it
+  now has the server's side of QIDO-RS (PS3.18 10.6).
+  `dicomweb.NewServer(backend)` is an `http.Handler` for `/studies`,
+  `/series`, `/instances` and the same within a study or a series. A search
+  is turned into the identifier a C-FIND would carry and put to the
+  archive, so what matches over DIMSE matches over HTTP: wildcards, date
+  ranges, lists of UIDs and attributes inside a sequence
+  (`RequestAttributesSequence.RequestedProcedureID=...`), with
+  `includefield`, `limit` and `offset`. The answer is DICOM JSON, or 204
+  when nothing matches. `dicomweb.Backend` is the archive's one method, and
+  a `dcmstore.Store` is one as it is. Compared with Orthanc over 77 files of
+  pydicom's corpus, 24 of 26 searches return the same results and the same
+  values; the other two are a date range, where Orthanc also returns
+  studies with no date, and a name, which Orthanc matches without regard to
+  case. Retrieving and storing are not served yet.
+
 - **`show` prints a whole value when asked for one, and `--full` prints
   them all** (#282). The table printed the first hundred bytes of a value,
   and so did `show file::Element`, so a long text value or a list of numbers
