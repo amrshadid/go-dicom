@@ -300,13 +300,32 @@ selection, and user identity negotiation. The window defaults to one.
 ### 4.1 DICOMweb
 
 The `dicomweb` package and the `qido`, `wado` and `stow` commands are a user
-agent for the HTTP services of PS3.18. There is no origin server.
+agent for the HTTP services of PS3.18. `dicomweb.Server`, and `qrscp -web`
+over its store, are an origin server for the search service; see below.
 
 | Service | Supported | Not supported |
 |---------|-----------|---------------|
 | QIDO-RS | Search for studies, series and instances, with matching, `includefield`, `limit`, `offset` and `fuzzymatching`; results as DICOM JSON | XML results |
 | WADO-RS | Study, series and instance as `application/dicom` in `multipart/related`, in a named transfer syntax or as stored; metadata as DICOM JSON | Frames, rendered images, thumbnails and bulk data retrieved on their own |
 | STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons | Metadata with separate bulk data |
+
+As an origin server (`dicomweb.NewServer`, `qrscp -web`):
+
+| Service | Supported | Not supported |
+|---------|-----------|---------------|
+| QIDO-RS | `/studies`, `/series`, `/instances` and the same within a study or a series. Matching is the archive's own (section 2.7), so a search matches what a C-FIND does: single value, wildcard, range, list of UID, and `Sequence.Attribute` for an attribute inside a sequence. `includefield`, `limit`, `offset`. Results as DICOM JSON in UTF-8, each with the attributes of PS3.18 10.6.3.3 the archive holds a value for; 204 when nothing matches | XML results. Fuzzy matching: `fuzzymatching=true` is answered by literal matching and a `Warning: 299`. `includefield=all` returns the default attributes. Retrieve URL (0008,1190) |
+| WADO-RS | Not served yet | |
+| STOW-RS | Not served yet | |
+
+`qrscp -web` serves under `/dicom-web`. A port alone listens on this machine
+only. An address other machines can reach is refused without `-web-token` (or
+`DICOMWEB_TOKEN`), which every request must then carry as a bearer token.
+Under `-tls` the service is HTTPS with the same certificate, and asks for a
+client certificate when `-tls-ca` is given. Checked in
+`scripts/interop-test.sh`: files stored by pynetdicom over DIMSE are searched
+for over HTTP by a client that is not this library, and the answers held
+against pydicom's reading of the files, a C-FIND on the same archive, and
+Orthanc holding the same files.
 
 UPS-RS and the capabilities service are not implemented. Bulk data that
 metadata refers to by URI is not fetched: the element is kept, empty.

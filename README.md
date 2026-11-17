@@ -348,6 +348,13 @@ go build -o go-dicom .
 # commits what it holds (commitscu above works against it)
 ./go-dicom qrscp -port 11112 -output ./archive/
 
+# The same archive over HTTP as well: a DICOMweb search service at
+# http://127.0.0.1:8080/dicom-web, on this machine only. To be reached from
+# other machines it must be given an address and a token
+./go-dicom qrscp -port 11112 -output ./archive/ -web 8080
+./go-dicom qido -match "PatientName=smith*" http://127.0.0.1:8080/dicom-web
+DICOMWEB_TOKEN=... ./go-dicom qrscp -output ./archive/ -web 0.0.0.0:8080
+
 # Any network command over TLS. With -tls-ca a server requires a client
 # certificate from that CA and a client verifies the server against it
 ./go-dicom storescp -port 2762 -output ./received/ \

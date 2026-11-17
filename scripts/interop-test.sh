@@ -1591,6 +1591,169 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# The archive over DICOMweb (#294)
+#
+# qrscp -web serves the store a DIMSE peer writes to. So: pynetdicom stores
+# three files over DIMSE, and a client that is not this library (urllib)
+# searches for them over HTTP. What each search returns is held against what
+# pydicom reads from the file, against what pynetdicom finds by C-FIND on the
+# same archive, and, when there is an Orthanc holding the same files, against
+# what Orthanc answers. The token is checked the same way: from outside.
+# ---------------------------------------------------------------------------
+if python3 -c "import pydicom, pynetdicom" >/dev/null 2>&1; then
+  note "DICOMweb: the archive searched over HTTP by a client that is not this library"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/webarc" "$WORKDIR/webarc_guarded"
+  start_server "$WORKDIR" "$WORKDIR/webarc.log" \
+    "$GODICOM" qrscp -port 11740 -web 18740 -output "$WORKDIR/webarc"
+  WEBARC_PID=$SERVER_PID
+  start_server "$WORKDIR" "$WORKDIR/webarc_guarded.log" \
+    "$GODICOM" qrscp -port 11741 -web 18741 -web-token interop-token -output "$WORKDIR/webarc_guarded"
+  WEBARC_GUARDED_PID=$SERVER_PID
+  if wait_for_port 11740 && wait_for_port 18740 && wait_for_port 18741; then
+    if webarc=$(python3 - "${ORTHANC_URL:-}" <<'PY'
+import json, sys, urllib.error, urllib.parse, urllib.request
+import pydicom
+from pydicom.data import get_testdata_file
+from pydicom.dataset import Dataset
+from pynetdicom import AE
+from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelFind as FIND
+
+orthanc = sys.argv[1].rstrip("/")
+ours = "http://127.0.0.1:18740/dicom-web"
+
+def get(base, path, query=None, token=None):
+    url = base + path + ("?" + urllib.parse.urlencode(query) if query else "")
+    headers = {"Accept": "application/dicom+json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as r:
+            body = r.read()
+            return r.status, json.loads(body) if body.strip() else []
+    except urllib.error.HTTPError as e:
+        return e.code, []
+
+def first(result, tag):
+    values = result.get(tag, {}).get("Value") or [None]
+    v = values[0]
+    return v.get("Alphabetic") if isinstance(v, dict) else v
+
+# Stored over DIMSE, by pynetdicom.
+names = ["CT_small.dcm", "MR_small.dcm", "SC_rgb_rle.dcm"]
+files = [pydicom.dcmread(get_testdata_file(n)) for n in names]
+ae = AE()
+# Each file in the transfer syntax it is in: the archive keeps it as sent.
+for ds in files:
+    ae.add_requested_context(ds.SOPClassUID, ds.file_meta.TransferSyntaxUID)
+ae.add_requested_context(FIND)
+assoc = ae.associate("127.0.0.1", 11740, ae_title="QRSCP")
+if not assoc.is_established:
+    sys.exit("pynetdicom could not associate with qrscp")
+for ds in files:
+    status = assoc.send_c_store(ds)
+    if not status or status.Status != 0:
+        sys.exit("pynetdicom could not store %s" % ds.SOPInstanceUID)
+
+# Each file, found at each level over HTTP, with the values pydicom reads.
+for name, ds in zip(names, files):
+    study, series, sop = str(ds.StudyInstanceUID), str(ds.SeriesInstanceUID), str(ds.SOPInstanceUID)
+    status, studies = get(ours, "/studies", {"StudyInstanceUID": study})
+    if status != 200 or len(studies) != 1:
+        sys.exit("%s: /studies answered %d with %d results" % (name, status, len(studies)))
+    want = {"00100010": str(ds.PatientName), "00100020": str(ds.PatientID),
+            "00080020": str(ds.get("StudyDate", "")) or None}
+    for tag, value in want.items():
+        if value and first(studies[0], tag) != value:
+            sys.exit("%s: study %s is %r, pydicom reads %r" % (name, tag, first(studies[0], tag), value))
+    if first(studies[0], "00201208") != 1 or first(studies[0], "00080061") != str(ds.Modality):
+        sys.exit("%s: the study's counts are %r" % (name, studies[0]))
+
+    status, serieses = get(ours, "/studies/%s/series" % study)
+    if [first(s, "0020000E") for s in serieses] != [series] or first(serieses[0], "00080060") != str(ds.Modality):
+        sys.exit("%s: /series answered %r" % (name, serieses))
+
+    status, instances = get(ours, "/studies/%s/series/%s/instances" % (study, series))
+    if [first(i, "00080018") for i in instances] != [sop]:
+        sys.exit("%s: /instances answered %r" % (name, instances))
+    got = instances[0]
+    size = (first(got, "00280010"), first(got, "00280011"), first(got, "00280100"), first(got, "00080016"))
+    if size != (int(ds.Rows), int(ds.Columns), int(ds.BitsAllocated), str(ds.SOPClassUID)):
+        sys.exit("%s: the instance is %r, pydicom reads %r" % (
+            name, size, (ds.Rows, ds.Columns, ds.BitsAllocated, ds.SOPClassUID)))
+
+    # Against Orthanc, which the earlier step gave the same files: every
+    # attribute both return has the same value.
+    if orthanc:
+        for path in ("/studies?StudyInstanceUID=" + study, "/studies/%s/series" % study,
+                     "/studies/%s/series/%s/instances" % (study, series)):
+            _, mine = get(ours, path)
+            _, theirs = get(orthanc, path)
+            if len(mine) != 1 or len(theirs) != 1:
+                sys.exit("%s %s: %d results against Orthanc's %d" % (name, path, len(mine), len(theirs)))
+            for tag in set(mine[0]) & set(theirs[0]) - {"00081190"}:
+                a, b = mine[0][tag].get("Value"), theirs[0][tag].get("Value")
+                if a != b:
+                    sys.exit("%s %s %s: %r against Orthanc's %r" % (name, path, tag, a, b))
+
+# The same archive by C-FIND and by HTTP: the same studies, the same names.
+query = Dataset()
+query.QueryRetrieveLevel = "STUDY"
+query.StudyInstanceUID = ""
+query.PatientName = ""
+by_find = sorted((str(i.StudyInstanceUID), str(i.PatientName))
+                 for s, i in assoc.send_c_find(query, FIND) if i is not None)
+assoc.release()
+_, studies = get(ours, "/studies")
+by_http = sorted((first(s, "0020000D"), first(s, "00100010")) for s in studies)
+if by_find != by_http or len(by_http) != len({str(d.StudyInstanceUID) for d in files}):
+    sys.exit("C-FIND found %r and HTTP found %r" % (by_find, by_http))
+
+# A name is matched whatever its case, and nothing found is 204.
+name = str(files[0].PatientName)
+status, found = get(ours, "/studies", {"PatientName": name[:3].lower() + "*"})
+if status != 200 or name not in [first(s, "00100010") for s in found]:
+    sys.exit("a search for %r in lower case did not find it" % name)
+status, found = get(ours, "/studies", {"PatientName": "NOBODY^AT^ALL"})
+if status != 204:
+    sys.exit("a search that matches nothing answered %d" % status)
+status, _ = get(ours, "/studies", {"PatientNmae": "x"})
+if status != 400:
+    sys.exit("an attribute that does not exist answered %d" % status)
+
+# The token: asked for, and nothing without it.
+guarded = "http://127.0.0.1:18741/dicom-web"
+if get(guarded, "/studies")[0] != 401 or get(guarded, "/studies", token="wrong")[0] != 401:
+    sys.exit("the guarded archive answered a request with no token, or a wrong one")
+if get(guarded, "/studies", token="interop-token")[0] != 204:
+    sys.exit("the guarded archive refused its own token")
+
+print("%d files stored over DIMSE and found over HTTP at three levels%s; C-FIND and HTTP agree; the token is enforced"
+      % (len(files), ", as Orthanc answers" if orthanc else ""))
+PY
+    ); then
+      pass "qrscp -web answers as pydicom, pynetdicom and Orthanc read the same files — $webarc"
+    else
+      fail "the archive over DICOMweb: $webarc"
+    fi
+  else
+    fail "qrscp -web did not start: $(tail -3 "$WORKDIR/webarc.log")"
+  fi
+  stop_server "$WEBARC_PID"
+  stop_server "$WEBARC_GUARDED_PID"
+  # An address other machines can reach, with no token, is refused outright.
+  if "$GODICOM" qrscp -port 11742 -web 0.0.0.0:18742 -output "$WORKDIR/webarc" >"$WORKDIR/webarc_open.log" 2>&1; then
+    fail "qrscp served an archive on every interface with no token"
+  elif grep -q -- "-web-token" "$WORKDIR/webarc_open.log"; then
+    pass "qrscp -web refuses to listen beyond this machine without a token"
+  else
+    fail "qrscp -web 0.0.0.0 failed for another reason: $(tail -2 "$WORKDIR/webarc_open.log")"
+  fi
+else
+  skip "the archive over DICOMweb needs pydicom and pynetdicom"
+fi
+
+# ---------------------------------------------------------------------------
 # show --json: where each element sits in the file (#259)
 #
 # pydicom records where it found every value it read (file_tell). The
