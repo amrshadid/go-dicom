@@ -19,9 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`EncodeBlock`) and the packet headers, with the rules for a
   coefficient's context shared by both so they cannot differ. OpenJPEG
   decodes what it writes: across 360 images of every depth, sign and shape
-  tried, `opj_decompress` returned each sample as it was encoded. The data
-  set and network side, which make `1.2.840.10008.1.2.4.90` something a
-  file or a send can be compressed to, follow.
+  tried, `opj_decompress` returned each sample as it was encoded. The next
+  entry is what makes `1.2.840.10008.1.2.4.90` something a file or a send
+  can be compressed to.
 
 - **A file or a send can be compressed to JPEG 2000 Lossless** (#308).
   `Dataset.CompressJPEG2000LosslessInPlace` replaces the Pixel Data with
@@ -48,12 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ranges, lists of UIDs and attributes inside a sequence
   (`RequestAttributesSequence.RequestedProcedureID=...`), with
   `includefield`, `limit` and `offset`. The answer is DICOM JSON, or 204
-  when nothing matches. `dicomweb.Backend` is the archive's one method, and
-  a `dcmstore.Store` is one as it is. Compared with Orthanc over 77 files of
-  pydicom's corpus, 24 of 26 searches return the same results and the same
-  values; the other two are a date range, where Orthanc also returns
-  studies with no date, and a name, which Orthanc matches without regard to
-  case. Retrieving and storing are not served yet.
+  when nothing matches. `dicomweb.Backend` is what the server asks of an
+  archive, and a `dcmstore.Store` is one as it is. Compared with Orthanc
+  over 77 files of pydicom's corpus, 25 of 26 searches return the same
+  results and the same values, once the matching fixes listed under Fixed
+  and Changed were in; the one left is a date range, where Orthanc also
+  returns the studies that have no date. The entries after this one add
+  the archive's side, the command, retrieving and storing.
 
 - **The archive answers with the size of an image** (#294). The index held
   the C-FIND keys of PS3.4. It now also holds what a DICOMweb search
@@ -64,8 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   number is matched whether a query carries it as bytes or, from a URL, as
   text, and is answered as a number of its VR. The index file is version
   3, so an index written before is rebuilt once on opening. Against
-  Orthanc over the same 77 files, a search now returns every attribute
-  Orthanc does but the Retrieve URL, which comes with retrieval.
+  Orthanc over the same 77 files, a search returns every attribute
+  Orthanc does.
 
 - **`qrscp -web` serves the archive over HTTP as well** (#294).
   `go-dicom qrscp -web 8080` adds a DICOMweb search service at
