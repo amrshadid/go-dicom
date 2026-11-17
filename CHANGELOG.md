@@ -87,6 +87,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A file with elements written without a VR says so in its warnings**
+  (#305). A file that declares explicit VR and holds elements with none is
+  read, each such element as implicit, as pydicom reads it. That it
+  happened was said only in the library's log, which the commands silence
+  since #283, so nothing a program could read said the file is not
+  conformant. `DICOMFile.Warnings`, and so `warnings` in `show --json`, now
+  has one line for it: how many elements, and the first. The log keeps a
+  line for each at debug level. Elements inside a sequence written as UN
+  are not counted: there the rule is implicit VR (PS3.5 6.2.2). Across
+  pydicom's corpus the warning appears for the one file pydicom warns of
+  for the same reason, and `show --json` is otherwise unchanged.
+
 - **The archive matches a person name whatever its case** (#301). A C-FIND
   for `smith*` did not find `SMITH^JOHN`. PS3.4 C.2.2.2.1 lets an SCP
   ignore case for person names, Orthanc and dcm4chee do, and modalities
