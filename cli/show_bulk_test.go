@@ -15,7 +15,7 @@ func TestShowTableLeavesBulkValuesInTheFile(t *testing.T) {
 	}
 	path := writeInstance(t, t.TempDir(), "a.dcm", "1.2.840.10008.5.1.4.1.1.2", "1.2.274.1", "1.2.840.10008.1.2.1", pixels)
 
-	elements, err := readDICOMElements(path, true)
+	elements, err := readDICOMElements(path, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestShowTableIsTheSameWithoutReadingBulkData(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		light, err := readDICOMElements(path, true)
+		light, err := readDICOMElements(path, true, false)
 		if err != nil {
 			t.Errorf("%s lists in full and not for display: %v", filepath.Base(path), err)
 			continue

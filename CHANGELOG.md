@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`show` prints a whole value when asked for one, and `--full` prints
+  them all** (#282). The table printed the first hundred bytes of a value,
+  and so did `show file::Element`, so a long text value or a list of numbers
+  could be read from the command line only through `--json`. Asking for one
+  element now prints its value whole. The table keeps its cut, since it is
+  read in a terminal, and `--full` lifts it. Bulk binary such as Pixel Data
+  is a count of bytes either way, and stays in the file.
+
 - **A handler knows which association it is answering, and `STORED` says
   so** (#284). The events of an association carry an id, and a handler's
   context did not, so `storescp` and `qrscp` wrote their `STORED` line with
@@ -29,6 +37,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now logs the library's errors alone. `GODICOM_LOG=warn`, `info` or
   `debug` brings the rest back to diagnose a file. A program that uses the
   packages as a library keeps the logger it set.
+
+- **The table prints every value of a number** (#282). A binary number VR
+  was printed as a number only when it held exactly one: `256\0\16` came
+  out as `<6 bytes>`, and some came out blank or as bytes that are not
+  valid UTF-8. The table now formats numbers with the function `--json`
+  uses, so the two agree. Floats are printed as `--json` prints them, `2`
+  and `0.5` where the table had `2.000000` and `0.500000`. Across pydicom's
+  corpus 289 of 9,117 rows change, all of them numbers. `--json` is the
+  same byte for byte but for one thing: an empty value of a bulk binary VR
+  was printed with `"value": ""`, the only place such a VR had a value, and
+  now has none, as when it holds bytes.
 
 ## [1.9.1] - 2026-11-15
 
