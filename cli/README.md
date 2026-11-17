@@ -43,6 +43,16 @@ go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # D
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
 ```
 
+## The library's log
+
+A command prints its own output. What the library logs as it reads a file (a
+retired attribute, an element written without its VR) is kept off the terminal
+unless it is an error. To see it while working out what is odd about a file:
+
+```bash
+GODICOM_LOG=warn go-dicom show odd.dcm      # or info, or debug
+```
+
 ## The event log
 
 Every network command (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`,

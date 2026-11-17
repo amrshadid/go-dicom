@@ -60,7 +60,7 @@ jobs:
   # ubuntu's amd64 runs a 386 binary natively. No -race: the detector needs
   # 64 bits.
   test-32bit:
-    name: Test - linux/386
+    name: Test - linux/386 and linux/arm
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -90,13 +90,36 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o go-dicom-linux-386 .
           docker run --rm -v "$PWD:/w" i386/alpine:3.20 /w/go-dicom-linux-386 -v
 
-      # 32-bit ARM is the other 32-bit target people run this on. It cannot
-      # be run here, so it is built and vetted, tests included.
+      # 32-bit ARM is the other 32-bit target people run this on, and a
+      # target that is built and not run is not known to work: the first run
+      # on 386 found two overflows the build had let through (#258, #286).
       - name: Build and vet for 32-bit ARM
         env:
           GOARCH: arm
           CGO_ENABLED: '0'
         run: go build ./... && go vet ./...
+
+      # The runner cannot execute ARM, so each test binary is built here and
+      # run by QEMU's user-mode emulator, which `go test -exec` allows. The
+      # binaries are static, so no ARM system is needed around them.
+      - name: Install the ARM emulator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          qemu-arm --version | head -1
+
+      # The packages that read and write bytes, where the width of an int
+      # matters. The network and the command line are left to 386 above: under
+      # emulation their tests measure the emulator's speed against their
+      # timeouts, and the command line's build their own binaries.
+      - name: Run tests on 32-bit ARM
+        env:
+          GOARCH: arm
+          GOARM: '7'
+          CGO_ENABLED: '0'
+        run: |
+          packages=$(go list ./... | grep -v -E '/(network|cli|dcmstore|examples|scripts)(/|$)' | grep -v -x 'github.com/amrshadid/go-dicom')
+          go test -exec qemu-arm -timeout 20m $packages
 
   network-integration:
     name: Network Integration Tests - ${{ matrix.os }} - Go ${{ matrix.go-version }}
@@ -198,6 +221,19 @@ jobs:
   interop:
     name: Interoperability - pynetdicom and dcmtk
     runs-on: ubuntu-latest
+    # A DICOMweb server that is not this library, for the client's commands
+    # (#285). Orthanc 1.13.0 with its DICOMweb plugin 1.24, pinned by digest:
+    # the check compares bytes, and an image that changes under a tag would
+    # change what it means. Authentication is off because nothing but this job
+    # can reach the container.
+    services:
+      orthanc:
+        image: orthancteam/orthanc@sha256:06b8baab0c63cd58de5474a74b64096a82ea3f7eab2aa471e217cc48c9ae11bf
+        ports:
+          - 8042:8042
+        env:
+          DICOM_WEB_PLUGIN_ENABLED: "true"
+          ORTHANC__AUTHENTICATION_ENABLED: "false"
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -231,6 +267,20 @@ jobs:
       - name: Build CLI
         run: go build -o go-dicom .
 
+      # The script skips a peer it cannot reach, which is right on a laptop
+      # and wrong here: a server that never came up would pass as a skip.
+      - name: Wait for Orthanc
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8042/dicom-web/studies; then
+              echo "Orthanc answered after $attempt attempt(s)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Orthanc did not answer on 127.0.0.1:8042 within two minutes"
+          exit 1
+
       # Verifies go-dicom against two independent implementations, in both
       # directions, comparing the transferred data with pydicom. Every critical
       # defect in v1.2.0 was a case where go-dicom talked to itself
@@ -239,6 +289,7 @@ jobs:
         env:
           GODICOM: ./go-dicom
           DCMTK_BIN: /usr/bin
+          ORTHANC_URL: http://127.0.0.1:8042/dicom-web
         run: |
           export PYNETDICOM_BIN="$HOME/dicomvenv/bin"
           # pydicom supplies the fixture and the verifier.
