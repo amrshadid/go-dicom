@@ -305,6 +305,7 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 	transport *Transport, rq *AssociateRQ) {
 	// Attach association info to the context so handlers can access it.
 	info := &AssociationInfo{
+		ID:                         transport.associationID(),
 		CallingAE:                  assoc.CallingAE(),
 		CalledAE:                   assoc.CalledAE(),
 		RemoteAddr:                 transport.RemoteAddr(),

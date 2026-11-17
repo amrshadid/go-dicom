@@ -17,7 +17,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read in a terminal, and `--full` lifts it. Bulk binary such as Pixel Data
   is a count of bytes either way, and stays in the file.
 
+- **A handler knows which association it is answering, and `STORED` says
+  so** (#284). The events of an association carry an id, and a handler's
+  context did not, so `storescp` and `qrscp` wrote their `STORED` line with
+  none and a reader paired it with the `EVT_C_STORE` before it by SOP
+  Instance UID, which two associations sending the same instance at once
+  make ambiguous. `network.AssociationInfo.ID` is that id, and the `STORED`
+  line now has `associationId`, `role` and the AE titles and addresses, as
+  the association's own events do.
+
 ### Fixed
+
+- **The commands print their own output and not the library's log** (#283).
+  The library logs what it notices as it reads: a retired attribute, an
+  element written without its VR. Under a command those lines went to the
+  terminal in the logger's format, among the command's output: over
+  pydicom's corpus `show`, `info`, `convert` and `codify` each printed
+  forty of them, and `anonymize` and `share` printed them too. A command
+  now logs the library's errors alone. `GODICOM_LOG=warn`, `info` or
+  `debug` brings the rest back to diagnose a file. A program that uses the
+  packages as a library keeps the logger it set.
 
 - **The table prints every value of a number** (#282). A binary number VR
   was printed as a number only when it held exactly one: `256\0\16` came
