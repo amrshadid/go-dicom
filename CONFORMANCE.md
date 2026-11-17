@@ -553,10 +553,28 @@ how decoded samples are shaped and coloured, and the one tolerance.
   and pydicom decode what it writes, to the quality and size libjpeg gives at
   the same setting.
 
+  **JPEG 2000 Lossless (`.90`)** is written by `jpeg2000.Encode`, in pure Go:
+  the reversible 5/3 wavelet with no quantization, every bit plane coded, one
+  tile, one quality layer, code-blocks of 64 by 64, at 1 to 16 bits, signed or
+  unsigned. An RGB image is coded with the reversible component transform and
+  the data set then says `YBR_RCT`, with Planar Configuration 0 (PS3.5 8.2.4);
+  three samples that are not red, green and blue are coded component by
+  component. A frame is coded at Bits Stored, or at Bits Allocated when a
+  sample uses the bits above Bits Stored, so that what was in the file comes
+  back. `Dataset.CompressJPEG2000LosslessInPlace` is the same encoder for
+  files, and it is what a send uses when a peer accepts only this syntax.
+  Lossy JPEG 2000 (`.91`) is not written.
+
+  *Verified:* OpenJPEG, which shares no code with this library, decodes what
+  the encoder writes. `opj_decompress` returns every sample of 360 generated
+  images of each depth, sign and shape, and of every uncompressed image in
+  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
+  receives one over the network with its codestream intact. Both run in CI.
+
   Every other compressed target fails, naming the syntax asked for. There is no
-  JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send that
-  cannot be satisfied fails rather than putting bytes on the wire described as
-  something they are not, which the receiver could not detect.
+  lossy JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send
+  that cannot be satisfied fails rather than putting bytes on the wire
+  described as something they are not, which the receiver could not detect.
 
   *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
   shares no code with this library. A round trip through this package's own

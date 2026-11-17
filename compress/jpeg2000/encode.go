@@ -33,6 +33,15 @@ const (
 	maxGuardBits = 7
 )
 
+// EncodeOptions are the choices Encode leaves to its caller.
+type EncodeOptions struct {
+	// NoComponentTransform codes three components each on its own. The
+	// reversible component transform takes them for red, green and blue,
+	// which is what makes it worth doing; components that are something
+	// else, luminance and chrominance already, are better left as they are.
+	NoComponentTransform bool
+}
+
 // Encode writes an image as a lossless JPEG 2000 codestream.
 //
 // Every component has the image's size, and they share one depth, from 1 to
@@ -41,6 +50,11 @@ const (
 // records as Photometric Interpretation YBR_RCT (PS3.5 8.2.4). A sample
 // outside what its depth holds is an error: it could not come back.
 func Encode(img *Image) ([]byte, error) {
+	return EncodeWithOptions(img, EncodeOptions{})
+}
+
+// EncodeWithOptions is Encode with the choices of EncodeOptions.
+func EncodeWithOptions(img *Image, options EncodeOptions) ([]byte, error) {
 	if err := checkEncodable(img); err != nil {
 		return nil, err
 	}
@@ -61,7 +75,7 @@ func Encode(img *Image) ([]byte, error) {
 		Coding: CodingStyle{
 			Progression:    ProgressionLRCP,
 			Layers:         1,
-			MCT:            components == 3,
+			MCT:            components == 3 && !options.NoComponentTransform,
 			Levels:         levels,
 			CodeBlockWidth: 1 << encodeBlockExponent,
 			CodeBlockHt:    1 << encodeBlockExponent,

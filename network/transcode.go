@@ -205,6 +205,19 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 			return compressPixelData(ds, source, targetSyntax, encodeFramesRLE)
 		case JPEGLSLosslessUID:
 			return compressPixelData(ds, source, targetSyntax, encodeFramesJPEGLS)
+		case JPEG2000LosslessUID:
+			if _, ok := ds.Get(pixelDataTag); !ok {
+				return ds, nil
+			}
+			// A copy: sending must not rewrite the caller's data set. The
+			// data set's own method and not compressPixelData, because what
+			// describes the image changes with it: an RGB image coded with
+			// the reversible component transform is YBR_RCT (PS3.5 8.2.4).
+			out := ds.Clone()
+			if err := out.CompressJPEG2000LosslessInPlace(); err != nil {
+				return nil, fmt.Errorf("cannot encode a %s instance as %s: %w", source, targetSyntax, err)
+			}
+			return out, nil
 		case JPEGBaselineUID:
 			// Lossy, so only for a sender that has said how much loss it
 			// accepts. Refusing is the same rule as for JPEG-LS Near-Lossless
@@ -232,9 +245,9 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 			// much error to accept is the caller's decision rather than one to make
 			// silently on their behalf while transcoding.
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
-				"RLE Lossless (%s) and JPEG-LS Lossless (%s), and JPEG Baseline (%s) when "+
-				"NetworkConfig.JPEGQuality is set",
-				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEGBaselineUID)
+				"RLE Lossless (%s), JPEG-LS Lossless (%s) and JPEG 2000 Lossless (%s), and "+
+				"JPEG Baseline (%s) when NetworkConfig.JPEGQuality is set",
+				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEG2000LosslessUID, JPEGBaselineUID)
 		}
 	}
 
