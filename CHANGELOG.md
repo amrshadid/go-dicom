@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Text burned into the pixels is found** (#310). `-redact` took rectangles
+  a person had measured. `anonymize.NewTextDetector` now finds lettering in
+  a rendered frame: detection, not recognition, in pure Go, with no OCR
+  engine and no new dependency. It marks the pixels that stand out from
+  their surroundings, keeps the connected shapes that are drawn like
+  characters, and takes runs of them that line up, in one color, for
+  lines of text, at several scales. On the commands:
+  `anonymize -redact auto` and `share -redact auto` black out what it
+  finds; `-detect` prints the regions and writes nothing; `share -preview`
+  writes the picture with the regions outlined. A detector can miss, and
+  a missed name is a leak, so `auto` is never the default, an image at
+  risk is still refused unless something is asked for, an automatic
+  redaction is recorded in De-identification Method as "Burned-in text
+  redacted where detected, unverified", and Burned In Annotation is not
+  set to NO by it. Measured on pictures the tests draw, where every
+  letter's place is known: 24 of 24 lines of text covered whole, in five
+  sizes, four colors, on plain grounds and beside and over ultrasound-like
+  texture, with at most 3.9% of a picture marked beside the text, and a
+  picture of texture alone left unmarked. On the two ultrasound screens
+  in pydicom's corpus every caption block is found; in the one whose
+  lettering is six pixels tall and blurred, a clock and three two- and
+  three-letter labels are not. `anonymize.TextDetector` is an interface,
+  so a program with a recognition engine can use its own.
+
 - **A JPEG 2000 lossless encoder** (#308). `compress/jpeg2000` decoded and
   nothing wrote the format. `jpeg2000.Encode` now writes an image as a
   lossless codestream (ISO/IEC 15444-1): the reversible 5/3 wavelet, and
