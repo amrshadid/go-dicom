@@ -54,9 +54,13 @@
 // skipped with a warning, so one corrupt instance does not make the rest
 // unqueryable.
 //
-// Only the attributes PS3.4 C.6.1.1 and C.6.2.1 define as keys are indexed. An
-// index of every attribute of every instance would hold the whole archive in
-// memory, which is what storing the files was meant to avoid.
+// Only the attributes PS3.4 C.6.1.1 and C.6.2.1 define as keys are indexed,
+// and those a DICOMweb search returns for each level (PS3.18 10.6.3.3): the
+// rows, columns, bits allocated and number of frames of an image, its
+// timezone offset, and when its performed procedure step began. An index of
+// every attribute of every instance would hold the whole archive in memory,
+// which is what storing the files was meant to avoid. Instance Availability
+// (0008,0056) is answered ONLINE: what the index lists is a file in the store.
 //
 // # Text
 //

@@ -25,6 +25,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   studies with no date, and a name, which Orthanc matches without regard to
   case. Retrieving and storing are not served yet.
 
+- **The archive answers with the size of an image** (#294). The index held
+  the C-FIND keys of PS3.4. It now also holds what a DICOMweb search
+  returns for each level (PS3.18 10.6.3.3): Rows, Columns, Bits Allocated,
+  Number of Frames, Timezone Offset From UTC and Performed Procedure Step
+  Start Date and Time, and Instance Availability is answered `ONLINE`.
+  They are return keys of a C-FIND as well, and can be matched on: a
+  number is matched whether a query carries it as bytes or, from a URL, as
+  text, and is answered as a number of its VR. The index file is version
+  3, so an index written before is rebuilt once on opening. Against
+  Orthanc over the same 77 files, a search now returns every attribute
+  Orthanc does but the Retrieve URL, which comes with retrieval.
+
+- **`qrscp -web` serves the archive over HTTP as well** (#294).
+  `go-dicom qrscp -web 8080` adds a DICOMweb search service at
+  `http://127.0.0.1:8080/dicom-web` over the store its DIMSE side writes
+  to, so what a modality stores a web client finds. A port alone listens
+  on this machine only. An address other machines can reach is refused
+  unless `-web-token` or `DICOMWEB_TOKEN` gives a bearer token, which every
+  request must then carry. Under `-tls` the service is HTTPS with the same
+  certificate. Each request is printed with its method, path and status,
+  and never its query, which is where a search carries a patient's name.
+  The interoperability suite stores three files with pynetdicom over DIMSE
+  and searches for them over HTTP with a client that is not this library:
+  the answers agree with pydicom's reading of the files, with a C-FIND on
+  the same archive, and with Orthanc holding the same files.
+
 - **`show` prints a whole value when asked for one, and `--full` prints
   them all** (#282). The table printed the first hundred bytes of a value,
   and so did `show file::Element`, so a long text value or a list of numbers

@@ -1,6 +1,10 @@
 package dcmstore
 
 import (
+	"encoding/binary"
+	"strconv"
+	"strings"
+
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -39,7 +43,8 @@ func textEncodings(ds *dataset.Dataset, inherited []string) []string {
 	return filereader.TextEncodings(declared, inherited)
 }
 
-// elementText is elementString with the value decoded to UTF-8.
+// elementText is the value of an element in the one form the index holds
+// and matching compares: text as UTF-8, and a binary number in decimal.
 //
 // Only bytes are decoded: they are what a sender wrote. A Go string in an
 // element is text already, set by a program, and decoding it again would
@@ -48,6 +53,9 @@ func textEncodings(ds *dataset.Dataset, inherited []string) []string {
 func elementText(elem *dataelem.DataElement, vr dataelem.VR, encodings []string) string {
 	if elem == nil {
 		return ""
+	}
+	if width := binaryNumberWidth(vr); width > 0 {
+		return numberText(elem, vr, width)
 	}
 	raw, ok := elem.GetValue().([]byte)
 	if !ok || !dataelem.IsCharacterSetVR(vr) {
@@ -91,4 +99,71 @@ func holdsNonASCII(ds *dataset.Dataset) bool {
 		}
 	}
 	return false
+}
+
+// binaryNumberWidth is the size in bytes of one value of a VR that holds
+// whole numbers in binary, and 0 for any other VR.
+func binaryNumberWidth(vr dataelem.VR) int {
+	switch vr {
+	case dataelem.US, dataelem.SS:
+		return 2
+	case dataelem.UL, dataelem.SL:
+		return 4
+	}
+	return 0
+}
+
+// numberText renders a binary number as decimal text, values separated by
+// a backslash as text values are.
+//
+// The index is text, and a number reaches it three ways: as the little
+// endian bytes a peer or a file holds, as a Go number a program set, and as
+// decimal text from a URL. Rendered alike, Rows of 512 is "512" whichever
+// way it came, and matches itself.
+func numberText(elem *dataelem.DataElement, vr dataelem.VR, width int) string {
+	if text, ok := elem.GetValue().(string); ok {
+		return trimPadding(text)
+	}
+	raw, err := dataelem.ValueBytes(vr, elem.GetValue())
+	if err != nil || len(raw)%width != 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(raw)/width)
+	for i := 0; i < len(raw); i += width {
+		switch vr {
+		case dataelem.US:
+			parts = append(parts, strconv.FormatUint(uint64(binary.LittleEndian.Uint16(raw[i:])), 10))
+		case dataelem.SS:
+			parts = append(parts, strconv.FormatInt(int64(int16(binary.LittleEndian.Uint16(raw[i:]))), 10))
+		case dataelem.UL:
+			parts = append(parts, strconv.FormatUint(uint64(binary.LittleEndian.Uint32(raw[i:])), 10))
+		default: // SL
+			parts = append(parts, strconv.FormatInt(int64(int32(binary.LittleEndian.Uint32(raw[i:]))), 10))
+		}
+	}
+	return strings.Join(parts, `\`)
+}
+
+// indexedElement makes the element an answer returns for an indexed value.
+//
+// Text goes back as it is. A binary number goes back as numbers: written
+// into a US as text, "512" would be sent as three bytes of a two byte
+// value. A value that is not the number its VR holds is returned empty.
+func indexedElement(t tag.Tag, vr dataelem.VR, value string) *dataelem.DataElement {
+	if binaryNumberWidth(vr) == 0 || value == "" {
+		return dataelem.NewDataElement(t, vr, value)
+	}
+	parts := strings.Split(value, `\`)
+	numbers := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil {
+			return dataelem.NewDataElement(t, vr, "")
+		}
+		numbers = append(numbers, n)
+	}
+	if _, err := dataelem.ValueBytes(vr, numbers); err != nil {
+		return dataelem.NewDataElement(t, vr, "")
+	}
+	return dataelem.NewDataElement(t, vr, numbers)
 }
