@@ -8,12 +8,12 @@
 // data was written with an explicit length where the standard requires an
 // undefined one.
 //
-// With -rle the pixel data is re-encoded as RLE Lossless on the way out, which
-// exercises the one compressed syntax this library writes. Another toolkit
-// reading the result is the only way to know the encoder is right rather than
-// merely self-consistent.
+// With -rle or -jpeg2000 the pixel data is re-encoded on the way out, as RLE
+// Lossless or as JPEG 2000 Lossless, which exercises an encoder this library
+// has. Another toolkit reading the result is the only way to know the encoder
+// is right rather than merely self-consistent.
 //
-// Usage: roundtrip-check [-rle] <source dir> <output dir>
+// Usage: roundtrip-check [-rle|-jpeg2000] <source dir> <output dir>
 package main
 
 import (
@@ -31,13 +31,17 @@ import (
 
 func main() {
 	args := os.Args[1:]
-	asRLE := false
-	if len(args) > 0 && args[0] == "-rle" {
-		asRLE = true
-		args = args[1:]
+	target := ""
+	if len(args) > 0 {
+		switch args[0] {
+		case "-rle":
+			target, args = network.RLELosslessUID, args[1:]
+		case "-jpeg2000":
+			target, args = network.JPEG2000LosslessUID, args[1:]
+		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle] <source dir> <output dir>")
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000] <source dir> <output dir>")
 		os.Exit(2)
 	}
 	corpus, out := args[0], args[1]
@@ -47,7 +51,7 @@ func main() {
 	var written, failed int
 	for _, path := range files {
 		name := filepath.Base(path)
-		if err := roundTrip(path, filepath.Join(out, name), asRLE); err != nil {
+		if err := roundTrip(path, filepath.Join(out, name), target); err != nil {
 			fmt.Printf("SKIP %s: %v\n", name, err)
 			failed++
 			continue
@@ -57,7 +61,7 @@ func main() {
 	fmt.Printf("wrote %d, skipped %d\n", written, failed)
 }
 
-func roundTrip(in, out string, asRLE bool) (err error) {
+func roundTrip(in, out, target string) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic: %v", r)
@@ -81,14 +85,14 @@ func roundTrip(in, out string, asRLE bool) (err error) {
 	}
 
 	ds := df.GetDataset()
-	if asRLE {
+	if target != "" {
 		// Re-encoding goes through the same path a C-STORE takes, so what is
-		// written here is what a peer negotiating RLE would receive.
-		encoded, err := network.EncodeDataset(ds, network.RLELosslessUID)
+		// written here is what a peer negotiating the syntax would receive.
+		encoded, err := network.EncodeDataset(ds, target)
 		if err != nil {
-			return fmt.Errorf("encode as RLE: %w", err)
+			return fmt.Errorf("encode as %s: %w", target, err)
 		}
-		recoded, err := network.DecodeDataset(encoded, network.RLELosslessUID)
+		recoded, err := network.DecodeDataset(encoded, target)
 		if err != nil {
 			return fmt.Errorf("decode re-encoded: %w", err)
 		}
@@ -97,7 +101,7 @@ func roundTrip(in, out string, asRLE bool) (err error) {
 		// with none is untouched by the encoder, and declaring a compressed
 		// syntax over nothing describes the file wrongly.
 		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
-			ts = network.RLELosslessUID
+			ts = target
 		}
 	}
 	dst, err := os.Create(out)

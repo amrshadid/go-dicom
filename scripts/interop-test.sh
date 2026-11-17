@@ -1512,6 +1512,206 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG 2000 encoding: go-dicom compresses, OpenJPEG decompresses (#308)
+#
+# The encoder is lossless, so the check is equality, and the decoder has to
+# be one that does not share this library's reading of the standard. Each
+# uncompressed corpus file with an image is written as JPEG 2000 Lossless,
+# its frames are taken out of the file and given to opj_decompress, and what
+# comes back is held against the source's pixel data, sample for sample.
+# dcmtk has to read the file as well: it does not decode JPEG 2000, and it
+# does say when the structure around the codestream is wrong.
+#
+# The samples are compared as numbers and without numpy, which the
+# interoperability venv does not have.
+# ---------------------------------------------------------------------------
+if command -v opj_decompress >/dev/null 2>&1 && python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "JPEG 2000 encoding: go-dicom encoder, OpenJPEG decoder"
+  RAN_ANY=1
+  j2k_src="$WORKDIR/j2k-src"
+  j2k_out="$WORKDIR/j2k-out"
+  mkdir -p "$j2k_src" "$j2k_out" "$WORKDIR/j2k-frames"
+  if python3 - "$j2k_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom
+import pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    path = os.path.join(corpus, name)
+    try:
+        ds = pydicom.dcmread(path)
+        if "PixelData" not in ds or ds.file_meta.TransferSyntaxUID.is_compressed:
+            continue
+        if int(ds.BitsAllocated) not in (8, 16):
+            continue
+    except Exception:
+        continue
+    shutil.copy(path, sys.argv[1])
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check -jpeg2000 "$j2k_src" "$j2k_out" > "$WORKDIR/j2k.log" 2>&1; then
+      j2k_unread=0
+      for written in "$j2k_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        if ! "$DCMTK_BIN/dcmdump" "$written" >/dev/null 2>"$WORKDIR/j2k-dump.err" || [ -s "$WORKDIR/j2k-dump.err" ]; then
+          # A complaint the source also draws is the source's, not the encoder's.
+          "$DCMTK_BIN/dcmdump" "$j2k_src/$(basename "$written")" >/dev/null 2>"$WORKDIR/j2k-src.err" || true
+          if ! diff -q "$WORKDIR/j2k-dump.err" "$WORKDIR/j2k-src.err" >/dev/null 2>&1; then
+            j2k_unread=$((j2k_unread + 1))
+            echo "   dcmtk on $(basename "$written"): $(head -1 "$WORKDIR/j2k-dump.err")" >&2
+          fi
+        fi
+      done
+      if j2k=$(python3 - "$j2k_src" "$j2k_out" "$WORKDIR/j2k-frames" <<'PYEOF'
+import os, struct, subprocess, sys
+import pydicom
+from pydicom.encaps import generate_pixel_data_frame
+
+src, out, work = sys.argv[1:4]
+
+def pgx(path):
+    """One component as OpenJPEG writes it: a text header, then big endian samples."""
+    with open(path, "rb") as f:
+        header = f.readline().split()
+        data = f.read()
+    signed, depth, width, height = header[2] == b"-", int(header[3]), int(header[4]), int(header[5])
+    size = 1 if depth <= 8 else 2
+    code = ">" + str(width * height) + ("b" if size == 1 else "h") if signed else \
+           ">" + str(width * height) + ("B" if size == 1 else "H")
+    return struct.unpack(code, data[:width * height * size])
+
+def source_samples(ds):
+    """The source's samples as numbers, frame by frame, pixel by pixel."""
+    rows, cols, spp = int(ds.Rows), int(ds.Columns), int(ds.SamplesPerPixel)
+    frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    size = int(ds.BitsAllocated) // 8
+    signed = int(ds.PixelRepresentation) == 1
+    order = "<" if ds.file_meta.TransferSyntaxUID.is_little_endian else ">"
+    n = rows * cols * spp * frames
+    code = order + str(n) + ({1: "b", 2: "h"} if signed else {1: "B", 2: "H"})[size]
+    raw = bytes(ds.PixelData)
+    if size == 1 and order == ">" and ds["PixelData"].VR == "OW":
+        # 8-bit samples in 16-bit words, big endian: each pair is swapped
+        # (PS3.5 8.2 and Annex D).
+        swapped = bytearray(raw)
+        swapped[0::2], swapped[1::2] = raw[1::2], raw[0:len(raw) - len(raw) % 2:2]
+        raw = bytes(swapped)
+    values = struct.unpack(code, raw[:n * size])
+    per = rows * cols * spp
+    for f in range(frames):
+        frame = values[f * per:(f + 1) * per]
+        if spp > 1 and int(getattr(ds, "PlanarConfiguration", 0)) == 1:
+            plane = rows * cols
+            frame = tuple(frame[c * plane + i] for i in range(plane) for c in range(spp))
+        yield frame
+
+checked, frames_checked, bad = 0, 0, []
+for name in sorted(os.listdir(out)):
+    if not name.endswith(".dcm"):
+        continue
+    want = pydicom.dcmread(os.path.join(src, name))
+    got = pydicom.dcmread(os.path.join(out, name))
+    spp = int(want.SamplesPerPixel)
+    frames = int(getattr(want, "NumberOfFrames", 1) or 1)
+    # A source that holds fewer bytes than its own header describes says
+    # nothing about the encoder.
+    if len(want.PixelData) < int(want.Rows) * int(want.Columns) * spp * frames * int(want.BitsAllocated) // 8:
+        continue
+    if got.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.90":
+        bad.append("%s was written as %s" % (name, got.file_meta.TransferSyntaxUID))
+        continue
+    # What the data set must say of an image coded this way (PS3.5 8.2.4).
+    if spp == 3 and want.PhotometricInterpretation == "RGB" and got.PhotometricInterpretation != "YBR_RCT":
+        bad.append("%s: an RGB image is described as %s" % (name, got.PhotometricInterpretation))
+        continue
+    if spp > 1 and int(got.PlanarConfiguration) != 0:
+        bad.append("%s: Planar Configuration is %s" % (name, got.PlanarConfiguration))
+        continue
+    coded = list(generate_pixel_data_frame(got.PixelData, frames))
+    if len(coded) != frames:
+        bad.append("%s holds %d frames of %d" % (name, len(coded), frames))
+        continue
+    ok = True
+    for index, (codestream, original) in enumerate(zip(coded, source_samples(want))):
+        base = os.path.join(work, "frame")
+        for stale in os.listdir(work):
+            os.remove(os.path.join(work, stale))
+        with open(base + ".j2k", "wb") as f:
+            f.write(codestream)
+        run = subprocess.run(["opj_decompress", "-i", base + ".j2k", "-o", base + ".pgx"], capture_output=True)
+        if run.returncode != 0:
+            bad.append("%s frame %d: OpenJPEG refuses it: %s" % (name, index, run.stderr.decode()[-200:]))
+            ok = False
+            break
+        files = [base + ".pgx"] if spp == 1 and os.path.exists(base + ".pgx") else \
+                [base + "_%d.pgx" % c for c in range(spp)]
+        planes = [pgx(p) for p in files]
+        decoded = tuple(planes[c][i] for i in range(len(planes[0])) for c in range(spp))
+        if decoded != tuple(original):
+            bad.append("%s frame %d: OpenJPEG decodes other samples" % (name, index))
+            ok = False
+            break
+        frames_checked += 1
+    checked += ok
+for line in bad:
+    print("   " + line, file=sys.stderr)
+print("%d files, %d frames" % (checked, frames_checked))
+raise SystemExit(1 if bad or not checked else 0)
+PYEOF
+      ) && [ "$j2k_unread" -eq 0 ]; then
+        pass "JPEG 2000 encoding — OpenJPEG decodes every frame to the original samples, and dcmtk reads each file — $j2k"
+
+        # And over the network: a file this encoder wrote, sent to dcmtk,
+        # which takes it in JPEG 2000 Lossless and keeps the codestream.
+        if [ -x "$DCMTK_BIN/storescp" ]; then
+          mkdir -p "$WORKDIR/j2k-recv"
+          start_server "$WORKDIR/j2k-recv" "$WORKDIR/j2k_scp.log" \
+            "$DCMTK_BIN/storescp" +xv -od "$WORKDIR/j2k-recv" 11750
+          J2K_SCP_PID=$SERVER_PID
+          j2k_sent="$j2k_out/CT_small.dcm"
+          if wait_for_port 11750 && "$GODICOM" storescu 127.0.0.1:11750 "$j2k_sent" >"$WORKDIR/j2k_scu.log" 2>&1 &&
+            python3 - "$j2k_sent" "$WORKDIR/j2k-recv" <<'PYEOF'
+import os, sys
+import pydicom
+
+sent = pydicom.dcmread(sys.argv[1])
+received = [os.path.join(sys.argv[2], n) for n in os.listdir(sys.argv[2]) if not n.endswith(".log")]
+if len(received) != 1:
+    sys.exit("dcmtk kept %d files" % len(received))
+got = pydicom.dcmread(received[0])
+if got.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.90":
+    sys.exit("dcmtk received it as %s" % got.file_meta.TransferSyntaxUID)
+if bytes(got.PixelData) != bytes(sent.PixelData):
+    sys.exit("the codestream dcmtk kept is not the one that was sent")
+PYEOF
+          then
+            pass "JPEG 2000 over the network — dcmtk storescp receives the file in 1.2.840.10008.1.2.4.90 with its codestream intact"
+          else
+            fail "dcmtk did not receive a JPEG 2000 Lossless file as sent: $(tail -2 "$WORKDIR/j2k_scu.log")"
+          fi
+          stop_server "$J2K_SCP_PID"
+        fi
+      else
+        fail "this encoder's JPEG 2000 does not survive OpenJPEG or dcmtk: $j2k"
+      fi
+    else
+      fail "the JPEG 2000 encoding harness failed"
+      sed -n '1,20p' "$WORKDIR/j2k.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+else
+  skip "JPEG 2000 encoding needs opj_decompress (OpenJPEG) and pydicom"
+fi
+
+# ---------------------------------------------------------------------------
 # DICOMweb against a server that is not this library (#285)
 #
 # The client had its own test server and nothing else in CI. Checked by hand

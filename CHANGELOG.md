@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set and network side, which make `1.2.840.10008.1.2.4.90` something a
   file or a send can be compressed to, follow.
 
+- **A file or a send can be compressed to JPEG 2000 Lossless** (#308).
+  `Dataset.CompressJPEG2000LosslessInPlace` replaces the Pixel Data with
+  `.90` frames and makes the data set say so: an RGB image becomes
+  `YBR_RCT` with Planar Configuration 0, as PS3.5 8.2.4 has it, and decodes
+  back to RGB. `1.2.840.10008.1.2.4.90` is now a transfer syntax a send
+  transcodes to, as RLE and JPEG-LS Lossless are, so a peer that accepts
+  only JPEG 2000 can be sent an uncompressed image. An image held in
+  another compressed syntax is decoded first. A frame is coded at Bits
+  Stored, or at Bits Allocated when a sample uses the bits above it, so
+  what was in the file is what comes back. `compress.EncodeJPEG2000Lossless`
+  codes one frame of native samples. Checked in the interoperability suite,
+  which now has OpenJPEG: every uncompressed image of pydicom's corpus is
+  written as `.90`, each frame is decoded by `opj_decompress` to the
+  samples of the source, dcmtk reads each file, and dcmtk receives one over
+  the network with its codestream intact.
+
 - **A DICOMweb search service** (#294). Package `dicomweb` was a client; it
   now has the server's side of QIDO-RS (PS3.18 10.6).
   `dicomweb.NewServer(backend)` is an `http.Handler` for `/studies`,

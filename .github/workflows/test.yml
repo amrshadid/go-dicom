@@ -264,6 +264,22 @@ jobs:
           sudo apt-get install -y -qq dcmtk
           /usr/bin/storescu --version | head -1
 
+      # The reference JPEG 2000 codec, for the encoder (#308): what this
+      # library writes has to be decoded by something that is not it.
+      - name: Install OpenJPEG
+        run: |
+          sudo apt-get install -y -qq libopenjp2-tools
+          opj_decompress -h | head -3
+
+      # Skipped where there is no opj_decompress, so it is run here, where
+      # there is: every generated image, decoded by OpenJPEG, sample for sample.
+      - name: Verify the JPEG 2000 encoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run TestOpenJPEGDecodesWhatEncodeWrites -v > openjpeg.log
+          tail -5 openjpeg.log
+          # A skip passes too, and here it must not.
+          grep -q "OpenJPEG returned the samples" openjpeg.log
+
       - name: Build CLI
         run: go build -o go-dicom .
 
