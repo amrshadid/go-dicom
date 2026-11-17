@@ -3,8 +3,11 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/amrshadid/go-dicom/config"
 )
 
 // Command interface all CLI commands must implement.
@@ -135,7 +138,37 @@ func (c *CLI) Run(args []string) error {
 		return fmt.Errorf("unknown command: %s\nRun '%s --help' for usage", cmdName, c.Name)
 	}
 
+	quietLibrary()
+
 	return cmd.Execute(args[1:])
+}
+
+// libraryLogEnv names the level the library logs at while a command runs:
+// warn, info or debug. Unset, it logs errors alone.
+const libraryLogEnv = "GODICOM_LOG"
+
+// quietLibrary keeps the library's log off the terminal a command is using.
+//
+// The library logs what it notices as it reads: a retired attribute, an
+// element written without its VR. To a program that embeds it those go to a
+// logger the program chose. Here they went to standard error in the logger's
+// own format, among the command's output, forty lines of it across pydicom's
+// corpus for show alone, and said nothing the person running the command
+// asked about (#283). What a command has to tell of a file it tells itself.
+//
+// Only here, where a command is about to run. A program using this package
+// as a library keeps the logger it set.
+func quietLibrary() {
+	level := slog.LevelError
+	switch strings.ToLower(os.Getenv(libraryLogEnv)) {
+	case "warn":
+		level = slog.LevelWarn
+	case "info":
+		level = slog.LevelInfo
+	case "debug":
+		level = slog.LevelDebug
+	}
+	config.SetLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 }
 
 // ShowHelp displays the main help message for the CLI.
