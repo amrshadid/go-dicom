@@ -4,45 +4,15 @@ import (
 	"testing"
 )
 
-// bitWriter writes the bits a packet header is made of, for the table test
-// below, with the bit stuffing a real encoder applies: after a byte of 0xFF the
-// next carries seven bits, so that no marker can appear inside a header
-// (B.10.1). The reader refuses an unstuffed 0xFF, which is how the patterns for
-// 37 and 164 passes found this.
-type bitWriter struct {
-	out  []byte
-	buf  byte
-	bits int
-	room int
-}
-
-func (w *bitWriter) write(pattern string) {
+// write puts a pattern of bits, written as '0' and '1', into a header.
+func (w *headerWriter) write(pattern string) {
 	for _, c := range pattern {
-		if w.room == 0 {
-			w.room = 8
-			if len(w.out) > 0 && w.out[len(w.out)-1] == 0xFF {
-				w.room = 7
-			}
-			w.buf, w.bits = 0, 0
-		}
-		w.bits++
-		w.room--
-		w.buf <<= 1
+		bit := 0
 		if c == '1' {
-			w.buf |= 1
+			bit = 1
 		}
-		if w.room == 0 {
-			w.out = append(w.out, w.buf)
-			w.bits = 0
-		}
+		w.writeBit(bit)
 	}
-}
-
-func (w *bitWriter) bytes() []byte {
-	if w.bits > 0 {
-		return append(w.out, w.buf<<uint(w.room))
-	}
-	return w.out
 }
 
 // TestPassCountTable checks the code of Table B.4 bit pattern by bit pattern.
@@ -70,7 +40,7 @@ func TestPassCountTable(t *testing.T) {
 		{"1111111111111111", 164, "the most passes the code can carry"},
 	}
 	for _, tc := range tests {
-		w := &bitWriter{}
+		w := &headerWriter{}
 		w.write(tc.bits)
 		got, err := readPassCount(newBitReader(w.bytes()))
 		if err != nil {
@@ -89,7 +59,7 @@ func TestPassCountTable(t *testing.T) {
 // pass count.
 func TestSegmentLengthFieldGrows(t *testing.T) {
 	// No growth: three bits plus log2(1) = 0, value 5.
-	w := &bitWriter{}
+	w := &headerWriter{}
 	w.write("0" + "101")
 	b := &blockState{lblock: 3}
 	got, err := readSegmentLength(newBitReader(w.bytes()), b, 1)
@@ -101,7 +71,7 @@ func TestSegmentLengthFieldGrows(t *testing.T) {
 	}
 
 	// Two 1 bits: five bits of length, and eight passes adds three more.
-	w = &bitWriter{}
+	w = &headerWriter{}
 	w.write("110" + "10000000")
 	b = &blockState{lblock: 3}
 	got, err = readSegmentLength(newBitReader(w.bytes()), b, 8)
