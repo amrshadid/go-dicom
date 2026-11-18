@@ -147,10 +147,10 @@ func TestUnencodableCompressedTargetIsRefused(t *testing.T) {
 	// wire described as something they are not, which the receiver could not
 	// detect. The list is what is true now. It went stale when the JPEG 2000
 	// Lossless encoder arrived (#327), because it is edited by hand: the
-	// syntaxes that are written are RLE, JPEG-LS Lossless and JPEG 2000
-	// Lossless, and JPEG Baseline only when a quality is set. Of the rest:
+	// syntaxes that are written are RLE, JPEG-LS Lossless, JPEG 2000 Lossless
+	// and JPEG Lossless (both forms), and JPEG Baseline only when a quality is
+	// set. Of the rest:
 	//
-	//   - JPEG Lossless (SV1) has no encoder.
 	//   - JPEG 2000 (the lossy .91) has none either; the lossless encoder is
 	//     not turned into it by a flag.
 	//   - JPEG-LS *Near*-Lossless stays refused although the same encoder could
@@ -161,7 +161,6 @@ func TestUnencodableCompressedTargetIsRefused(t *testing.T) {
 	//     tested with NetworkConfig.JPEGQuality.
 	for _, target := range []string{
 		network.JPEGBaselineUID,
-		network.JPEGLosslessSV1UID,
 		network.JPEG2000UID,
 		network.JPEGLSNearLosslessUID,
 	} {
