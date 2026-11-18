@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A time with fractional seconds is a valid TM, and a DT is checked**
+  (#356). `valuerep.ValidateValue` refused `120000.5`, which PS3.5 Table
+  6.2-1 allows (up to six digits after the dot), and passed any text as a
+  DT. Both now follow the table; `DataElement.ValidateVR` and
+  `SetValueWithValidation`, which use it, follow with them.
+
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
   arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
