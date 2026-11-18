@@ -53,8 +53,8 @@ func brokenCT(t *testing.T) string {
 func TestValidateReportsEachDefect(t *testing.T) {
 	path := brokenCT(t)
 	out, err := captured(t, func() error { return (&ValidateCommand{}).Execute([]string{path}) })
-	var status *ExitStatusError
-	if !errors.As(err, &status) || status.ExitCode() != validateErrors {
+	var status *ExitError
+	if !errors.As(err, &status) || status.Code != validateErrors {
 		t.Fatalf("the run ended with %v; want exit status %d", err, validateErrors)
 	}
 	for _, want := range []string{
@@ -124,7 +124,7 @@ func TestValidateRefusesWhatItCannotCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := captured(t, func() error { return (&ValidateCommand{}).Execute([]string{path}) })
-	var status *ExitStatusError
+	var status *ExitError
 	if err == nil || errors.As(err, &status) {
 		t.Errorf("a file that is not DICOM gave %v", err)
 	}

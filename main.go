@@ -56,7 +56,10 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.TagDocCommand{})
 	dicomCLI.RegisterCommand(&cli.CodifyCommand{})
 	dicomCLI.RegisterCommand(&cli.AnonymizeCommand{})
+	dicomCLI.RegisterCommand(&cli.DICOMDIRCommand{})
 	dicomCLI.RegisterCommand(&cli.ShareCommand{})
+	dicomCLI.RegisterCommand(&cli.DiffCommand{})
+	dicomCLI.RegisterCommand(&cli.SRCommand{})
 	dicomCLI.RegisterCommand(&cli.ValidateCommand{})
 	dicomCLI.RegisterCommand(&cli.HelpCommand{})
 	dicomCLI.RegisterCommand(&cli.VersionCommand{
@@ -82,12 +85,17 @@ func main() {
 
 	// Run CLI with command-line arguments
 	if err := dicomCLI.Run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		// A command whose status says more than failure, as validate does.
-		var status interface{ ExitCode() int }
-		if errors.As(err, &status) {
-			os.Exit(status.ExitCode())
+		// A command that answers in its exit status (diff, validate) says which.
+		code := 1
+		var exit *cli.ExitError
+		if errors.As(err, &exit) {
+			code = exit.Code
+			if exit.Err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", exit.Err)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
-		os.Exit(1)
+		os.Exit(code)
 	}
 }

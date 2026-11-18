@@ -34,24 +34,11 @@ func (vc *ValidateCommand) AddFlags(fs *flag.FlagSet) {
 }
 
 // Exit statuses of validate, by the worst finding. 1 is any command that
-// could not run.
+// could not run. The status is carried to main by ExitError.
 const (
 	validateWarnings = 2
 	validateErrors   = 3
 )
-
-// ExitStatusError is an error that asks for a particular exit status, for a
-// command whose status says more than success or failure.
-type ExitStatusError struct {
-	Status  int
-	Message string
-}
-
-// Error returns the message.
-func (e *ExitStatusError) Error() string { return e.Message }
-
-// ExitCode is the status the process exits with.
-func (e *ExitStatusError) ExitCode() int { return e.Status }
 
 // Execute runs the validate command.
 func (vc *ValidateCommand) Execute(args []string) error {
@@ -101,9 +88,9 @@ func (vc *ValidateCommand) Execute(args []string) error {
 	errors, warnings := report.Count(validate.Error), report.Count(validate.Warning)
 	switch {
 	case errors > 0:
-		return &ExitStatusError{validateErrors, fmt.Sprintf("validate: %s: %d error(s), %d warning(s)", path, errors, warnings)}
+		return &ExitError{Code: validateErrors, Err: fmt.Errorf("validate: %s: %d error(s), %d warning(s)", path, errors, warnings)}
 	case warnings > 0:
-		return &ExitStatusError{validateWarnings, fmt.Sprintf("validate: %s: %d warning(s)", path, warnings)}
+		return &ExitError{Code: validateWarnings, Err: fmt.Errorf("validate: %s: %d warning(s)", path, warnings)}
 	}
 	return nil
 }
