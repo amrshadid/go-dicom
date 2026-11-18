@@ -463,8 +463,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
   coding style's own, with any combination of the six code-block style options
   (selective arithmetic coding bypass, reset of context probabilities,
   termination on each coding pass, vertically causal context, predictable
-  termination, segmentation symbols), and with the reversible and irreversible
-  component transforms. There is no CGO and nothing to register.
+  termination, segmentation symbols), with a region of interest coded by the
+  Maxshift method in the main header or a tile-part header, and with the
+  reversible and irreversible component transforms. There is no CGO and
+  nothing to register.
 
   pydicom's corpus uses only the defaults, so what it does not exercise is
   checked against OpenJPEG instead: `opj_compress` writes a codestream with the
@@ -473,6 +475,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   not, reversible and irreversible (`TestDecodeMatchesOpenJPEG`, run in CI).
   All 63 combinations of the code-block style options are checked this way
   (`TestDecodeEveryBlockStyleMatchesOpenJPEG`).
+
+  One combination is checked against the samples that were encoded instead: a
+  region of interest with selective arithmetic coding bypass. OpenJPEG 2.5.4
+  decodes its own lossless output of that combination to thousands of wrong
+  samples, because its decoder starts bypass four bit planes into the block
+  without counting the planes the region's shift added (D.6). This decoder
+  returns every sample (`TestRegionOfInterestWithBypassIsLossless`). Its
+  boundary between region and background follows H.1, 2^s, where OpenJPEG's
+  decoder uses 2^(s-1). OpenJPEG's encoder never writes background that the
+  difference would show, so `TestRegionOfInterestThreshold` pins H.1's rule.
 
   A reversible codestream is required to match pydicom sample for sample. An
   irreversible one is held to a tolerance of one up to 12 bits and two at 16:
@@ -493,7 +505,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   - the High-Throughput block coder of Part 15, and the reserved bit, in the
     code-block style: `code-block style 0x40` or `0x80` and up [A.6.1 Table
     A.19];
-  - a region of interest: `region of interest (RGN)` [A.6.3, Annex H];
+  - a region of interest coded by a method other than Maxshift, which Part 2
+    defines: `region of interest style N` [A.6.3];
   - progression order changes: `progression order change (POC)` [A.6.6];
   - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
   - subsampled components: `component subsampling` [A.5.1, B.2];
@@ -502,9 +515,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   - the Part 2 wavelets and quantization styles: `wavelet transform N`,
     `quantization style N`.
 
-  An RGN or POC segment in a tile-part header, rather than the main header, and
-  any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) are
-  refused too, but as `unexpected marker` with its code rather than by name.
+  A POC segment in a tile-part header, rather than the main header, and any
+  marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) are refused
+  too, but as `unexpected marker` with its code rather than by name.
 
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an

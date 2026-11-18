@@ -168,7 +168,22 @@ type Codestream struct {
 	TileQuant           map[int]Quantization
 	TileComponentQuant  map[TileComponentKey]Quantization
 
+	// ROIShift is the Maxshift value s of a component's region of interest,
+	// from an RGN segment in the main header, and TileROIShift a tile's own
+	// (A.6.3, Annex H). A component without one has no region of interest.
+	ROIShift     map[int]int
+	TileROIShift map[TileComponentKey]int
+
 	TileParts []TilePart
+}
+
+// ROIShiftForTile returns the region-of-interest shift in force for a
+// component of a tile: the tile's own RGN, then the main header's, then 0.
+func (c *Codestream) ROIShiftForTile(tile, component int) int {
+	if s, ok := c.TileROIShift[TileComponentKey{Tile: tile, Component: component}]; ok {
+		return s
+	}
+	return c.ROIShift[component]
 }
 
 // TileComponentKey names one component of one tile, for the override maps.
@@ -272,6 +287,8 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		TileComponentCoding: map[TileComponentKey]CodingStyle{},
 		TileQuant:           map[int]Quantization{},
 		TileComponentQuant:  map[TileComponentKey]Quantization{},
+		ROIShift:            map[int]int{},
+		TileROIShift:        map[TileComponentKey]int{},
 	}
 	pos := 2
 	seenSIZ, seenCOD, seenQCD := false, false, false
@@ -333,7 +350,10 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		case markerPOC:
 			err = &ErrUnsupported{Feature: "progression order change (POC)"}
 		case markerRGN:
-			err = &ErrUnsupported{Feature: "region of interest (RGN)"}
+			var index, shift int
+			if index, shift, err = parseRGN(c, segment); err == nil {
+				c.ROIShift[index] = shift
+			}
 		default:
 			err = fmt.Errorf("jpeg2000: unexpected marker %04X at offset %d", marker, pos-2)
 		}
@@ -505,6 +525,34 @@ func parseTileCOC(c *Codestream, tile int, s []byte) error {
 	}
 	c.TileComponentCoding[TileComponentKey{Tile: tile, Component: index}] = style
 	return nil
+}
+
+// parseRGN reads an RGN segment (A.6.3): the component it applies to, and the
+// shift of its region of interest.
+//
+// Part 1 defines one method, Maxshift (Annex H, Srgn 0). The encoder scales
+// the region's coefficients up by 2^s, past every coefficient of the
+// background, and says nothing else about where the region is: the decoder
+// finds it again by magnitude. Any other Srgn is Part 2's and is refused by
+// name.
+func parseRGN(c *Codestream, s []byte) (index, shift int, err error) {
+	if len(c.Components) == 0 {
+		return 0, 0, fmt.Errorf("jpeg2000: RGN before SIZ")
+	}
+	index, rest, err := componentIndex(c, s)
+	if err != nil {
+		return 0, 0, err
+	}
+	if index >= len(c.Components) {
+		return 0, 0, fmt.Errorf("jpeg2000: RGN for component %d of %d", index, len(c.Components))
+	}
+	if len(rest) < 2 {
+		return 0, 0, fmt.Errorf("jpeg2000: RGN is too short")
+	}
+	if rest[0] != 0 {
+		return 0, 0, &ErrUnsupported{Feature: fmt.Sprintf("region of interest style %d", rest[0])}
+	}
+	return index, int(rest[1]), nil
 }
 
 // parseTileQCC records quantization for one component of one tile.
@@ -714,6 +762,11 @@ func parseTilePart(c *Codestream, data []byte, pos int) (int, error) {
 			}
 		case markerQCC:
 			err = parseTileQCC(c, tile, segment)
+		case markerRGN:
+			var index, shift int
+			if index, shift, err = parseRGN(c, segment); err == nil {
+				c.TileROIShift[TileComponentKey{Tile: tile, Component: index}] = shift
+			}
 		case markerPPT:
 			err = &ErrUnsupported{Feature: "packed packet headers (PPT)"}
 		case markerCOM, markerPLT:
