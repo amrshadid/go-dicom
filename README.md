@@ -27,8 +27,8 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
 - **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
 - **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
-- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
-- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines
+- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: the modality, VOI and presentation lookup tables or rescale and window, MONOCHROME1, YBR and palette color
+- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines. Both formats are written down, each with a JSON Schema: [`show --json`](docs/show-json.md) and [`-events`](docs/events.md)
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
@@ -305,6 +305,7 @@ go build -o go-dicom .
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
 ./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at
 ./go-dicom anonymize -redact auto us.dcm clean.dcm  # Black out what it finds; it can miss, so look
+./go-dicom diff a.dcm b.dcm           # What differs, element by element; exit 0 equal, 1 different, 2 error
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
@@ -325,6 +326,9 @@ go build -o go-dicom .
 
 # Query for patients/studies
 ./go-dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
+
+# Ask the worklist what is scheduled for this MR today, steps included
+./go-dicom findscu -worklist -modality MR -date today -aec RIS ris:104
 
 # Retrieve studies to a destination
 ./go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
@@ -668,6 +672,7 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
+| HTJ2K (`.201`-`.203`), JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
 `YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
@@ -779,6 +784,12 @@ golangci-lint run ./...
 ```
 
 ## Examples
+
+Coming from another toolkit: [Coming from pydicom](./docs/coming-from-pydicom.md)
+and [Coming from dcmtk](./docs/coming-from-dcmtk.md) map the calls and commands
+you know to their equivalents here, and [Examples](./docs/examples.md) shows the
+common jobs as command lines and as Go, every Go sample run by `go test`
+([`examples/commonjobs`](./examples/commonjobs/)).
 
 See the [examples](./examples/) directory for complete working examples:
 

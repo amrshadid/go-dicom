@@ -174,6 +174,53 @@ var uids = map[string]*UIDInfo{
 		IsRetired:   false,
 		Description: "JPEG 2000 Part 2 multicomponent lossy",
 	},
+	// JPEG XL (ISO/IEC 18181-1). Named so that a file in them
+	// is refused by name: they are read and carried, and not decoded.
+	"1.2.840.10008.1.2.4.110": {
+		UID:         "1.2.840.10008.1.2.4.110",
+		Name:        "JPEG XL Lossless",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "JPEG XL lossless compression",
+	},
+	"1.2.840.10008.1.2.4.111": {
+		UID:         "1.2.840.10008.1.2.4.111",
+		Name:        "JPEG XL JPEG Recompression",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "JPEG XL lossless recompression of a JPEG baseline image",
+	},
+	"1.2.840.10008.1.2.4.112": {
+		UID:         "1.2.840.10008.1.2.4.112",
+		Name:        "JPEG XL",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "JPEG XL compression, lossless or lossy",
+	},
+	// High-Throughput JPEG 2000 (ISO/IEC 15444-15). Read and
+	// carried, and not decoded: the JPEG 2000 decoder here has no HT block
+	// decoder.
+	"1.2.840.10008.1.2.4.201": {
+		UID:         "1.2.840.10008.1.2.4.201",
+		Name:        "High-Throughput JPEG 2000 Image Compression (Lossless Only)",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "HTJ2K lossless compression",
+	},
+	"1.2.840.10008.1.2.4.202": {
+		UID:         "1.2.840.10008.1.2.4.202",
+		Name:        "High-Throughput JPEG 2000 with RPCL Options Image Compression (Lossless Only)",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "HTJ2K lossless compression, RPCL progression order",
+	},
+	"1.2.840.10008.1.2.4.203": {
+		UID:         "1.2.840.10008.1.2.4.203",
+		Name:        "High-Throughput JPEG 2000 Image Compression",
+		Type:        "TransferSyntax",
+		IsRetired:   false,
+		Description: "HTJ2K compression, lossless or lossy",
+	},
 	// RLE Lossless
 	"1.2.840.10008.1.2.5": {
 		UID:         "1.2.840.10008.1.2.5",
