@@ -255,8 +255,7 @@ jobs:
         run: |
           python -m venv "$HOME/dicomvenv"
           "$HOME/dicomvenv/bin/pip" install --quiet --upgrade pip
-          # numpy, for pydicom to decode the pixels of what a streamed C-STORE wrote.
-          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom numpy
+          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom
           "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__)"
 
       - name: Install dcmtk

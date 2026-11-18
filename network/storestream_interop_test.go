@@ -94,11 +94,12 @@ func streamingArchive(t *testing.T) (string, string, *fileWriter) {
 
 // compareScript compares the file a peer sent, or a faithful copy of it, with
 // the file written here: the data set bytes after each one's File Meta
-// Information, and the written file as pydicom reads it, its meta, its
-// elements and its pixels against the other's.
+// Information, and the written file as pydicom reads it, its meta and every
+// element, Pixel Data included, against the other's. The pixels are compared
+// as stored rather than decoded: decoding needs numpy, which the interop job
+// does not install.
 const compareScript = `
 import sys
-import numpy as np
 import pydicom
 from pynetdicom.dsutils import split_dataset
 
@@ -115,8 +116,8 @@ for original, written in [(sys.argv[1], sys.argv[2])]:
     assert w.file_meta.MediaStorageSOPClassUID == o.SOPClassUID
     for elem in o:
         assert w[elem.tag].value == elem.value, elem.tag
-    assert np.array_equal(w.pixel_array, o.pixel_array)
-    print("%s: %d data set bytes identical, transfer syntax %s, pixels equal (pydicom %s)" % (
+    assert w.PixelData == o.PixelData
+    print("%s: %d data set bytes identical, transfer syntax %s, every element equal (pydicom %s)" % (
         original.rsplit("/", 1)[-1], len(b), w.file_meta.TransferSyntaxUID.name, pydicom.__version__))
 `
 
