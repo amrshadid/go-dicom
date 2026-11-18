@@ -1,6 +1,8 @@
 package network
 
 import (
+	"encoding/binary"
+
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -23,9 +25,39 @@ const (
 
 // Additional command tag constants for N-DIMSE.
 var (
-	tagEventTypeID  = tag.New(0x0000, 0x1002)
-	tagActionTypeID = tag.New(0x0000, 0x1008)
+	tagEventTypeID             = tag.New(0x0000, 0x1002)
+	tagAttributeIdentifierList = tag.New(0x0000, 0x1005)
+	tagActionTypeID            = tag.New(0x0000, 0x1008)
 )
+
+// attributeIdentifierList reads an N-GET-RQ's Attribute Identifier List
+// (0000,1005), the attributes the requester asked for (PS3.7 10.1.2.1.4). An
+// absent or empty list means every attribute, and is returned as nil.
+//
+// The value is AT, VM 1-n: each tag a group then an element, two bytes each,
+// little endian, since a command set is always Implicit VR Little Endian
+// (PS3.5 6.2, PS3.7 6.3.1). A length that is not a multiple of four is not a
+// list of tags; reading what fits would hand the handler a list the requester
+// did not send, so it is an error.
+func attributeIdentifierList(cmd *dataset.Dataset) ([]tag.Tag, error) {
+	elem, ok := cmd.Get(tagAttributeIdentifierList)
+	if !ok {
+		return nil, nil
+	}
+	data, ok := elem.GetValue().([]byte)
+	if !ok {
+		return nil, NewPDUErrorf("N-GET", "Attribute Identifier List holds %T, not bytes", elem.GetValue())
+	}
+	if len(data)%4 != 0 {
+		return nil, NewPDUErrorf("N-GET",
+			"Attribute Identifier List is %d bytes, not a whole number of tags", len(data))
+	}
+	var tags []tag.Tag
+	for i := 0; i < len(data); i += 4 {
+		tags = append(tags, tag.New(binary.LittleEndian.Uint16(data[i:]), binary.LittleEndian.Uint16(data[i+2:])))
+	}
+	return tags, nil
+}
 
 // NEventReportRequest represents an N-EVENT-REPORT-RQ message.
 type NEventReportRequest struct {
@@ -48,7 +80,9 @@ type NEventReportResponse struct {
 	DataSet              *dataset.Dataset
 }
 
-// NGetRequest represents an N-GET-RQ message.
+// NGetRequest represents an N-GET-RQ message. AttributeList is the Attribute
+// Identifier List (0000,1005) the requester sent, in its order; nil means it
+// asked for every attribute (PS3.7 10.1.2.1.4).
 type NGetRequest struct {
 	MessageID            uint16
 	RequestedSOPClass    string

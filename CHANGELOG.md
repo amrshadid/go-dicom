@@ -578,6 +578,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the decoder is asked, a fixture that cannot be built fails, and the job
   fails if the check did not pass. The decoder itself was right.
 
+- **An N-GET handler is given the attributes that were asked for** (#380).
+  `NGetRequest.AttributeList` was always empty: the SCP never read
+  Attribute Identifier List (0000,1005) from the request, and to a handler
+  an empty list means every attribute (PS3.7 10.1.2.1.4). pynetdicom asking
+  a Media Creation SCP for Execution Status got a handler that saw no list.
+  The list now reaches the handler in the order it was sent. A list whose
+  length is not a whole number of tags is refused with 0x0110 Processing
+  failure, and the handler is not called.
+
 - **An N-service response's data set is read with it** (#379).
   `SCU.NCreate`, `NSet`, `NAction` and `NEventReport` read the response's
   command and stopped. When the peer sent a data set after it, as PS3.7
