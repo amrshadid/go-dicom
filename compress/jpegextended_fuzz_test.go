@@ -39,8 +39,10 @@ func FuzzJPEGExtendedDecompress(f *testing.F) {
 	decoder := compress.NewJPEGDecompressor()
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_ = decoder.CanDecompress(data)
-		if out, err := decoder.Decompress(data); err == nil && len(out) == 0 {
+		out, err := decoder.Decompress(data)
+		if err == nil && len(out) == 0 {
 			t.Fatal("decoded successfully but produced no pixels")
 		}
+		checkFrameWidths(t, decoder, data, out, err)
 	})
 }

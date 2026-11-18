@@ -437,6 +437,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A frame coded at 8 bits in a 16-bit image decodes to the whole image**
+  (#362). The JPEG-LS, lossless JPEG and JPEG Baseline/Extended decoders
+  unpacked a frame at its own precision, one byte a sample at 8 bits or
+  fewer, so an image of 16 bits allocated whose frames were coded at 8 came
+  back from `DecodedPixelData` at half its size with no error, and was read
+  as 16-bit samples by everything after it. T.81 and T.87 allow such a frame;
+  dcmtk's `dcmdjpeg` decodes it, `dcmdjpls` refuses it, and pydicom's main
+  branch widens a JPEG-LS one. Every bundled decoder now writes the width
+  Bits Allocated says, through the new `compress.FrameDecompressor`
+  interface that JPEG 2000's `DecompressFrame` already had the shape of, and
+  refuses a frame coded at more bits than Bits Allocated instead of writing
+  it two bytes a sample or, for JPEG 2000, keeping its low bits. A decoded
+  frame shorter than the image is now an error from `DecodedPixelData` too,
+  as it already was from `DecompressInPlace`.
+
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
   reason 2, which from that source is "application context name not

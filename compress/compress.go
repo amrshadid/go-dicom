@@ -1049,13 +1049,40 @@ func NewJPEGDecompressorForPhotometric(photometric string) *JPEGDecompressor {
 	return &JPEGDecompressor{KeepYCbCr: strings.HasPrefix(photometric, "YBR")}
 }
 
-// Decompress decompresses JPEG data and returns raw pixel data.
+// Decompress decompresses JPEG data and returns raw pixel data, one byte a
+// sample for an 8-bit frame and two for a 12-bit one.
 func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
+	samples, _, err := d.decode(data)
+	return samples, err
+}
+
+// DecompressFrame decodes one JPEG frame to samples bitsAllocated bits wide,
+// the layout a data set describes; see FrameDecompressor.
+//
+// An 8-bit frame in an image of 16 bits allocated is legal and comes back two
+// bytes a sample; a 12-bit frame in an image of 8 bits allocated is refused.
+// bitsStored and pixelRepresentation are not needed.
+func (d *JPEGDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsStored,
+	pixelRepresentation int) ([]byte, error) {
+
+	samples, precision, err := d.decode(data)
+	if err != nil {
+		return nil, err
+	}
+	samples, err = atBitsAllocated(samples, precision, bitsAllocated)
+	if err != nil {
+		return nil, fmt.Errorf("jpeg: %w", err)
+	}
+	return samples, nil
+}
+
+// decode decodes one frame at its own width and reports its precision.
+func (d *JPEGDecompressor) decode(data []byte) ([]byte, int, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data for JPEG decompression")
+		return nil, 0, fmt.Errorf("empty data for JPEG decompression")
 	}
 
 	// The standard library covers 8-bit frames, baseline and progressive alike,
@@ -1065,24 +1092,24 @@ func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
 	if sequentialJPEGPrecision(data) == 12 {
 		img, err := decodeSequentialJPEG(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode 12-bit JPEG: %w", err)
+			return nil, 0, fmt.Errorf("failed to decode 12-bit JPEG: %w", err)
 		}
-		return img.pack(), nil
+		return img.pack(), img.precision, nil
 	}
 
 	reader := bytes.NewReader(data)
 	img, err := jpeg.Decode(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode JPEG: %w", err)
+		return nil, 0, fmt.Errorf("failed to decode JPEG: %w", err)
 	}
 	// image/jpeg returns an empty image, not an error, for a frame of zero
 	// columns, or of zero rows with the count in a DNL marker it does not read.
 	if bounds := img.Bounds(); bounds.Empty() {
-		return nil, fmt.Errorf("failed to decode JPEG: the frame is %dx%d",
+		return nil, 0, fmt.Errorf("failed to decode JPEG: the frame is %dx%d",
 			bounds.Dx(), bounds.Dy())
 	}
 
-	return samplesFromImage(img, d.KeepYCbCr), nil
+	return samplesFromImage(img, d.KeepYCbCr), 8, nil
 }
 
 // samplesFromImage flattens a decoded JPEG to DICOM pixel data.

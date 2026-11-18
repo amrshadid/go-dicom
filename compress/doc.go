@@ -240,10 +240,22 @@
 //
 //	type Decompressor interface {
 //		// Decompress decompresses pixel data
-//		Decompress(data []byte, width, height, bitsPerPixel int) ([]byte, error)
+//		Decompress(data []byte) ([]byte, error)
 //
 //		// CanDecompress checks if this decompressor can handle the data
 //		CanDecompress(data []byte) bool
+//	}
+//
+// Decompress returns samples at the codestream's own width: one byte a sample
+// at a precision of 8 or fewer, two above. A decoder that also satisfies
+// FrameDecompressor writes them at the width a data set's Bits Allocated says
+// instead, which is what a data set's pixel path asks for; every decoder here
+// does. A frame coded at 8 bits in an image of 16 bits allocated is legal, and
+// at its own width it is half the image.
+//
+//	type FrameDecompressor interface {
+//		Decompressor
+//		DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
 //	}
 //
 // ## Compressor Interface

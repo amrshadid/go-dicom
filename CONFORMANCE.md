@@ -485,7 +485,10 @@ RLE, JPEG Baseline, JPEG Lossless (`.57` and `.70`, every prediction selection
 value) and JPEG-LS (`.80` and `.81`, lossless and near-lossless, both interleave
 modes) all decode in pure Go, single or multi component,
 at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
-horizontally subsampled `YBR_FULL_422` expanded.
+horizontally subsampled `YBR_FULL_422` expanded. A frame coded at fewer bits
+than Bits Allocated, such as a JPEG-LS frame of 8 bits in an image of 16 bits
+allocated, decodes at the width Bits Allocated says, as JPEG 2000 always did; a
+frame coded at more bits than Bits Allocated is refused rather than cut.
 
 Every file in pydicom's corpus that pydicom can decode decodes here to the same
 samples: **all 50 of them**, compared whole rather than by their leading values,
