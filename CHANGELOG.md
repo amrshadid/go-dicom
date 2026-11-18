@@ -379,6 +379,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ended. `WriteDataElement` and `WriteFileMetaInfo` now return an error
   before writing any of the element or the group.
 
+- **A time with fractional seconds is a valid TM, and a DT is checked**
+  (#356). `valuerep.ValidateValue` refused `120000.5`, which PS3.5 Table
+  6.2-1 allows (up to six digits after the dot), and passed any text as a
+  DT. Both now follow the table; `DataElement.ValidateVR` and
+  `SetValueWithValidation`, which use it, follow with them.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
