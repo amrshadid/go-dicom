@@ -146,13 +146,11 @@ func TestUnencodableCompressedTargetIsRefused(t *testing.T) {
 	// than put bytes on the wire described as something they are not — which the
 	// receiver could not detect.
 	//
-	// JPEG-LS *Near*-Lossless stays refused although the same encoder could
-	// produce it: it is lossy, and how much error to accept is the caller's
-	// decision rather than one to make silently while transcoding.
+	// JPEG-LS Near-Lossless is no longer here either: with no error allowed
+	// it is coded losslessly, which that syntax includes (#337).
 	for _, target := range []string{
 		network.JPEGBaselineUID,
 		network.JPEG2000LosslessUID,
-		network.JPEGLSNearLosslessUID,
 	} {
 		t.Run(target, func(t *testing.T) {
 			if _, err := network.EncodeDataset(ds, target); err == nil {

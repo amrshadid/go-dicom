@@ -1712,6 +1712,125 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# JPEG-LS Near-Lossless encoding: go-dicom compresses, dcmtk decompresses (#337)
+#
+# Each uncompressed, unsigned corpus image of 8 or 16 bits is written as .81
+# with an allowed error of 2, dcmdjpls decodes it, and every sample dcmtk
+# returns has to be within 2 of the source's. dcmtk's JPEG-LS decoder is
+# CharLS, which shares no code with this library. A signed image is refused
+# at NEAR above 0, by this library as by dcmtk, and is not part of the check.
+# ---------------------------------------------------------------------------
+if [ -x "$DCMTK_BIN/dcmdjpls" ] && python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "JPEG-LS Near-Lossless encoding: go-dicom encoder, dcmtk decoder"
+  RAN_ANY=1
+  jn_src="$WORKDIR/jn-src"
+  jn_out="$WORKDIR/jn-out"
+  mkdir -p "$jn_src" "$jn_out" "$jn_out-decoded"
+  if python3 - "$jn_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom
+import pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    path = os.path.join(corpus, name)
+    try:
+        ds = pydicom.dcmread(path)
+        if "PixelData" not in ds or ds.file_meta.TransferSyntaxUID.is_compressed:
+            continue
+        if int(ds.BitsAllocated) not in (8, 16) or int(ds.PixelRepresentation) != 0:
+            continue
+    except Exception:
+        continue
+    shutil.copy(path, sys.argv[1])
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check -jpegls-near 2 "$jn_src" "$jn_out" > "$WORKDIR/jn.log" 2>&1; then
+      for written in "$jn_out"/*.dcm; do
+        [ -f "$written" ] || continue
+        "$DCMTK_BIN/dcmdjpls" "$written" "$jn_out-decoded/$(basename "$written")" 2>>"$WORKDIR/jn-dcmdjpls.log" || true
+      done
+      if jn=$(python3 - "$jn_src" "$jn_out" "$jn_out-decoded" <<'PYEOF'
+import os, struct, sys
+import pydicom
+
+src, out, decoded = sys.argv[1:4]
+NEAR = 2
+
+def samples(ds, stored):
+    """Every sample as a number masked to Bits Stored, pixel by pixel."""
+    rows, cols, spp = int(ds.Rows), int(ds.Columns), int(ds.SamplesPerPixel)
+    frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    size = int(ds.BitsAllocated) // 8
+    order = "<" if ds.file_meta.TransferSyntaxUID.is_little_endian else ">"
+    n = rows * cols * spp * frames
+    raw = bytes(ds.PixelData)
+    if size == 1 and order == ">" and ds["PixelData"].VR == "OW":
+        swapped = bytearray(raw)
+        swapped[0::2], swapped[1::2] = raw[1::2], raw[0:len(raw) - len(raw) % 2:2]
+        raw = bytes(swapped)
+    values = struct.unpack(order + str(n) + ("B" if size == 1 else "H"), raw[:n * size])
+    mask = (1 << stored) - 1
+    if spp > 1 and int(getattr(ds, "PlanarConfiguration", 0)) == 1:
+        plane, per = rows * cols, rows * cols * spp
+        values = tuple(values[f * per + c * plane + i] for f in range(frames)
+                       for i in range(plane) for c in range(spp))
+    return [v & mask for v in values]
+
+checked, bad = 0, []
+for name in sorted(os.listdir(out)):
+    if not name.endswith(".dcm"):
+        continue
+    want = pydicom.dcmread(os.path.join(src, name))
+    frames = int(getattr(want, "NumberOfFrames", 1) or 1)
+    if len(want.PixelData) < int(want.Rows) * int(want.Columns) * int(want.SamplesPerPixel) * \
+            frames * int(want.BitsAllocated) // 8:
+        continue
+    written = pydicom.dcmread(os.path.join(out, name))
+    if written.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.81":
+        bad.append("%s was written as %s" % (name, written.file_meta.TransferSyntaxUID))
+        continue
+    if str(getattr(written, "LossyImageCompression", "")) != "01":
+        bad.append("%s is not marked lossy" % name)
+        continue
+    path = os.path.join(decoded, name)
+    if not os.path.exists(path):
+        bad.append("%s: dcmdjpls could not decode it" % name)
+        continue
+    stored = int(want.BitsStored)
+    a, b = samples(pydicom.dcmread(path), stored), samples(want, stored)
+    worst = max(abs(x - y) for x, y in zip(a, b)) if a else 0
+    if len(a) != len(b) or worst > NEAR:
+        bad.append("%s: dcmtk decodes a sample %d away" % (name, worst))
+        continue
+    checked += 1
+for line in bad:
+    print("   " + line, file=sys.stderr)
+print("%d files" % checked)
+raise SystemExit(1 if bad or not checked else 0)
+PYEOF
+      ); then
+        pass "JPEG-LS Near-Lossless encoding — dcmdjpls decodes every file to within NEAR 2 of the original — $jn"
+      else
+        fail "this encoder's near-lossless JPEG-LS does not survive dcmtk: $jn"
+      fi
+    else
+      fail "the near-lossless JPEG-LS encoding harness failed"
+      sed -n '1,20p' "$WORKDIR/jn.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+else
+  skip "JPEG-LS Near-Lossless encoding needs dcmdjpls (dcmtk) and pydicom"
+fi
+
+# ---------------------------------------------------------------------------
 # DICOMweb against a server that is not this library (#285)
 #
 # The client had its own test server and nothing else in CI. Checked by hand

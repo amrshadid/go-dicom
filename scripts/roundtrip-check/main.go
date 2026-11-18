@@ -10,10 +10,11 @@
 //
 // With -rle or -jpeg2000 the pixel data is re-encoded on the way out, as RLE
 // Lossless or as JPEG 2000 Lossless, which exercises an encoder this library
-// has. Another toolkit reading the result is the only way to know the encoder
-// is right rather than merely self-consistent.
+// has. With -jpegls-near N it is coded as JPEG-LS Near-Lossless with an allowed
+// error of N. Another toolkit reading the result is the only way to know the
+// encoder is right rather than merely self-consistent.
 //
-// Usage: roundtrip-check [-rle|-jpeg2000] <source dir> <output dir>
+// Usage: roundtrip-check [-rle|-jpeg2000|-jpegls-near N] <source dir> <output dir>
 package main
 
 import (
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -38,10 +40,15 @@ func main() {
 			target, args = network.RLELosslessUID, args[1:]
 		case "-jpeg2000":
 			target, args = network.JPEG2000LosslessUID, args[1:]
+		case "-jpegls-near":
+			if len(args) > 1 {
+				near, _ = strconv.Atoi(args[1])
+				target, args = network.JPEGLSNearLosslessUID, args[2:]
+			}
 		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000] <source dir> <output dir>")
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpegls-near N] <source dir> <output dir>")
 		os.Exit(2)
 	}
 	corpus, out := args[0], args[1]
@@ -60,6 +67,9 @@ func main() {
 	}
 	fmt.Printf("wrote %d, skipped %d\n", written, failed)
 }
+
+// near is the allowed error for -jpegls-near.
+var near int
 
 func roundTrip(in, out, target string) (err error) {
 	defer func() {
@@ -85,7 +95,16 @@ func roundTrip(in, out, target string) (err error) {
 	}
 
 	ds := df.GetDataset()
-	if target != "" {
+	if target == network.JPEGLSNearLosslessUID {
+		// The data set's own method, which is what a send uses with
+		// NetworkConfig.JPEGLSNear; EncodeDataset allows no error.
+		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
+			if err := ds.CompressJPEGLSNearLosslessInPlace(near); err != nil {
+				return fmt.Errorf("encode as %s: %w", target, err)
+			}
+			ts = target
+		}
+	} else if target != "" {
 		// Re-encoding goes through the same path a C-STORE takes, so what is
 		// written here is what a peer negotiating the syntax would receive.
 		encoded, err := network.EncodeDataset(ds, target)

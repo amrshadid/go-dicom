@@ -176,7 +176,7 @@ var pixelDataTag = tag.New(0x7FE0, 0x0010)
 // here, because the alternative is an image that is wrong without looking wrong.
 //
 // Returns the data set to encode, which is the original when nothing is needed.
-func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality int) (*dataset.Dataset, error) {
+func transcodePixelData(ds *dataset.Dataset, targetSyntax string, config NetworkConfig) (*dataset.Dataset, error) {
 	if ds == nil {
 		return ds, nil
 	}
@@ -218,11 +218,23 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 				return nil, fmt.Errorf("cannot encode a %s instance as %s: %w", source, targetSyntax, err)
 			}
 			return out, nil
+		case JPEGLSNearLosslessUID:
+			if _, ok := ds.Get(pixelDataTag); !ok {
+				return ds, nil
+			}
+			// The error allowed is the sender's (NetworkConfig.JPEGLSNear),
+			// and with none allowed the image is coded losslessly, which this
+			// syntax includes. A copy: sending must not make the caller's
+			// image lossy.
+			out := ds.Clone()
+			if err := out.CompressJPEGLSNearLosslessInPlace(config.JPEGLSNear); err != nil {
+				return nil, fmt.Errorf("cannot encode a %s instance as %s: %w", source, targetSyntax, err)
+			}
+			return out, nil
 		case JPEGBaselineUID:
 			// Lossy, so only for a sender that has said how much loss it
-			// accepts. Refusing is the same rule as for JPEG-LS Near-Lossless
-			// below: that decision is not one to make while transcoding.
-			if jpegQuality <= 0 {
+			// accepts: that decision is not one to make while transcoding.
+			if config.JPEGQuality <= 0 {
 				return nil, fmt.Errorf("cannot encode pixel data as %s: JPEG Baseline is lossy and "+
 					"nothing is sent that way unasked; set NetworkConfig.JPEGQuality to allow it",
 					targetSyntax)
@@ -232,7 +244,7 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 			}
 			// A copy: sending must not make the caller's image lossy.
 			out := ds.Clone()
-			if err := out.CompressJPEGBaselineInPlace(jpegQuality); err != nil {
+			if err := out.CompressJPEGBaselineInPlace(config.JPEGQuality); err != nil {
 				return nil, fmt.Errorf("cannot encode a %s instance as %s: %w", source, targetSyntax, err)
 			}
 			return out, nil
@@ -240,14 +252,11 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 			// A send that cannot be satisfied fails rather than putting bytes on
 			// the wire described as something they are not, which the receiver
 			// could not detect.
-			//
-			// JPEG-LS Near-Lossless is excluded deliberately: it is lossy, and how
-			// much error to accept is the caller's decision rather than one to make
-			// silently on their behalf while transcoding.
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
-				"RLE Lossless (%s), JPEG-LS Lossless (%s) and JPEG 2000 Lossless (%s), and "+
-				"JPEG Baseline (%s) when NetworkConfig.JPEGQuality is set",
-				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEG2000LosslessUID, JPEGBaselineUID)
+				"RLE Lossless (%s), JPEG-LS Lossless (%s), JPEG-LS Near-Lossless (%s) and "+
+				"JPEG 2000 Lossless (%s), and JPEG Baseline (%s) when NetworkConfig.JPEGQuality is set",
+				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEGLSNearLosslessUID,
+				JPEG2000LosslessUID, JPEGBaselineUID)
 		}
 	}
 
