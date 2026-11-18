@@ -226,6 +226,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked over every file of pydicom's corpus under every profile, with the
   pixels left in the file and with every binary value left there.
 
+- **`convert --format png` and `jpeg` hold one picture at a time** (#331).
+  Every frame asked for was rendered before the first was written, and each
+  was encoded into memory before its file was made: a hundred frames of a
+  megapixel took 418 MB, and a 200 MB image of noise took 482 MB to become
+  one PNG of 100 MB. Each frame is now rendered, encoded straight into its
+  file and let go before the next: 223 MB and 321 MB, with the same pictures,
+  byte for byte, over every file of pydicom's corpus. The files are written
+  under temporary names and take theirs together, so a failure still leaves
+  none of them. `Dataset.RenderEachFrame` is the new call that hands frames
+  over one at a time. What is left is the image itself: the whole Pixel Data
+  is read, and one frame of a multi-frame image still costs every frame,
+  since the renderer reads samples from one slice and finds the range of an
+  image with no window across all frames.
+
 ### Fixed
 
 - **A server at its association limit says it is full** (#318). A caller

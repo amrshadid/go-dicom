@@ -73,17 +73,42 @@ func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, err
 
 // RenderFrames renders every frame; see RenderFrame.
 func (ds *Dataset) RenderFrames(opts *RenderOptions) ([]image.Image, error) {
-	r, err := ds.newRenderer(opts)
+	var out []image.Image
+	err := ds.RenderEachFrame(opts, func(_ int, img image.Image) error {
+		out = append(out, img)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]image.Image, r.info.NumberOfFrames)
-	for f := range out {
-		if out[f], err = r.frame(f); err != nil {
-			return nil, err
+	return out, nil
+}
+
+// RenderEachFrame renders every frame in turn, as RenderFrames does, and
+// hands each to use as it is made, counted from 0. An error from use stops
+// it and is returned.
+//
+// It is RenderFrames for a caller that writes each frame and lets it go:
+// RenderFrames holds all of them at once, and a hundred frames of a
+// megapixel image are a hundred megabytes before the first is written
+// (#331). Calling RenderFrame for each frame instead decodes a compressed
+// image once per frame, and finds the range of an image with no window
+// once per frame, over all of them.
+func (ds *Dataset) RenderEachFrame(opts *RenderOptions, use func(frame int, img image.Image) error) error {
+	r, err := ds.newRenderer(opts)
+	if err != nil {
+		return err
+	}
+	for f := 0; f < r.info.NumberOfFrames; f++ {
+		img, err := r.frame(f)
+		if err != nil {
+			return err
+		}
+		if err := use(f, img); err != nil {
+			return err
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // renderer holds what every frame of one image shares.
