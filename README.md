@@ -27,7 +27,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
 - **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
 - **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
-- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
+- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: the modality, VOI and presentation lookup tables or rescale and window, MONOCHROME1, YBR and palette color
 - **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
