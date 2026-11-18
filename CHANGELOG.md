@@ -451,6 +451,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`show file::Element` takes a keyword** (#384). The element was matched
+  against its tag and its dictionary name, which for Patient's Name is
+  `Patient's Name`, so `show ct.dcm::PatientName` answered `element
+  'PatientName' not found` for an element that was there, and so did every
+  keyword of two words or more, `StudyInstanceUID` among them. The help's own
+  example, `patient.dcm::ImageComments`, was one. The element is now read
+  with the parser `diff` uses for its tags, `parseTagOrKeyword`: a keyword, or
+  a tag as `0010,0010`, `(0010,0010)` or `00100010`. The dictionary name still
+  works, and is all a private element has. A test runs every example in
+  `show`'s help text against a file that has what they ask for, so the help
+  cannot go stale again. `show --json` is untouched. dcmtk's `dcmdump +P
+  PatientName` prints the same value.
+
+
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
   reason 2, which from that source is "application context name not
