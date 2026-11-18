@@ -111,6 +111,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and reason of the A-ASSOCIATE-RJ. It was empty, so `LoggingEventHandlers`
   logged "Association rejected: SCU -> SCP: " with nothing after the colon.
 
+- **`storescp` and `qrscp` admit only the callers they are given** (#351).
+  Both answered anyone who reached the port and named their AE title.
+  `-allow` takes calling AE titles, and IP addresses or CIDR ranges, comma
+  separated and repeatable, and hands them to `SCPConfig.Admit`. With both
+  kinds a caller needs a listed title and a listed address. Any other caller
+  is refused before anything is negotiated: an unlisted title as
+  calling-AE-title-not-recognized, which dcmtk's `echoscu` prints as `Reason:
+  Calling AE Title Not Recognized`, and an unlisted address with no reason
+  given, since PS3.8 Table 9-21 has none for an address. The server prints
+  its list when it starts and a line for each caller it refuses. A host name
+  is not resolved. `-allow` covers DIMSE only: `qrscp -web` has its own
+  token.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
