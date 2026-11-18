@@ -60,6 +60,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.ShareCommand{})
 	dicomCLI.RegisterCommand(&cli.DiffCommand{})
 	dicomCLI.RegisterCommand(&cli.SRCommand{})
+	dicomCLI.RegisterCommand(&cli.ValidateCommand{})
 	dicomCLI.RegisterCommand(&cli.HelpCommand{})
 	dicomCLI.RegisterCommand(&cli.VersionCommand{
 		AppName:    "go-dicom",
@@ -84,7 +85,7 @@ func main() {
 
 	// Run CLI with command-line arguments
 	if err := dicomCLI.Run(os.Args[1:]); err != nil {
-		// A command that answers in its exit status (diff) says which.
+		// A command that answers in its exit status (diff, validate) says which.
 		code := 1
 		var exit *cli.ExitError
 		if errors.As(err, &exit) {

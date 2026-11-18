@@ -360,6 +360,10 @@ jobs:
           # every profile, byte for byte.
           go test ./filewriter/ -run TestValuesCopiedFromTheFileAcrossThePydicomCorpus -v
           go test ./cli/ -run TestAnonymizeLeavingValuesInTheFileWritesTheSameFile -v
+          # Checking an instance against its IOD is tested on corpus files:
+          # the broken CT is CT_small with eight changes.
+          go test ./validate/ -v
+          go test ./cli/ -run TestValidate -v
           # The transcoding checks need a genuinely compressed instance, which
           # the corpus supplies; they skip without it, so this is the one job
           # where they run. The whole package runs, not the tests that were

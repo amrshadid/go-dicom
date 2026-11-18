@@ -784,6 +784,22 @@ They are present so a caller can name them, and the set matches pynetdicom's
 exactly — 256 SOP class UIDs, each value checked against pynetdicom's own table
 rather than transcribed. Treat them as a starting point rather than as support.
 
+### 8.6 Validation against the IOD
+
+`go-dicom validate` and package `validate` check an instance against the IOD
+of its SOP class, with tables generated from PS3.3 and PS3.4 (the edition is
+printed): module usage, attribute Types 1, 2 and the value of a present 1C,
+value multiplicity from PS3.6, Enumerated Values and Defined Terms where the
+tables list them, and item counts where a sequence's description states them.
+It does not evaluate conditions, which PS3.3 writes as prose: a Conditional
+module, an absent Type 1C or 2C attribute and a macro included under a
+condition are reported as not checked. Repeating groups (60xx), the
+Functional Group Macros of enhanced IODs, context groups (PS3.16), rules
+between attributes and attributes the IOD does not name are not checked. No
+other validator was available to compare it with (`dciodvfy` is not
+installed where it was built); its findings for five corpus files were
+compared with the standard by hand.
+
 ---
 
 ## 9. How these claims are verified
