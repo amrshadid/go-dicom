@@ -147,6 +147,54 @@ func TestConvertFrames(t *testing.T) {
 	}
 }
 
+// TestConvertFramesAreAllOrNothing: the frames are written under temporary
+// names and take theirs together. A successful run leaves the pictures and
+// nothing else; a run that cannot name one of them leaves none of them, and
+// no temporary file either.
+func TestConvertFramesAreAllOrNothing(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.dcm")
+	writeTwoFrameImage(t, in)
+
+	out := filepath.Join(dir, "ok")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConvert(in, filepath.Join(out, "cine.png"), "--format", "png", "--frame", "all"); err != nil {
+		t.Fatalf("--frame all: %v", err)
+	}
+	if got := listDir(t, out); got != "cine-0001.png cine-0002.png" {
+		t.Errorf("the directory holds %s", got)
+	}
+
+	// The second frame's name is taken by a directory that is not empty,
+	// which a file cannot replace.
+	out = filepath.Join(dir, "blocked")
+	if err := os.MkdirAll(filepath.Join(out, "cine-0002.png", "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConvert(in, filepath.Join(out, "cine.png"), "--format", "png", "--frame", "all"); err == nil {
+		t.Error("a frame that could not be written was not an error")
+	}
+	if got := listDir(t, out); got != "cine-0002.png" {
+		t.Errorf("after the failure the directory holds %s; want what it held before", got)
+	}
+}
+
+// listDir names what a directory holds, hidden files too, in order.
+func listDir(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return strings.Join(names, " ")
+}
+
 // TestConvertWindow: --window replaces the file's.
 func TestConvertWindow(t *testing.T) {
 	dir := t.TempDir()

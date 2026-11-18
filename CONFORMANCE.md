@@ -45,6 +45,26 @@ classes it supports, and dispatches each DIMSE message to a handler. A handler
 that is absent causes the service to be refused rather than silently accepted —
 see [§2.4](#24-services-refused-when-unimplemented).
 
+A C-STORE is given to the handler one of two ways. `HandleCStore` receives the
+data set decoded, after the whole message has arrived and been held in memory. A
+handler that also implements `CStoreStreamer` receives the bytes of the data set
+exactly as the peer sent them, read from the association as it reads, so memory
+stays bounded by two PDUs whatever the instance's size; `WriteCStoreFile` writes
+them as a Part 10 file with File Meta Information built from the command (PS3.10
+7.1), the data set untouched. A data set that does not arrive whole fails the
+handler's read with an error that is never `io.EOF`, and no response is sent; one
+the handler stops reading early is read to its end and discarded before the
+handler's status is sent. A C-STORE-RQ that states no data set follows is
+refused with C000H without the handler being called (PS3.7 9.3.1.1).
+
+`WriteCStoreFile` checks the command's Affected SOP Class UID and Affected SOP
+Instance UID, and the transfer syntax, against PS3.5 9.1 before it writes
+anything, and refuses a command that fails; the handler chooses the status, and
+0117H (Invalid Object Instance) is the one PS3.7 9.1.1.1.9 gives for the instance
+UID. It does not compare those UIDs with the data set's own (0008,0016) and
+(0008,0018), which PS3.10 7.1 requires to be equal: the data set is copied, not
+parsed.
+
 ### 1.3 Sequencing
 
 The library imposes no ordering beyond what the standard requires. An
@@ -94,7 +114,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()` |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
@@ -271,9 +291,18 @@ are using that package.
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
 | JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
+| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`), JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
+
+A file in High-Throughput JPEG 2000 or JPEG XL is read, stored, de-identified
+and sent as it is, to a peer that accepts its syntax. Its pixel data is not
+decoded: rendering, reading the samples, redacting, and sending it over a
+context that needs it decoded are refused with the syntax's name. pydicom 3
+decodes HTJ2K through OpenJPEG 2.5, and OpenJPEG 2.5.4's `opj_decompress`
+decodes pydicom-data's two HTJ2K files to the same samples; nothing in pydicom,
+dcmtk 3.7.0 or this library decodes JPEG XL.
 
 ### 3.3 Extended negotiation
 
@@ -354,7 +383,10 @@ of, and does not name a file it could not read; both are counted as refused.
 | AE title | `SCPConfig.AETitle`, `SCUConfig.CallingAE` / `CalledAE` |
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
-| Concurrent association limit | `SCPConfig.MaxAssociations` |
+| Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
+| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges) |
+| AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
+| A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
@@ -421,7 +453,7 @@ advisory.
 | `network.MaxAssociatePDULength` | 1 MiB | An A-ASSOCIATE-RQ or -AC declaring a huge length, before the caller is known; the four-byte PDUs are held to four bytes |
 | The Maximum Length advertised in the A-ASSOCIATE-RQ or -AC | `NetworkConfig.MaxPDUSize` | A P-DATA-TF longer than the receiver agreed to; aborted (PS3.8 D.1) |
 | Command set being assembled | 1 MiB | Command fragments never marked last; aborted |
-| `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory; aborted |
+| `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory, or will take from a stream; aborted |
 | `NetworkConfig.ARTIMTimeout` / `DIMSETimeout` | 30 s / 60 s | A peer that connects and sends nothing, or stops partway through a PDU |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file |
@@ -463,18 +495,42 @@ how decoded samples are shaped and coloured, and the one tolerance.
   CGO and nothing to register.
 
   A reversible codestream is required to match pydicom sample for sample. An
-  irreversible one is held to a tolerance of one: the 9/7 filter is defined in
-  real arithmetic, so two conformant decoders can land either side of a half,
-  and ISO 15444-4 grades a decoder on how close it comes rather than on
-  equality. Against OpenJPEG the corpus's irreversible file is 22 samples of
-  262144 out by one.
+  irreversible one is held to a tolerance of one up to 12 bits and two at 16:
+  the 9/7 filter is defined in real arithmetic, so two conformant decoders can
+  land either side of a half, and ISO 15444-4 grades a decoder on how close it
+  comes rather than on equality. Against OpenJPEG the corpus's irreversible file is 22 samples of
+  262144 out by one. One is the difference from OpenJPEG up to 12 bits. At 16
+  bits OpenJPEG lands up to two away, and this decoder is the nearer of the two
+  to the samples that were encoded: on a generated 70×65 16-bit image written
+  by `opj_compress -I`, a mean squared error of 370 against OpenJPEG's 1281.
 
-  Features outside that set are refused by name rather than guessed at:
-  subsampled components, custom precinct sizes, the code-block style options
-  (bypass, termall, vertical causal, reset, segmentation marks), packed packet
-  headers, and progression-order changes. A decoder that quietly mis-decodes is
-  worse than none — the image looks plausible and the numbers are wrong, and in
-  an RT Dose that is a wrong dose.
+  Features outside that set are refused rather than guessed at. A decoder that
+  quietly mis-decodes is worse than none — the image looks plausible and the
+  numbers are wrong, and in an RT Dose that is a wrong dose. Each of these is
+  refused with an `ErrUnsupported` that names it, quoted here as the error
+  reads (ITU-T T.800 clauses in brackets):
+
+  - the RPCL, PCRL and CPRL progression orders: `progression order 2`, `3`
+    and `4` [A.6.1, B.12.1.3–B.12.1.5]. LRCP and RLCP decode;
+  - user-defined precinct sizes: `user-defined precinct sizes` [A.6.1, B.6];
+  - every code-block style option, alone or combined: `code-block style 0x..`
+    with the style byte in hex [A.6.1 Table A.19, D.5–D.7]. They are selective
+    arithmetic coding bypass (`0x01`), reset of context probabilities (`0x02`),
+    termination on each coding pass (`0x04`), vertically causal context
+    (`0x08`), predictable termination (`0x10`) and segmentation symbols
+    (`0x20`);
+  - a region of interest: `region of interest (RGN)` [A.6.3, Annex H];
+  - progression order changes: `progression order change (POC)` [A.6.6];
+  - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
+  - subsampled components: `component subsampling` [A.5.1, B.2];
+  - components deeper than 16 bits: `17-bit components` and so on [A.5.1];
+  - a JP2 box with a 64-bit length: `JP2 box with a 64-bit length` [I.4];
+  - the Part 2 wavelets and quantization styles: `wavelet transform N`,
+    `quantization style N`.
+
+  An RGN or POC segment in a tile-part header, rather than the main header, and
+  any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) are
+  refused too, but as `unexpected marker` with its code rather than by name.
 
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an
@@ -501,14 +557,24 @@ how decoded samples are shaped and coloured, and the one tolerance.
   with the attribute, not despite it.
 
 - **`RenderFrame` renders for display, within what it knows.** It applies the
-  sign of the samples, Rescale Slope and Intercept, a window (LINEAR,
-  LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
-  the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
-  not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
-  an ICC profile, and it refuses 64-bit samples and segmented palettes by
-  name. `go-dicom convert --format png|jpeg` is the same
-  rendering. Grayscale output is checked against pydicom, and color against
-  the lossless copy of the same picture.
+  sign of the samples, the Modality LUT Sequence or Rescale Slope and
+  Intercept, the VOI LUT Sequence or a window (LINEAR, LINEAR_EXACT or
+  SIGMOID) or the range of the data, the Presentation LUT Sequence or
+  Presentation LUT Shape, MONOCHROME1 inversion, the YBR to RGB conversion
+  and the Palette Color tables, at 8 bits (PS3.3 C.11). Where a data set has
+  both a VOI LUT Sequence and a window, which C.11.2 leaves to the viewer, the
+  table is used, as pydicom does; a caller's window wins over both.
+  Presentation LUT Shape decides the inversion when it is present, so
+  MONOCHROME1 with INVERSE is inverted once, as dcmtk does. A Presentation LUT
+  Sequence takes the VOI output range as its input range (C.11.4.1); pydicom
+  scales by the image's lowest and highest values instead, which agrees when
+  the image reaches both ends. It does not apply an ICC Profile (C.11.15):
+  color is not color managed. It refuses 64-bit samples, segmented palettes
+  and a Presentation LUT Shape other than IDENTITY or INVERSE by name.
+  `go-dicom convert --format png|jpeg` is the same rendering. Grayscale
+  output is checked against pydicom, the lookup tables on generated files
+  since no corpus file has one, and color against the lossless copy of the
+  same picture.
 
 ### 8.2 Network
 
@@ -526,14 +592,31 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Four syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless and
-  Near-Lossless, and JPEG Baseline when asked.** Pixel data is transcoded in both directions as
-  the negotiated context requires.
+- **Seven syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless and
+  Near-Lossless, JPEG 2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG
+  Baseline when asked.** Pixel data is transcoded in both directions as the
+  negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
   Lossless** encodes it — from native pixels, or by decoding a compressed source
-  and re-encoding.
+  and re-encoding — with `Dataset.CompressRLELosslessInPlace` and
+  `Dataset.CompressJPEGLSLosslessInPlace`, which write a file the same way
+  (`go-dicom compress`).
+  Both code the samples pixel by pixel and say so: a color image becomes
+  Planar Configuration 0, and a native YBR_FULL_422 image, coded with its
+  chroma expanded, becomes YBR_FULL. RLE takes any whole number of bytes a
+  sample (up to the fifteen segments of its header); JPEG-LS takes 8 or 16
+  bits allocated, coded at Bits Stored, or at Bits Allocated when a sample
+  uses the bits above it, and a 16-bit image at no less than 9 bits so that
+  a decoder returns two bytes a sample.
+
+  *Verified* over every image in pydicom's corpus that this library reads
+  and decodes: dcmtk (`dcmdrle`, and `dcmdjpls`, which is CharLS) and pydicom
+  return the samples that were coded, for all 56 written as RLE and all 48
+  written as JPEG-LS. pydicom 2.4's own JPEG-LS path rearranges a color image
+  wrongly, for dcmtk's files and the corpus's own as much as for these, so
+  JPEG-LS color is checked with the libjpeg decoder it uses, called directly.
 
   The JPEG-LS encoder codes 2 to 16 bits, one scan per component, losslessly
   or with an allowed error. **JPEG-LS Near-Lossless (`.81`) uses the error the
@@ -587,6 +670,32 @@ how decoded samples are shaped and coloured, and the one tolerance.
   files, and it is what a send uses when a peer accepts only this syntax.
   Lossy JPEG 2000 (`.91`) is not written.
 
+  **JPEG Lossless (`.57` and `.70`)** is ITU-T T.81 Process 14, in pure Go:
+  one scan with every component interleaved at full resolution, Huffman
+  tables built for each frame (T.81 K.2), since the example tables of Annex K
+  stop at a difference of 11 bits, at 2 to 16 bits, signed or unsigned, one
+  to four components. `.70` predicts each sample from the one to its left
+  (Selection Value 1); `.57` codes each frame with the predictor of the
+  seven that makes it smallest. There is no point transform and no restart
+  interval. Color is coded as it is, so an RGB image stays RGB, with Planar
+  Configuration 0. A frame is coded at Bits Stored, or at Bits Allocated
+  when a sample uses the bits above it, and at no fewer than 9 bits in an
+  image of 16 bits allocated; a signed sample is coded as its two's
+  complement bits (PS3.5 8.2.1). Lossy Image Compression is not touched.
+  `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`
+  are the same encoder for files, and what a send uses when a peer accepts
+  only one of these.
+
+  *Verified:* dcmtk's `dcmdjpeg` and libjpeg (through pylibjpeg-libjpeg),
+  neither of which shares code with this library, decode every image of
+  pydicom's corpus of 8 or 16 bits allocated, 48 files, written in each
+  syntax, and ten generated edge cases (1x1, odd sizes, 16-bit signed, the
+  full 16-bit range, 12-bit signed, planar configuration 1, a 6000 by 5000
+  image), to every sample. CI runs the dcmtk half. pydicom's own pixel
+  access is not the check for color: it asks pylibjpeg-libjpeg for a YCbCr to
+  RGB conversion whenever the data set says RGB, which is wrong for lossless
+  JPEG, and it misreads dcmtk's own lossless RGB output in the same way.
+
   *Verified:* OpenJPEG, which shares no code with this library, decodes what
   the encoder writes. `opj_decompress` returns every sample of 360 generated
   images of each depth, sign and shape, and of every uncompressed image in
@@ -594,7 +703,7 @@ how decoded samples are shaped and coloured, and the one tolerance.
   receives one over the network with its codestream intact. Both run in CI.
 
   Every other compressed target fails, naming the syntax asked for. There is no
-  lossy JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send
+  lossy JPEG 2000 encoder here, nor a 12-bit JPEG one, and a send
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 
@@ -723,16 +832,24 @@ and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
 presentation-context helpers provided.
 
-Three of them are now exercised end to end:
+All of them are now exercised end to end:
 
 | SOP class | Verified by |
 |---|---|
 | Relevant Patient Information Query (all three) | A C-FIND over a real association, and against pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it received |
 | Display System | An N-GET for the well-known instance `1.2.840.10008.5.1.1.40.1`, asserting the SCP is asked about that instance and not another |
 | Non-patient object information models | A C-FIND for hanging protocol, color palette and generic implant template, and against pynetdicom, which confirms the identifier carries **no** QueryRetrieveLevel |
+| Media Creation Management | Against pynetdicom in both directions (`network/interop_mediaevent_test.go`, run by `scripts/interop-test.sh`): N-CREATE of a request with a Referenced SOP Sequence, N-ACTION 1 to initiate it, N-GET of its Execution Status. Each side reports the instance, action type and attributes it read |
+| Procedural Event Logging, Substance Administration Logging | Against pynetdicom in both directions, the same way: N-ACTION 1 to each class's well-known instance, a Content Sequence item for the procedural event and a Product Name for the substance |
 
-Media Creation Management and the event logging classes still have no test
-against a peer.
+pynetdicom 2.1 serves all three classes, so none of them is tested against
+go-dicom alone. Writing these tests found two defects in the N-DIMSE
+primitives, recorded on their own: an SCU leaves the data set of an N-CREATE,
+N-SET, N-ACTION or N-EVENT-REPORT response unread, so the next operation
+reads it as its response (#379); and an SCP never gives an N-GET handler the
+Attribute Identifier List (#380). The tests here do not lean on either: the
+media creation SCP answers N-CREATE without an attribute list, and the N-GET
+handler's list is not asserted.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes
@@ -754,6 +871,22 @@ supplying that handler is the caller's.
 They are present so a caller can name them, and the set matches pynetdicom's
 exactly — 256 SOP class UIDs, each value checked against pynetdicom's own table
 rather than transcribed. Treat them as a starting point rather than as support.
+
+### 8.6 Validation against the IOD
+
+`go-dicom validate` and package `validate` check an instance against the IOD
+of its SOP class, with tables generated from PS3.3 and PS3.4 (the edition is
+printed): module usage, attribute Types 1, 2 and the value of a present 1C,
+value multiplicity from PS3.6, Enumerated Values and Defined Terms where the
+tables list them, and item counts where a sequence's description states them.
+It does not evaluate conditions, which PS3.3 writes as prose: a Conditional
+module, an absent Type 1C or 2C attribute and a macro included under a
+condition are reported as not checked. Repeating groups (60xx), the
+Functional Group Macros of enhanced IODs, context groups (PS3.16), rules
+between attributes and attributes the IOD does not name are not checked. No
+other validator was available to compare it with (`dciodvfy` is not
+installed where it was built); its findings for five corpus files were
+compared with the standard by hand.
 
 ---
 

@@ -13,6 +13,7 @@ import (
 	"github.com/amrshadid/go-dicom/encaps"
 	"github.com/amrshadid/go-dicom/pixels"
 	"github.com/amrshadid/go-dicom/tag"
+	"github.com/amrshadid/go-dicom/uid"
 )
 
 // GetPixelDataInfo extracts pixel data metadata from the dataset.
@@ -704,6 +705,9 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 		// pixel-interleaved little-endian samples.
 		return normalizeNativePixelBytes(pixelBytes, info), nil
 	}
+	if compression == "" {
+		return nil, ds.undecodedSyntax()
+	}
 
 	encData, err := ds.ExtractEncapsulatedFrames()
 	if err != nil {
@@ -837,6 +841,15 @@ func (ds *Dataset) pixelCompression(pixelBytes []byte, info *PixelDataInfo) (com
 	if uid := ds.TransferSyntaxUID(); uid != "" {
 		compression, err := compress.TransferSyntaxToCompressionType(uid)
 		if err != nil {
+			// A syntax with no decoder here, such as HTJ2K or JPEG XL, whose
+			// Pixel Data is fragments: encapsulated, of no known compression.
+			// Taken for native, its fragments were read as samples, and the
+			// refusal was a count of bytes ("holds 4330 bytes and the image
+			// needs 8192") that named neither the syntax nor the reason, and
+			// a redaction could have written black into the codestream.
+			if compress.IsEncapsulated(uid) && looksEncapsulated(pixelBytes) {
+				return "", true
+			}
 			return compress.UNCOMPRESSED, false
 		}
 		// Deflate compresses the whole data set, not the pixel element, so by
@@ -851,11 +864,33 @@ func (ds *Dataset) pixelCompression(pixelBytes []byte, info *PixelDataInfo) (com
 	if expected > 0 && len(pixelBytes) == expected {
 		return compress.UNCOMPRESSED, false
 	}
-	if len(pixelBytes) >= 8 && pixelBytes[0] == 0xFE && pixelBytes[1] == 0xFF &&
-		pixelBytes[2] == 0x00 && pixelBytes[3] == 0xE0 {
+	if looksEncapsulated(pixelBytes) {
 		return sniffPixelCompression(pixelBytes), true
 	}
 	return compress.UNCOMPRESSED, false
+}
+
+// looksEncapsulated reports whether Pixel Data begins as encapsulated data
+// does: with the item that holds the Basic Offset Table (PS3.5 A.4).
+func looksEncapsulated(pixelBytes []byte) bool {
+	return len(pixelBytes) >= 8 && pixelBytes[0] == 0xFE && pixelBytes[1] == 0xFF &&
+		pixelBytes[2] == 0x00 && pixelBytes[3] == 0xE0
+}
+
+// undecodedSyntax is the refusal for encapsulated Pixel Data in a transfer
+// syntax this package has no decoder for, naming the syntax.
+func (ds *Dataset) undecodedSyntax() error {
+	return fmt.Errorf("the pixel data is in %s, which is read and carried and not decoded",
+		transferSyntaxName(ds.TransferSyntaxUID()))
+}
+
+// transferSyntaxName is a transfer syntax's name and UID, or the UID alone
+// when the dictionary does not know it.
+func transferSyntaxName(u string) string {
+	if info := uid.GetUIDInfo(u); info != nil {
+		return fmt.Sprintf("%s (%s)", info.Name, u)
+	}
+	return "transfer syntax " + u
 }
 
 // sniffPixelCompression guesses a codec from the first fragment, for data sets

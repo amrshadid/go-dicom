@@ -8,13 +8,15 @@
 // data was written with an explicit length where the standard requires an
 // undefined one.
 //
-// With -rle or -jpeg2000 the pixel data is re-encoded on the way out, as RLE
-// Lossless or as JPEG 2000 Lossless, which exercises an encoder this library
-// has. With -jpegls-near N it is coded as JPEG-LS Near-Lossless with an allowed
-// error of N. Another toolkit reading the result is the only way to know the
-// encoder is right rather than merely self-consistent.
+// With -rle, -jpeg2000, -jpeg-lossless or -jpeg-lossless-sv1 the pixel data is
+// re-encoded on the way out, as RLE Lossless, JPEG 2000 Lossless or lossless
+// JPEG (.57 or .70), which exercises an encoder this library has. With
+// -jpegls-near N it is coded as JPEG-LS Near-Lossless with an allowed error of
+// N. Another toolkit reading the result is the only way to know the encoder is
+// right rather than merely self-consistent.
 //
-// Usage: roundtrip-check [-rle|-jpeg2000|-jpegls-near N] <source dir> <output dir>
+// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N]
+// <source dir> <output dir>
 package main
 
 import (
@@ -40,6 +42,10 @@ func main() {
 			target, args = network.RLELosslessUID, args[1:]
 		case "-jpeg2000":
 			target, args = network.JPEG2000LosslessUID, args[1:]
+		case "-jpeg-lossless":
+			target, args = network.JPEGLosslessProcess14UID, args[1:]
+		case "-jpeg-lossless-sv1":
+			target, args = network.JPEGLosslessSV1UID, args[1:]
 		case "-jpegls-near":
 			if len(args) > 1 {
 				near, _ = strconv.Atoi(args[1])
@@ -48,7 +54,8 @@ func main() {
 		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpegls-near N] <source dir> <output dir>")
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N] "+
+			"<source dir> <output dir>")
 		os.Exit(2)
 	}
 	corpus, out := args[0], args[1]
