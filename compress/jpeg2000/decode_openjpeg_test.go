@@ -76,6 +76,33 @@ var openJPEGEncodings = []openJPEGEncoding{
 	// And the irreversible path, where the tolerance applies.
 	{"RPCL irreversible", []string{"-p", "RPCL", "-I", "-c", "[32,32],[16,16]"}},
 	{"PCRL irreversible layers", []string{"-p", "PCRL", "-I", "-r", "20,5", "-c", "[32,32]"}},
+
+	// The code-block style options (Table A.19, D.5 to D.7), which -M takes
+	// as the sum of their bits: each alone, the two that split a block into
+	// several codeword segments together, and all six.
+	{"bypass", []string{"-M", "1"}},
+	{"reset", []string{"-M", "2"}},
+	{"termination on each pass", []string{"-M", "4"}},
+	{"vertically causal", []string{"-M", "8"}},
+	{"predictable termination", []string{"-M", "16"}},
+	{"segmentation symbols", []string{"-M", "32"}},
+	{"bypass and termination", []string{"-M", "5"}},
+	{"bypass, reset, vertically causal", []string{"-M", "11"}},
+	{"termination, segmentation symbols", []string{"-M", "36"}},
+	{"every style", []string{"-M", "63"}},
+	// Codeword segments that run across layers, where a block's contribution
+	// to one packet ends mid-segment or spans several and its header gives a
+	// length for each (B.10.7.2).
+	{"bypass in layers", []string{"-M", "1", "-r", "30,10,3,1"}},
+	{"termination in layers", []string{"-M", "4", "-r", "20,5,1"}},
+	{"every style in layers", []string{"-M", "63", "-r", "16,4,1"}},
+	// With the rest of the decoder: small code-blocks, tiles, precincts, a
+	// position-driven order, and the irreversible filter.
+	{"bypass, small blocks", []string{"-M", "1", "-b", "8,8"}},
+	{"vertically causal, tall blocks", []string{"-M", "8", "-b", "16,64"}},
+	{"every style, RPCL precincts tiles", []string{"-M", "63", "-p", "RPCL", "-c", "[32,32]", "-t", "48,40", "-n", "4"}},
+	{"bypass irreversible", []string{"-M", "1", "-I", "-r", "8"}},
+	{"every style irreversible", []string{"-M", "63", "-I"}},
 }
 
 // openJPEGSource is one image the options are tried on.
@@ -240,6 +267,26 @@ func TestDecodeMatchesOpenJPEG(t *testing.T) {
 	t.Logf("OpenJPEG and this decoder agree on %d codestreams", checked)
 }
 
+// TestDecodeEveryBlockStyleMatchesOpenJPEG tries all 63 combinations of the
+// six code-block style options, in three layers so that codeword segments
+// cross packets, on a gray and a signed 16-bit image. The matrix above takes
+// a representative few through the rest of the decoder; this takes every
+// combination through tier-1, where the options interact.
+func TestDecodeEveryBlockStyleMatchesOpenJPEG(t *testing.T) {
+	requireOpenJPEG(t)
+	sources := openJPEGSources()
+	checked := 0
+	for style := 1; style < 64; style++ {
+		for _, source := range []openJPEGSource{sources[0], sources[2]} {
+			label := fmt.Sprintf("code-block style 0x%02X, %s", style, source.name)
+			args := []string{"-M", fmt.Sprint(style), "-r", "20,5,1"}
+			compareWithOpenJPEG(t, label, encodeWithOpenJPEG(t, t.TempDir(), source.img, args))
+			checked++
+		}
+	}
+	t.Logf("OpenJPEG and this decoder agree on all %d combinations", checked)
+}
+
 // openJPEGFixture is a committed codestream written by opj_compress, with the
 // digest of the samples opj_decompress returns for it.
 type openJPEGFixture struct {
@@ -262,6 +309,14 @@ var openJPEGFixtures = []openJPEGFixture{
 	{"opj_cprl_small_precincts.j2k", "-F 31,17,1,16,u -p CPRL -n 2 -b 4,4 -c [4,4],[2,2] -r 3,1", "5e86b086f9f904a2"},
 	// RPCL with the 9/7 filter: this one happens to round alike in both.
 	{"opj_rpcl_irreversible.j2k", "-F 27,23,1,8,u -p RPCL -I -n 3 -c [16,16]", "ccb4bc6b3a970e74"},
+	// Bypass with its raw segments spread over three layers.
+	{"opj_style_bypass_layers.j2k", "-F 29,23,1,8,u -n 4 -M 1 -r 20,5,1", "0aa82ec44889de16"},
+	// Every code-block style option at once, signed color, two layers.
+	{"opj_style_every_color.j2k", "-F 26,19,3,12,s -n 4 -M 63 -r 10,1", "4291e0ecdf4cdeef"},
+	// Termination on each pass with the vertically causal context, 16 bits.
+	{"opj_style_termall_vertical.j2k", "-F 33,31,1,16,s -n 4 -M 12 -b 16,16", "db06cf718d4add6e"},
+	// Reset and segmentation symbols under the 9/7 filter.
+	{"opj_style_reset_segmentation_irreversible.j2k", "-F 25,21,1,8,u -n 4 -M 34 -I", "c8ea2982ab06cbeb"},
 }
 
 // samplesDigest is the digest openJPEGFixtures records.

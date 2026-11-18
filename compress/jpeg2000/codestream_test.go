@@ -160,7 +160,9 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 		// Offsets into the segments buildCodestream writes: Scod at 4,
 		// progression 5, code-block style 12, wavelet 13; in SIZ the first
 		// component's Ssiz is at 40 and its XRsiz at 41.
-		"code-block style": {func(cod, _ []byte) { cod[12] = 0x01 }, "code-block style"},
+		// Bit 6 is Part 15's High-Throughput block coder; Part 1's six
+		// options below it all decode.
+		"code-block style": {func(cod, _ []byte) { cod[12] = 0x40 }, "code-block style 0x40"},
 		// CPRL (4) is the last order Table A.16 defines.
 		"progression": {func(cod, _ []byte) { cod[5] = 5 }, "progression order"},
 		"wavelet":     {func(cod, _ []byte) { cod[13] = 9 }, "wavelet"},

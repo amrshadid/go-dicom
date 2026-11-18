@@ -26,6 +26,22 @@ type CodeBlockData struct {
 	ZeroBitPlanes int // leading bit planes that are all zero (B.10.5)
 	Passes        int
 	Data          []byte
+
+	// Style is the code-block style the block was coded with (Table A.19),
+	// the BlockStyle bits.
+	Style byte
+	// Segments divides Data into the codeword segments the encoder
+	// terminated (D.4.1), in order. It is set only when the style makes
+	// more than one: with bypass or termination on each pass. Empty means
+	// all of Data is one segment holding every pass.
+	Segments []CodewordSegment
+}
+
+// CodewordSegment is one terminated run of a code-block's coding passes: how
+// many passes it holds and how many bytes of the block's data they occupy.
+type CodewordSegment struct {
+	Passes int
+	Length int
 }
 
 // TileData is one tile's code-blocks, in the order the geometry lists them.
@@ -50,6 +66,9 @@ type blockState struct {
 	lblock        int // bits in the length field, 3 to start (B.10.7.1)
 	passes        int
 	data          []byte
+	// segments is kept only for a style with several codeword segments, and
+	// its last entry is the one the next passes join until it is full.
+	segments []CodewordSegment
 }
 
 // precinctState holds the two tag trees a precinct's packets share and the
@@ -133,6 +152,7 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 		comp, res, band, _ := key[0], key[1], key[2], key[3]
 		tc := out.Components[comp]
 		bandInfo := tc.Resolutions[res].Bands[band]
+		blockStyle := c.CodingForTile(tile, comp).BlockStyle
 		for i := range state.blocks {
 			b := &state.blocks[i]
 			if !b.included || len(b.data) == 0 {
@@ -146,6 +166,8 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 				ZeroBitPlanes: b.zeroBitPlanes,
 				Passes:        b.passes,
 				Data:          b.data,
+				Style:         blockStyle,
+				Segments:      b.segments,
 			})
 		}
 	}
@@ -365,12 +387,23 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 				if err != nil {
 					return 0, err
 				}
-				length, err := readSegmentLength(r, b, passes)
+				if style.BlockStyle&(BlockStyleBypass|BlockStyleTermAll) == 0 {
+					length, err := readSegmentLength(r, b, passes)
+					if err != nil {
+						return 0, err
+					}
+					b.passes += passes
+					contributions = append(contributions, contribution{key, i, length})
+					continue
+				}
+				lengths, err := readSegmentLengths(r, b, passes, style.BlockStyle)
 				if err != nil {
 					return 0, err
 				}
 				b.passes += passes
-				contributions = append(contributions, contribution{key, i, length})
+				for _, length := range lengths {
+					contributions = append(contributions, contribution{key, i, length})
+				}
 			}
 		}
 	}
@@ -497,6 +530,67 @@ func readSegmentLength(r *bitReader, b *blockState, passes int) (int, error) {
 		return 0, err
 	}
 	return int(length), nil
+}
+
+// readSegmentLengths reads the lengths of a contribution whose passes may fall
+// in several codeword segments, one length for each (B.10.7.2), and records
+// the segments on the block.
+//
+// The field's width grows with the 1 bits before it, as in readSegmentLength,
+// but once for the contribution; each segment's length then takes that many
+// bits plus the floor of log2 of the passes it holds. Which passes share a
+// segment follows from the style alone. Termination on each pass makes every
+// pass its own segment. Bypass makes the first ten one MQ-coded segment (the
+// four most significant bit planes, D.6), and then alternates a raw segment of
+// a significance and a refinement pass with an MQ-coded one of a cleanup pass.
+func readSegmentLengths(r *bitReader, b *blockState, passes int, blockStyle byte) ([]int, error) {
+	for {
+		bit, err := r.readBit()
+		if err != nil {
+			return nil, err
+		}
+		if bit == 0 {
+			break
+		}
+		b.lblock++
+		if b.lblock > 32 {
+			return nil, errorf("a code-block length field grew past 32 bits")
+		}
+	}
+
+	var lengths []int
+	for passes > 0 {
+		last := len(b.segments) - 1
+		if last < 0 || b.segments[last].Passes == segmentCapacity(blockStyle, last) {
+			b.segments = append(b.segments, CodewordSegment{})
+			last++
+		}
+		n := min(segmentCapacity(blockStyle, last)-b.segments[last].Passes, passes)
+		length, err := r.readBits(b.lblock + log2(n))
+		if err != nil {
+			return nil, err
+		}
+		b.segments[last].Passes += n
+		b.segments[last].Length += int(length)
+		lengths = append(lengths, int(length))
+		passes -= n
+	}
+	return lengths, nil
+}
+
+// segmentCapacity is how many passes a block's codeword segment number index
+// holds, under a style with bypass or termination on each pass.
+func segmentCapacity(blockStyle byte, index int) int {
+	switch {
+	case blockStyle&BlockStyleTermAll != 0:
+		return 1
+	case index == 0:
+		return 10
+	case index%2 == 1:
+		return 2 // a raw significance and refinement pass
+	default:
+		return 1 // an MQ-coded cleanup pass
+	}
 }
 
 // blockGridOf is how many code-blocks a band holds across and down, which is
