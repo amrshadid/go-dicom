@@ -2,6 +2,13 @@
 
 Standalone examples demonstrating the go-dicom library. Each example is its own `main` package and can be run directly with `go run`.
 
+## Common jobs
+
+```bash
+go test -v ./commonjobs
+```
+Reading, changing and saving a file, the pixels, a rendered picture, de-identification, a sequence, compression and the network, as `Example` functions that `go test` runs and checks. They are the Go samples of [docs/examples.md](../docs/examples.md) and the pages for readers [coming from pydicom](../docs/coming-from-pydicom.md) and [dcmtk](../docs/coming-from-dcmtk.md).
+
 ## Input/Output
 
 ### Read a DICOM file

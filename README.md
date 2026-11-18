@@ -784,6 +784,12 @@ golangci-lint run ./...
 
 ## Examples
 
+Coming from another toolkit: [Coming from pydicom](./docs/coming-from-pydicom.md)
+and [Coming from dcmtk](./docs/coming-from-dcmtk.md) map the calls and commands
+you know to their equivalents here, and [Examples](./docs/examples.md) shows the
+common jobs as command lines and as Go, every Go sample run by `go test`
+([`examples/commonjobs`](./examples/commonjobs/)).
+
 See the [examples](./examples/) directory for complete working examples:
 
 - **[Read DICOM](./examples/input_output/read_dicom/)** - Reading DICOM files and accessing elements

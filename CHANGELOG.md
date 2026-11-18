@@ -59,6 +59,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   alone. The 59 corpus files that rendered before render to the same bytes.
   An ICC profile is still not applied.
 
+- **Pages for readers coming from pydicom and from dcmtk** (#391). The README
+  was the only manual, and nothing said what `dcmread`, `pixel_array`,
+  `dcmdump` or `dcm2pnm` are called here. `docs/coming-from-pydicom.md` and
+  `docs/coming-from-dcmtk.md` map each familiar call and command to its
+  equivalent, and say where there is none; `docs/examples.md` shows the
+  common jobs as command lines and as Go. Every Go sample is an `Example`
+  function in `examples/commonjobs`, run and checked by `go test`, and
+  every command line was run on a file from pydicom's corpus before it was
+  written down.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
