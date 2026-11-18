@@ -364,6 +364,8 @@ of, and does not name a file it could not read; both are counted as refused.
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
+| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted |
+| AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |

@@ -12,7 +12,8 @@
 //
 //   - Application Entity (AE) title — the name a DICOM node answers to. Peers
 //     are addressed by AE title as well as host and port, and an SCP rejects an
-//     association whose called AE title is not its own.
+//     association whose called AE title is not its own, unless
+//     SCPConfig.AcceptAnyCalledAE leaves that to SCPConfig.Admit.
 //   - Association — the negotiated session. Everything happens inside one; it
 //     is established, used, then released.
 //   - Presentation context — a pairing of an abstract syntax (a SOP Class: what
@@ -164,6 +165,15 @@
 // claim any calling AE title unless TLS with client certificates or user
 // identity negotiation is in use. Set SCPConfig.MaxAssociations to bound
 // concurrency on an exposed server.
+//
+// SCPConfig.Admit decides who may associate, before anything is negotiated:
+// it is given the calling and called AE titles, the remote address and, over
+// TLS, the verified certificate chains, and admits the caller or refuses it
+// with an A-ASSOCIATE-RJ of its choosing. An SCP that lists its callers there
+// is closed to everyone else, and a refused caller learns nothing of what it
+// supports. It is asked only about well-formed AE titles, and the SCP goes on
+// checking the called AE title itself unless SCPConfig.AcceptAnyCalledAE is
+// set.
 //
 // A panic in a handler ends the association it happened on, with an A-ABORT
 // and its stack in the log, and nothing else: the server and its other

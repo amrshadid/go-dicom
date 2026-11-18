@@ -286,9 +286,11 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 		return
 	}
 
-	// Check AE title
-	if rq.CalledAE != s.config.AETitle {
-		_ = assoc.RejectAssociation(ctx, RJResultRejectedPermanent, RJSourceServiceUser, 7)
+	// Who may associate is decided before anything is negotiated, so a caller
+	// that is refused learns nothing of what this SCP supports, and the
+	// connection is closed behind the refusal.
+	if r := s.decideAdmission(ctx, transport, rq); r != nil {
+		_ = assoc.RejectAssociation(ctx, r.Result, r.Source, r.Reason)
 		return
 	}
 
