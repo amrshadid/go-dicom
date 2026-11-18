@@ -11,6 +11,11 @@ package jpeg2000
 // Nothing here decodes a coefficient. This is the layer that says which bytes
 // belong to which code-block, so tier-1 can be handed one block's data.
 
+import (
+	"fmt"
+	"slices"
+)
+
 // CodeBlockData is everything one code-block contributed across the layers of
 // a tile: its place in the band, and the bytes tier-1 will decode.
 type CodeBlockData struct {
@@ -21,6 +26,22 @@ type CodeBlockData struct {
 	ZeroBitPlanes int // leading bit planes that are all zero (B.10.5)
 	Passes        int
 	Data          []byte
+
+	// Style is the code-block style the block was coded with (Table A.19),
+	// the BlockStyle bits.
+	Style byte
+	// Segments divides Data into the codeword segments the encoder
+	// terminated (D.4.1), in order. It is set only when the style makes
+	// more than one: with bypass or termination on each pass. Empty means
+	// all of Data is one segment holding every pass.
+	Segments []CodewordSegment
+}
+
+// CodewordSegment is one terminated run of a code-block's coding passes: how
+// many passes it holds and how many bytes of the block's data they occupy.
+type CodewordSegment struct {
+	Passes int
+	Length int
 }
 
 // TileData is one tile's code-blocks, in the order the geometry lists them.
@@ -45,14 +66,29 @@ type blockState struct {
 	lblock        int // bits in the length field, 3 to start (B.10.7.1)
 	passes        int
 	data          []byte
+	// segments is kept only for a style with several codeword segments, and
+	// its last entry is the one the next passes join until it is full.
+	segments []CodewordSegment
 }
 
 // precinctState holds the two tag trees a precinct's packets share and the
-// per-block state.
+// per-block state, for one band of the precinct.
 type precinctState struct {
 	inclusion *tagTree
 	zeroBits  *tagTree
-	blocks    []blockState
+	// indexes says which of the band's code-blocks each entry of blocks is:
+	// the precinct's own blocks, in the order its packets list them. Nil
+	// means the precinct holds the whole band, in the band's order.
+	indexes []int
+	blocks  []blockState
+}
+
+// bandBlock is which of the band's code-blocks entry i of the precinct is.
+func (p *precinctState) bandBlock(i int) int {
+	if p.indexes == nil {
+		return i
+	}
+	return p.indexes[i]
 }
 
 // ReadTilePackets reads every packet of a tile and returns the code-blocks with
@@ -75,31 +111,36 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 	out := &TileData{Tile: tile}
 	states := map[[4]int]*precinctState{} // component, resolution, band, precinct
 
-	maxResolutions := 0
 	for comp := range c.Components {
 		tc, err := c.TileComponentFor(tile, comp)
 		if err != nil {
 			return nil, err
 		}
 		out.Components = append(out.Components, tc)
-		if len(tc.Resolutions) > maxResolutions {
-			maxResolutions = len(tc.Resolutions)
-		}
 	}
 
+	precincts, err := c.tilePrecincts(tile, out.Components, len(data))
+	if err != nil {
+		return nil, err
+	}
 	style := c.CodingForTile(tile, 0)
 	pos := 0
-	for _, step := range progressionOrder(style, maxResolutions, len(c.Components), out.Components) {
+	err = forEachPacket(style, c.ProgressionChangesForTile(tile), precincts, len(data), func(step packetStep) (bool, error) {
 		if pos >= len(data) {
 			// Layers may simply stop: an encoder writes as many as it wrote,
-			// and the rest of the progression is empty.
-			break
+			// and the rest of the progression is empty. This is also what
+			// bounds the walk: every packet read takes at least a byte.
+			return false, nil
 		}
 		next, err := c.readPacket(data, pos, tile, step, states, out)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		pos = next
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	out.BytesRead = pos
@@ -111,19 +152,22 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 		comp, res, band, _ := key[0], key[1], key[2], key[3]
 		tc := out.Components[comp]
 		bandInfo := tc.Resolutions[res].Bands[band]
+		blockStyle := c.CodingForTile(tile, comp).BlockStyle
 		for i := range state.blocks {
 			b := &state.blocks[i]
 			if !b.included || len(b.data) == 0 {
 				continue
 			}
 			out.Blocks = append(out.Blocks, CodeBlockData{
-				Block:         bandInfo.Blocks[i],
+				Block:         bandInfo.Blocks[state.bandBlock(i)],
 				BandType:      bandInfo.Type,
 				Resolution:    res,
 				Component:     comp,
 				ZeroBitPlanes: b.zeroBitPlanes,
 				Passes:        b.passes,
 				Data:          b.data,
+				Style:         blockStyle,
+				Segments:      b.segments,
 			})
 		}
 	}
@@ -138,40 +182,192 @@ type packetStep struct {
 	precinct   int
 }
 
-// progressionOrder lists the packets of a tile in the order they appear
-// (B.12). Only the two orders the parser accepts are produced.
-func progressionOrder(style CodingStyle, resolutions, components int, comps []TileComponent) []packetStep {
-	var steps []packetStep
-	precincts := func(comp, res int) int {
-		if comp >= len(comps) || res >= len(comps[comp].Resolutions) {
-			return 0
+// tilePrecinct is one precinct of one resolution of one component, and the
+// point of the reference grid where the position-driven progressions meet it.
+type tilePrecinct struct {
+	component, resolution, precinct int
+	x, y                            int64
+	index                           int // its place in tilePrecincts' list
+}
+
+// tilePrecincts lists every precinct of a tile, resolution by resolution, and
+// within a resolution component by component in raster order: the order LRCP
+// and RLCP visit them in.
+//
+// The position-driven orders (B.12.1.3 to B.12.1.5) step across the tile's
+// reference grid and take a component's precinct at each point that is a
+// multiple of the precinct's size there, 2^(PPx + NL - r) times the
+// component's subsampling, or at the tile's own edge when the first precinct
+// starts before it. That point is where the precinct's left and top edges are
+// on the reference grid, moved in to the tile's edge for the first one, which
+// is what x and y hold; sorting by them is the standard's loop without
+// visiting every point of the grid to find the few that start a precinct.
+//
+// A complete codestream holds at least one packet of at least one byte for
+// every precinct, so a tile that declares far more precincts than it has bytes
+// is refused here, before a list of them is allocated. The slack is for a
+// codestream truncated after its first layers, which is legal.
+func (c *Codestream) tilePrecincts(tile int, comps []TileComponent, tileBytes int) ([]tilePrecinct, error) {
+	total, resolutions := int64(0), 0
+	for _, tc := range comps {
+		for _, res := range tc.Resolutions {
+			total += int64(res.PrecinctsWide) * int64(res.PrecinctsHigh)
 		}
-		return comps[comp].Resolutions[res].Precincts()
+		resolutions = maxInt(resolutions, len(tc.Resolutions))
+	}
+	if limit := int64(tileBytes) + 1<<16; total > limit {
+		return nil, errorf("tile %d declares %d precincts in %d bytes", tile, total, tileBytes)
 	}
 
-	if style.Progression == ProgressionRLCP {
-		for r := 0; r < resolutions; r++ {
-			for l := 0; l < style.Layers; l++ {
-				for c := 0; c < components; c++ {
-					for p := 0; p < precincts(c, r); p++ {
-						steps = append(steps, packetStep{l, r, c, p})
+	tx0, ty0, _, _ := c.TileBounds(tile)
+	precincts := make([]tilePrecinct, 0, total)
+	for r := 0; r < resolutions; r++ {
+		for comp, tc := range comps {
+			if r >= len(tc.Resolutions) {
+				continue // this component has fewer resolutions than another
+			}
+			res := tc.Resolutions[r]
+			// The precinct's size on the reference grid, as a shift and the
+			// component's subsampling.
+			shift := res.PPx + len(tc.Resolutions) - 1 - r
+			shiftY := res.PPy + len(tc.Resolutions) - 1 - r
+			dx, dy := int64(c.Components[comp].DX), int64(c.Components[comp].DY)
+			firstX, firstY := floorDivPow2(res.X0, res.PPx), floorDivPow2(res.Y0, res.PPy)
+			for k := 0; k < res.Precincts(); k++ {
+				x := int64(firstX+k%res.PrecinctsWide) << shift * dx
+				y := int64(firstY+k/res.PrecinctsWide) << shiftY * dy
+				precincts = append(precincts, tilePrecinct{
+					component: comp, resolution: r, precinct: k,
+					x: max(x, int64(tx0)), y: max(y, int64(ty0)),
+					index: len(precincts),
+				})
+			}
+		}
+	}
+	return precincts, nil
+}
+
+// forEachPacket calls visit for each packet of a tile in the order the coding
+// style's progression writes them (B.12.1), or the order its progression
+// order changes give (B.12.2), until visit returns false or an error.
+// precincts is tilePrecincts' list, and tileBytes the tile's length.
+func forEachPacket(style CodingStyle, changes []ProgressionChange, precincts []tilePrecinct,
+	tileBytes int, visit func(packetStep) (bool, error)) error {
+
+	step := func(p tilePrecinct, layer int) packetStep {
+		return packetStep{layer: layer, resolution: p.resolution, component: p.component, precinct: p.precinct}
+	}
+	if len(changes) == 0 {
+		_, err := walkVolume(style.Progression, style.Layers, precincts, func(p tilePrecinct, l int) (bool, error) {
+			return visit(step(p, l))
+		})
+		return err
+	}
+
+	// Each volume is a range of resolutions, components and layers in its own
+	// order, and a packet an earlier volume carried is not carried again.
+	// Every volume walks a precinct's layers upwards from 0, so the layers a
+	// precinct has given are always 0 to some n, and one count per precinct
+	// says which packets are done.
+	//
+	// Skipping is not free, and a POC can name thousands of volumes that
+	// repeat each other without consuming a byte: the work of skipping and of
+	// picking out each volume's precincts is bounded by the tile's size, far
+	// above what any real progression needs.
+	done := make([]int, len(precincts))
+	work, budget := 0, 64*(tileBytes+len(precincts))+1<<20
+	for _, change := range changes {
+		if work += len(precincts); work > budget {
+			return errorf("a tile's progression order changes name more than %d precincts", budget)
+		}
+		var volume []tilePrecinct
+		for _, p := range precincts {
+			if p.resolution >= change.ResolutionStart && p.resolution < change.ResolutionEnd &&
+				p.component >= change.ComponentStart && p.component < change.ComponentEnd {
+				volume = append(volume, p)
+			}
+		}
+		more, err := walkVolume(change.Progression, min(change.LayerEnd, style.Layers), volume,
+			func(p tilePrecinct, l int) (bool, error) {
+				if l < done[p.index] {
+					if work++; work > budget {
+						return false, errorf("a tile's progression order changes revisit more than %d packets", budget)
+					}
+					return true, nil
+				}
+				done[p.index] = l + 1
+				return visit(step(p, l))
+			})
+		if !more || err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// walkVolume calls emit for each packet of a volume of precincts in one
+// progression order (B.12.1), with layers 0 to layers-1, until emit returns
+// false or an error. It reports whether emit asked to go on.
+//
+// Each order is the list in some order, with the layer loop where the order
+// puts it: outermost for LRCP, second for RLCP, innermost for the three
+// position-driven ones, whose precincts are sorted by where on the grid the
+// standard's loops meet them.
+func walkVolume(progression, layers int, precincts []tilePrecinct, emit func(tilePrecinct, int) (bool, error)) (bool, error) {
+	switch progression {
+	case ProgressionLRCP:
+		for l := 0; l < layers; l++ {
+			for _, p := range precincts {
+				if more, err := emit(p, l); !more || err != nil {
+					return more, err
+				}
+			}
+		}
+		return true, nil
+
+	case ProgressionRLCP:
+		// The list is in resolution order, so each resolution is a run of it.
+		for start := 0; start < len(precincts); {
+			end := start
+			for end < len(precincts) && precincts[end].resolution == precincts[start].resolution {
+				end++
+			}
+			for l := 0; l < layers; l++ {
+				for _, p := range precincts[start:end] {
+					if more, err := emit(p, l); !more || err != nil {
+						return more, err
 					}
 				}
 			}
+			start = end
 		}
-		return steps
+		return true, nil
 	}
 
-	for l := 0; l < style.Layers; l++ {
-		for r := 0; r < resolutions; r++ {
-			for c := 0; c < components; c++ {
-				for p := 0; p < precincts(c, r); p++ {
-					steps = append(steps, packetStep{l, r, c, p})
-				}
+	order := slices.Clone(precincts)
+	var key func(p tilePrecinct) [4]int64
+	switch progression {
+	case ProgressionRPCL:
+		key = func(p tilePrecinct) [4]int64 { return [4]int64{int64(p.resolution), p.y, p.x, int64(p.component)} }
+	case ProgressionPCRL:
+		key = func(p tilePrecinct) [4]int64 { return [4]int64{p.y, p.x, int64(p.component), int64(p.resolution)} }
+	case ProgressionCPRL:
+		key = func(p tilePrecinct) [4]int64 { return [4]int64{int64(p.component), p.y, p.x, int64(p.resolution)} }
+	default:
+		return false, &ErrUnsupported{Feature: fmt.Sprintf("progression order %d", progression)}
+	}
+	slices.SortStableFunc(order, func(a, b tilePrecinct) int {
+		ka, kb := key(a), key(b)
+		return slices.Compare(ka[:], kb[:])
+	})
+	for _, p := range order {
+		for l := 0; l < layers; l++ {
+			if more, err := emit(p, l); !more || err != nil {
+				return more, err
 			}
 		}
 	}
-	return steps
+	return true, nil
 }
 
 // readPacket reads one packet's header and body, returning the offset after it.
@@ -206,23 +402,24 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 
 	if nonEmpty == 1 {
 		for bandIndex, band := range res.Bands {
-			if len(band.Blocks) == 0 {
-				continue
-			}
 			key := [4]int{step.component, step.resolution, bandIndex, step.precinct}
 			state := states[key]
 			if state == nil {
-				// The trees are sized by the code-block grid of this precinct.
-				w, h := blockGridOf(band)
+				// The trees are sized by the code-block grid of this precinct,
+				// which is the whole band only with the default precincts.
+				indexes, w, h := precinctBlocks(res, band, step.precinct)
 				state = &precinctState{
 					inclusion: newTagTree(w, h),
 					zeroBits:  newTagTree(w, h),
-					blocks:    make([]blockState, len(band.Blocks)),
+					indexes:   indexes,
+					blocks:    make([]blockState, w*h),
 				}
 				states[key] = state
 			}
 
-			for i := range band.Blocks {
+			// A band with no code-blocks in this precinct has nothing in its
+			// packets (B.10).
+			for i := range state.blocks {
 				b := &state.blocks[i]
 				included, err := readInclusion(r, state, b, i, step.layer)
 				if err != nil {
@@ -246,12 +443,23 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 				if err != nil {
 					return 0, err
 				}
-				length, err := readSegmentLength(r, b, passes)
+				if style.BlockStyle&(BlockStyleBypass|BlockStyleTermAll) == 0 {
+					length, err := readSegmentLength(r, b, passes)
+					if err != nil {
+						return 0, err
+					}
+					b.passes += passes
+					contributions = append(contributions, contribution{key, i, length})
+					continue
+				}
+				lengths, err := readSegmentLengths(r, b, passes, style.BlockStyle)
 				if err != nil {
 					return 0, err
 				}
 				b.passes += passes
-				contributions = append(contributions, contribution{key, i, length})
+				for _, length := range lengths {
+					contributions = append(contributions, contribution{key, i, length})
+				}
 			}
 		}
 	}
@@ -380,6 +588,67 @@ func readSegmentLength(r *bitReader, b *blockState, passes int) (int, error) {
 	return int(length), nil
 }
 
+// readSegmentLengths reads the lengths of a contribution whose passes may fall
+// in several codeword segments, one length for each (B.10.7.2), and records
+// the segments on the block.
+//
+// The field's width grows with the 1 bits before it, as in readSegmentLength,
+// but once for the contribution; each segment's length then takes that many
+// bits plus the floor of log2 of the passes it holds. Which passes share a
+// segment follows from the style alone. Termination on each pass makes every
+// pass its own segment. Bypass makes the first ten one MQ-coded segment (the
+// four most significant bit planes, D.6), and then alternates a raw segment of
+// a significance and a refinement pass with an MQ-coded one of a cleanup pass.
+func readSegmentLengths(r *bitReader, b *blockState, passes int, blockStyle byte) ([]int, error) {
+	for {
+		bit, err := r.readBit()
+		if err != nil {
+			return nil, err
+		}
+		if bit == 0 {
+			break
+		}
+		b.lblock++
+		if b.lblock > 32 {
+			return nil, errorf("a code-block length field grew past 32 bits")
+		}
+	}
+
+	var lengths []int
+	for passes > 0 {
+		last := len(b.segments) - 1
+		if last < 0 || b.segments[last].Passes == segmentCapacity(blockStyle, last) {
+			b.segments = append(b.segments, CodewordSegment{})
+			last++
+		}
+		n := min(segmentCapacity(blockStyle, last)-b.segments[last].Passes, passes)
+		length, err := r.readBits(b.lblock + log2(n))
+		if err != nil {
+			return nil, err
+		}
+		b.segments[last].Passes += n
+		b.segments[last].Length += int(length)
+		lengths = append(lengths, int(length))
+		passes -= n
+	}
+	return lengths, nil
+}
+
+// segmentCapacity is how many passes a block's codeword segment number index
+// holds, under a style with bypass or termination on each pass.
+func segmentCapacity(blockStyle byte, index int) int {
+	switch {
+	case blockStyle&BlockStyleTermAll != 0:
+		return 1
+	case index == 0:
+		return 10
+	case index%2 == 1:
+		return 2 // a raw significance and refinement pass
+	default:
+		return 1 // an MQ-coded cleanup pass
+	}
+}
+
 // blockGridOf is how many code-blocks a band holds across and down, which is
 // the shape of its tag trees.
 func blockGridOf(band Band) (int, int) {
@@ -397,27 +666,16 @@ func blockGridOf(band Band) (int, int) {
 }
 
 // sortedKeys lists the precinct keys in component, resolution, band, precinct
-// order, so the blocks come out in the order the geometry lists them.
+// order, so the blocks come out in the same order whatever order the map
+// gives them in. A tile with user-defined precincts can have thousands, so
+// this is a real sort and not the insertion sort a handful of keys allowed.
 func sortedKeys(states map[[4]int]*precinctState) [][4]int {
 	keys := make([][4]int, 0, len(states))
 	for key := range states {
 		keys = append(keys, key)
 	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && less(keys[j], keys[j-1]); j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	slices.SortFunc(keys, func(a, b [4]int) int { return slices.Compare(a[:], b[:]) })
 	return keys
-}
-
-func less(a, b [4]int) bool {
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] < b[i]
-		}
-	}
-	return false
 }
 
 // ReadTilePacketsForTest exposes ReadTilePackets to tests in this package that

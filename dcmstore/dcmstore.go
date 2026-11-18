@@ -78,8 +78,11 @@ type Store struct {
 	// uidLocks serialize the writers of one SOP Instance UID, so its file and
 	// its index entry are always the same copy.
 	uidLocks [64]sync.Mutex
-	// saving serializes saveIndex, whose snapshot must be the one renamed in.
-	saving sync.Mutex
+	// journal serializes appends to the index journal, and guards seq, the
+	// last begin record's number, and records, how many the journal holds.
+	journal sync.Mutex
+	seq     uint64
+	records int
 }
 
 // lockUID locks the writers of one SOP Instance UID and returns the unlock.
@@ -135,6 +138,15 @@ func (s *Store) Count() int {
 // cannot file an instance without either. Storing the same SOP Instance UID twice
 // replaces the first, which is what a repeated C-STORE of one instance means.
 func (s *Store) Store(ctx context.Context, ds *dataset.Dataset) (*Instance, error) {
+	inst, err := s.store(ctx, ds)
+	if err == nil {
+		s.compactIfLong()
+	}
+	return inst, err
+}
+
+// store is Store, holding the store shared while it writes.
+func (s *Store) store(ctx context.Context, ds *dataset.Dataset) (*Instance, error) {
 	if ds == nil {
 		return nil, fmt.Errorf("the data set is nil")
 	}
@@ -170,13 +182,21 @@ func (s *Store) Store(ctx context.Context, ds *dataset.Dataset) (*Instance, erro
 		return nil, err
 	}
 
-	if err := writeInstance(path, sopClassUID, sopInstanceUID, ds); err != nil {
-		return nil, err
-	}
-
 	relative, err := filepath.Rel(s.root, path)
 	if err != nil {
 		return nil, fmt.Errorf("locating %q within %q: %w", path, s.root, err)
+	}
+
+	// Recorded, and synced, before the file is put in place: a crash
+	// between the two is then found at the next Open, not lost. A store
+	// whose journal cannot be written is refused, since it could not keep
+	// that promise.
+	seq, err := s.appendJournal(journalRecord{Op: recordBegin, UID: sopInstanceUID, Path: filepath.ToSlash(relative)}, true)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeInstance(path, sopClassUID, sopInstanceUID, ds); err != nil {
+		return nil, err
 	}
 
 	inst := &Instance{
@@ -202,11 +222,12 @@ func (s *Store) Store(ctx context.Context, ds *dataset.Dataset) (*Instance, erro
 		}
 	}
 
-	// A failure to save the index is not a failure to store: the instance is on
-	// disk and Rebuild will find it. Reporting it would have the SCP refuse an
-	// instance it has in fact kept.
-	if err := s.saveIndex(); err != nil {
-		storeLogger.Warn("dcmstore: could not save the index, which will be rebuilt on the next Open: %v", err)
+	// A put that is not recorded is not a failure to store: the instance is on
+	// disk, its begin is in the journal, and the next Open indexes it from the
+	// file. Reporting it would have the SCP refuse an instance it has kept.
+	if _, err := s.appendJournal(journalRecord{Seq: seq, Op: recordPut, Instance: inst}, false); err != nil {
+		storeLogger.Warn("dcmstore: could not record %s in the index journal; the next Open reads it from its file: %v",
+			sopInstanceUID, err)
 	}
 
 	return inst, nil
@@ -290,28 +311,41 @@ func (s *Store) Load(ctx context.Context, inst *Instance) (*dataset.Dataset, err
 
 // Remove deletes an instance from the store and its index.
 func (s *Store) Remove(sopInstanceUID string) error {
+	err := s.remove(sopInstanceUID)
+	if err == nil {
+		s.compactIfLong()
+	}
+	return err
+}
+
+// remove is Remove, holding the store shared while it writes.
+func (s *Store) remove(sopInstanceUID string) error {
 	s.ops.RLock()
 	defer s.ops.RUnlock()
 	defer s.lockUID(sopInstanceUID)()
 
-	s.mu.Lock()
-	inst, ok := s.instances[sopInstanceUID]
-	if ok {
-		delete(s.instances, sopInstanceUID)
-	}
-	s.mu.Unlock()
-
+	inst, ok := s.Instance(sopInstanceUID)
 	if !ok {
 		return fmt.Errorf("no instance %q in the store", sopInstanceUID)
 	}
 
+	// Begun before the file goes, as a store is, so a crash between the
+	// two is settled from the disk at the next Open.
+	seq, err := s.appendJournal(journalRecord{Op: recordBegin, UID: sopInstanceUID, Path: inst.Path}, true)
+	if err != nil {
+		return err
+	}
 	path := filepath.Join(s.root, filepath.FromSlash(inst.Path))
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing %s: %w", path, err)
 	}
+	s.mu.Lock()
+	delete(s.instances, sopInstanceUID)
+	s.mu.Unlock()
 
-	if err := s.saveIndex(); err != nil {
-		storeLogger.Warn("dcmstore: could not save the index after a removal: %v", err)
+	if _, err := s.appendJournal(journalRecord{Seq: seq, Op: recordRemove, UID: sopInstanceUID, Path: inst.Path}, false); err != nil {
+		storeLogger.Warn("dcmstore: could not record the removal of %s; the next Open finds its file gone: %v",
+			sopInstanceUID, err)
 	}
 	return nil
 }
@@ -389,7 +423,7 @@ func (s *Store) Rebuild(ctx context.Context) error {
 			s.root, count, skipped)
 	}
 
-	return s.saveIndex()
+	return s.writeSnapshot()
 }
 
 // readInstance reads one file and derives its index entry.
@@ -447,7 +481,16 @@ func (s *Store) readInstance(path string) (*Instance, error) {
 // 3: the index also holds the attributes a DICOMweb search returns: the size
 // of an image, its frames, its timezone and when its procedure step began
 // (#294). An index without them would answer as if no instance had any.
-const indexVersion = 3
+//
+// 4: the entries of 3, and the changes since in index.log beside it. A
+// version that reads 3 and not the journal would open such a store as it was
+// at the last snapshot, so the version is raised to have it rebuild instead.
+// A store of version 3 is read as it is and written as 4 when it is opened.
+const indexVersion = 4
+
+// indexVersionBeforeJournal is the version whose entries are those of 4,
+// with no journal beside it.
+const indexVersionBeforeJournal = 3
 
 // indexFile is the index as it is written.
 type indexFile struct {
@@ -455,8 +498,9 @@ type indexFile struct {
 	Instances map[string]*Instance `json:"instances"`
 }
 
-// loadIndex reads the index file. An index of another version is an error,
-// which Open answers by rebuilding.
+// loadIndex reads the snapshot and replays the journal. An index of another
+// version, or a journal that does not read, is an error, which Open answers
+// by rebuilding.
 func (s *Store) loadIndex() error {
 	data, err := os.ReadFile(filepath.Join(s.root, indexFileName))
 	if err != nil {
@@ -467,59 +511,30 @@ func (s *Store) loadIndex() error {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return err
 	}
-	if file.Version != indexVersion {
-		return fmt.Errorf("the index is version %d and this store reads version %d", file.Version, indexVersion)
+	if file.Version != indexVersion && file.Version != indexVersionBeforeJournal {
+		return fmt.Errorf("the index is version %d and this store reads versions %d and %d",
+			file.Version, indexVersionBeforeJournal, indexVersion)
 	}
 	loaded := file.Instances
 	if loaded == nil {
 		loaded = make(map[string]*Instance)
 	}
+	if file.Version == indexVersion {
+		if err := s.replayJournal(loaded); err != nil {
+			return err
+		}
+	}
 
 	s.mu.Lock()
 	s.instances = loaded
 	s.mu.Unlock()
-	return nil
-}
 
-// saveIndex writes the index file.
-//
-// Written to a temporary file and renamed, so an interrupted save leaves the
-// previous index rather than a truncated one. A truncated index would be read
-// back as a shorter archive, which is worse than no index at all — that at least
-// triggers a rebuild.
-func (s *Store) saveIndex() error {
-	// The snapshot and the rename happen under one lock. Taken apart, an older
-	// snapshot could be renamed in after a newer one, and the index on disk
-	// would lack an instance the C-STORE had acknowledged.
-	s.saving.Lock()
-	defer s.saving.Unlock()
-
-	s.mu.RLock()
-	data, err := json.MarshalIndent(indexFile{Version: indexVersion, Instances: s.instances}, "", "  ")
-	s.mu.RUnlock()
-	if err != nil {
-		return fmt.Errorf("encoding the index: %w", err)
-	}
-
-	final := filepath.Join(s.root, indexFileName)
-	temporary, err := os.CreateTemp(s.root, indexFileName+".*")
-	if err != nil {
-		return fmt.Errorf("creating a temporary index file: %w", err)
-	}
-	name := temporary.Name()
-
-	if _, err := temporary.Write(data); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(name)
-		return fmt.Errorf("writing the index: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(name)
-		return fmt.Errorf("closing the index: %w", err)
-	}
-	if err := os.Rename(name, final); err != nil {
-		_ = os.Remove(name)
-		return fmt.Errorf("replacing the index: %w", err)
+	// Written as 4 before anything is journaled, so that a version reading 3
+	// never opens this store and misses what the journal holds.
+	if file.Version == indexVersionBeforeJournal {
+		if err := s.writeSnapshot(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

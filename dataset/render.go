@@ -17,6 +17,9 @@ import (
 // units for CT.
 type Window struct {
 	Center, Width float64
+	// Function is the VOI LUT Function to apply it by: LINEAR, LINEAR_EXACT
+	// or SIGMOID (PS3.3 C.11.2.1.3). Empty is LINEAR.
+	Function string
 }
 
 // RenderOptions choose how an image is rendered for display.
@@ -162,6 +165,13 @@ func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
 	if info.SamplesPerPixel == 1 && info.PhotometricInterpretation != "PALETTE COLOR" {
 		if err := r.readGrayTables(); err != nil {
 			return nil, err
+		}
+	}
+	if w := r.opts.Window; w != nil {
+		switch strings.ToUpper(w.Function) {
+		case "", "LINEAR", "LINEAR_EXACT", "SIGMOID":
+		default:
+			return nil, fmt.Errorf("render: VOI LUT Function %q; it is LINEAR, LINEAR_EXACT or SIGMOID", w.Function)
 		}
 	}
 	return r, nil
@@ -443,10 +453,14 @@ func (r *renderer) rescale(f int) (slope, intercept float64) {
 }
 
 // voi returns the VOI LUT for a frame: a window and its VOI LUT Function, or
-// a table, or neither when the image has none and the caller gave none.
+// a table, or neither when the image has none and the caller gave none. A
+// caller's window names its own function, linear when it names none.
 func (r *renderer) voi(f int) (*Window, string, *lut, error) {
-	if r.opts.Window != nil {
-		return r.opts.Window, "LINEAR", nil, nil
+	if w := r.opts.Window; w != nil {
+		if w.Function == "" {
+			return w, "LINEAR", nil, nil
+		}
+		return w, strings.ToUpper(w.Function), nil, nil
 	}
 	src := r.holder(f, tagFrameVOILUT, tagWindowWidth, tagVOILUTSequence)
 	if src == nil {

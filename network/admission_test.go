@@ -241,11 +241,14 @@ func TestEachRejectionArrivesAsSent(t *testing.T) {
 
 // TestRefusedCallerIsNotNegotiated: a refused caller gets an A-ASSOCIATE-RJ
 // and nothing else: no A-ASSOCIATE-AC, no presentation context, and the
-// connection closed.
+// connection closed when ARTIM expires.
 func TestRefusedCallerIsNotNegotiated(t *testing.T) {
-	addr, events := admitServer(t, SCPConfig{Admit: func(context.Context, *AssociationRequest) *AssociationRejection {
-		return RejectCallingAE()
-	}})
+	addr, events := admitServer(t, SCPConfig{
+		Network: NetworkConfig{ARTIMTimeout: 300 * time.Millisecond},
+		Admit: func(context.Context, *AssociationRequest) *AssociationRejection {
+			return RejectCallingAE()
+		},
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	transport, err := Dial(ctx, addr, time.Second)
@@ -267,18 +270,20 @@ func TestRefusedCallerIsNotNegotiated(t *testing.T) {
 	if got := (AssociationRejection{rj.Result, rj.Source, rj.Reason}); got != *RejectCallingAE() {
 		t.Fatalf("refused with %s", got)
 	}
-	// Closed by the SCP, and at once: the read ends because the connection
-	// did, not because this test stopped waiting. Its own deadline used to
-	// count as success, so an SCP that never closed passed.
-	closeCtx, cancelClose := context.WithTimeout(ctx, 2*time.Second)
+	// Nothing follows the A-ASSOCIATE-RJ, and the connection is closed by the
+	// SCP when ARTIM expires, this caller not having closed it (PS3.8 9.2,
+	// AE-8 and AA-2; #430). The read ends because the connection did, not
+	// because this test stopped waiting: its own deadline used to count as
+	// success, so an SCP that never closed passed.
+	closeCtx, cancelClose := context.WithTimeout(ctx, 3*time.Second)
 	defer cancelClose()
 	next, err := transport.ReadPDU(closeCtx)
 	if err == nil {
-		t.Fatalf("after the A-ASSOCIATE-RJ the SCP sent %T; it should have closed the connection", next)
+		t.Fatalf("after the A-ASSOCIATE-RJ the SCP sent %T; nothing is due but the close", next)
 	}
 	var timeout *TimeoutError
 	if errors.As(err, &timeout) || errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, io.EOF) {
-		t.Fatalf("2s after the A-ASSOCIATE-RJ the connection is still open: %v", err)
+		t.Fatalf("3s after the A-ASSOCIATE-RJ, with ARTIM at 300ms, the connection is still open: %v", err)
 	}
 	// The refusal is reported once it is written; by then an acceptance
 	// would have been reported too.

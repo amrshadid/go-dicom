@@ -38,7 +38,70 @@ func framesOf(t *testing.T, value []byte, numberOfFrames int) ([][]byte, error) 
 	if err != nil {
 		t.Fatalf("ParseEncapsulatedData: %v", err)
 	}
-	return encaps.Frames(enc, numberOfFrames)
+	frames, err := encaps.Frames(enc, numberOfFrames)
+
+	// FrameRanges makes the same decision from where the fragments lie, so
+	// every case here holds it to the same answer.
+	ranges, rangesErr := encaps.FrameRanges(bytes.NewReader(value), items(value), nil, numberOfFrames)
+	if (err == nil) != (rangesErr == nil) {
+		t.Fatalf("Frames says %v and FrameRanges says %v", err, rangesErr)
+	}
+	for i := range ranges {
+		if got := join(value, ranges[i]); !bytes.Equal(got, frames[i]) {
+			t.Errorf("FrameRanges frame %d is %q, Frames %q", i, got, frames[i])
+		}
+	}
+	return frames, err
+}
+
+// items finds the items of an encapsulated value, each as the range of its
+// content, as filereader records them.
+func items(value []byte) []encaps.Range {
+	var found []encaps.Range
+	for at := 0; at+8 <= len(value); {
+		if value[at+2] == 0xDD {
+			break
+		}
+		length := int(binary.LittleEndian.Uint32(value[at+4:]))
+		found = append(found, encaps.Range{Offset: int64(at + 8), Length: int64(length)})
+		at += 8 + length
+	}
+	return found
+}
+
+// join reads a frame's fragments out of the value.
+func join(value []byte, ranges []encaps.Range) []byte {
+	var out []byte
+	for _, r := range ranges {
+		out = append(out, value[r.Offset:r.Offset+r.Length]...)
+	}
+	return out
+}
+
+// TestExtendedOffsetTableComesFirst: the Extended Offset Table (PS3.3
+// C.7.6.3.1.8) counts as the basic one does, from the first fragment's item
+// tag. The Basic Offset Table is empty here, as the standard requires beside
+// an extended one, and the fragments carry no end-of-image markers, so
+// nothing else could divide them.
+func TestExtendedOffsetTableComesFirst(t *testing.T) {
+	value := encapsulate(nil, []byte("aaaa"), []byte("bb"), []byte("cccc"), []byte("dd"))
+	ranges, err := encaps.FrameRanges(bytes.NewReader(value), items(value), []uint64{0, 22}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranges) != 2 || string(join(value, ranges[0])) != "aaaabb" || string(join(value, ranges[1])) != "ccccdd" {
+		t.Fatalf("frames %v", ranges)
+	}
+	// Each range is a fragment's content in the value: where a caller reads.
+	if ranges[1][0] != (encaps.Range{Offset: 8 + 8 + 4 + 8 + 2 + 8, Length: 4}) {
+		t.Errorf("the second frame starts at %+v", ranges[1][0])
+	}
+
+	// An extended table that does not fit is passed over, like a basic one,
+	// and here nothing else divides the fragments.
+	if _, err := encaps.FrameRanges(bytes.NewReader(value), items(value), []uint64{0, 5}, 2); err == nil {
+		t.Error("an extended offset inside a fragment was used")
+	}
 }
 
 func wantFrames(t *testing.T, got [][]byte, err error, want ...string) {

@@ -255,8 +255,11 @@ jobs:
         run: |
           python -m venv "$HOME/dicomvenv"
           "$HOME/dicomvenv/bin/pip" install --quiet --upgrade pip
-          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom
-          "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__)"
+          # numpy is named because pydicom 3 no longer brings it, and the
+          # DICOMweb steps compare pixels with it; without it they skip (#414).
+          # Pillow reads the pictures the DICOMweb server renders.
+          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom numpy pillow
+          "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom, numpy, PIL; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__, '/ numpy', numpy.__version__, '/ Pillow', PIL.__version__)"
 
       - name: Install dcmtk
         run: |
@@ -279,6 +282,42 @@ jobs:
           tail -5 openjpeg.log
           # A skip passes too, and here it must not.
           grep -q "OpenJPEG returned the samples" openjpeg.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeEveryBlockStyleMatchesOpenJPEG|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeEveryBlockStyleMatchesOpenJPEG|TestRegionOfInterest|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeEveryBlockStyleMatchesOpenJPEG|TestRegionOfInterest|TestProgressionChangesByComponent|TestJP2BoxWithA64BitLength|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
 
       - name: Build CLI
         run: go build -o go-dicom .

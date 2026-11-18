@@ -344,7 +344,7 @@ As an origin server (`dicomweb.NewServer`, `qrscp -web`):
 | Service | Supported | Not supported |
 |---------|-----------|---------------|
 | QIDO-RS | `/studies`, `/series`, `/instances` and the same within a study or a series. Matching is the archive's own (section 2.7), so a search matches what a C-FIND does: single value, wildcard, range, list of UID, and `Sequence.Attribute` for an attribute inside a sequence. `includefield`, `limit`, `offset`. Results as DICOM JSON in UTF-8, each with the attributes of PS3.18 10.6.3.3 the archive holds a value for; 204 when nothing matches | XML results. Fuzzy matching: `fuzzymatching=true` is answered by literal matching and a `Warning: 299`. `includefield=all` returns the default attributes |
-| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON | Frames, rendered images, thumbnails, bulk data on its own. Metadata names a bulk value by its VR and gives no `BulkDataURI`. Encoding into a compressed syntax on request |
+| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON. Frames, `…/frames/{list}`: one part a frame, in the order asked; by default, or for `application/octet-stream`, uncompressed in Explicit VR Little Endian, a compressed frame decoded for it; for `application/octet-stream; transfer-syntax=*`, or the frame's own type (`image/jpeg`, `image/jls`, `image/jp2`, `image/jpx`, `image/dicom-rle`, `image/x-dicom-rle` accepted for it), as stored. Each frame read from the file by its position, through the Extended or Basic Offset Table, a frame over several fragments joined. A frame number not in the image: 404; a list that is not frame numbers counted from 1: 400; a compressed type the frame is not held in: 406. Bulk data, `…/instances/{instance}/bulkdata/{tag}[/{item}/{tag}…]`: each value metadata leaves out (binary values over 1 KiB, Pixel Data at any length), read from the file by its position, as `application/octet-stream` in little endian; Pixel Data as its frames are sent, every frame in one part when uncompressed. `/metadata` gives a `BulkDataURI` for each, inside sequences too. Rendered, `…/instances/{instance}/rendered` and `…/frames/{list}/rendered`, and thumbnails of an instance, frames, a series and a study (the first instance with an image, its first frame): `image/jpeg` (the default) or `image/png`, one picture bare, several in `multipart/related`; `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]` and `quality` applied; a thumbnail fitted to 128 pixels when no viewport is given. Refused: a malformed parameter, a flipped viewport region, `iccprofile` other than `no`: 400; another media type: 406; a study or a series rendered whole, an instance with no Pixel Data: 501. `annotation`: the picture, not annotated, and `Warning: 299` | Bulk data of a study or a series as one resource. Frames of Float and Double Float Pixel Data, a frame of a 1-bit image that starts inside a byte, frames sent outside a multipart body. Encoding into a compressed syntax on request |
 | STOW-RS | `application/dicom` parts in `multipart/related`, to `/studies` or into a study. Each instance kept or refused on its own: 200 when all were kept, 202 when some were, 409 when none was, with Referenced SOP Sequence and Failed SOP Sequence in the answer. Failure reasons: A900H for an instance sent into a study it is not of, 0110H when the archive could not keep it. A compressed instance is kept in the syntax it came in. A request is bounded (4 GiB unless set), 413 beyond | Metadata with separate bulk data (415). A part that is not a DICOM file has no UID to be listed under, and shows in the status alone |
 
 `qrscp -web` serves under `/dicom-web`. A port alone listens on this machine
@@ -355,7 +355,10 @@ client certificate when `-tls-ca` is given. Checked in
 `scripts/interop-test.sh`: files stored by pynetdicom over DIMSE are searched
 for over HTTP by a client that is not this library, and the answers held
 against pydicom's reading of the files, a C-FIND on the same archive, and
-Orthanc holding the same files.
+Orthanc holding the same files. Frames are checked the same way: every file
+of pydicom's corpus with pixel data is stored, and each of its frames is the
+bytes pydicom divides out of the file and the bytes Orthanc sends, except
+32-bit big endian, which Orthanc 1.13 reverses in two-byte words.
 
 UPS-RS and the capabilities service are not implemented. Bulk data that
 metadata refers to by URI is not fetched: the element is kept, empty.
@@ -384,6 +387,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
+| After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
@@ -491,8 +495,38 @@ how decoded samples are shaped and coloured, and the one tolerance.
 
 - **JPEG 2000 decodes in pure Go**, `.90` and `.91`, both wavelets, 1 to 16 bits,
   signed or unsigned, single or multi component, any number of tiles and quality
-  layers, with the reversible and irreversible component transforms. There is no
+  layers, in all five progression orders and with progression order changes
+  in the main or a tile-part header, with the default precincts or the
+  coding style's own, with any combination of the six code-block style options
+  (selective arithmetic coding bypass, reset of context probabilities,
+  termination on each coding pass, vertically causal context, predictable
+  termination, segmentation symbols), with a region of interest coded by the
+  Maxshift method in the main header or a tile-part header, and with the
+  reversible and irreversible component transforms, bare or in a JP2
+  container whose boxes may give their lengths in 32 or 64 bits. There is no
   CGO and nothing to register.
+
+  pydicom's corpus uses only the defaults, so what it does not exercise is
+  checked against OpenJPEG instead: `opj_compress` writes a codestream with the
+  feature, `opj_decompress` decodes it, and this decoder must return the same
+  samples, at 8, 12 and 16 bits, signed and unsigned, gray and color, tiled and
+  not, reversible and irreversible (`TestDecodeMatchesOpenJPEG`, run in CI).
+  All 63 combinations of the code-block style options are checked this way
+  (`TestDecodeEveryBlockStyleMatchesOpenJPEG`).
+
+  One combination is checked against the samples that were encoded instead: a
+  region of interest with selective arithmetic coding bypass. OpenJPEG 2.5.4
+  decodes its own lossless output of that combination to thousands of wrong
+  samples, because its decoder starts bypass four bit planes into the block
+  without counting the planes the region's shift added (D.6). This decoder
+  returns every sample (`TestRegionOfInterestWithBypassIsLossless`). Its
+  boundary between region and background follows H.1, 2^s, where OpenJPEG's
+  decoder uses 2^(s-1). OpenJPEG's encoder never writes background that the
+  difference would show, so `TestRegionOfInterestThreshold` pins H.1's rule.
+  Likewise, OpenJPEG's encoder writes progression order changes whose volumes
+  overlap so that a packet carried twice would read the same as one carried
+  once, and B.12.2's rule that it is carried once is checked on the walk
+  itself (`TestProgressionVolumesCarryEachPacketOnce`).
 
   A reversible codestream is required to match pydicom sample for sample. An
   irreversible one is held to a tolerance of one up to 12 bits and two at 16:
@@ -510,26 +544,18 @@ how decoded samples are shaped and coloured, and the one tolerance.
   refused with an `ErrUnsupported` that names it, quoted here as the error
   reads (ITU-T T.800 clauses in brackets):
 
-  - the RPCL, PCRL and CPRL progression orders: `progression order 2`, `3`
-    and `4` [A.6.1, B.12.1.3–B.12.1.5]. LRCP and RLCP decode;
-  - user-defined precinct sizes: `user-defined precinct sizes` [A.6.1, B.6];
-  - every code-block style option, alone or combined: `code-block style 0x..`
-    with the style byte in hex [A.6.1 Table A.19, D.5–D.7]. They are selective
-    arithmetic coding bypass (`0x01`), reset of context probabilities (`0x02`),
-    termination on each coding pass (`0x04`), vertically causal context
-    (`0x08`), predictable termination (`0x10`) and segmentation symbols
-    (`0x20`);
-  - a region of interest: `region of interest (RGN)` [A.6.3, Annex H];
-  - progression order changes: `progression order change (POC)` [A.6.6];
+  - the High-Throughput block coder of Part 15, and the reserved bit, in the
+    code-block style: `code-block style 0x40` or `0x80` and up [A.6.1 Table
+    A.19];
+  - a region of interest coded by a method other than Maxshift, which Part 2
+    defines: `region of interest style N` [A.6.3];
   - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
   - subsampled components: `component subsampling` [A.5.1, B.2];
   - components deeper than 16 bits: `17-bit components` and so on [A.5.1];
-  - a JP2 box with a 64-bit length: `JP2 box with a 64-bit length` [I.4];
   - the Part 2 wavelets and quantization styles: `wavelet transform N`,
     `quantization style N`.
 
-  An RGN or POC segment in a tile-part header, rather than the main header, and
-  any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) are
+  Any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) is
   refused too, but as `unexpected marker` with its code rather than by name.
 
   A codestream's own signedness may disagree with the data set's Pixel
