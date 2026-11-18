@@ -526,8 +526,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Four syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless and
-  Near-Lossless, and JPEG Baseline when asked.** Pixel data is transcoded in both directions as
+- **Six syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless and
+  Near-Lossless, JPEG 2000 Lossless, and JPEG Baseline and lossy JPEG 2000
+  when asked.** Pixel data is transcoded in both directions as
   the negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
@@ -585,7 +586,41 @@ how decoded samples are shaped and coloured, and the one tolerance.
   sample uses the bits above Bits Stored, so that what was in the file comes
   back. `Dataset.CompressJPEG2000LosslessInPlace` is the same encoder for
   files, and it is what a send uses when a peer accepts only this syntax.
-  Lossy JPEG 2000 (`.91`) is not written.
+
+  **Lossy JPEG 2000 (`.91`) is written only when the sender sets
+  `NetworkConfig.JPEG2000Rate`**: a compression ratio or a PSNR, one of
+  them. `jpeg2000.EncodeLossy` codes the irreversible 9/7 wavelet (F.4.8.2),
+  the irreversible component transform for RGB (G.3; the data set then says
+  `YBR_ICT`, with Planar Configuration 0, PS3.5 8.2.4), and scalar deadzone
+  quantization with a step for each subband (E.1, expounded), at 1 to 16
+  bits, signed or unsigned, so a CT keeps its negative values. The steps are
+  one base step over each subband's synthesis norm, measured from this
+  library's own inverse filter, and the rate is met by searching for the
+  base step: the largest whose codestream fits the ratio, or whose decoded
+  image meets the PSNR. That is rate control by quantization, not the
+  pass-by-pass truncation of Annex J.14: one tile, one quality layer, every
+  bit plane of what is left coded. A ratio no codestream of the image can
+  meet, as for a very small image, is refused rather than met with one that
+  holds none of the picture, and so is PALETTE COLOR. The data set is marked
+  Lossy Image Compression `01` with its ratio and method `ISO_15444_1`, and
+  the SOP Instance UID is the caller's to change.
+  `Dataset.CompressJPEG2000InPlace` is the same encoder for files. A ratio
+  search on a 6000 by 5000 image takes about 20 seconds, a PSNR one about 4.
+
+  *Verified:* OpenJPEG's `opj_decompress` and pylibjpeg-openjpeg decode
+  every corpus image coded here (39 at 10:1, 44 at 45 dB; three corpus
+  files already `.91` are left alone, and five too small for 10:1 are
+  refused) and the generated edge cases (odd sizes, 16-bit signed, the full
+  16-bit range, planar configuration 1, 6000 by 5000, and at 45 dB 1x1 as
+  well), the two agreeing with each other on every file. At 10:1 the corpus
+  comes back at 40 dB or better, some of its simple images exactly; at a
+  PSNR of 45 every file decodes at 45.0 dB or better. Against
+  OpenJPEG's own encoder (`opj_compress -I -r`) at the same size the PSNR is
+  the same or a few tenths of a decibel better: `CT_small.dcm` 3268 bytes at
+  77.1 dB against 3140 at 76.4, `examples_rgb_color.dcm` 22964 at 40.0
+  against 22887 at 39.7. OpenJPEG counts a 12-bit sample as 1.5 bytes where
+  this library counts the 2 it is stored in, so `-r 7.5` is its 10:1 here.
+  CI runs the `opj_decompress` check at 10:1.
 
   *Verified:* OpenJPEG, which shares no code with this library, decodes what
   the encoder writes. `opj_decompress` returns every sample of 360 generated
@@ -594,7 +629,7 @@ how decoded samples are shaped and coloured, and the one tolerance.
   receives one over the network with its codestream intact. Both run in CI.
 
   Every other compressed target fails, naming the syntax asked for. There is no
-  lossy JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send
+  12-bit or lossless JPEG encoder here, and a send
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 

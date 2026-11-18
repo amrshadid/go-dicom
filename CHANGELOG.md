@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A file or a send can be compressed to lossy JPEG 2000** (#339). The
+  JPEG 2000 encoder was lossless only, so `1.2.840.10008.1.2.4.91` was
+  refused by name and a peer that accepted only it could not be sent an
+  image. `jpeg2000.EncodeLossy` codes the irreversible 9/7 wavelet, the
+  irreversible component transform and a quantization step for each
+  subband, and meets a compression ratio or a PSNR by searching for the
+  step. `Dataset.CompressJPEG2000InPlace` writes a file in it: an RGB image
+  becomes `YBR_ICT`, a signed one stays signed, and the data set is marked
+  Lossy Image Compression `01` with its ratio and `ISO_15444_1`. A send
+  needing `.91` uses `NetworkConfig.JPEG2000Rate` and is refused without
+  it. A ratio a small image cannot meet is refused rather than met with an
+  empty picture. OpenJPEG and pylibjpeg-openjpeg decode every corpus image
+  coded at 10:1 and at 45 dB, and at the same size the PSNR matches
+  OpenJPEG's own encoder or betters it by a few tenths of a decibel. The rate
+  is reached by quantization alone, in one quality layer, not by the
+  pass-by-pass truncation of Annex J.14.
+
 - **A file or a send can be compressed to JPEG-LS Near-Lossless** (#337).
   The JPEG-LS encoder coded NEAR 0 only, so `1.2.840.10008.1.2.4.81` was
   refused by name and a peer that accepted only it could not be sent an

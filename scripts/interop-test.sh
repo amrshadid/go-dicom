@@ -1831,6 +1831,154 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Lossy JPEG 2000 encoding: go-dicom compresses, OpenJPEG decompresses (#339)
+#
+# Each uncompressed corpus image of 8 or 16 bits is written as .91 at 10:1,
+# its frames are decoded by opj_decompress, and what comes back is held
+# against the source: each file marked lossy, no larger than the ratio
+# allows, and above 35 dB PSNR. An image too small for any codestream of it
+# to meet 10:1 is refused by the encoder and is not part of the check.
+# ---------------------------------------------------------------------------
+if command -v opj_decompress >/dev/null 2>&1 && python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "Lossy JPEG 2000 encoding: go-dicom encoder, OpenJPEG decoder"
+  RAN_ANY=1
+  jl2_src="$WORKDIR/j2kl-src"
+  jl2_out="$WORKDIR/j2kl-out"
+  mkdir -p "$jl2_src" "$jl2_out" "$WORKDIR/j2kl-frames"
+  if python3 - "$jl2_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom
+import pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    path = os.path.join(corpus, name)
+    try:
+        ds = pydicom.dcmread(path)
+        if "PixelData" not in ds or ds.file_meta.TransferSyntaxUID.is_compressed:
+            continue
+        if int(ds.BitsAllocated) not in (8, 16) or str(ds.PhotometricInterpretation) == "PALETTE COLOR":
+            continue
+    except Exception:
+        continue
+    shutil.copy(path, sys.argv[1])
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    if go run ./scripts/roundtrip-check -jpeg2000-ratio 10 "$jl2_src" "$jl2_out" > "$WORKDIR/j2kl.log" 2>&1; then
+      if jl2=$(python3 - "$jl2_src" "$jl2_out" "$WORKDIR/j2kl-frames" <<'PYEOF'
+import math, os, struct, subprocess, sys
+import pydicom
+from pydicom.encaps import generate_pixel_data_frame
+
+src, out, work = sys.argv[1:4]
+
+def pgx(path):
+    with open(path, "rb") as f:
+        header = f.readline().split()
+        data = f.read()
+    if len(header) == 6:
+        signed, depth = header[2] == b"-", int(header[3])
+    else:
+        signed, depth = header[2][:1] == b"-", int(header[2].lstrip(b"+-"))
+    width, height = int(header[-2]), int(header[-1])
+    size = 1 if depth <= 8 else 2
+    code = ">" + str(width * height) + ({1: "b", 2: "h"} if signed else {1: "B", 2: "H"})[size]
+    return struct.unpack(code, data[:width * height * size])
+
+def source_samples(ds):
+    rows, cols, spp = int(ds.Rows), int(ds.Columns), int(ds.SamplesPerPixel)
+    frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    size = int(ds.BitsAllocated) // 8
+    signed = int(ds.PixelRepresentation) == 1
+    order = "<" if ds.file_meta.TransferSyntaxUID.is_little_endian else ">"
+    n = rows * cols * spp * frames
+    raw = bytes(ds.PixelData)
+    if size == 1 and order == ">" and ds["PixelData"].VR == "OW":
+        swapped = bytearray(raw)
+        swapped[0::2], swapped[1::2] = raw[1::2], raw[0:len(raw) - len(raw) % 2:2]
+        raw = bytes(swapped)
+    values = struct.unpack(order + str(n) + ({1: "b", 2: "h"} if signed else {1: "B", 2: "H"})[size], raw[:n * size])
+    per = rows * cols * spp
+    for f in range(frames):
+        frame = values[f * per:(f + 1) * per]
+        if spp > 1 and int(getattr(ds, "PlanarConfiguration", 0)) == 1:
+            plane = rows * cols
+            frame = tuple(frame[c * plane + i] for i in range(plane) for c in range(spp))
+        yield frame
+
+checked, bad, lowest = 0, [], float("inf")
+for name in sorted(os.listdir(out)):
+    if not name.endswith(".dcm"):
+        continue
+    want = pydicom.dcmread(os.path.join(src, name))
+    spp = int(want.SamplesPerPixel)
+    frames = int(getattr(want, "NumberOfFrames", 1) or 1)
+    if len(want.PixelData) < int(want.Rows) * int(want.Columns) * spp * frames * int(want.BitsAllocated) // 8:
+        continue
+    got = pydicom.dcmread(os.path.join(out, name))
+    if got.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.91":
+        bad.append("%s was written as %s" % (name, got.file_meta.TransferSyntaxUID))
+        continue
+    if str(getattr(got, "LossyImageCompression", "")) != "01":
+        bad.append("%s is not marked lossy" % name)
+        continue
+    coded = list(generate_pixel_data_frame(got.PixelData, frames))
+    size = int(want.BitsAllocated) // 8
+    if sum(len(c) for c in coded) * 10 > int(want.Rows) * int(want.Columns) * spp * frames * size:
+        bad.append("%s is larger than 10:1" % name)
+        continue
+    stored = int(want.BitsStored)
+    sq, n = 0.0, 0
+    for index, (codestream, original) in enumerate(zip(coded, source_samples(want))):
+        base = os.path.join(work, "frame")
+        for stale in os.listdir(work):
+            os.remove(os.path.join(work, stale))
+        with open(base + ".j2k", "wb") as f:
+            f.write(codestream)
+        run = subprocess.run(["opj_decompress", "-i", base + ".j2k", "-o", base + ".pgx"], capture_output=True)
+        if run.returncode != 0:
+            bad.append("%s frame %d: OpenJPEG refuses it" % (name, index))
+            break
+        files = [base + ".pgx"] if spp == 1 and os.path.exists(base + ".pgx") else \
+                [base + "_%d.pgx" % c for c in range(spp)]
+        planes = [pgx(p) for p in files]
+        decoded = [planes[c][i] for i in range(len(planes[0])) for c in range(spp)]
+        sq += sum((a - b) ** 2 for a, b in zip(decoded, original))
+        n += len(original)
+    else:
+        psnr = float("inf") if sq == 0 else 10 * math.log10(((1 << stored) - 1) ** 2 / (sq / n))
+        if psnr < 35:
+            bad.append("%s decodes at %.1f dB" % (name, psnr))
+            continue
+        lowest = min(lowest, psnr)
+        checked += 1
+for line in bad:
+    print("   " + line, file=sys.stderr)
+print("%d files, the lowest at %.1f dB" % (checked, lowest))
+raise SystemExit(1 if bad or not checked else 0)
+PYEOF
+      ); then
+        pass "Lossy JPEG 2000 encoding — OpenJPEG decodes every file, marked lossy, within 10:1, above 35 dB — $jl2"
+      else
+        fail "this encoder's lossy JPEG 2000 does not survive OpenJPEG: $jl2"
+      fi
+    else
+      fail "the lossy JPEG 2000 encoding harness failed"
+      sed -n '1,20p' "$WORKDIR/j2kl.log" >&2
+    fi
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+else
+  skip "lossy JPEG 2000 encoding needs opj_decompress (OpenJPEG) and pydicom"
+fi
+
+# ---------------------------------------------------------------------------
 # DICOMweb against a server that is not this library (#285)
 #
 # The client had its own test server and nothing else in CI. Checked by hand

@@ -479,7 +479,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Five syntaxes are compressed *to*: **RLE Lossless**, **JPEG-LS Lossless**, **JPEG-LS Near-Lossless** (`.81`, with the error allowed in `NetworkConfig.JPEGLSNear`, losslessly when none is, or with `Dataset.CompressJPEGLSNearLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, also with `Dataset.CompressJPEG2000LosslessInPlace`), and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, JPEG-LS Near-Lossless an allowed error, and lossy JPEG 2000 (`.91`) is refused. |
+| **Compressing pixel data** | Six syntaxes are compressed *to*: **RLE Lossless**, **JPEG-LS Lossless**, **JPEG-LS Near-Lossless** (`.81`, with the error allowed in `NetworkConfig.JPEGLSNear`, losslessly when none is, or with `Dataset.CompressJPEGLSNearLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, also with `Dataset.CompressJPEG2000LosslessInPlace`), **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`), and **lossy JPEG 2000** (`.91`) at the ratio or PSNR in `NetworkConfig.JPEG2000Rate` (or with `Dataset.CompressJPEG2000InPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, JPEG-LS Near-Lossless an allowed error, lossy JPEG 2000 a rate. |
 | **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
@@ -695,7 +695,10 @@ with nothing skipped.
 `Dataset.CompressJPEG2000LosslessInPlace` produce `.90` with the reversible 5/3
 wavelet at 1 to 16 bits, signed or unsigned, gray or color, in pure Go. OpenJPEG
 decodes what they write to the samples that went in, which CI checks on every
-push over pydicom's corpus.
+push over pydicom's corpus. Lossy too: `jpeg2000.EncodeLossy` and
+`Dataset.CompressJPEG2000InPlace` write `.91` with the irreversible 9/7 wavelet
+at a compression ratio or a PSNR, and OpenJPEG decodes it at the PSNR its own
+encoder reaches at the same size.
 
 **JPEG 2000 decodes too**, as of this version: `.90` and `.91`, both the 5/3
 reversible and 9/7 irreversible wavelets, with the reversible and irreversible

@@ -171,9 +171,9 @@
 // These syntaxes can be compressed *to*: RLE Lossless; JPEG-LS through
 // EncodeJPEGLS — lossless — and EncodeJPEGLSNearLossless — every sample within
 // the allowed error NEAR the caller gives — 2 to 16 bits, one scan per
-// component; JPEG 2000 Lossless through EncodeJPEG2000Lossless; and JPEG
-// Baseline through EncodeJPEGBaseline — lossy, 8 bits, one or three components
-// at full resolution. Decoding is broader than encoding, and a request to
+// component; JPEG 2000 through EncodeJPEG2000Lossless and, lossy at a ratio or
+// a PSNR, EncodeJPEG2000; and JPEG Baseline through EncodeJPEGBaseline —
+// lossy, 8 bits, one or three components at full resolution. Decoding is broader than encoding, and a request to
 // compress to any other syntax fails rather than producing bytes described as
 // something they are not.
 //

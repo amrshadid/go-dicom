@@ -1,4 +1,5 @@
-// Package jpeg2000 decodes JPEG 2000 Part 1 codestreams in pure Go.
+// Package jpeg2000 decodes JPEG 2000 Part 1 codestreams in pure Go, and
+// encodes them: losslessly with Encode, and lossy with EncodeLossy.
 //
 // DICOM carries JPEG 2000 in two transfer syntaxes, 1.2.840.10008.1.2.4.90
 // (lossless) and .91 (lossy), and this library bundled no decoder for either:
