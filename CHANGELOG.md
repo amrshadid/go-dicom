@@ -407,6 +407,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quality 90 the size and PSNR match dcmtk's own encoder at the same
   quality.
 
+- **A file or a send can be compressed to lossy JPEG 2000** (#339). The
+  JPEG 2000 encoder was lossless only, so `1.2.840.10008.1.2.4.91` was
+  refused by name and a peer that accepted only it could not be sent an
+  image. `jpeg2000.EncodeLossy` codes the irreversible 9/7 wavelet, the
+  irreversible component transform and a quantization step for each
+  subband, and meets a compression ratio or a PSNR by searching for the
+  step. `Dataset.CompressJPEG2000InPlace` writes a file in it: an RGB image
+  becomes `YBR_ICT`, a signed one stays signed, and the data set is marked
+  Lossy Image Compression `01` with its ratio and `ISO_15444_1`. A send
+  needing `.91` uses `NetworkConfig.JPEG2000Rate` and is refused without
+  it. A ratio a small image cannot meet is refused rather than met with an
+  empty picture. OpenJPEG and pylibjpeg-openjpeg decode every corpus image
+  coded at 10:1 and at 45 dB, and at the same size the PSNR matches
+  OpenJPEG's own encoder or betters it by a few tenths of a decibel. The rate
+  is reached by quantization alone, in one quality layer, not by the
+  pass-by-pass truncation of Annex J.14.
+
+- **`compress` writes every syntax the library writes.** It offered RLE,
+  JPEG-LS Lossless, JPEG 2000 Lossless and JPEG Baseline, and refused the
+  rest by name. It now also writes `-syntax jpeg-lossless` (`.57`) and
+  `jpeg-lossless-sv1` (`.70`), and the lossy ones only when asked with
+  their parameter: `jpeg-ls-near -near N` (`.81`; `-near 0` is lossless
+  and keeps the UID), `jpeg-extended -quality Q` (`.51`), and
+  `jpeg2000-lossy -ratio R` or `-psnr DB` (`.91`). A lossy file records
+  the loss and is a new instance, as `jpeg` already did; a parameter given
+  to a syntax that does not take it is refused. dcmtk, libjpeg and OpenJPEG
+  decode what it writes in each new syntax.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

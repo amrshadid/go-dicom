@@ -88,6 +88,17 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, config Network
 			return compressCopy(ds, source, targetSyntax, func(out *dataset.Dataset) error {
 				return out.CompressJPEGLSNearLosslessInPlace(config.JPEGLSNear)
 			})
+		case JPEG2000UID:
+			// Lossy, so only at a rate the sender has given.
+			if config.JPEG2000Rate == (compress.JPEG2000Rate{}) {
+				return nil, fmt.Errorf("cannot encode pixel data as %s: lossy JPEG 2000 loses detail and "+
+					"nothing is sent that way unasked; set NetworkConfig.JPEG2000Rate to allow it",
+					targetSyntax)
+			}
+			// A copy: sending must not make the caller's image lossy.
+			return compressCopy(ds, source, targetSyntax, func(out *dataset.Dataset) error {
+				return out.CompressJPEG2000InPlace(config.JPEG2000Rate)
+			})
 		case JPEGBaselineUID:
 			// Lossy, so only for a sender that has said how much loss it
 			// accepts: that decision is not one to make while transcoding.
@@ -120,10 +131,11 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, config Network
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
 				"RLE Lossless (%s), JPEG-LS Lossless (%s), JPEG-LS Near-Lossless (%s), "+
 				"JPEG 2000 Lossless (%s) and JPEG Lossless (%s, %s), and JPEG Baseline (%s) and "+
-				"JPEG Extended (%s) when NetworkConfig.JPEGQuality is set",
+				"JPEG Extended (%s) when NetworkConfig.JPEGQuality is set, and JPEG 2000 (%s) when "+
+				"NetworkConfig.JPEG2000Rate is",
 				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEGLSNearLosslessUID,
 				JPEG2000LosslessUID, JPEGLosslessProcess14UID, JPEGLosslessSV1UID, JPEGBaselineUID,
-				JPEGExtendedUID)
+				JPEGExtendedUID, JPEG2000UID)
 		}
 	}
 

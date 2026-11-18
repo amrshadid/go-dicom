@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataset"
 )
 
@@ -72,6 +73,13 @@ type NetworkConfig struct {
 	// under that syntax, which it allows, so nothing is lost unasked. A signed
 	// image is sent only at zero. It runs from 0 to 255.
 	JPEGLSNear int
+
+	// JPEG2000Rate allows an image to be sent as lossy JPEG 2000
+	// (1.2.840.10008.1.2.4.91) when that is the only syntax the peer accepts
+	// for it, at this compression ratio or this PSNR, one of them. It is
+	// lossy, so nothing is sent that way unless this is set: the zero value
+	// refuses, and the send fails.
+	JPEG2000Rate compress.JPEG2000Rate
 
 	// MaxDataSetSize bounds the data set of one message, which is held in
 	// memory whole while it arrives. A peer sending more is aborted. Zero is

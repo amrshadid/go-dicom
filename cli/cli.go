@@ -195,7 +195,7 @@ func (c *CLI) ShowHelp() {
 		"tag-doc":   "Generate documentation for DICOM tags",
 		"codify":    "Read a DICOM file and produce Go code to create it",
 
-		"compress":   "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG Baseline",
+		"compress":   "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG",
 		"decompress": "Write a file's pixel data uncompressed",
 		"create":     "Make a DICOM file from DICOM JSON, a picture or a PDF",
 	}
