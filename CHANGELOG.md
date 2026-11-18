@@ -451,6 +451,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`GetPixelDataInfo` holds the rescale** (#378). `PixelDataInfo` has
+  `RescaleSlope` and `RescaleIntercept`, and nothing ever set them, so both
+  were 0 for every image: a CT with intercept -1024 read `0 0`, and
+  `624*slope + intercept` came to 0 rather than -400, as pydicom's
+  `apply_modality_lut` gives. They now hold Rescale Slope (0028,1053) and
+  Intercept (0028,1052), and 1 and 0 when the image has none, since an absent
+  slope means no scaling and not a slope of 0. An enhanced multi-frame image
+  keeps them per frame in the functional groups; there the fields hold frame
+  0's values, its own group's or else the shared one's, and the doc comment
+  says so. The rendering code and this share one lookup, which now also finds
+  a Pixel Value Transformation whose slope is absent but whose intercept is
+  there. Compared with pydicom on the 62 corpus files that have pixels.
+
+
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
   reason 2, which from that source is "application context name not
