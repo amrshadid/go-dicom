@@ -300,10 +300,19 @@ func isPrivateTag(tag string) bool {
 }
 
 // extractDICOMInfo extracts key metadata from elements.
+//
+// Only the data set's own elements are looked at, not those of the items of
+// its sequences. The list is flat, so an Icon Image Sequence item's Rows and
+// Columns, or an Other Patient IDs Sequence item's Patient ID, came after the
+// top-level ones and replaced them: info gave the icon's size as the image's
+// (#335).
 func extractDICOMInfo(elements []DicomElement) DicomInfo {
 	info := DicomInfo{}
 
 	for _, elem := range elements {
+		if elem.Depth > 0 {
+			continue
+		}
 		switch elem.Tag {
 		case "0010,0010": // PatientName
 			info.PatientName = strings.TrimSpace(formatValueRawIn("PN", elem.Value, elem.Encodings))
@@ -317,7 +326,7 @@ func extractDICOMInfo(elements []DicomElement) DicomInfo {
 			info.StudyDescription = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
 		case "0008,103E": // SeriesDescription
 			info.SeriesDescription = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
-		case "0020,1209": // NumberOfFrames
+		case "0028,0008": // NumberOfFrames, an IS: decimal digits as text
 			if len(elem.Value) > 0 {
 				_, _ = fmt.Sscanf(string(elem.Value), "%d", &info.NumberOfFrames)
 			}
