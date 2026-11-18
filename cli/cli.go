@@ -180,13 +180,14 @@ func (c *CLI) ShowHelp() {
 
 	// Display commands in a specific order
 	fmt.Printf("  FILE COMMANDS:\n")
-	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "tag-doc", "codify"}
+	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "diff", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
 		"show":      "Display DICOM file contents",
 		"info":      "Show DICOM file metadata and information",
 		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
 		"anonymize": "De-identify a DICOM file or directory (PS3.15 Annex E)",
 		"share":     "Render an image as a PNG or JPEG that is safe to hand on",
+		"diff":      "Compare two DICOM files element by element",
 		"tag-doc":   "Generate documentation for DICOM tags",
 		"codify":    "Read a DICOM file and produce Go code to create it",
 	}

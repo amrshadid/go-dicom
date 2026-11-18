@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`diff` compares two files** (#329). Every check of a file against its
+  anonymized or recompressed copy was a throwaway script, and `show` of each
+  followed by `diff(1)` is unreadable: the offsets move when the elements do
+  not. `go-dicom diff a.dcm b.dcm` compares the file meta group and the data
+  set element by element, into sequences and items, and prints the elements
+  only one file has and those whose VR or value differ (nothing when there is
+  none), or with `--json` a document with `schemaVersion` 1. The exit status
+  is the answer, as in `diff(1)`: 0 equal, 1 different, 2 the comparison could
+  not be made. Bulk values are read from the two files in chunks and never
+  held whole, and report the byte they first differ at; a value is compared
+  as what it means, so padding, a character set and the byte order of a number
+  or of pixel words do not make files differ. `--ignore` (a tag or keyword,
+  at every depth), `--ignore-meta` and `--ignore-private` leave elements out.
+  `cli.ExitError` lets a command choose its exit status; the others still end
+  with 1.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
