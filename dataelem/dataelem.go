@@ -492,7 +492,7 @@ func (de *DataElement) ValidateAgainstDictionary() error {
 
 	// Validate VR if present
 	if de.VR != "" && info.VR != "" {
-		if string(de.VR) != info.VR && !isValidVRVariant(string(de.VR), info.VR) {
+		if !VRMatchesDictionary(string(de.VR), info.VR) {
 			return fmt.Errorf("VR mismatch for %s: expected %s, got %s",
 				t.String(), info.VR, de.VR)
 		}
@@ -566,22 +566,4 @@ func (de *DataElement) IsRetiredTag() bool {
 	}
 
 	return t.IsRetired()
-}
-
-// isValidVRVariant checks if a VR is a valid variant of the expected VR.
-// Handles cases like "OB or OW" where either is acceptable.
-func isValidVRVariant(actual, expected string) bool {
-	if expected == "OB or OW" {
-		return actual == "OB" || actual == "OW"
-	}
-	if expected == "OB or OD" {
-		return actual == "OB" || actual == "OD"
-	}
-	if expected == "US or SS" {
-		return actual == "US" || actual == "SS"
-	}
-	if expected == "OW or OB" {
-		return actual == "OW" || actual == "OB"
-	}
-	return false
 }

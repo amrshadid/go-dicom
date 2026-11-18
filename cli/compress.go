@@ -16,6 +16,9 @@ import (
 type CompressCommand struct {
 	syntax  string
 	quality int
+	near    int
+	ratio   float64
+	psnr    float64
 	inPlace bool
 	help    bool
 }
@@ -26,59 +29,85 @@ type DecompressCommand struct {
 	help    bool
 }
 
+// compressParams are what a lossy target is asked with: one of them, the one
+// its param names.
+type compressParams struct {
+	quality int
+	near    int
+	ratio   float64
+	psnr    float64
+}
+
+// The parameter a target takes. Every lossy coder takes one, and is used only
+// when it is given: what to lose is the caller's to say.
+const (
+	paramNone    = ""
+	paramQuality = "-quality"
+	paramNear    = "-near"
+	paramRate    = "-ratio or -psnr"
+)
+
 // compressTarget is a syntax this library writes.
 type compressTarget struct {
 	uid, name string
-	lossy     bool
-	compress  func(ds *dataset.Dataset, quality int) error
+	param     string
+	compress  func(ds *dataset.Dataset, p compressParams) error
 }
 
-// compressTargets are the four syntaxes the data set's coders write, under the
-// names the command takes. JPEG Baseline is the one lossy coder, and is
-// named and given a quality or not used.
+// lossy reports whether coding with p loses anything. JPEG-LS Near-Lossless
+// with an allowed error of 0 is lossless; every other target with a parameter
+// is lossy at every value of it.
+func (t compressTarget) lossy(p compressParams) bool {
+	if t.param == paramNear {
+		return p.near > 0
+	}
+	return t.param != paramNone
+}
+
+// compressTargets are the syntaxes the data set's coders write, under the
+// names the command takes.
 var compressTargets = []compressTarget{
-	{"1.2.840.10008.1.2.5", "RLE Lossless", false,
-		func(ds *dataset.Dataset, _ int) error { return ds.CompressRLELosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.80", "JPEG-LS Lossless", false,
-		func(ds *dataset.Dataset, _ int) error { return ds.CompressJPEGLSLosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless", false,
-		func(ds *dataset.Dataset, _ int) error { return ds.CompressJPEG2000LosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.50", "JPEG Baseline", true,
-		func(ds *dataset.Dataset, quality int) error { return ds.CompressJPEGBaselineInPlace(quality) }},
+	{"1.2.840.10008.1.2.5", "RLE Lossless", paramNone,
+		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressRLELosslessInPlace() }},
+	{"1.2.840.10008.1.2.4.80", "JPEG-LS Lossless", paramNone,
+		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEGLSLosslessInPlace() }},
+	{"1.2.840.10008.1.2.4.81", "JPEG-LS Near-Lossless", paramNear,
+		func(ds *dataset.Dataset, p compressParams) error { return ds.CompressJPEGLSNearLosslessInPlace(p.near) }},
+	{"1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless", paramNone,
+		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEG2000LosslessInPlace() }},
+	{"1.2.840.10008.1.2.4.91", "JPEG 2000", paramRate,
+		func(ds *dataset.Dataset, p compressParams) error {
+			return ds.CompressJPEG2000InPlace(compress.JPEG2000Rate{Ratio: p.ratio, PSNR: p.psnr})
+		}},
+	{"1.2.840.10008.1.2.4.57", "JPEG Lossless", paramNone,
+		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEGLosslessInPlace() }},
+	{"1.2.840.10008.1.2.4.70", "JPEG Lossless, Selection Value 1", paramNone,
+		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEGLosslessSV1InPlace() }},
+	{"1.2.840.10008.1.2.4.50", "JPEG Baseline", paramQuality,
+		func(ds *dataset.Dataset, p compressParams) error { return ds.CompressJPEGBaselineInPlace(p.quality) }},
+	{"1.2.840.10008.1.2.4.51", "JPEG Extended", paramQuality,
+		func(ds *dataset.Dataset, p compressParams) error { return ds.CompressJPEGExtendedInPlace(p.quality) }},
 }
 
 // compressNames maps what -syntax accepts to a target's UID.
 var compressNames = map[string]string{
-	"rle":           "1.2.840.10008.1.2.5",
-	"jpeg-ls":       "1.2.840.10008.1.2.4.80",
-	"jpegls":        "1.2.840.10008.1.2.4.80",
-	"jls":           "1.2.840.10008.1.2.4.80",
-	"jpeg2000":      "1.2.840.10008.1.2.4.90",
-	"jpeg-2000":     "1.2.840.10008.1.2.4.90",
-	"j2k":           "1.2.840.10008.1.2.4.90",
-	"jpeg":          "1.2.840.10008.1.2.4.50",
-	"jpeg-baseline": "1.2.840.10008.1.2.4.50",
-}
-
-// notWritten names the compressed syntaxes people ask for that no coder here
-// writes, so the refusal says which one it is rather than that the name is
-// unknown.
-var notWritten = map[string]string{
-	"1.2.840.10008.1.2.4.91": "JPEG 2000 (lossy)",
-	"1.2.840.10008.1.2.4.57": "JPEG Lossless (Process 14)",
-	"1.2.840.10008.1.2.4.70": "JPEG Lossless (Process 14, first-order prediction)",
-	"1.2.840.10008.1.2.4.51": "JPEG Extended (12-bit, Process 2 and 4)",
-	"1.2.840.10008.1.2.4.81": "JPEG-LS Near-Lossless",
-}
-
-var notWrittenNames = map[string]string{
-	"jpeg2000-lossy": "1.2.840.10008.1.2.4.91",
-	"j2k-lossy":      "1.2.840.10008.1.2.4.91",
-	"jpeg-lossless":  "1.2.840.10008.1.2.4.70",
-	"jpeg-extended":  "1.2.840.10008.1.2.4.51",
-	"jpeg-12bit":     "1.2.840.10008.1.2.4.51",
-	"jpeg-ls-near":   "1.2.840.10008.1.2.4.81",
-	"jls-near":       "1.2.840.10008.1.2.4.81",
+	"rle":               "1.2.840.10008.1.2.5",
+	"jpeg-ls":           "1.2.840.10008.1.2.4.80",
+	"jpegls":            "1.2.840.10008.1.2.4.80",
+	"jls":               "1.2.840.10008.1.2.4.80",
+	"jpeg-ls-near":      "1.2.840.10008.1.2.4.81",
+	"jls-near":          "1.2.840.10008.1.2.4.81",
+	"jpeg2000":          "1.2.840.10008.1.2.4.90",
+	"jpeg-2000":         "1.2.840.10008.1.2.4.90",
+	"j2k":               "1.2.840.10008.1.2.4.90",
+	"jpeg2000-lossy":    "1.2.840.10008.1.2.4.91",
+	"j2k-lossy":         "1.2.840.10008.1.2.4.91",
+	"jpeg-lossless":     "1.2.840.10008.1.2.4.57",
+	"jpeg-lossless-sv1": "1.2.840.10008.1.2.4.70",
+	"jpeg":              "1.2.840.10008.1.2.4.50",
+	"jpeg-baseline":     "1.2.840.10008.1.2.4.50",
+	"jpeg-extended":     "1.2.840.10008.1.2.4.51",
+	"jpeg-12bit":        "1.2.840.10008.1.2.4.51",
 }
 
 // findTarget reads -syntax: a name or a UID.
@@ -91,16 +120,10 @@ func findTarget(given string) (compressTarget, error) {
 	if named, ok := compressNames[key]; ok {
 		uid = named
 	}
-	if named, ok := notWrittenNames[key]; ok {
-		uid = named
-	}
 	for _, t := range compressTargets {
 		if t.uid == uid {
 			return t, nil
 		}
-	}
-	if name, ok := notWritten[uid]; ok {
-		return compressTarget{}, fmt.Errorf("%s (%s) is not written by this tool; it writes %s", name, uid, targetNames())
 	}
 	if valuerep.ValidateUID(uid) != nil {
 		return compressTarget{}, fmt.Errorf("%q is neither a syntax name nor a transfer syntax UID; the names are %s", given, targetNames())
@@ -114,9 +137,61 @@ func findTarget(given string) (compressTarget, error) {
 	return compressTarget{}, fmt.Errorf("%q is neither a syntax name nor a transfer syntax UID; the names are %s", given, targetNames())
 }
 
-// targetNames lists the four targets by their main names.
+// targetNames lists the targets by their main names.
 func targetNames() string {
-	return "rle, jpeg-ls, jpeg2000, and jpeg (lossy, with -quality)"
+	return "rle, jpeg-ls, jpeg-ls-near (with -near), jpeg2000, jpeg2000-lossy (with -ratio or -psnr), " +
+		"jpeg-lossless, jpeg-lossless-sv1, jpeg and jpeg-extended (lossy, with -quality)"
+}
+
+// checkParams says whether the parameters given are the ones target takes:
+// a lossy target's own, given and in range, and no other.
+func checkParams(target compressTarget, p compressParams, nearGiven bool) error {
+	given := []struct {
+		param string
+		set   bool
+	}{
+		{paramQuality, p.quality != 0},
+		{paramNear, nearGiven},
+		{paramRate, p.ratio != 0 || p.psnr != 0},
+	}
+	for _, g := range given {
+		if param := g.param; g.set && param != target.param {
+			if target.param == paramNone {
+				return fmt.Errorf("%s is not for %s, which is lossless", param, target.name)
+			}
+			return fmt.Errorf("%s is not for %s, which takes %s", param, target.name, target.param)
+		}
+	}
+	switch target.param {
+	case paramQuality:
+		if p.quality == 0 {
+			// Lossy is never the default.
+			return fmt.Errorf("%s is lossy; give -quality from 1 to 100 to accept that", target.name)
+		}
+		if p.quality < 1 || p.quality > 100 {
+			return fmt.Errorf("-quality %d; it runs from 1 to 100", p.quality)
+		}
+	case paramNear:
+		if !nearGiven {
+			return fmt.Errorf("%s takes the error it may make on a sample; give -near, 0 for none", target.name)
+		}
+		if p.near < 0 || p.near > 255 {
+			return fmt.Errorf("-near %d; it runs from 0 to 255", p.near)
+		}
+	case paramRate:
+		switch {
+		case p.ratio == 0 && p.psnr == 0:
+			return fmt.Errorf("%s is lossy; give -ratio (a compression ratio, such as 10) or -psnr "+
+				"(in decibels, such as 45) to accept that", target.name)
+		case p.ratio != 0 && p.psnr != 0:
+			return fmt.Errorf("give -ratio or -psnr, not both")
+		case p.ratio < 0 || (p.ratio > 0 && p.ratio < 1):
+			return fmt.Errorf("-ratio %g; it is 1 or more", p.ratio)
+		case p.psnr < 0:
+			return fmt.Errorf("-psnr %g; it is above zero", p.psnr)
+		}
+	}
+	return nil
 }
 
 // withoutPrefix drops the "compress: " a data set's coder starts its error
@@ -130,7 +205,7 @@ func (cc *CompressCommand) Name() string { return "compress" }
 
 // Description returns the command description.
 func (cc *CompressCommand) Description() string {
-	return "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG Baseline"
+	return "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG"
 }
 
 // AddFlags adds command flags to the flag set.
@@ -138,7 +213,10 @@ func (cc *CompressCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&cc.help, "h", false, "Show help for this command")
 	fs.BoolVar(&cc.help, "help", false, "Show help for this command")
 	fs.StringVar(&cc.syntax, "syntax", "", "The syntax to write: "+targetNames()+", or its UID")
-	fs.IntVar(&cc.quality, "quality", 0, "For jpeg, which is lossy: quality from 1 to 100")
+	fs.IntVar(&cc.quality, "quality", 0, "For jpeg and jpeg-extended, which are lossy: quality from 1 to 100")
+	fs.IntVar(&cc.near, "near", 0, "For jpeg-ls-near: the error allowed on each sample, 0 to 255 (0 is lossless)")
+	fs.Float64Var(&cc.ratio, "ratio", 0, "For jpeg2000-lossy: the compression ratio to meet, such as 10")
+	fs.Float64Var(&cc.psnr, "psnr", 0, "For jpeg2000-lossy: the PSNR to meet, in decibels, such as 45")
 	fs.BoolVar(&cc.inPlace, "in-place", false, "Write over the input instead of to a new file")
 }
 
@@ -159,14 +237,17 @@ func (cc *CompressCommand) Execute(args []string) error {
 	if err != nil {
 		return fmt.Errorf("compress: %w", err)
 	}
-	switch {
-	case target.lossy && cc.quality == 0:
-		// Lossy is never the default: what to lose is the caller's to say.
-		return fmt.Errorf("compress: %s is lossy; give -quality from 1 to 100 to accept that", target.name)
-	case target.lossy && (cc.quality < 1 || cc.quality > 100):
-		return fmt.Errorf("compress: -quality %d; it runs from 1 to 100", cc.quality)
-	case !target.lossy && cc.quality != 0:
-		return fmt.Errorf("compress: -quality is for jpeg; %s is lossless", target.name)
+	// -near 0 is a value, lossless JPEG-LS Near-Lossless, so whether it was
+	// given is asked of the flag set and not of the value.
+	nearGiven := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "near" {
+			nearGiven = true
+		}
+	})
+	params := compressParams{quality: cc.quality, near: cc.near, ratio: cc.ratio, psnr: cc.psnr}
+	if err := checkParams(target, params, nearGiven); err != nil {
+		return fmt.Errorf("compress: %w", err)
 	}
 	input, output, err := outputPaths("compress", positional, cc.inPlace)
 	if err != nil {
@@ -184,10 +265,11 @@ func (cc *CompressCommand) Execute(args []string) error {
 	if meta.TransferSyntaxUID == target.uid {
 		return fmt.Errorf("compress: %s is %s already", input, target.name)
 	}
-	if err := target.compress(ds, cc.quality); err != nil {
+	if err := target.compress(ds, params); err != nil {
 		return fmt.Errorf("compress: %s: %s", input, withoutPrefix(err))
 	}
-	if target.lossy {
+	lossy := target.lossy(params)
+	if lossy {
 		// PS3.3 C.7.6.1.1.5: a lossily compressed image is a new instance.
 		// The coder records the loss; the identity is the command's to give,
 		// and the meta, made below from the data set, follows it.
@@ -201,7 +283,7 @@ func (cc *CompressCommand) Execute(args []string) error {
 		return fmt.Errorf("compress: %w", err)
 	}
 	fmt.Printf("Wrote %s: %s (%s)\n", output, target.name, target.uid)
-	if target.lossy {
+	if lossy {
 		fmt.Printf("  lossy: Lossy Image Compression is 01, and the instance has a new SOP Instance UID, %s\n",
 			meta.MediaStorageSOPInstanceUID)
 	}
@@ -218,38 +300,57 @@ USAGE:
 SYNTAXES:
   rle                     RLE Lossless                  1.2.840.10008.1.2.5
   jpeg-ls (jpegls, jls)   JPEG-LS Lossless              1.2.840.10008.1.2.4.80
+  jpeg-ls-near (jls-near) JPEG-LS Near-Lossless, -near  1.2.840.10008.1.2.4.81
   jpeg2000 (j2k)          JPEG 2000 Lossless            1.2.840.10008.1.2.4.90
-  jpeg (jpeg-baseline)    JPEG Baseline, lossy          1.2.840.10008.1.2.4.50
+  jpeg2000-lossy          JPEG 2000, lossy, -ratio      1.2.840.10008.1.2.4.91
+    (j2k-lossy)             or -psnr
+  jpeg-lossless           JPEG Lossless, Process 14     1.2.840.10008.1.2.4.57
+  jpeg-lossless-sv1       JPEG Lossless, predictor 1    1.2.840.10008.1.2.4.70
+  jpeg (jpeg-baseline)    JPEG Baseline, lossy,         1.2.840.10008.1.2.4.50
+                            -quality
+  jpeg-extended           JPEG Extended (12-bit),       1.2.840.10008.1.2.4.51
+    (jpeg-12bit)            lossy, -quality
 
-  The three lossless ones return every sample as it was. Compressed pixel
-  data is decoded first, so a file moves from one syntax to another.
-
-  Not written, and refused by name: lossy JPEG 2000 (.91), JPEG Lossless
-  (.57, .70), 12-bit JPEG Extended (.51) and JPEG-LS Near-Lossless (.81).
+  The lossless ones return every sample as it was. Compressed pixel data is
+  decoded first, so a file moves from one syntax to another. A lossy one is
+  used only when its parameter is given: what to lose is never chosen for you.
 
 OPTIONS:
   -syntax <name|uid>   The syntax to write (required).
-  -quality <1-100>     For jpeg, and required with it: JPEG Baseline loses
-                       detail at every quality, so it is never chosen for you.
+  -quality <1-100>     For jpeg and jpeg-extended, and required with them. They
+                       lose detail at every quality.
+  -near <0-255>        For jpeg-ls-near, and required with it: every sample
+                       comes back within this much of its value. 0 is lossless.
+  -ratio <r>           For jpeg2000-lossy: the compression ratio to meet, the
+                       codestream no larger than the samples over r.
+  -psnr <dB>           For jpeg2000-lossy, instead of -ratio: the PSNR the
+                       decoded image is to have at least.
   -in-place            Write over the input, through a new file renamed over it.
   -h, -help            Show this help message
 
 WHAT CHANGES:
   The transfer syntax and Pixel Data. A color image says Planar Configuration
-  0; an RGB image in JPEG 2000 is YBR_RCT, and in JPEG Baseline YBR_FULL.
-  JPEG Baseline takes 8-bit unsigned grayscale, RGB and YBR_FULL images.
+  0; an RGB image in JPEG 2000 Lossless is YBR_RCT, in lossy JPEG 2000 YBR_ICT,
+  and in JPEG Baseline and Extended YBR_FULL; lossless JPEG and JPEG-LS keep
+  RGB. JPEG Baseline takes 8-bit unsigned grayscale and color; JPEG Extended
+  takes those and unsigned grayscale of up to 12 bits stored; JPEG-LS with
+  -near above 0 takes unsigned images. Lossy JPEG 2000 takes signed images too.
   Lossless: the SOP Instance UID is kept, and so is any record of a loss
   made before.
-  Lossy (jpeg): Lossy Image Compression becomes 01, its ratio and method
-  ISO_10918_1 are added to any recorded, and the instance is given a new
-  SOP Instance UID, since a lossy copy is a different instance (PS3.3
-  C.7.6.1.1.5).
+  Lossy: Lossy Image Compression becomes 01, its ratio and method
+  (ISO_10918_1, ISO_14495_1 or ISO_15444_1) are added to any recorded, and the
+  instance is given a new SOP Instance UID, since a lossy copy is a different
+  instance (PS3.3 C.7.6.1.1.5).
 
 EXAMPLES:
   go-dicom compress -syntax rle ct.dcm ct-rle.dcm
   go-dicom compress -syntax jpeg-ls -in-place mr.dcm
+  go-dicom compress -syntax jpeg-lossless-sv1 ct.dcm ct-jpll.dcm
   go-dicom compress -syntax 1.2.840.10008.1.2.4.90 us.dcm us-j2k.dcm
   go-dicom compress -syntax jpeg -quality 90 sc.dcm sc-jpeg.dcm
+  go-dicom compress -syntax jpeg-extended -quality 90 cr.dcm cr-jpeg12.dcm
+  go-dicom compress -syntax jpeg-ls-near -near 2 us.dcm us-jls.dcm
+  go-dicom compress -syntax jpeg2000-lossy -ratio 10 mr.dcm mr-j2k.dcm
 `)
 }
 

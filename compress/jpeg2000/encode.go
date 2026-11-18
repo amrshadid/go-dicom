@@ -298,7 +298,7 @@ func writeCodestream(c *Codestream, tile []byte) []byte {
 
 	// COD (A.6.1): no precincts, SOP or EPH; the progression, one layer,
 	// the component transform; then the levels, the code-block size as its
-	// exponent less two, style 0, and the reversible filter.
+	// exponent less two, style 0, and the filter.
 	mct := byte(0)
 	if c.Coding.MCT {
 		mct = 1
@@ -306,13 +306,19 @@ func writeCodestream(c *Codestream, tile []byte) []byte {
 	cod := []byte{0, byte(c.Coding.Progression)}
 	cod = be.AppendUint16(cod, uint16(c.Coding.Layers))
 	cod = append(cod, mct, byte(c.Coding.Levels),
-		encodeBlockExponent-2, encodeBlockExponent-2, 0, Wavelet53Reversible)
+		encodeBlockExponent-2, encodeBlockExponent-2, 0, byte(c.Coding.Wavelet))
 	segment(markerCOD, cod)
 
-	// QCD (A.6.4): no quantization, the guard bits, and an exponent for
-	// each subband in its top five bits.
-	qcd := []byte{byte(c.Quant.GuardBits<<5 | QuantNone)}
-	for _, exponent := range c.Quant.Exponents {
+	// QCD (A.6.4): the style and the guard bits, then for each subband an
+	// exponent in the top five bits of a byte when nothing is quantized, or
+	// an exponent of five bits and a mantissa of eleven in two bytes when
+	// each subband has its own step.
+	qcd := []byte{byte(c.Quant.GuardBits<<5 | c.Quant.Style)}
+	for i, exponent := range c.Quant.Exponents {
+		if c.Quant.Style == QuantExpounded {
+			qcd = be.AppendUint16(qcd, uint16(exponent<<11|c.Quant.Mantissas[i]))
+			continue
+		}
 		qcd = append(qcd, byte(exponent<<3))
 	}
 	segment(markerQCD, qcd)
