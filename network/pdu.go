@@ -426,8 +426,46 @@ func DecodePDU(r io.Reader) (PDU, error) {
 // the Maximum Length this side advertised.
 const errPDUOverMaxLength = "OVER_MAX_LENGTH"
 
-// decodePDU reads one PDU, refusing a P-DATA-TF whose length exceeds
-// maxDataTF before reading its body. Zero is no bound but MaxPDULengthLimit.
+// MaxAssociatePDULength is the longest A-ASSOCIATE-RQ or A-ASSOCIATE-AC that
+// is read. These are the PDUs a peer sends before anything about it is known,
+// so their bound cannot wait for negotiation. An A-ASSOCIATE-RQ proposing all
+// 128 presentation contexts with 40 transfer syntaxes each is about 350 KB; a
+// megabyte leaves room for extended negotiation and user identity on top.
+const MaxAssociatePDULength uint32 = 1 << 20
+
+// fixedPDULength is the length of an A-ASSOCIATE-RJ, A-RELEASE-RQ,
+// A-RELEASE-RP and A-ABORT (PS3.8 9.3.4 and 9.3.6 to 9.3.8).
+const fixedPDULength uint32 = 4
+
+// pduBodyStep is the first piece of a PDU body allocated; see readPDUBody.
+const pduBodyStep = 1 << 20
+
+// maxLengthOf returns the longest body a PDU of pduType may state, and
+// whether the type is one this library reads. maxDataTF is the Maximum
+// Length this side advertised, zero when it advertised none.
+func maxLengthOf(pduType byte, maxDataTF uint32) (uint32, bool) {
+	switch pduType {
+	case PDUTypeAssociateRQ, PDUTypeAssociateAC:
+		return MaxAssociatePDULength, true
+	case PDUTypeAssociateRJ, PDUTypeReleaseRQ, PDUTypeReleaseRP, PDUTypeAbort:
+		return fixedPDULength, true
+	case PDUTypeDataTF:
+		// PS3.8 D.1: the Maximum Length a receiver advertised bounds the
+		// variable field of each P-DATA-TF it is sent, which the PDU length is.
+		if maxDataTF > 0 {
+			return maxDataTF, true
+		}
+		return MaxPDULengthLimit, true
+	default:
+		return 0, false
+	}
+}
+
+// decodePDU reads one PDU. The length in its header is the peer's word and is
+// checked against what a PDU of its type can be before the body is read: a
+// P-DATA-TF against maxDataTF (zero is no bound but MaxPDULengthLimit), an
+// A-ASSOCIATE-RQ or -AC against MaxAssociatePDULength, the others against the
+// four bytes the standard gives them.
 func decodePDU(r io.Reader, maxDataTF uint32) (PDU, error) {
 	// Read PDU header: type (1 byte) + reserved (1 byte) + length (4 bytes)
 	header := make([]byte, 6)
@@ -438,21 +476,27 @@ func decodePDU(r io.Reader, maxDataTF uint32) (PDU, error) {
 	pduType := header[0]
 	pduLength := binary.BigEndian.Uint32(header[2:6])
 
+	// Refused from the header, whatever the type: the body is not read. It
+	// was, up to 128 MiB of it, for a PDU nothing would be done with.
+	limit, known := maxLengthOf(pduType, maxDataTF)
+	if !known {
+		return nil, NewPDUErrorf("UNKNOWN_TYPE", "unknown PDU type: 0x%02X", pduType)
+	}
 	if pduLength > MaxPDULengthLimit {
 		return nil, NewPDUErrorf("TOO_LARGE",
 			"PDU length %d exceeds maximum allowed %d", pduLength, MaxPDULengthLimit)
 	}
-	// PS3.8 D.1: the Maximum Length a receiver advertised bounds the variable
-	// field of each P-DATA-TF it is sent, which the PDU length is.
-	if pduType == PDUTypeDataTF && maxDataTF > 0 && pduLength > maxDataTF {
-		return nil, NewPDUErrorf(errPDUOverMaxLength,
-			"P-DATA-TF length %d exceeds the advertised maximum %d", pduLength, maxDataTF)
+	if pduLength > limit {
+		if pduType == PDUTypeDataTF {
+			return nil, NewPDUErrorf(errPDUOverMaxLength,
+				"P-DATA-TF length %d exceeds the advertised maximum %d", pduLength, limit)
+		}
+		return nil, NewPDUErrorf("TOO_LARGE",
+			"PDU of type 0x%02X states a length of %d; one of its type is at most %d", pduType, pduLength, limit)
 	}
 
-	// Read PDU data. io.ReadFull fails if the peer declared more than it sends,
-	// so the allocation above is bounded and the read is never short.
-	data := make([]byte, pduLength)
-	if _, err := io.ReadFull(r, data); err != nil {
+	data, err := readPDUBody(r, pduLength)
+	if err != nil {
 		return nil, NewCommunicationError("READ_PDU", "failed to read PDU data", err)
 	}
 
@@ -474,6 +518,38 @@ func decodePDU(r io.Reader, maxDataTF uint32) (PDU, error) {
 	default:
 		return nil, NewPDUErrorf("UNKNOWN_TYPE", "unknown PDU type: 0x%02X", pduType)
 	}
+}
+
+// readPDUBody reads the n bytes of a PDU's body, allocating them as they
+// arrive rather than on the word of the header.
+//
+// The whole body was allocated before any of it had been read. A length
+// within its bound can still be 128 MiB, and a peer that stated one and then
+// sent nothing held that much for six bytes, on each connection it opened,
+// until its read timed out. A body of up to pduBodyStep is one allocation, as
+// before, which is every PDU of an association that negotiated an ordinary
+// Maximum Length; a longer one grows by doubling as its bytes come in, so
+// what is held is never more than twice what the peer has sent.
+func readPDUBody(r io.Reader, n uint32) ([]byte, error) {
+	size := int(n)
+	data := make([]byte, min(size, pduBodyStep))
+	if _, err := io.ReadFull(r, data); err != nil {
+		return nil, err
+	}
+	for len(data) < size {
+		grown := make([]byte, min(size, 2*len(data)))
+		copy(grown, data)
+		if _, err := io.ReadFull(r, grown[len(data):]); err != nil {
+			// Part of the body has been read, so an end here is never a
+			// clean one, as it would read from a piece that got no bytes.
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+		data = grown
+	}
+	return data, nil
 }
 
 func decodeAssociateRQ(data []byte) (*AssociateRQ, error) {

@@ -252,6 +252,11 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
 	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	// The only PDU due is an A-ASSOCIATE-RQ, which has its own bound. A
+	// P-DATA-TF sent in its place is not read past the Maximum Length this
+	// SCP will advertise: without a limit set yet it was read up to
+	// MaxPDULengthLimit before being refused as the wrong PDU.
+	transport.SetReceiveLimit(s.config.Network.MaxPDUSize)
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
 		// A connection that opens and closes without sending a PDU is not a fault.
