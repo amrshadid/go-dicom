@@ -43,6 +43,30 @@ type Decompressor interface {
 	CanDecompress(data []byte) bool
 }
 
+// FrameDecompressor is a Decompressor that can write a frame in the layout a
+// data set describes rather than the one its codestream does.
+//
+// The two differ in the width of a sample. A codestream states its own
+// precision, and Decompress packs one byte a sample at 8 bits or fewer and two
+// above; a data set's Bits Allocated fixes the width independently of it, and
+// nothing in T.81, T.87 or ISO/IEC 15444-1 makes the two agree. A frame coded at
+// 8 bits inside an image of 16 bits allocated, unpacked by Decompress, is half
+// the size the data set describes.
+//
+// DecompressFrame returns samples bitsAllocated bits wide, pixel-interleaved
+// and little endian, and refuses a frame whose precision is wider than
+// bitsAllocated rather than truncating it. bitsStored and pixelRepresentation
+// are the data set's, for a decoder whose codestream can disagree with the
+// data set about sign (JPEG 2000); the others ignore them.
+//
+// Every decoder of this package that a data set's pixel path uses satisfies
+// it, and the path prefers it to Decompress for any registered decoder that
+// does, a caller's own included.
+type FrameDecompressor interface {
+	Decompressor
+	DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
+}
+
 // Compressor is an interface for compressing pixel data.
 // Implementations should be thread-safe and reusable.
 type Compressor interface {

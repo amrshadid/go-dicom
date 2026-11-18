@@ -68,7 +68,9 @@ type NEventReportRequest struct {
 	DataSet             *dataset.Dataset
 }
 
-// NEventReportResponse represents an N-EVENT-REPORT-RSP message.
+// NEventReportResponse represents an N-EVENT-REPORT-RSP message. DataSet is
+// the event reply: one a handler returns is sent after the response, and the
+// SCU fills it when the peer sent one (PS3.7 10.1.1).
 type NEventReportResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -88,7 +90,9 @@ type NGetRequest struct {
 	AttributeList        []tag.Tag
 }
 
-// NGetResponse represents an N-GET-RSP message.
+// NGetResponse represents an N-GET-RSP message. DataSet is the attribute list:
+// one a handler returns is sent after the response, and the SCU fills it when
+// the peer sent one (PS3.7 10.1.2).
 type NGetResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -105,7 +109,9 @@ type NSetRequest struct {
 	DataSet              *dataset.Dataset
 }
 
-// NSetResponse represents an N-SET-RSP message.
+// NSetResponse represents an N-SET-RSP message. DataSet is the attribute list:
+// one a handler returns is sent after the response, and the SCU fills it when
+// the peer sent one (PS3.7 10.1.3).
 type NSetResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -123,7 +129,9 @@ type NActionRequest struct {
 	DataSet              *dataset.Dataset
 }
 
-// NActionResponse represents an N-ACTION-RSP message.
+// NActionResponse represents an N-ACTION-RSP message. DataSet is the action
+// reply: one a handler returns is sent after the response, and the SCU fills
+// it when the peer sent one (PS3.7 10.1.4).
 type NActionResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -141,7 +149,9 @@ type NCreateRequest struct {
 	DataSet             *dataset.Dataset
 }
 
-// NCreateResponse represents an N-CREATE-RSP message.
+// NCreateResponse represents an N-CREATE-RSP message. DataSet is the attribute
+// list of the created instance: one a handler returns is sent after the
+// response, and the SCU fills it when the peer sent one (PS3.7 10.1.5).
 type NCreateResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string

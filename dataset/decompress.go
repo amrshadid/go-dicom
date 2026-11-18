@@ -100,12 +100,11 @@ func (ds *Dataset) DecodeFrame(codestream []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decode frame: transfer syntax %q does not compress frames", ds.TransferSyntaxUID())
 	}
 	samples, err := decompressPixelFrame(compression, codestream, info)
+	if err == nil {
+		err = checkFrameSize(samples, info)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("decode frame: %w", err)
-	}
-	if len(samples) < info.BytesPerFrame {
-		return nil, fmt.Errorf("decode frame: the frame decodes to %d bytes and the image needs %d",
-			len(samples), info.BytesPerFrame)
 	}
 	return samples[:info.BytesPerFrame], nil
 }

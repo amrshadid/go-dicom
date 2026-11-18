@@ -18,6 +18,13 @@ import (
 
 // GetPixelDataInfo extracts pixel data metadata from the dataset.
 // Returns an error if required pixel data tags are missing.
+//
+// RescaleSlope and RescaleIntercept hold Rescale Slope (0028,1053) and Rescale
+// Intercept (0028,1052), and 1 and 0 when the image has none: an absent slope
+// means no scaling, not a slope of 0. An enhanced multi-frame image holds them
+// per frame in the functional groups, so there the fields hold frame 0's values
+// (its own group, or else the shared one) and later frames can differ; the
+// rescale of a frame is part of what RenderFrame applies.
 func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 	info := &PixelDataInfo{
 		BitsAllocated:       8,
@@ -104,6 +111,11 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 			info.PhotometricInterpretation = val
 		}
 	}
+
+	// Rescale Slope (0028,1053) and Intercept (0028,1052). They were never read
+	// from the data set, so both were 0 for every image and a slope of 0 turned
+	// each pixel into the intercept.
+	info.RescaleSlope, info.RescaleIntercept = rescaleOf(ds, 0)
 
 	// Validate required fields
 	if info.Rows == 0 || info.Columns == 0 {
@@ -724,6 +736,9 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 	var out []byte
 	for i, fragment := range frames {
 		frame, err := decompressPixelFrame(compression, fragment, info)
+		if err == nil {
+			err = checkFrameSize(frame, info)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode %s frame %d: %w", compression, i, err)
 		}
@@ -917,6 +932,22 @@ func ds_parseEncapsulated(pixelBytes []byte) (*compress.EncapsulatedData, error)
 	return encaps.NewParser(bytes.NewReader(pixelBytes), true).ParseEncapsulatedData()
 }
 
+// checkFrameSize refuses a decoded frame shorter than the data set says a
+// frame is.
+//
+// A short frame is never right, and nothing above notices it: a decoder that
+// unpacked a frame of 8 bits in an image of 16 bits allocated at one byte a
+// sample handed back half the image, and DecodedPixelData returned it with no
+// error, to be read as 16-bit samples by everything after it (#362). In a
+// multi-frame image every later frame would also start in the wrong place.
+func checkFrameSize(frame []byte, info *PixelDataInfo) error {
+	if len(frame) < info.BytesPerFrame {
+		return fmt.Errorf("the frame decodes to %d bytes and the image needs %d",
+			len(frame), info.BytesPerFrame)
+	}
+	return nil
+}
+
 // decompressPixelFrame decodes one compressed frame into raw samples.
 func decompressPixelFrame(compression compress.CompressionType, fragment []byte, info *PixelDataInfo) ([]byte, error) {
 	// RLE needs the image layout: its segments are planar, one per byte of
@@ -931,7 +962,7 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 	// color-transformed frame should come back as RGB or stay in YBR.
 	if compression == compress.JPEG {
 		return compress.NewJPEGDecompressorForPhotometric(info.PhotometricInterpretation).
-			Decompress(fragment)
+			DecompressFrame(fragment, info.BitsAllocated, info.BitsStored, info.PixelRepresentation)
 	}
 
 	// Everything else goes through the registry. JPEG-LS, JPEG Lossless and
@@ -943,15 +974,16 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 			"compress.GetExternalRegistry().RegisterExternalDecoder: %w", compression, err)
 	}
 
-	// JPEG 2000 needs the layout for the same reason RLE does, and for one
-	// more. A codestream carries its own sample depth and its own signedness,
-	// and DICOM's Bits Allocated and Pixel Representation may differ from both:
-	// Bits Allocated decides how wide each sample is written, and where the two
-	// disagree about sign the data set is the authority. A decoder the caller
-	// registered gets the plain call, since only this one knows what to do with
-	// the extra arguments.
-	if bundled, ok := decoder.(*compress.JPEG2000Decompressor); ok {
-		return bundled.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored,
+	// A codestream carries its own sample depth, and DICOM's Bits Allocated may
+	// differ from it: a JPEG-LS or lossless JPEG frame coded at 8 bits in an
+	// image of 16 bits allocated is legal, and unpacked at its own width it is
+	// half the image, returned as the whole of it. JPEG 2000 also carries its own
+	// signedness, and where it disagrees with Pixel Representation the data set
+	// is the authority. A decoder that can write the data set's layout says so
+	// by satisfying FrameDecompressor, as every bundled one does; one the caller
+	// registered without it gets the plain call.
+	if framed, ok := decoder.(compress.FrameDecompressor); ok {
+		return framed.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored,
 			info.PixelRepresentation)
 	}
 	return decoder.Decompress(fragment)

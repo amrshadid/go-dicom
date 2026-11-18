@@ -236,13 +236,22 @@ if not assoc.is_established:
 instance = "1.2.826.0.1.3680043.10.511.9.2"
 ds = Dataset()
 ds.PerformedProcedureStepStatus = "IN PROGRESS"
-status, _ = assoc.send_n_create(ds, ModalityPerformedProcedureStep, instance)
+status, attrs = assoc.send_n_create(ds, ModalityPerformedProcedureStep, instance)
 assert status.Status == 0x0000, "N-CREATE 0x%04X" % status.Status
+# The SCP returns the attribute list of the instance it created (PS3.4
+# F.7.2.1.2); pynetdicom gives an empty data set when the response said none
+# follows.
+print("N-CREATE status 0x%04X, attribute list returned: %s" % (status.Status, attrs))
+assert "PerformedProcedureStepStatus" in attrs, "N-CREATE: no attribute list returned"
+assert attrs.PerformedProcedureStepStatus == "IN PROGRESS", "N-CREATE returned %r" % attrs.PerformedProcedureStepStatus
 
 ds2 = Dataset()
 ds2.PerformedProcedureStepStatus = "COMPLETED"
-status, _ = assoc.send_n_set(ds2, ModalityPerformedProcedureStep, instance)
+status, attrs = assoc.send_n_set(ds2, ModalityPerformedProcedureStep, instance)
 assert status.Status == 0x0000, "N-SET 0x%04X" % status.Status
+print("N-SET status 0x%04X, attribute list returned: %s" % (status.Status, attrs))
+assert "PerformedProcedureStepStatus" in attrs, "N-SET: no attribute list returned"
+assert attrs.PerformedProcedureStepStatus == "COMPLETED", "N-SET returned %r" % attrs.PerformedProcedureStepStatus
 assoc.release()
 `)
 
@@ -386,14 +395,16 @@ type mppsRecorder struct {
 	events chan<- mppsEvent
 }
 
+// Each response returns the attributes the request set, as the attribute list
+// PS3.4 F.7.2.1.2 and F.7.2.2.2 say an MPPS SCP may send back.
 func (h *mppsRecorder) HandleNCreate(_ context.Context, req *network.NCreateRequest) (*network.NCreateResponse, error) {
 	h.record("N-CREATE", req.DataSet)
-	return &network.NCreateResponse{Status: network.StatusSuccess}, nil
+	return &network.NCreateResponse{Status: network.StatusSuccess, DataSet: req.DataSet}, nil
 }
 
 func (h *mppsRecorder) HandleNSet(_ context.Context, req *network.NSetRequest) (*network.NSetResponse, error) {
 	h.record("N-SET", req.DataSet)
-	return &network.NSetResponse{Status: network.StatusSuccess}, nil
+	return &network.NSetResponse{Status: network.StatusSuccess, DataSet: req.DataSet}, nil
 }
 
 func (h *mppsRecorder) record(kind string, ds *dataset.Dataset) {

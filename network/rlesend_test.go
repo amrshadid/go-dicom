@@ -146,27 +146,28 @@ func TestUnencodableCompressedTargetIsRefused(t *testing.T) {
 	// A send that cannot be satisfied has to fail rather than put bytes on the
 	// wire described as something they are not, which the receiver could not
 	// detect. The list is what is true now. It went stale when the JPEG 2000
-	// Lossless encoder arrived (#327), because it is edited by hand: the
-	// syntaxes that are written are RLE, JPEG-LS Lossless, JPEG 2000 Lossless
-	// and JPEG Lossless (both forms), JPEG-LS Near-Lossless, and JPEG Baseline
-	// only when a quality is set. Of the rest:
+	// Lossless encoder arrived (#327), because it is edited by hand: every
+	// compressed syntax a data set is written in has an encoder (RLE, JPEG-LS
+	// Lossless and Near-Lossless, JPEG 2000 Lossless and lossy, JPEG Lossless
+	// in both forms, JPEG Baseline and Extended). What stays refused here is
+	// the lossy ones that EncodeDataset, which states no loss accepted, cannot
+	// be asked for:
 	//
-	//   - JPEG 2000 (the lossy .91) has none either; the lossless encoder is
-	//     not turned into it by a flag.
-	//   - JPEG Baseline is lossy and refused here because EncodeDataset states
-	//     no quality; the sender who has said how much loss it accepts is
-	//     tested with NetworkConfig.JPEGQuality.
+	//   - JPEG Baseline and JPEG Extended need NetworkConfig.JPEGQuality;
+	//   - lossy JPEG 2000 (.91) needs NetworkConfig.JPEG2000Rate.
 	//
+	// The sender who has said how much loss it accepts is tested with those.
 	// JPEG-LS Near-Lossless is not here: with no error allowed it is coded
 	// losslessly, which that syntax includes (#337).
 	for _, target := range []string{
 		network.JPEGBaselineUID,
+		network.JPEGExtendedUID,
 		network.JPEG2000UID,
 	} {
 		t.Run(target, func(t *testing.T) {
 			_, err := network.EncodeDataset(ds, target)
 			if err == nil {
-				t.Fatalf("a native instance encoded for %s; there is no encoder for it", target)
+				t.Fatalf("a native instance encoded for %s with no loss accepted", target)
 			}
 			if !strings.Contains(err.Error(), target) {
 				t.Errorf("the refusal does not name %s: %v", target, err)

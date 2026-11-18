@@ -244,7 +244,28 @@ func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	// local-limit-exceeded (PS3.8 Table 9-21). A reason means something only
 	// with its source: sent as service-user, reason 2 told the caller its
 	// application context name was not supported (#318).
-	_ = assoc.RejectAssociation(ctx, RJResultRejectedTransient, RJSourceServiceProviderPresentation, 2)
+	s.rejectAndAwaitClose(ctx, assoc, transport, RJResultRejectedTransient, RJSourceServiceProviderPresentation, 2)
+}
+
+// rejectAndAwaitClose sends an A-ASSOCIATE-RJ and leaves the connection for the caller to
+// close, as the acceptor's state machine has it (PS3.8 9.2, AE-8: issue the
+// PDU, start ARTIM, and await the transport connection close in Sta13; AA-2
+// closes it when the timer expires).
+//
+// Closing behind the PDU let the close reach the caller before it had acted
+// on the rejection. pynetdicom, on a loaded machine, then held the PDU with
+// the right result, source and reason and did not count the association as
+// rejected (#430): what the caller learned depended on the order two events
+// reached it in.
+//
+// Whatever arrives while waiting is not answered: nothing is due from a
+// caller that has been refused but the close.
+func (s *SCP) rejectAndAwaitClose(ctx context.Context, assoc *Association, transport *Transport, result, source, reason byte) {
+	if err := assoc.RejectAssociation(ctx, result, source, reason); err != nil {
+		return
+	}
+	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	_, _ = transport.ReadPDU(ctx)
 }
 
 func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
@@ -287,10 +308,10 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	}
 
 	// Who may associate is decided before anything is negotiated, so a caller
-	// that is refused learns nothing of what this SCP supports, and the
-	// connection is closed behind the refusal.
+	// that is refused learns nothing of what this SCP supports. The connection
+	// is then the caller's to close.
 	if r := s.decideAdmission(ctx, transport, rq); r != nil {
-		_ = assoc.RejectAssociation(ctx, r.Result, r.Source, r.Reason)
+		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return
 	}
 
@@ -999,6 +1020,48 @@ func instanceUIDs(ds *dataset.Dataset) (sopClassUID, sopInstanceUID string, ok b
 	return sopClassUID, sopInstanceUID, true
 }
 
+// sendNResponse sends an N-service response command and, when the handler
+// returned one, the data set that goes with it: the reply of an N-EVENT-REPORT
+// or N-ACTION, the attribute list of an N-GET, N-SET or N-CREATE (PS3.7 10.1).
+//
+// The Command Data Set Type says whether a data set follows (PS3.7 E.2), so it
+// is set here, from what is actually sent, rather than by each builder. The
+// response builders said "no data set" for every service but N-GET, and the
+// handlers' data sets were dropped: an MPPS SCP could not return the attribute
+// list PS3.4 F.7.2.1.2 describes, and an N-ACTION could not reply at all.
+//
+// The data set is encoded before the command goes out. A command that promises
+// a data set and is followed by none leaves the peer waiting on a read that
+// never completes, so a data set that cannot be encoded turns the response
+// into 0x0110 Processing failure with no data set.
+func (s *SCP) sendNResponse(ctx context.Context, assoc *Association, ctxID byte, service string,
+	rsp, data *dataset.Dataset) {
+
+	var dataBytes []byte
+	if data != nil {
+		encoded, err := EncodeDataset(data, assoc.TransferSyntaxFor(ctxID))
+		if err != nil {
+			DefaultLogger.Error("the %s handler's data set could not be encoded; answering 0x%04X without it: %v",
+				service, StatusProcessingFailure, err)
+			addUSElement(rsp, tagStatus, StatusProcessingFailure)
+			data = nil
+		} else {
+			dataBytes = encoded
+			addUSElement(rsp, tagCommandDataSetType, CommandDataSetTypePresent)
+		}
+	}
+
+	rspBytes, err := EncodeCommandDataset(rsp)
+	if err != nil {
+		DefaultLogger.Error("failed to encode the %s response: %v", service, err)
+		return
+	}
+	if err := assoc.SendPData(ctx, ctxID, rspBytes, true); err != nil || data == nil {
+		return
+	}
+	_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
+}
+
 func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handler Handler,
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
@@ -1054,15 +1117,16 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 	}
 
 	resp, err := handler.HandleNEventReport(ctx, req)
+	var reply *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		reply = resp.DataSet
 	}
 
-	rspDS := BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-EVENT-REPORT",
+		BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, status), reply)
 }
 
 func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handler,
@@ -1077,12 +1141,11 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 	// such as Display System, Media Creation and UPS, answered with everything.
 	// A list that is not a list of tags is refused as this SCP refuses any
 	// request it cannot read, rather than answered as if it were absent.
-	attrs, err := attributeIdentifierList(cmdDS)
+	asked, err := attributeIdentifierList(cmdDS)
 	if err != nil {
 		DefaultLogger.Error("refusing an N-GET whose Attribute Identifier List does not decode: %v", err)
-		rspBytes, _ := EncodeCommandDataset(
-			BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure, false))
-		_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+		s.sendNResponse(ctx, assoc, ctxID, "N-GET",
+			BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure, false), nil)
 		return
 	}
 
@@ -1090,27 +1153,21 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 		MessageID:            messageID,
 		RequestedSOPClass:    sopClassUID,
 		RequestedSOPInstance: sopInstanceUID,
-		AttributeList:        attrs,
+		AttributeList:        asked,
 	}
 
 	resp, err := handler.HandleNGet(ctx, req)
 	status := StatusSuccess
-	hasDS := false
+	var attrs *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
-		hasDS = resp.DataSet != nil
+		attrs = resp.DataSet
 	}
 
-	rspDS := BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, status, hasDS)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
-
-	if hasDS && resp != nil && resp.DataSet != nil {
-		dataBytes, _ := EncodeDataset(resp.DataSet, assoc.TransferSyntaxFor(ctxID))
-		_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
-	}
+	s.sendNResponse(ctx, assoc, ctxID, "N-GET",
+		BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, status, false), attrs)
 }
 
 func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handler,
@@ -1142,15 +1199,16 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 
 	resp, err := handler.HandleNSet(ctx, req)
 	status := StatusSuccess
+	var attrs *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		attrs = resp.DataSet
 	}
 
-	rspDS := BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-SET",
+		BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, status), attrs)
 }
 
 func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Handler,
@@ -1193,15 +1251,16 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 
 	resp, err := handler.HandleNAction(ctx, req)
 	status := StatusSuccess
+	var reply *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		reply = resp.DataSet
 	}
 
-	rspDS := BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-ACTION",
+		BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, status), reply)
 }
 
 // handleStorageCommitment answers a commitment request and then reports the
@@ -1349,15 +1408,16 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 
 	resp, err := handler.HandleNCreate(ctx, req)
 	status := StatusSuccess
+	var attrs *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		attrs = resp.DataSet
 	}
 
-	rspDS := BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-CREATE",
+		BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, status), attrs)
 }
 
 func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Handler,

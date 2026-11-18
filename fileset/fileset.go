@@ -1,6 +1,7 @@
 package fileset
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,17 @@ import (
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
 )
+
+// ErrNoFileMeta is the reason a data set with no File Meta Information is
+// not taken into a file-set: no preamble, no "DICM", no group 0002. Every
+// file of a File-set is in the DICOM File Format (PS3.10 7.1, 8.1), and a
+// DICOMDIR naming one that is not sends a reader to a file it cannot open as
+// one. AddFile returns an error wrapping it, and Scan reports the file with it.
+var ErrNoFileMeta = errors.New("a data set without the file meta information of PS3.10")
+
+// ErrNotDICOM is the reason a file that is not a DICOM instance is not taken
+// into a file-set.
+var ErrNotDICOM = errors.New("not a DICOM instance")
 
 // FileRecord represents a single DICOM file in the file-set.
 type FileRecord struct {
@@ -223,86 +235,88 @@ type FileSetStatistics struct {
 	SeriesCount  int64
 }
 
-// ScanDirectory scans a directory for files and adds them to the file-set.
+// ScanDirectory scans the root directory for files and adds the DICOM files
+// among them to the file-set, returning how many it added.
+//
+// A file that cannot be a member is left out without failing the scan: a
+// file that is not DICOM, and a bare data set with no File Meta Information
+// (ErrNoFileMeta). A directory holds whatever was put in it, and a scan that
+// stopped at the first README would index nothing. Scan does the same and
+// also says which files were left out and why.
 func (fs *FileSet) ScanDirectory(recursive bool) (int, error) {
+	added, _, err := fs.Scan(recursive)
+	return added, err
+}
+
+// SkippedFile is a file a scan found in the directory and did not add to the
+// file-set, and why.
+type SkippedFile struct {
+	Path string
+	// Err is the reason: it wraps ErrNoFileMeta for a data set that is not
+	// in the File Format, ErrNotDICOM for anything else that is not an
+	// instance, and is the error from opening it for a file that could not
+	// be opened.
+	Err error
+}
+
+// Scan is ScanDirectory, and returns as well the files it left out, in the
+// order it met them, each with the reason.
+//
+// Leaving a file out is a report, not an error: the error is for a directory
+// that could not be read.
+func (fs *FileSet) Scan(recursive bool) (added int, skipped []SkippedFile, err error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	addedCount := 0
+	known := make(map[string]bool, len(fs.FileRecords))
+	for _, record := range fs.FileRecords {
+		known[record.FilePath] = true
+	}
+	consider := func(path string, info os.FileInfo) {
+		if known[path] {
+			return
+		}
+		record, err := readFileRecord(path, info)
+		if err != nil {
+			skipped = append(skipped, SkippedFile{Path: path, Err: err})
+			return
+		}
+		fs.FileRecords = append(fs.FileRecords, record)
+		known[path] = true
+		added++
+	}
 
 	if recursive {
 		err := filepath.Walk(fs.RootDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}
-
-			if info.IsDir() {
-				return nil
+			if !info.IsDir() {
+				consider(path, info)
 			}
-
-			alreadyExists := false
-			for _, record := range fs.FileRecords {
-				if record.FilePath == path {
-					alreadyExists = true
-					break
-				}
-			}
-
-			if !alreadyExists {
-				record, err := readFileRecord(path, info)
-				if err != nil {
-					// A directory may hold anything. A file that is not DICOM is
-					// not part of the file-set, and recording it as one would put
-					// a README in the index.
-					return nil
-				}
-				fs.FileRecords = append(fs.FileRecords, record)
-				addedCount++
-			}
-
 			return nil
 		})
 		if err != nil {
-			return addedCount, fmt.Errorf("error scanning directory: %w", err)
+			return added, skipped, fmt.Errorf("error scanning directory: %w", err)
 		}
-	} else {
-		entries, err := os.ReadDir(fs.RootDir)
-		if err != nil {
-			return 0, fmt.Errorf("failed to read directory: %w", err)
-		}
-
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-
-			info, err := entry.Info()
-			if err != nil {
-				continue
-			}
-
-			path := filepath.Join(fs.RootDir, entry.Name())
-
-			alreadyExists := false
-			for _, record := range fs.FileRecords {
-				if record.FilePath == path {
-					alreadyExists = true
-					break
-				}
-			}
-
-			if !alreadyExists {
-				record, err := readFileRecord(path, info)
-				if err != nil {
-					continue
-				}
-				fs.FileRecords = append(fs.FileRecords, record)
-				addedCount++
-			}
-		}
+		return added, skipped, nil
 	}
 
-	return addedCount, nil
+	entries, err := os.ReadDir(fs.RootDir)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to read directory: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		consider(filepath.Join(fs.RootDir, entry.Name()), info)
+	}
+	return added, skipped, nil
 }
 
 // SortByPatientName sorts file records by file name.
@@ -450,26 +464,33 @@ func readFileRecord(path string, info os.FileInfo) (*FileRecord, error) {
 
 	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrNotDICOM, err)
 	}
 	ds := df.GetDataset()
 	if ds == nil {
-		return nil, fmt.Errorf("fileset: %s parsed to no data set", path)
+		return nil, fmt.Errorf("%w: it parsed to no data set", ErrNotDICOM)
 	}
 
 	// Parsing succeeding is not evidence that the file is DICOM. A stream with
 	// no meta header is read as a raw data set, and arbitrary bytes can be read
 	// that way without producing an error — a README in the directory would
-	// otherwise be indexed as an instance.
+	// otherwise be indexed as an instance. The two UIDs that identify an
+	// instance tell the two apart.
 	//
-	// The proof is a preamble, or the two UIDs that identify an instance. A
-	// directory record cannot reference a file without them in any case.
-	if !df.HasPreamble {
+	// Being DICOM is not enough either. A file in a File-set is in the DICOM
+	// File Format: the preamble, "DICM" and the File Meta Information (PS3.10
+	// 7.1, 8.1). A bare data set used to be indexed when it had the UIDs, and
+	// the DICOMDIR then named a file dcmtk's dcmmkdir refuses ("file not in
+	// part 10 format (no file meta information)") and pydicom's FileSet cannot
+	// load. The dicomdir command checked for it on its own; this is now the one
+	// place that knows.
+	if !df.HasPreamble || len(df.MetaElements) == 0 {
 		if recordString(ds, tag.New(0x0008, 0x0016)) == "" ||
 			recordString(ds, tag.New(0x0008, 0x0018)) == "" {
-			return nil, fmt.Errorf("fileset: %s has neither a DICM preamble nor a SOP "+
-				"Class and Instance UID, so it is not a DICOM instance", path)
+			return nil, fmt.Errorf("%w: it has neither a DICM preamble nor a SOP "+
+				"Class and Instance UID", ErrNotDICOM)
 		}
+		return nil, ErrNoFileMeta
 	}
 	_ = ds.Remove(tag.New(0x7FE0, 0x0010))
 

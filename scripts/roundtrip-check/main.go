@@ -12,10 +12,12 @@
 // re-encoded on the way out, as RLE Lossless, JPEG 2000 Lossless or lossless
 // JPEG (.57 or .70), which exercises an encoder this library has. With
 // -jpegls-near N it is coded as JPEG-LS Near-Lossless with an allowed error of
-// N. Another toolkit reading the result is the only way to know the encoder is
-// right rather than merely self-consistent.
+// N, with -jpeg-extended Q as JPEG Extended at quality Q, and with
+// -jpeg2000-ratio R as lossy JPEG 2000 at R:1. Another toolkit
+// reading the result is the only way to know the encoder is right rather than
+// merely self-consistent.
 //
-// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N]
+// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N|-jpeg-extended Q|-jpeg2000-ratio R]
 // <source dir> <output dir>
 package main
 
@@ -26,6 +28,7 @@ import (
 	"sort"
 	"strconv"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/filewriter"
@@ -51,10 +54,20 @@ func main() {
 				near, _ = strconv.Atoi(args[1])
 				target, args = network.JPEGLSNearLosslessUID, args[2:]
 			}
+		case "-jpeg-extended":
+			if len(args) > 1 {
+				quality, _ = strconv.Atoi(args[1])
+				target, args = network.JPEGExtendedUID, args[2:]
+			}
+		case "-jpeg2000-ratio":
+			if len(args) > 1 {
+				ratio, _ = strconv.ParseFloat(args[1], 64)
+				target, args = network.JPEG2000UID, args[2:]
+			}
 		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N] "+
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N|-jpeg-extended Q|-jpeg2000-ratio R] "+
 			"<source dir> <output dir>")
 		os.Exit(2)
 	}
@@ -75,8 +88,13 @@ func main() {
 	fmt.Printf("wrote %d, skipped %d\n", written, failed)
 }
 
-// near is the allowed error for -jpegls-near.
-var near int
+// near is the allowed error for -jpegls-near, quality the JPEG quality for
+// -jpeg-extended, and ratio the compression ratio for -jpeg2000-ratio.
+var (
+	near    int
+	quality int
+	ratio   float64
+)
 
 func roundTrip(in, out, target string) (err error) {
 	defer func() {
@@ -107,6 +125,24 @@ func roundTrip(in, out, target string) (err error) {
 		// NetworkConfig.JPEGLSNear; EncodeDataset allows no error.
 		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
 			if err := ds.CompressJPEGLSNearLosslessInPlace(near); err != nil {
+				return fmt.Errorf("encode as %s: %w", target, err)
+			}
+			ts = target
+		}
+	} else if target == network.JPEGExtendedUID {
+		// The data set's own method, which is what a send uses with
+		// NetworkConfig.JPEGQuality; EncodeDataset accepts no loss.
+		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
+			if err := ds.CompressJPEGExtendedInPlace(quality); err != nil {
+				return fmt.Errorf("encode as %s: %w", target, err)
+			}
+			ts = target
+		}
+	} else if target == network.JPEG2000UID {
+		// The data set's own method, which is what a send uses with
+		// NetworkConfig.JPEG2000Rate; EncodeDataset accepts no loss.
+		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
+			if err := ds.CompressJPEG2000InPlace(compress.JPEG2000Rate{Ratio: ratio}); err != nil {
 				return fmt.Errorf("encode as %s: %w", target, err)
 			}
 			ts = target

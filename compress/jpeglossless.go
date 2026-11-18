@@ -90,6 +90,27 @@ func (d *JPEGLosslessDecompressor) Decompress(data []byte) ([]byte, error) {
 	return img.pack(), nil
 }
 
+// DecompressFrame decodes one lossless JPEG frame to samples bitsAllocated
+// bits wide, the layout a data set describes; see FrameDecompressor.
+//
+// T.81 allows any precision from 2 to 16 for the lossless process, and a frame
+// coded at 8 bits in an image of 16 bits allocated unpacked by Decompress is
+// half the image. bitsStored and pixelRepresentation are not needed, since a
+// lossless JPEG sample has no sign of its own.
+func (d *JPEGLosslessDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsStored,
+	pixelRepresentation int) ([]byte, error) {
+
+	img, err := decodeLosslessJPEG(data)
+	if err != nil {
+		return nil, err
+	}
+	samples, err := atBitsAllocated(img.pack(), img.precision, bitsAllocated)
+	if err != nil {
+		return nil, fmt.Errorf("jpeglossless: %w", err)
+	}
+	return samples, nil
+}
+
 // losslessComponent is one color component of the frame.
 type losslessComponent struct {
 	id       byte

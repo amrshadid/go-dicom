@@ -171,13 +171,15 @@
 // These syntaxes can be compressed *to*: RLE Lossless; JPEG-LS through
 // EncodeJPEGLS — lossless — and EncodeJPEGLSNearLossless — every sample within
 // the allowed error NEAR the caller gives — 2 to 16 bits, one scan per
-// component; JPEG 2000 Lossless through EncodeJPEG2000Lossless; lossless JPEG
-// (.57 and .70) through EncodeJPEGLossless — Process 14, 2 to 16 bits, one to
-// four components in one scan, with Huffman tables built for each frame; and
-// JPEG Baseline through EncodeJPEGBaseline — lossy, 8 bits, one or three
-// components at full resolution. Decoding is broader than encoding, and a
-// request to compress to any other syntax fails rather than producing bytes
-// described as something they are not.
+// component; JPEG 2000 through EncodeJPEG2000Lossless and, lossy at a ratio or
+// a PSNR, EncodeJPEG2000; lossless JPEG (.57 and .70) through
+// EncodeJPEGLossless — Process 14, 2 to 16 bits, one to four components in
+// one scan, with Huffman tables built for each frame; JPEG Baseline through
+// EncodeJPEGBaseline — lossy, 8 bits, one or three components at full
+// resolution; and JPEG Extended through EncodeJPEGExtended — lossy, 8 or 12
+// bits, its Huffman tables built for each frame. Decoding is broader than
+// encoding, and a request to compress to any other syntax fails rather than
+// producing bytes described as something they are not.
 //
 // How much error to accept belongs to the caller, so nothing here chooses a
 // NEAR or a quality.
@@ -241,10 +243,22 @@
 //
 //	type Decompressor interface {
 //		// Decompress decompresses pixel data
-//		Decompress(data []byte, width, height, bitsPerPixel int) ([]byte, error)
+//		Decompress(data []byte) ([]byte, error)
 //
 //		// CanDecompress checks if this decompressor can handle the data
 //		CanDecompress(data []byte) bool
+//	}
+//
+// Decompress returns samples at the codestream's own width: one byte a sample
+// at a precision of 8 or fewer, two above. A decoder that also satisfies
+// FrameDecompressor writes them at the width a data set's Bits Allocated says
+// instead, which is what a data set's pixel path asks for; every decoder here
+// does. A frame coded at 8 bits in an image of 16 bits allocated is legal, and
+// at its own width it is half the image.
+//
+//	type FrameDecompressor interface {
+//		Decompressor
+//		DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
 //	}
 //
 // ## Compressor Interface
