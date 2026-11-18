@@ -262,6 +262,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every lossless output to the source's samples (RLE 47, JPEG-LS 47, JPEG
   2000 44 by pydicom), and the 16 JPEG outputs to within 2 of each other.
 
+- **`create` makes a DICOM file from DICOM JSON, a picture or a PDF**
+  (#402). `convert` went one way, and nothing made a file. From DICOM JSON
+  (PS3.18 Annex F), read with the reader the DICOMweb client uses; from a
+  PNG or JPEG, a Secondary Capture image (PS3.3 A.8.1), the JPEG put in as
+  it is in JPEG Baseline and recorded as lossy, the PNG decoded; from a PDF,
+  an Encapsulated PDF (A.45.1) with its length beside it. UIDs come from the
+  library's generator; the patient and study from `-template` or flags.
+  `convert --format dicom-json` writes what `create` reads: the existing
+  `json` format has no sequences or binary values and stays as it is.
+  Checked: 66 of the 74 corpus files pydicom reads come back from DICOM JSON
+  as the same data set (six have no SOP Class UID and are refused, two are
+  truncated files the reader drops a value of), and so does pydicom's own
+  `to_json` of five; pydicom shows the pictures' pixels as PIL reads them;
+  `dcmdecap` gives back the PDF byte for byte; `dcmdump` reads every file.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

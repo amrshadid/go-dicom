@@ -35,6 +35,10 @@ go-dicom modify -set PatientName=Doe^Jane in.dcm out.dcm  # Set, insert or delet
 go-dicom modify -insert 'ReferencedImageSequence[0].ReferencedSOPInstanceUID=1.2.3' -in-place f.dcm
 go-dicom compress -syntax rle ct.dcm ct-rle.dcm   # Also jpeg-ls, jpeg2000; jpeg -quality 90 is lossy
 go-dicom decompress ct-rle.dcm ct.dcm        # Native pixel data
+go-dicom convert patient.dcm dicom.json --format dicom-json   # DICOM JSON, which create reads back
+go-dicom create dicom.json patient-copy.dcm  # A file from DICOM JSON
+go-dicom create -template ct.dcm screen.png sc.dcm   # A Secondary Capture in the CT's study
+go-dicom create -patient-id 123 report.pdf report.dcm  # An Encapsulated PDF
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
 go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom anonymize -redact 0,0,640,40 us.dcm clean.dcm   # Black out burned-in text

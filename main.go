@@ -57,6 +57,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.CodifyCommand{})
 	dicomCLI.RegisterCommand(&cli.CompressCommand{})
 	dicomCLI.RegisterCommand(&cli.DecompressCommand{})
+	dicomCLI.RegisterCommand(&cli.CreateCommand{})
 	dicomCLI.RegisterCommand(&cli.AnonymizeCommand{})
 	dicomCLI.RegisterCommand(&cli.DICOMDIRCommand{})
 	dicomCLI.RegisterCommand(&cli.ModifyCommand{})

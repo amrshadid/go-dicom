@@ -32,7 +32,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 25 commands: file inspection and conversion (`show`, `info`, `validate`, `convert`, `codify`, `tag-doc`), editing (`modify`), transfer syntax (`compress`, `decompress`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
+- **CLI tools** — 29 commands: file inspection and conversion (`show`, `info`, `validate`, `diff`, `sr`, `convert`, `codify`, `tag-doc`), making and editing a file (`create`, `modify`), transfer syntax (`compress`, `decompress`), media (`dicomdir`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -305,6 +305,9 @@ go build -o go-dicom .
 ./go-dicom modify -set PatientName=Doe^Jane -insert 'RequestAttributesSequence[0].RequestedProcedureID=RP1' in.dcm out.dcm  # Edit attributes; syntax and pixels kept
 ./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # RLE, JPEG-LS, JPEG 2000 lossless; jpeg with -quality
 ./go-dicom decompress ct-jls.dcm ct.dcm                  # Native pixel data again
+./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
+./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF
+./go-dicom create -template ct.dcm report.pdf report.dcm     # An Encapsulated PDF in the CT's study
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
 ./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at

@@ -28,6 +28,7 @@ func allCommands() []Command {
 		&CodifyCommand{},
 		&CompressCommand{},
 		&DecompressCommand{},
+		&CreateCommand{},
 		&AnonymizeCommand{},
 		&ModifyCommand{},
 		&ShareCommand{},
