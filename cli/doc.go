@@ -16,6 +16,7 @@
 //   - show: Display DICOM file contents
 //   - info: Get file information and statistics
 //   - convert: Convert DICOM files to different formats
+//   - sr: Print the content tree of a structured report
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation

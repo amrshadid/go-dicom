@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`sr` prints a structured report as a document** (#359). The `sr` package
+  reads a content tree and no command printed one; `show` gives the flat
+  element list, which does not read as a report. `go-dicom sr file.dcm` prints
+  a header and then the content items as an indented tree: relationship, value
+  type, concept name and value, with a number's unit, a code's scheme, dates
+  and times written as people read them, the SOP class and instance an
+  IMAGE, WAVEFORM or COMPOSITE item points at (frames, segments, channels and
+  presentation state too), spatial and temporal coordinates, and an item that
+  only refers to another as `-> 1.2.3`. `--json` gives the same tree with each
+  item's position and `schemaVersion` 1. Compared with dcmtk's `dsrdump` on
+  the three reports of the pydicom corpus and one more with what they lack:
+  the same nodes in the same order with the same values.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
