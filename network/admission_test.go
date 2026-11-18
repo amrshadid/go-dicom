@@ -59,6 +59,21 @@ func (r *recordedEvents) of(eventType EventType) []Event {
 	return out
 }
 
+// await returns the recorded events of one type once there are n of them.
+// The SCP reports an A-ASSOCIATE-RJ after writing it, so the peer can read the
+// refusal before the event is emitted.
+func (r *recordedEvents) await(t *testing.T, eventType EventType, n int) []Event {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := r.of(eventType)
+		if len(got) >= n || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // associateAs associates with addr under the given AE titles and returns the
 // rejection the SCP answered with, nil when it accepted. An accepted
 // association is checked with a C-ECHO and released.
@@ -114,7 +129,7 @@ func TestAdmitByCallingAE(t *testing.T) {
 	if called, _ := seen.Load("STRANGER"); called != "ARCHIVE" {
 		t.Errorf("the function was given called AE %q, want %q", called, "ARCHIVE")
 	}
-	rejected := events.of(EVTAssocRejected)
+	rejected := events.await(t, EVTAssocRejected, 1)
 	if len(rejected) != 1 {
 		t.Fatalf("%d EVTAssocRejected events, want 1", len(rejected))
 	}
@@ -218,7 +233,7 @@ func TestEachRejectionArrivesAsSent(t *testing.T) {
 		choice.Store(&want)
 		wantRejection(t, want.String(), associateAs(t, addr, "ANY", "ARCHIVE"), want)
 	}
-	if got := len(events.of(EVTAssocRejected)); got != len(all) {
+	if got := len(events.await(t, EVTAssocRejected, len(all))); got != len(all) {
 		t.Errorf("%d EVTAssocRejected events for %d refusals", got, len(all))
 	}
 }
@@ -254,6 +269,9 @@ func TestRefusedCallerIsNotNegotiated(t *testing.T) {
 	if next, err := transport.ReadPDU(ctx); err == nil {
 		t.Fatalf("after the A-ASSOCIATE-RJ the SCP sent %T; it should have closed the connection", next)
 	}
+	// The refusal is reported once it is written; by then an acceptance
+	// would have been reported too.
+	events.await(t, EVTAssocRejected, 1)
 	if n := len(events.of(EVTAssocAccepted)) + len(events.of(EVTAssocEstablished)); n != 0 {
 		t.Errorf("%d accepted or established events for a refused caller", n)
 	}
@@ -267,7 +285,7 @@ func TestNoAdmitChangesNothing(t *testing.T) {
 		t.Fatalf("refused without a function: %v", r)
 	}
 	wantRejection(t, "another called AE", associateAs(t, addr, "ANYONE", "OTHER"), *RejectCalledAE())
-	if rejected := events.of(EVTAssocRejected); len(rejected) != 1 ||
+	if rejected := events.await(t, EVTAssocRejected, 1); len(rejected) != 1 ||
 		rejected[0].Description != "rejected-permanent, service-user: called-AE-title-not-recognized" {
 		t.Errorf("EVTAssocRejected events: %+v", rejected)
 	}
