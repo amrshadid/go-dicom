@@ -16,6 +16,7 @@
 //   - show: Display DICOM file contents
 //   - info: Get file information and statistics
 //   - convert: Convert DICOM files to different formats
+//   - dicomdir: Write the DICOMDIR of a directory, or list one
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation

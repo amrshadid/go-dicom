@@ -35,6 +35,9 @@ go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom anonymize -redact 0,0,640,40 us.dcm clean.dcm   # Black out burned-in text
 go-dicom share ct.dcm ct.png --window 40,400             # A picture that is safe to hand on
 go-dicom share -redact 0,0,640,40 us.dcm us.png          # ...with burned-in text blacked out
+go-dicom dicomdir study/                     # Write study/DICOMDIR; refuses file names that are not File IDs
+go-dicom dicomdir --copy-to media/ export/   # ...or copy the files as DICOM/IM000001... and index those
+go-dicom dicomdir --list study/DICOMDIR      # The records as a tree
 go-dicom convert ct.dcm ct.png --format png  # Render as PNG (or jpeg), windowed
 go-dicom convert cine.dcm f.png --format png --frame all   # f-0001.png, f-0002.png, ...
 go-dicom codify patient.dcm -output struct.go # Generate Go code

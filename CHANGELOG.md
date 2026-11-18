@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`dicomdir` writes and lists a DICOMDIR** (#348). `fileset.WriteDICOMDIR`
+  and `ReadDICOMDIR` existed, and indexing a directory still meant writing a
+  program. `go-dicom dicomdir <directory>` writes the DICOMDIR of the DICOM
+  files under it, and `dicomdir --list <DICOMDIR or directory>` prints one as
+  a tree, or as JSON with `schemaVersion` 1. A File ID is at most eight
+  components of at most eight characters from A-Z, 0-9 and `_` (PS3.10 8.5),
+  which `ct.dcm` is not: the command refuses by name, every such file at
+  once, and writes nothing. It never renames. `--copy-to <new directory>`
+  copies the files there as `DICOM/IM000001` onward and indexes the copies.
+  A data set without the file meta information of Part 10 is left out and
+  named, as is anything that is not DICOM; an existing DICOMDIR is replaced
+  only with `--force`. `fileset.ValidFileID` exports the File ID check.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
