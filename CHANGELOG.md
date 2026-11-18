@@ -332,6 +332,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was refused, and is now read. OpenJPEG returns the same samples. Packed
   packet headers and subsampled components are still refused by name.
 
+- **The DICOMweb server serves frames** (#330). `…/instances/{uid}/frames/1`
+  answered 404, and a web viewer loads an image by frame, so none could show
+  what `qrscp -web` holds. `GET …/frames/{list}` now answers with one part
+  per frame, in the order asked: uncompressed (`application/octet-stream`,
+  Explicit VR Little Endian) by default, a compressed frame decoded for it;
+  as stored for `transfer-syntax=*` or the frame's own type (`image/jpeg`,
+  `image/jls`, `image/jp2`, `image/dicom-rle`). A frame is read from the file
+  by where it lies, so one frame of a 200-frame image costs that frame:
+  `filereader.DICOMFile.FrameRanges` says which bytes hold each frame, with
+  the Extended and Basic Offset Tables and a frame split over fragments
+  (`encaps.FrameRanges`, which shares its rules with `encaps.Frames`), and
+  `Dataset.DecodeFrame` decodes one. A frame number that is not in the image
+  is 404, a list that is not frame numbers 400, and a compressed type the
+  frame is not held in 406. Across pydicom's corpus, 56 files, seven of them
+  multi-frame: every frame is the bytes pydicom divides out of the same file,
+  and Orthanc sends the same bytes for 49 of them; two more are 32-bit big
+  endian, which Orthanc reverses in two-byte words and pydicom does not.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

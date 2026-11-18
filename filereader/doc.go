@@ -239,6 +239,21 @@
 // byte for byte as if it had been read whole. A deflated file is refused,
 // since its values are not in the file.
 //
+// ### DICOMFile.FrameRanges
+//
+//	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
+//
+// Where each frame of Pixel Data lies in the file, so one frame is read
+// without the rest: a range a frame for native data, and for encapsulated
+// data the fragments that hold it, found by the Extended Offset Table, the
+// Basic Offset Table, the counts and the end-of-image markers.
+//
+//	file, _ := os.Open(path)
+//	dicom, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),
+//		filereader.ReadOptions{SkipBulkData: true})
+//	frames, err := dicom.FrameRanges(file)
+//	// frames[i] are the byte ranges of frame i+1, to be read and joined.
+//
 // ### TextEncodings and DecodeText
 //
 //	func TextEncodings(elements []*DataElementValue, inherited []string) []string

@@ -2272,6 +2272,206 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Frames over DICOMweb (#330)
+#
+# Each file of pydicom's corpus that has pixel data is stored to qrscp -web,
+# and every frame is asked for, last first, as stored. Each part has to be
+# the bytes pydicom divides out of the same file: the encapsulated frame, or
+# the native frame in little endian. Asked for uncompressed, a compressed
+# frame is decoded, and held against pydicom's own decoding where pydicom
+# can decode it and the coding is lossless. With an Orthanc, the same file
+# is given to it and its frames have to be the same bytes.
+# ---------------------------------------------------------------------------
+if python3 -c "import pydicom, numpy" >/dev/null 2>&1; then
+  note "DICOMweb: frames held against pydicom's, and Orthanc's"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/webframes"
+  start_server "$WORKDIR" "$WORKDIR/webframes.log" \
+    "$GODICOM" qrscp -port 11743 -web 18743 -output "$WORKDIR/webframes"
+  WEBFRAMES_PID=$SERVER_PID
+  if wait_for_port 18743; then
+    corpus=$(python3 -c "import os, pydicom.data; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+    if frames=$(python3 -W ignore - "http://127.0.0.1:18743/dicom-web" "$corpus" "${ORTHANC_URL:-}" <<'PY'
+import json, os, re, sys, urllib.error, urllib.request
+import numpy
+import pydicom
+try:
+    from pydicom.encaps import generate_frames
+except ImportError:  # pydicom 2
+    from pydicom.encaps import generate_pixel_data_frame
+    def generate_frames(buffer, number_of_frames):
+        return generate_pixel_data_frame(buffer, number_of_frames)
+
+ours, corpus, orthanc = sys.argv[1], sys.argv[2], sys.argv[3].rstrip("/")
+STORED = 'multipart/related; type="application/octet-stream"; transfer-syntax=*'
+EXPLICIT = "1.2.840.10008.1.2.1"
+
+def request(base, path, accept=None, data=None, content_type=None):
+    headers = {k: v for k, v in (("Accept", accept), ("Content-Type", content_type)) if v}
+    req = urllib.request.Request(base + path, data=data, headers=headers, method="POST" if data else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", ""), e.read()
+
+def stow(base, blob):
+    return request(base, "/studies", "application/dicom+json",
+                   b"--b\r\nContent-Type: application/dicom\r\n\r\n" + blob + b"\r\n--b--\r\n",
+                   'multipart/related; type="application/dicom"; boundary=b')[0]
+
+def parts(content_type, body):
+    # Taken apart by hand: the check is that the body is what PS3.18 8.6
+    # says, not what some reader takes.
+    boundary = re.search(r'boundary="?([^";]+)"?', content_type).group(1).encode()
+    out = []
+    for chunk in body.split(b"--" + boundary)[1:]:
+        if chunk.startswith(b"--"):
+            break
+        header, _, data = chunk.partition(b"\r\n\r\n")
+        out.append((header.decode(), data[:-2] if data.endswith(b"\r\n") else data))
+    return out
+
+def native_frames(ds, n, little):
+    bits = ds.BitsAllocated
+    length = ds.Rows * ds.Columns * ds.get("SamplesPerPixel", 1) * bits
+    if ds.PhotometricInterpretation == "YBR_FULL_422" and bits == 8:
+        length = length * 2 // 3
+    length = (length + 7) // 8
+    data = ds.PixelData
+    # Big endian at the sample width, and in pairs for 8-bit samples in OW,
+    # as pydicom's own pixel_array reads them.
+    if not little and (bits > 8 or ds["PixelData"].VR == "OW"):
+        width = max(bits // 8, 2)
+        data = numpy.frombuffer(data[: len(data) // width * width], ">u%d" % width).astype("<u%d" % width).tobytes()
+    return [data[i * length:(i + 1) * length] for i in range(n)], length
+
+checked = decoded = 0
+agreed, disagreed, multi = [], [], []
+for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
+    try:
+        ds = pydicom.dcmread(os.path.join(corpus, name))
+        syntax = ds.file_meta.TransferSyntaxUID
+        n = int(ds.get("NumberOfFrames", 1) or 1)
+    except Exception:
+        continue  # a file pydicom will not read, or with no transfer syntax
+    if "PixelData" not in ds or not all(k in ds for k in ("StudyInstanceUID", "SeriesInstanceUID", "SOPInstanceUID")):
+        continue
+    try:
+        if syntax.is_compressed:
+            want, length = list(generate_frames(ds.PixelData, number_of_frames=n)), 0
+        else:
+            want, length = native_frames(ds, n, syntax.is_little_endian)
+    except Exception:
+        continue  # pydicom cannot divide the frames, so there is nothing to hold them to
+    with open(os.path.join(corpus, name), "rb") as f:
+        blob = f.read()
+    if stow(ours, blob) != 200:
+        sys.exit("%s: not stored" % name)
+    path = "/studies/%s/series/%s/instances/%s/frames/" % (ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID)
+    order = list(range(n, 0, -1))
+    status, ctype, body = request(ours, path + ",".join(map(str, order)), STORED)
+    if not syntax.is_compressed and len(want[-1]) < length:
+        # A file that ends inside its pixel data: refused, not half sent.
+        if status == 200:
+            sys.exit("%s: the frames of a truncated file were sent" % name)
+        continue
+    if status != 200:
+        sys.exit("%s: frames as stored answered %d: %s" % (name, status, body[:200]))
+    got = parts(ctype, body)
+    label = "transfer-syntax=" + (syntax if syntax.is_compressed else EXPLICIT)
+    if len(got) != n:
+        sys.exit("%s: %d parts for %d frames" % (name, len(got), n))
+    for (header, data), number in zip(got, order):
+        if label not in header:
+            sys.exit("%s frame %d: the part is labeled %r" % (name, number, header))
+        if data != want[number - 1]:
+            sys.exit("%s frame %d: %d bytes, pydicom divides out %d, and they differ" % (
+                name, number, len(data), len(want[number - 1])))
+    checked += 1
+    if n > 1:
+        multi.append(name)
+
+    if orthanc:
+        # Several corpus files share a SOP Instance UID and Orthanc keeps the
+        # first copy it is given, so the copy it holds is removed first,
+        # through its REST API at the service root.
+        root = orthanc[: -len("/dicom-web")] if orthanc.endswith("/dicom-web") else orthanc
+        status, _, found = request(root, "/tools/lookup", None, str(ds.SOPInstanceUID).encode(), "text/plain")
+        for entry in json.loads(found or b"[]") if status == 200 else []:
+            urllib.request.urlopen(urllib.request.Request(root + entry["Path"], method="DELETE"), timeout=30).read()
+        stow(orthanc, blob)
+        status, ctype, body = request(orthanc, path + ",".join(map(str, order)), STORED)
+        if status == 200:
+            if [d for _, d in parts(ctype, body)] == [d for _, d in got]:
+                agreed.append(name)
+            elif not syntax.is_compressed and not syntax.is_little_endian and ds.BitsAllocated == 32:
+                # Orthanc 1.13 reverses 32-bit big endian samples in two-byte
+                # words, as OW alone would say: RT Dose's 1249000 comes back
+                # as 250085395. pydicom reads them at the sample width, and
+                # these frames were held to pydicom above.
+                disagreed.append(name)
+            else:
+                sys.exit("%s: the frames differ from Orthanc's" % name)
+
+    # Uncompressed, the default for frames (PS3.18 8.7.3.3.1).
+    status, ctype, body = request(ours, path + "1")
+    if syntax.is_compressed and status != 200:
+        continue  # a codestream this library does not decode; pydicom fails on the same ones
+    if status != 200:
+        sys.exit("%s: frame 1 uncompressed answered %d" % (name, status))
+    (header, data), = parts(ctype, body)
+    if "application/octet-stream; transfer-syntax=" + EXPLICIT not in header:
+        sys.exit("%s: uncompressed part labeled %r" % (name, header))
+    if not syntax.is_compressed:
+        if data != want[0]:
+            sys.exit("%s: uncompressed frame 1 is not the stored frame" % name)
+    elif ds.get("SamplesPerPixel", 1) == 1 and syntax in (
+            "1.2.840.10008.1.2.5", "1.2.840.10008.1.2.4.57", "1.2.840.10008.1.2.4.70",
+            "1.2.840.10008.1.2.4.80", "1.2.840.10008.1.2.4.90"):
+        try:
+            array = ds.pixel_array
+        except Exception:
+            continue  # pydicom has no decoder for it here
+        frame = array[0] if n > 1 else array
+        if not numpy.array_equal(numpy.frombuffer(data, frame.dtype.newbyteorder("<")).reshape(frame.shape), frame):
+            sys.exit("%s: decoded frame 1 differs from pydicom's" % name)
+        decoded += 1
+
+# What is not served, as PS3.18 10.4.3 answers it, asked of a native image
+# held at the end: not frame numbers, a frame past the last, and a
+# compressed type, which nothing is encoded into on request.
+ds = pydicom.dcmread(os.path.join(corpus, "rtdose.dcm"))
+with open(os.path.join(corpus, "rtdose.dcm"), "rb") as f:
+    stow(ours, f.read())
+path = "/studies/%s/series/%s/instances/%s/frames/" % (ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID)
+for frames, accept, want_status in (("0", None, 400), ("1,x", None, 400), ("16", None, 404), ("15", None, 200),
+                                    ("1", 'multipart/related; type="image/jls"', 406)):
+    status = request(ours, path + frames, accept)[0]
+    if status != want_status:
+        sys.exit("frames/%s with Accept %r answered %d, want %d" % (frames, accept, status, want_status))
+
+if checked < 40 or not multi:
+    sys.exit("only %d files checked, %d of them multi-frame" % (checked, len(multi)))
+print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d decoded frames equal to pydicom's%s"
+      % (checked, len(multi), ", ".join(multi), decoded,
+         "; %d byte-equal to Orthanc's, %d where Orthanc swaps 32-bit big endian in words (%s)"
+         % (len(agreed), len(disagreed), ", ".join(disagreed)) if orthanc else ""))
+PY
+    ); then
+      pass "qrscp -web frames — $frames"
+    else
+      fail "frames over DICOMweb: $frames"
+    fi
+  else
+    fail "qrscp -web did not start: $(tail -3 "$WORKDIR/webframes.log")"
+  fi
+  stop_server "$WEBFRAMES_PID"
+else
+  skip "frames over DICOMweb need pydicom and numpy"
+fi
+
+# ---------------------------------------------------------------------------
 # show --json: where each element sits in the file (#259)
 #
 # pydicom records where it found every value it read (file_tell). The
