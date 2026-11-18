@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The JPEG 2000 decoder is checked against OpenJPEG in CI** (#322). The
+  interoperability check that decodes an OpenJPEG codestream built its
+  fixture with numpy, which the CI venv does not have, and reported that as
+  a skip, so it never ran. Where it did run, the fixture was wrong:
+  OpenJPEG's PGX reader takes the precision from the largest sample, so
+  `MR_small.dcm` was encoded signed 12-bit and every sample over 2047
+  clipped. The fixture is now built from the data set's own samples with
+  the depth stated, OpenJPEG must say 16 bits and return the original before
+  the decoder is asked, a fixture that cannot be built fails, and the job
+  fails if the check did not pass. The decoder itself was right.
+
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
   arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
