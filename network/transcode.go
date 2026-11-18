@@ -76,6 +76,10 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 			return compressCopy(ds, source, targetSyntax, (*dataset.Dataset).CompressJPEGLSLosslessInPlace)
 		case JPEG2000LosslessUID:
 			return compressCopy(ds, source, targetSyntax, (*dataset.Dataset).CompressJPEG2000LosslessInPlace)
+		case JPEGLosslessProcess14UID:
+			return compressCopy(ds, source, targetSyntax, (*dataset.Dataset).CompressJPEGLosslessInPlace)
+		case JPEGLosslessSV1UID:
+			return compressCopy(ds, source, targetSyntax, (*dataset.Dataset).CompressJPEGLosslessSV1InPlace)
 		case JPEGBaselineUID:
 			// Lossy, so only for a sender that has said how much loss it
 			// accepts. Refusing is the same rule as for JPEG-LS Near-Lossless
@@ -98,9 +102,10 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, jpegQuality in
 			// much error to accept is the caller's decision rather than one to make
 			// silently on their behalf while transcoding.
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
-				"RLE Lossless (%s), JPEG-LS Lossless (%s) and JPEG 2000 Lossless (%s), and "+
-				"JPEG Baseline (%s) when NetworkConfig.JPEGQuality is set",
-				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEG2000LosslessUID, JPEGBaselineUID)
+				"RLE Lossless (%s), JPEG-LS Lossless (%s), JPEG 2000 Lossless (%s) and "+
+				"JPEG Lossless (%s, %s), and JPEG Baseline (%s) when NetworkConfig.JPEGQuality is set",
+				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEG2000LosslessUID,
+				JPEGLosslessProcess14UID, JPEGLosslessSV1UID, JPEGBaselineUID)
 		}
 	}
 

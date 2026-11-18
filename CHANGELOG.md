@@ -277,6 +277,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `to_json` of five; pydicom shows the pictures' pixels as PIL reads them;
   `dcmdecap` gives back the PDF byte for byte; `dcmdump` reads every file.
 
+- **A file or a send can be compressed to lossless JPEG** (#336). Nothing
+  wrote T.81 Process 14, so a peer that accepted only `.57` or `.70` could
+  not be sent an image, though both decoded here.
+  `Dataset.CompressJPEGLosslessSV1InPlace` writes `.70`, each sample
+  predicted from the one to its left, and `Dataset.CompressJPEGLosslessInPlace`
+  writes `.57` with the predictor that codes each frame smallest. Both
+  syntaxes are now ones a send transcodes to. The coding is exact: 2 to 16
+  bits, signed or unsigned, gray or color, with Huffman tables built for each
+  frame, since the example tables stop at 11 bits. `compress.EncodeJPEGLossless`
+  codes one frame. dcmtk and libjpeg decode every image of pydicom's corpus
+  written in either syntax to the samples that went in, and the
+  interoperability suite has dcmtk check it.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
