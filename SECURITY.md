@@ -71,6 +71,7 @@ advisory:
 | Limit | Value | Guards against |
 |-------|-------|----------------|
 | `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
+| `network.MaxAssociatePDULength` | 1 MiB | An A-ASSOCIATE-RQ or -AC declaring a huge length, before the caller is known; the four-byte PDUs are held to four bytes |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file on disk |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
