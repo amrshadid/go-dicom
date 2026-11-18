@@ -29,6 +29,7 @@ func allCommands() []Command {
 		&AnonymizeCommand{},
 		&ShareCommand{},
 		&DiffCommand{},
+		&DICOMDIRCommand{},
 		&HelpCommand{},
 		&VersionCommand{},
 		&EchoSCUCommand{},

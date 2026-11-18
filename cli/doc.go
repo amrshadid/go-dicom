@@ -18,6 +18,7 @@
 //   - convert: Convert DICOM files to different formats
 //   - diff: Compare two files element by element; its exit status is the
 //     answer (0 equal, 1 different, 2 error), carried by ExitError
+//   - dicomdir: Write the DICOMDIR of a directory, or list one
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation

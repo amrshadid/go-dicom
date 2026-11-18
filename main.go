@@ -56,6 +56,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.TagDocCommand{})
 	dicomCLI.RegisterCommand(&cli.CodifyCommand{})
 	dicomCLI.RegisterCommand(&cli.AnonymizeCommand{})
+	dicomCLI.RegisterCommand(&cli.DICOMDIRCommand{})
 	dicomCLI.RegisterCommand(&cli.ShareCommand{})
 	dicomCLI.RegisterCommand(&cli.DiffCommand{})
 	dicomCLI.RegisterCommand(&cli.HelpCommand{})
