@@ -108,9 +108,14 @@ func (sc *ShowCommand) Execute(args []string) error {
 	}
 
 	if sc.element != "" {
+		// The element is named the way diff names one: by tag, in any of the
+		// forms people write it, or by keyword (PatientName). The dictionary
+		// name, "Patient's Name", is still taken for what it matched before,
+		// and it is all a private element has.
+		want, parseErr := parseTagOrKeyword(sc.element)
 		for _, elem := range elements {
-			if strings.EqualFold(strings.ToLower(elem.Name), strings.ToLower(sc.element)) ||
-				strings.EqualFold(strings.ToLower(elem.Tag), strings.ToLower(sc.element)) {
+			byTag := parseErr == nil && strings.EqualFold(elem.Tag, fmt.Sprintf("%04X,%04X", want.Group(), want.Element()))
+			if byTag || strings.EqualFold(elem.Name, sc.element) {
 				displayElement(out, elem, limit)
 				return nil
 			}
@@ -162,7 +167,9 @@ USAGE:
   go-dicom show <file> [options]
 
 DESCRIPTION:
-  Display all tags and values from a DICOM file.
+  Display all tags and values from a DICOM file. With file::Element, print
+  that one element, whole. Element is a keyword (PatientName), a tag
+  (0010,0010 or (0010,0010)) or the dictionary name ("Patient's Name").
 
 OPTIONS:
   -h, --help           Show help for this command
@@ -188,6 +195,8 @@ EXAMPLES:
   go-dicom show patient.dcm --top --quiet
   go-dicom show patient.dcm --json
   go-dicom show patient.dcm::ImageComments     One element, whole
+  go-dicom show patient.dcm::PatientName       The same, by keyword
+  go-dicom show patient.dcm::0010,0010         The same, by tag
   go-dicom show patient.dcm --full
   go-dicom show -h
 `)
