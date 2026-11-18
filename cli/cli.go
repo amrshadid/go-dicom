@@ -197,7 +197,7 @@ func (c *CLI) ShowHelp() {
 
 		"compress":   "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG Baseline",
 		"decompress": "Write a file's pixel data uncompressed",
-		"create":    "Make a DICOM file from DICOM JSON, a picture or a PDF",
+		"create":     "Make a DICOM file from DICOM JSON, a picture or a PDF",
 	}
 	for _, cmdName := range fileCommands {
 		if desc, ok := fileDescriptions[cmdName]; ok {
