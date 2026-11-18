@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its body being read. A body within its bound is allocated as its bytes
   arrive, so memory follows what a peer has sent: a P-DATA-TF stating
   128 MiB and sending 1 MiB costs 3 MiB.
+- **A panic in a handler ends its association, not the server** (#325).
+  Nothing in `network` recovered from a panic. A handler is the
+  application's code, called on a goroutine the SCP started, so a nil map
+  or an index out of range in one, reached by a single instance from a
+  single peer, ended the process: the listener and every other association
+  in progress. A panic in a DIMSE handler, including the streamed C-FIND,
+  C-GET and C-MOVE handlers that run on a goroutine of their own, is now
+  logged with its stack, the peer is sent an A-ABORT (service-provider,
+  reason-not-specified), and that association's slot is given back; the
+  associations beside it go on and the next caller is served. No status is
+  sent for the message in progress, since how far it got is not known. A
+  panic in an event handler is logged and the handlers registered after it
+  are still called.
 
 ## [1.10.0] - 2026-11-17
 
