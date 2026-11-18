@@ -2331,6 +2331,126 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Rendered frames over DICOMweb (#382)
+#
+# Frame 1 of each corpus image pydicom can decode is rendered as PNG and held
+# against pydicom. Grayscale: pydicom's Modality LUT and VOI LUT with the same
+# window, which has to agree within one level of 255. Color: pydicom's pixels
+# in RGB, within two levels, except JPEG with chroma subsampled, where two
+# decoders upsample the chroma differently at color edges and only the mean
+# difference is held to three.
+# ---------------------------------------------------------------------------
+if python3 -c "import pydicom, numpy, PIL" >/dev/null 2>&1; then
+  note "DICOMweb: rendered frames held against pydicom's windowing"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/webrender"
+  start_server "$WORKDIR" "$WORKDIR/webrender.log" \
+    "$GODICOM" qrscp -port 11744 -web 18744 -output "$WORKDIR/webrender"
+  WEBRENDER_PID=$SERVER_PID
+  if wait_for_port 18744; then
+    corpus=$(python3 -c "import os, pydicom.data; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+    if rendered=$(python3 -W ignore - "http://127.0.0.1:18744/dicom-web" "$corpus" <<'PY'
+import io, os, sys, urllib.error, urllib.request
+import numpy
+import pydicom
+from PIL import Image
+try:  # pydicom 3, whose pixel_array is already RGB
+    from pydicom.pixels import apply_modality_lut, apply_voi_lut, convert_color_space
+    ALREADY_RGB = True
+except ImportError:
+    from pydicom.pixel_data_handlers.util import apply_modality_lut, apply_voi_lut, convert_color_space
+    ALREADY_RGB = False
+
+ours, corpus = sys.argv[1], sys.argv[2]
+
+def request(url, accept=None, data=None, content_type=None):
+    headers = {k: v for k, v in (("Accept", accept), ("Content-Type", content_type)) if v}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", ""), e.read()
+
+gray = color = edged = 0
+for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
+    try:
+        ds = pydicom.dcmread(os.path.join(corpus, name))
+        n = int(ds.get("NumberOfFrames", 1) or 1)
+        syntax = ds.file_meta.TransferSyntaxUID
+        array = ds.pixel_array
+    except Exception:
+        continue  # not read, or no decoder for it here: nothing to hold the picture to
+    if not all(k in ds for k in ("StudyInstanceUID", "SeriesInstanceUID", "SOPInstanceUID")):
+        continue
+    frame = array[0] if n > 1 else array
+    with open(os.path.join(corpus, name), "rb") as f:
+        blob = f.read()
+    request(ours + "/studies", "application/dicom+json",
+            b"--b\r\nContent-Type: application/dicom\r\n\r\n" + blob + b"\r\n--b--\r\n",
+            'multipart/related; type="application/dicom"; boundary=b')
+    path = ours + "/studies/%s/series/%s/instances/%s/frames/1/rendered" % (
+        ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID)
+    photometric = ds.get("PhotometricInterpretation", "")
+    if ds.get("SamplesPerPixel", 1) == 1 and photometric in ("MONOCHROME1", "MONOCHROME2") and ds.BitsAllocated > 1:
+        values = apply_modality_lut(frame, ds).astype(numpy.float64)
+        lo, hi = float(values.min()), float(values.max())
+        center, width = round((lo + hi) / 2, 2), max(round(hi - lo, 2), 1) + 1
+        status, _, body = request(path + "?window=%r,%r,linear" % (center, width), "image/png")
+        if status != 200:
+            sys.exit("%s: rendered answered %d: %s" % (name, status, body[:100]))
+        mine = numpy.asarray(Image.open(io.BytesIO(body)), dtype=numpy.float64)
+        if "VOILUTSequence" in ds:
+            del ds["VOILUTSequence"]
+        ds.WindowCenter, ds.WindowWidth, ds.VOILUTFunction = center, width, "LINEAR"
+        windowed = apply_voi_lut(values, ds, index=0).astype(numpy.float64)
+        if ds.PixelRepresentation == 0:
+            y_min, y_max = 0, 2 ** ds.BitsStored - 1
+        else:
+            y_min, y_max = -(2 ** (ds.BitsStored - 1)), 2 ** (ds.BitsStored - 1) - 1
+        # pydicom carries its output range through the rescale it applied.
+        if "RescaleSlope" in ds and "RescaleIntercept" in ds:
+            slope, intercept = float(ds.RescaleSlope), float(ds.RescaleIntercept)
+            y_min, y_max = y_min * slope + intercept, y_max * slope + intercept
+        want = numpy.round((windowed - y_min) / (y_max - y_min) * 255)
+        if photometric == "MONOCHROME1":
+            want = 255 - want
+        if mine.shape != want.shape or numpy.abs(mine - want).max() > 1:
+            sys.exit("%s: the rendered frame differs from pydicom's windowing" % name)
+        gray += 1
+    elif ds.get("SamplesPerPixel", 1) == 3 and ds.BitsAllocated == 8:
+        status, _, body = request(path, "image/png")
+        if status != 200:
+            sys.exit("%s: rendered answered %d: %s" % (name, status, body[:100]))
+        mine = numpy.asarray(Image.open(io.BytesIO(body)).convert("RGB"), dtype=numpy.int16)
+        rgb = frame
+        if photometric in ("YBR_FULL", "YBR_FULL_422") and not ALREADY_RGB:
+            rgb = convert_color_space(frame, "YBR_FULL", "RGB")
+        diff = numpy.abs(mine - rgb.astype(numpy.int16))
+        subsampled = syntax in ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51") and photometric.startswith("YBR")
+        if mine.shape != rgb.shape or (diff.max() > 2 and not (subsampled and diff.mean() <= 3)):
+            sys.exit("%s: the rendered frame differs from pydicom's pixels by up to %d" % (name, diff.max()))
+        color += 1
+        edged += diff.max() > 2
+if gray < 10 or color < 10:
+    sys.exit("only %d grayscale and %d color frames compared" % (gray, color))
+print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels "
+      "(%d JPEG with chroma subsampled within a mean of three)" % (gray, color, edged))
+PY
+    ); then
+      pass "qrscp -web rendered — $rendered"
+    else
+      fail "rendered over DICOMweb: $rendered"
+    fi
+  else
+    fail "qrscp -web did not start: $(tail -3 "$WORKDIR/webrender.log")"
+  fi
+  stop_server "$WEBRENDER_PID"
+else
+  skip "rendered frames over DICOMweb need pydicom, numpy and Pillow"
+fi
+
+# ---------------------------------------------------------------------------
 # show --json: where each element sits in the file (#259)
 #
 # pydicom records where it found every value it read (file_tell). The

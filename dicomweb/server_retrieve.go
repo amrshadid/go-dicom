@@ -52,6 +52,9 @@ type retrieveTarget struct {
 	// bulkdata is the path to an element of a bulk data resource, a
 	// segment a level, or nil.
 	bulkdata []string
+	// render is "rendered" or "thumbnail" for those resources, of a study,
+	// a series, an instance or frames; otherwise empty.
+	render string
 }
 
 // retrieveTargetOf reads a request path as a retrieve resource, and reports
@@ -59,13 +62,17 @@ type retrieveTarget struct {
 func retrieveTargetOf(path string) (retrieveTarget, bool, *requestError) {
 	var target retrieveTarget
 	s := pathSegments(path)
-	if n := len(s); n > 1 && s[n-1] == "metadata" {
+	if n := len(s); n > 2 && (s[n-1] == "rendered" || s[n-1] == "thumbnail") {
+		target.render = s[n-1]
+		s = s[:n-1]
+	}
+	if n := len(s); target.render == "" && n > 1 && s[n-1] == "metadata" {
 		target.metadata = true
 		s = s[:n-1]
 	} else if n == 8 && s[6] == "frames" {
 		target.frames = s[7]
 		s = s[:6]
-	} else if n >= 8 && s[6] == "bulkdata" {
+	} else if n >= 8 && s[6] == "bulkdata" && target.render == "" {
 		target.bulkdata = s[7:]
 		s = s[:6]
 	}
