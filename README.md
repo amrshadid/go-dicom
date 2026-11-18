@@ -27,12 +27,12 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
 - **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
 - **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
-- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
-- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines
+- **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: the modality, VOI and presentation lookup tables or rescale and window, MONOCHROME1, YBR and palette color
+- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines. Both formats are written down, each with a JSON Schema: [`show --json`](docs/show-json.md) and [`-events`](docs/events.md)
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 21 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
+- **CLI tools** — 29 commands: file inspection and conversion (`show`, `info`, `validate`, `diff`, `sr`, `convert`, `codify`, `tag-doc`), making and editing a file (`create`, `modify`), transfer syntax (`compress`, `decompress`), media (`dicomdir`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -298,13 +298,24 @@ go build -o go-dicom .
 ./go-dicom show patient.dcm           # Every element, as stored
 ./go-dicom show patient.dcm --json    # The same as JSON, with where each element sits in the file
 ./go-dicom info patient.dcm           # Key metadata and image dimensions
+./go-dicom validate ct.dcm            # What its SOP class requires and it lacks (PS3.3 IOD tables)
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
+./go-dicom modify -set PatientName=Doe^Jane -insert 'RequestAttributesSequence[0].RequestedProcedureID=RP1' in.dcm out.dcm  # Edit attributes; syntax and pixels kept
+./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # RLE, JPEG-LS, JPEG 2000 lossless; jpeg with -quality
+./go-dicom decompress ct-jls.dcm ct.dcm                  # Native pixel data again
+./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
+./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF
+./go-dicom create -template ct.dcm report.pdf report.dcm     # An Encapsulated PDF in the CT's study
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
 ./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at
 ./go-dicom anonymize -redact auto us.dcm clean.dcm  # Black out what it finds; it can miss, so look
+./go-dicom diff a.dcm b.dcm           # What differs, element by element; exit 0 equal, 1 different, 2 error
+./go-dicom dicomdir study/            # Write study/DICOMDIR (File IDs must be PS3.10 names; --copy-to renames copies)
+./go-dicom dicomdir --list study/     # List a DICOMDIR as a tree (--json for a document)
+./go-dicom sr report.dcm              # A structured report's content tree as a document (--json too)
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
@@ -325,6 +336,9 @@ go build -o go-dicom .
 
 # Query for patients/studies
 ./go-dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
+
+# Ask the worklist what is scheduled for this MR today, steps included
+./go-dicom findscu -worklist -modality MR -date today -aec RIS ris:104
 
 # Retrieve studies to a destination
 ./go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
@@ -358,6 +372,10 @@ go build -o go-dicom .
 ./go-dicom wado -study 1.2.3.4 http://127.0.0.1:8080/dicom-web ./retrieved/
 ./go-dicom stow http://127.0.0.1:8080/dicom-web study/
 DICOMWEB_TOKEN=... ./go-dicom qrscp -output ./archive/ -web 0.0.0.0:8080
+
+# Admit only the callers listed: these AE titles, from these addresses. Any
+# other is refused before anything is negotiated
+./go-dicom qrscp -port 11112 -output ./archive/ -allow PRISMA1,CT_2,10.20.0.0/16
 
 # Any network command over TLS. With -tls-ca a server requires a client
 # certificate from that CA and a client verifies the server against it
@@ -418,6 +436,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
 | [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. A tree read and written back keeps everything it was read with. `StructuredReport` alongside it is a simpler bespoke model, written as a content tree that dcmtk and pydicom read |
+| [validate](./validate/) | An instance checked against its IOD: modules, attribute Types, value multiplicity, Enumerated Values and Defined Terms, generated from PS3.3; conditions in prose reported as not checked |
 | [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities
@@ -479,7 +498,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Four syntaxes are compressed *to*: **RLE Lossless**, **JPEG-LS Lossless**, **JPEG 2000 Lossless** (`.90`, also with `Dataset.CompressJPEG2000LosslessInPlace`), and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, and JPEG-LS Near-Lossless and lossy JPEG 2000 (`.91`) are refused. |
+| **Compressing pixel data** | Six syntaxes are compressed *to*, on a send and in a data set: **RLE Lossless** (`Dataset.CompressRLELosslessInPlace`), **JPEG-LS Lossless** (`Dataset.CompressJPEGLSLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, `Dataset.CompressJPEG2000LosslessInPlace`), **JPEG Lossless** (`.57` and `.70`, `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`), and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, and JPEG-LS Near-Lossless and lossy JPEG 2000 (`.91`) are refused. |
 | **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
@@ -668,6 +687,7 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
+| HTJ2K (`.201`-`.203`), JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
 `YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
@@ -696,6 +716,12 @@ with nothing skipped.
 wavelet at 1 to 16 bits, signed or unsigned, gray or color, in pure Go. OpenJPEG
 decodes what they write to the samples that went in, which CI checks on every
 push over pydicom's corpus.
+
+**Lossless JPEG is written as well as read**: `compress.EncodeJPEGLossless`,
+`Dataset.CompressJPEGLosslessInPlace` (`.57`, the predictor that codes each
+frame smallest) and `Dataset.CompressJPEGLosslessSV1InPlace` (`.70`) write
+Process 14 at 2 to 16 bits, gray or color. dcmtk's `dcmdjpeg` decodes what they
+write to the samples that went in, which CI checks over pydicom's corpus.
 
 **JPEG 2000 decodes too**, as of this version: `.90` and `.91`, both the 5/3
 reversible and 9/7 irreversible wavelets, with the reversible and irreversible
@@ -779,6 +805,12 @@ golangci-lint run ./...
 ```
 
 ## Examples
+
+Coming from another toolkit: [Coming from pydicom](./docs/coming-from-pydicom.md)
+and [Coming from dcmtk](./docs/coming-from-dcmtk.md) map the calls and commands
+you know to their equivalents here, and [Examples](./docs/examples.md) shows the
+common jobs as command lines and as Go, every Go sample run by `go test`
+([`examples/commonjobs`](./examples/commonjobs/)).
 
 See the [examples](./examples/) directory for complete working examples:
 

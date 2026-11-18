@@ -8,12 +8,13 @@
 // data was written with an explicit length where the standard requires an
 // undefined one.
 //
-// With -rle or -jpeg2000 the pixel data is re-encoded on the way out, as RLE
-// Lossless or as JPEG 2000 Lossless, which exercises an encoder this library
-// has. Another toolkit reading the result is the only way to know the encoder
-// is right rather than merely self-consistent.
+// With -rle, -jpeg2000, -jpeg-lossless or -jpeg-lossless-sv1 the pixel data is
+// re-encoded on the way out, as RLE Lossless, JPEG 2000 Lossless or lossless
+// JPEG (.57 or .70), which exercises an encoder this library has. Another
+// toolkit reading the result is the only way to know the encoder is right
+// rather than merely self-consistent.
 //
-// Usage: roundtrip-check [-rle|-jpeg2000] <source dir> <output dir>
+// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1] <source dir> <output dir>
 package main
 
 import (
@@ -38,10 +39,15 @@ func main() {
 			target, args = network.RLELosslessUID, args[1:]
 		case "-jpeg2000":
 			target, args = network.JPEG2000LosslessUID, args[1:]
+		case "-jpeg-lossless":
+			target, args = network.JPEGLosslessProcess14UID, args[1:]
+		case "-jpeg-lossless-sv1":
+			target, args = network.JPEGLosslessSV1UID, args[1:]
 		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000] <source dir> <output dir>")
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1] "+
+			"<source dir> <output dir>")
 		os.Exit(2)
 	}
 	corpus, out := args[0], args[1]
