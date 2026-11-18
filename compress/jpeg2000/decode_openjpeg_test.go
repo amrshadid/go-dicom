@@ -103,6 +103,21 @@ var openJPEGEncodings = []openJPEGEncoding{
 	{"every style, RPCL precincts tiles", []string{"-M", "63", "-p", "RPCL", "-c", "[32,32]", "-t", "48,40", "-n", "4"}},
 	{"bypass irreversible", []string{"-M", "1", "-I", "-r", "8"}},
 	{"every style irreversible", []string{"-M", "63", "-I"}},
+
+	// A region of interest by the Maxshift method (A.6.3, Annex H), on the
+	// first component, at small and large shifts, in layers, under the code-
+	// block styles, with tiles and precincts, and with the 9/7 filter.
+	{"ROI", []string{"-ROI", "c=0,U=4"}},
+	{"ROI shift of one", []string{"-ROI", "c=0,U=1"}},
+	{"ROI large shift", []string{"-ROI", "c=0,U=9"}},
+	{"ROI layers", []string{"-ROI", "c=0,U=5", "-r", "20,5,1"}},
+	// Every style but bypass: OpenJPEG cannot decode its own output with a
+	// region of interest and bypass together, which
+	// TestRegionOfInterestWithBypassIsLossless checks against the samples
+	// instead.
+	{"ROI every style but bypass", []string{"-ROI", "c=0,U=4", "-M", "62"}},
+	{"ROI RPCL precincts tiles", []string{"-ROI", "c=0,U=6", "-p", "RPCL", "-c", "[32,32]", "-t", "48,40", "-n", "4"}},
+	{"ROI irreversible", []string{"-ROI", "c=0,U=6", "-I", "-r", "10"}},
 }
 
 // openJPEGSource is one image the options are tried on.
@@ -287,6 +302,109 @@ func TestDecodeEveryBlockStyleMatchesOpenJPEG(t *testing.T) {
 	t.Logf("OpenJPEG and this decoder agree on all %d combinations", checked)
 }
 
+// TestRegionOfInterestWithBypassIsLossless decodes what opj_compress writes
+// with a region of interest and selective arithmetic coding bypass together,
+// and requires the samples that were encoded, since the encoding is lossless.
+//
+// It is checked against the samples and not against opj_decompress because
+// OpenJPEG 2.5.4 decodes this combination wrongly: nearly every sample of its
+// own lossless output comes back different. The standard has bypass start
+// after the first four bit planes a code-block codes (D.6), and with a region
+// of interest those include the s planes the shift added. OpenJPEG's encoder
+// counts them, which is why this decoder gets the samples back, and its
+// decoder does not. The test logs how far off OpenJPEG is, so that the day it
+// is fixed shows here.
+func TestRegionOfInterestWithBypassIsLossless(t *testing.T) {
+	requireOpenJPEG(t)
+	sources := openJPEGSources()
+	for _, source := range sources {
+		for _, args := range [][]string{
+			{"-ROI", "c=0,U=3", "-M", "1"},
+			{"-ROI", "c=0,U=7", "-M", "63", "-r", "20,5,1"},
+		} {
+			label := strings.Join(args, " ") + ", " + source.name
+			data := encodeWithOpenJPEG(t, t.TempDir(), source.img, args)
+			codestream, err := ParseCodestream(data)
+			if err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			img, err := Decode(codestream)
+			if err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			openjpeg := decodeWithOpenJPEG(t, t.TempDir(), data, len(img.Components))
+			wrong := 0
+			for c, plane := range source.img.Components {
+				for i, v := range plane {
+					if img.Components[c][i] != v {
+						t.Fatalf("%s: component %d sample %d is %d, was encoded as %d",
+							label, c, i, img.Components[c][i], v)
+					}
+					if openjpeg[c][i] != v {
+						wrong++
+					}
+				}
+			}
+			t.Logf("%s: every sample as encoded; OpenJPEG returns %d of them otherwise", label, wrong)
+		}
+	}
+}
+
+// TestRegionOfInterestMatchesOpenJPEG covers what the matrix cannot, since
+// its options apply to gray sources too: a region of interest on the second
+// and third component of a color image, and an RGN segment in a tile-part
+// header rather than the main header (A.6.3 allows either). opj_compress
+// writes RGN in the main header only, so the test moves it into the tile-part
+// and requires that OpenJPEG and this decoder both read the moved one as they
+// read the original.
+func TestRegionOfInterestMatchesOpenJPEG(t *testing.T) {
+	requireOpenJPEG(t)
+	for _, source := range openJPEGSources()[3:] { // the two color ones
+		for _, args := range [][]string{
+			{"-ROI", "c=1,U=5"},
+			{"-ROI", "c=2,U=8", "-r", "10,1"},
+		} {
+			label := strings.Join(args, " ") + ", " + source.name
+			data := encodeWithOpenJPEG(t, t.TempDir(), source.img, args)
+			compareWithOpenJPEG(t, label, data)
+
+			moved := rgnIntoTilePart(t, data)
+			compareWithOpenJPEG(t, label+", RGN in the tile-part header", moved)
+			codestream, err := ParseCodestream(moved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(codestream.ROIShift) != 0 || len(codestream.TileROIShift) != 1 {
+				t.Fatalf("%s: the moved RGN was read as %v in the main header and %v in the tile",
+					label, codestream.ROIShift, codestream.TileROIShift)
+			}
+		}
+	}
+}
+
+// rgnIntoTilePart moves a single-tile codestream's RGN segment from the main
+// header to the header of its tile-part, correcting the tile-part's length.
+func rgnIntoTilePart(t *testing.T, data []byte) []byte {
+	t.Helper()
+	sot := bytes.Index(data, []byte{0xFF, 0x90})
+	rgn := bytes.Index(data[:sot], []byte{0xFF, 0x5E})
+	if sot < 0 || rgn < 0 {
+		t.Fatal("no RGN before the first tile-part")
+	}
+	length := 2 + int(binary.BigEndian.Uint16(data[rgn+2:]))
+	segment := append([]byte{}, data[rgn:rgn+length]...)
+
+	out := append([]byte{}, data[:rgn]...)
+	out = append(out, data[rgn+length:sot+12]...) // up to the end of the SOT segment
+	out = append(out, segment...)
+	out = append(out, data[sot+12:]...)
+	psot := out[sot-length+6:]
+	if parts := binary.BigEndian.Uint32(psot); parts != 0 {
+		binary.BigEndian.PutUint32(psot, parts+uint32(length))
+	}
+	return out
+}
+
 // openJPEGFixture is a committed codestream written by opj_compress, with the
 // digest of the samples opj_decompress returns for it.
 type openJPEGFixture struct {
@@ -317,6 +435,71 @@ var openJPEGFixtures = []openJPEGFixture{
 	{"opj_style_termall_vertical.j2k", "-F 33,31,1,16,s -n 4 -M 12 -b 16,16", "db06cf718d4add6e"},
 	// Reset and segmentation symbols under the 9/7 filter.
 	{"opj_style_reset_segmentation_irreversible.j2k", "-F 25,21,1,8,u -n 4 -M 34 -I", "c8ea2982ab06cbeb"},
+	// A region of interest on a gray image, and on the third component of a
+	// signed color one in two layers.
+	{"opj_roi.j2k", "-F 29,27,1,8,u -n 4 -ROI c=0,U=4", "4cdf9f925ac4841e"},
+	{"opj_roi_color_layers.j2k", "-F 22,19,3,12,s -n 3 -ROI c=2,U=6 -r 10,1", "8a24ebb94d6dc67f"},
+}
+
+// TestRegionOfInterestThreshold pins H.1's rule on the boundary: with a shift
+// of s, a coefficient of magnitude 2^s or more is in the region and is
+// divided by 2^s, and one below 2^s is background and left alone. The values
+// are in halves, as DecodeBlock returns them, so the boundary is 2^(s+1).
+//
+// OpenJPEG cannot check this. Its encoder scales a whole component, so there
+// is no background to tell apart. Its decoder compares in halves against
+// 2^s, which also moves background between 2^(s-1) and 2^s. Maxshift allows
+// background up to 2^s - 1, so an encoder that marks a real region would see
+// that background come out divided by 2^s from OpenJPEG.
+func TestRegionOfInterestThreshold(t *testing.T) {
+	const s = 4
+	for _, tc := range []struct {
+		name     string
+		in, want int32
+	}{
+		{"largest background, decoded to plane 0", 2*(1<<s-1) + 1, 2*(1<<s-1) + 1},
+		{"background in OpenJPEG's gap", 2*(1<<(s-1)) + 1, 2*(1<<(s-1)) + 1},
+		{"smallest region coefficient", 2 << s, 2},
+		{"region coefficient, truncated estimate", 3 << (s + 2), 3 << 2},
+		{"negative region coefficient", -(2<<s + 2<<(s+1)), -6},
+		{"negative background", -(2*(1<<s-1) + 1), -(2*(1<<s-1) + 1)},
+		{"zero", 0, 0},
+	} {
+		values := []int32{tc.in}
+		descaleRegionOfInterest(values, s)
+		if values[0] != tc.want {
+			t.Errorf("%s: %d became %d, want %d", tc.name, tc.in, values[0], tc.want)
+		}
+	}
+}
+
+// TestRegionOfInterestInATilePartHeader moves the committed region-of-interest
+// fixtures' RGN segment into the tile-part header, where A.6.3 also allows it,
+// and requires the same samples, OpenJPEG's, without needing OpenJPEG.
+func TestRegionOfInterestInATilePartHeader(t *testing.T) {
+	for _, fixture := range openJPEGFixtures {
+		if !strings.HasPrefix(fixture.file, "opj_roi") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join("testdata", fixture.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		codestream, err := ParseCodestream(rgnIntoTilePart(t, data))
+		if err != nil {
+			t.Fatalf("%s: %v", fixture.file, err)
+		}
+		if len(codestream.TileROIShift) != 1 {
+			t.Fatalf("%s: the moved RGN was not read in the tile-part header", fixture.file)
+		}
+		img, err := Decode(codestream)
+		if err != nil {
+			t.Fatalf("%s: %v", fixture.file, err)
+		}
+		if got := samplesDigest(img.Components); got != fixture.digest {
+			t.Errorf("%s: the samples hash to %s, OpenJPEG's to %s", fixture.file, got, fixture.digest)
+		}
+	}
 }
 
 // samplesDigest is the digest openJPEGFixtures records.

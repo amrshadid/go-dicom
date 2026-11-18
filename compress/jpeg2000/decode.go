@@ -165,13 +165,14 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 	// read back in block order, so the result does not depend on scheduling.
 	errs := make([]error, len(mine))
 	next := make(chan int)
+	roiShift := c.ROIShiftForTile(tile, comp)
 	var wg sync.WaitGroup
 	for w := 0; w < min(runtime.GOMAXPROCS(0), len(mine)); w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				errs[i] = c.decodeBlockInto(bands, tc, quant, style, comp, mine[i])
+				errs[i] = c.decodeBlockInto(bands, tc, quant, style, comp, roiShift, mine[i])
 			}
 		}()
 	}
@@ -189,9 +190,10 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 }
 
 // decodeBlockInto decodes one code-block and writes its dequantized
-// coefficients into the band it belongs to.
+// coefficients into the band it belongs to. roiShift is the component's
+// region-of-interest shift, 0 when it has none.
 func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc TileComponent,
-	quant Quantization, style CodingStyle, comp int, block *CodeBlockData) error {
+	quant Quantization, style CodingStyle, comp, roiShift int, block *CodeBlockData) error {
 
 	if block.Resolution >= len(tc.Resolutions) {
 		return errorf("a code-block at resolution %d of %d", block.Resolution, len(tc.Resolutions))
@@ -208,11 +210,14 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 	if err != nil {
 		return err
 	}
-	decoded, err := decodeBlock(block, magnitudeBits)
+	decoded, err := decodeBlock(block, magnitudeBits+roiShift)
 	if err != nil {
 		return err
 	}
 	coefficients := decoded.data
+	if roiShift > 0 {
+		descaleRegionOfInterest(coefficients, roiShift)
+	}
 	step, err := stepSize(quant, band, block.Resolution, style.Levels, c.Components[comp].Depth)
 	if err != nil {
 		return err
@@ -241,6 +246,31 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 		}
 	}
 	return nil
+}
+
+// descaleRegionOfInterest undoes the Maxshift scaling (Annex H.1): the
+// encoder raised the region's coefficients by s bit planes, past every
+// coefficient of the background, so any coefficient of magnitude 2^s or more
+// is in the region and is scaled back down, and the rest are background and
+// stay as they are. The band's bit planes were counted s higher to read them
+// (decodeBlockInto), which is the other half of the method.
+//
+// The values are in halves (DecodeBlock), so the threshold is 2^(s+1) of
+// them; shifting a value in halves right by s keeps it in halves.
+func descaleRegionOfInterest(values []int32, shift int) {
+	if shift >= 31 {
+		// Nothing a block can hold reaches the threshold: all background.
+		return
+	}
+	threshold := int32(1) << uint(shift+1)
+	for i, v := range values {
+		switch {
+		case v >= threshold:
+			values[i] = v >> uint(shift)
+		case v <= -threshold:
+			values[i] = -((-v) >> uint(shift))
+		}
+	}
 }
 
 // scaleCoefficient turns one code-block value, which is in halves, into the

@@ -313,6 +313,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   precincts, a position-driven order and the 9/7 filter. A block coded
   without them takes the loop it took before.
 
+- **JPEG 2000 with a region of interest** (#396). An RGN segment, which an
+  encoder writes to give part of the image priority by the Maxshift method,
+  was refused in the main header and taken for an unexpected marker in a
+  tile-part header. Both now decode: the band's bit planes are counted s
+  higher and every coefficient of 2^s or more is scaled back down. OpenJPEG
+  returns the same samples across shifts, components, layers, tiles,
+  precincts, the style options and the 9/7 filter. With selective
+  arithmetic coding bypass as well, OpenJPEG 2.5.4 cannot decode its own
+  lossless output, and this decoder returns every sample that was encoded.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
