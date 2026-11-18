@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A server at its association limit says it is full** (#318). A caller
+  over `SCPConfig.MaxAssociations` was refused from the service-user with
+  reason 2, which from that source is "application context name not
+  supported": dcmtk's `echoscu` printed `Reason: App Context Name Not
+  Supported`, a misconfiguration on the caller's side, when the server was
+  only busy. The refusal now comes from the service-provider (presentation
+  related function), and reason 2 from there is local-limit-exceeded
+  (PS3.8 Table 9-21). It is still transient, so a caller tries again.
+
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
   arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
