@@ -244,7 +244,28 @@ func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	// local-limit-exceeded (PS3.8 Table 9-21). A reason means something only
 	// with its source: sent as service-user, reason 2 told the caller its
 	// application context name was not supported (#318).
-	_ = assoc.RejectAssociation(ctx, RJResultRejectedTransient, RJSourceServiceProviderPresentation, 2)
+	s.rejectAndAwaitClose(ctx, assoc, transport, RJResultRejectedTransient, RJSourceServiceProviderPresentation, 2)
+}
+
+// rejectAndAwaitClose sends an A-ASSOCIATE-RJ and leaves the connection for the caller to
+// close, as the acceptor's state machine has it (PS3.8 9.2, AE-8: issue the
+// PDU, start ARTIM, and await the transport connection close in Sta13; AA-2
+// closes it when the timer expires).
+//
+// Closing behind the PDU let the close reach the caller before it had acted
+// on the rejection. pynetdicom, on a loaded machine, then held the PDU with
+// the right result, source and reason and did not count the association as
+// rejected (#430): what the caller learned depended on the order two events
+// reached it in.
+//
+// Whatever arrives while waiting is not answered: nothing is due from a
+// caller that has been refused but the close.
+func (s *SCP) rejectAndAwaitClose(ctx context.Context, assoc *Association, transport *Transport, result, source, reason byte) {
+	if err := assoc.RejectAssociation(ctx, result, source, reason); err != nil {
+		return
+	}
+	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	_, _ = transport.ReadPDU(ctx)
 }
 
 func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
@@ -287,10 +308,10 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	}
 
 	// Who may associate is decided before anything is negotiated, so a caller
-	// that is refused learns nothing of what this SCP supports, and the
-	// connection is closed behind the refusal.
+	// that is refused learns nothing of what this SCP supports. The connection
+	// is then the caller's to close.
 	if r := s.decideAdmission(ctx, transport, rq); r != nil {
-		_ = assoc.RejectAssociation(ctx, r.Result, r.Source, r.Reason)
+		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return
 	}
 
