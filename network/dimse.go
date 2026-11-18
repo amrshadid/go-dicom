@@ -77,6 +77,8 @@ var (
 	tagCommandDataSetType        = tag.New(0x0000, 0x0800)
 	tagStatus                    = tag.New(0x0000, 0x0900)
 	tagAffectedSOPInstanceUID    = tag.New(0x0000, 0x1000)
+	tagMoveOriginatorAE          = tag.New(0x0000, 0x1030)
+	tagMoveOriginatorMessageID   = tag.New(0x0000, 0x1031)
 
 	// Requested SOP Instance UID. N-GET, N-SET, N-ACTION and N-DELETE name
 	// their target with this, not with Affected SOP Instance UID — the
@@ -104,14 +106,26 @@ type CEchoResponse struct {
 }
 
 // CStoreRequest represents a C-STORE-RQ message.
+//
+// An SCP fills every field from the command it received, whichever way the
+// handler takes the store. The UIDs are the command's, as the peer sent
+// them: they are not compared with the data set's own SOP Class UID
+// (0008,0016) and SOP Instance UID (0008,0018), and they are not checked to
+// be UIDs. A handler that builds a path or a key from one checks it first,
+// as WriteCStoreFile does (valuerep.ValidateUID).
 type CStoreRequest struct {
 	MessageID           uint16
 	AffectedSOPClass    string
 	AffectedSOPInstance string
 	Priority            uint16
+	// MoveOriginatorAE and MoveOriginatorMsgID are set when the store is a
+	// sub-operation of a C-MOVE (PS3.7 9.3.1.1): the AE that asked for the
+	// move, and the Message ID of its C-MOVE-RQ.
 	MoveOriginatorAE    string
 	MoveOriginatorMsgID uint16
-	DataSet             *dataset.Dataset
+	// DataSet is nil for a handler that takes the data set as a stream
+	// (CStoreStreamer).
+	DataSet *dataset.Dataset
 }
 
 // CStoreResponse represents a C-STORE-RSP message.

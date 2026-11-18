@@ -28,6 +28,8 @@ func allCommands() []Command {
 		&CodifyCommand{},
 		&AnonymizeCommand{},
 		&ShareCommand{},
+		&DiffCommand{},
+		&DICOMDIRCommand{},
 		&SRCommand{},
 		&HelpCommand{},
 		&VersionCommand{},

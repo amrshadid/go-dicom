@@ -61,7 +61,9 @@ When deploying applications built with go-dicom:
 - DICOM over TCP is unauthenticated and unencrypted by default. Use `network.DialTLS`
   and `network.ListenTLS` for transport security, and set `SCPConfig.MaxAssociations`
   to bound concurrency on an exposed server. Checking the called AE title is a naming
-  convention, not authentication.
+  convention, not authentication. So is a list of calling AE titles (`storescp` and
+  `qrscp -allow`): a caller names itself. An address range on the same list, or TLS
+  with client certificates, is what keeps out a caller who knows a listed title.
 
 ### Limits enforced by the library
 
@@ -71,6 +73,7 @@ advisory:
 | Limit | Value | Guards against |
 |-------|-------|----------------|
 | `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
+| `network.MaxAssociatePDULength` | 1 MiB | An A-ASSOCIATE-RQ or -AC declaring a huge length, before the caller is known; the four-byte PDUs are held to four bytes |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file on disk |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |

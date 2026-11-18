@@ -12,7 +12,8 @@
 //
 //   - Application Entity (AE) title — the name a DICOM node answers to. Peers
 //     are addressed by AE title as well as host and port, and an SCP rejects an
-//     association whose called AE title is not its own.
+//     association whose called AE title is not its own, unless
+//     SCPConfig.AcceptAnyCalledAE leaves that to SCPConfig.Admit.
 //   - Association — the negotiated session. Everything happens inside one; it
 //     is established, used, then released.
 //   - Presentation context — a pairing of an abstract syntax (a SOP Class: what
@@ -124,6 +125,12 @@
 // combine separate handlers per service. For full control, implement [Handler]
 // directly, embedding [BaseHandler] to inherit defaults for the rest.
 //
+// A C-STORE handler that also implements [CStoreStreamer] is given the data
+// set as the bytes the peer sent, read from the association as it reads,
+// instead of a decoded copy assembled in memory. Memory stays bounded whatever
+// the instance's size, and [WriteCStoreFile] writes the bytes as a Part 10 file
+// untouched, so what is stored is what was sent.
+//
 // [AssociationInfoFromContext] gives a handler the calling AE title, peer
 // address, negotiated contexts, and peer implementation details without
 // changing the Handler signature. It returns nil outside an association.
@@ -165,8 +172,25 @@
 // identity negotiation is in use. Set SCPConfig.MaxAssociations to bound
 // concurrency on an exposed server.
 //
-// Decoders reject input that would otherwise exhaust memory: PDU lengths are
-// capped at [MaxPDULengthLimit], deflated data sets at
+// SCPConfig.Admit decides who may associate, before anything is negotiated:
+// it is given the calling and called AE titles, the remote address and, over
+// TLS, the verified certificate chains, and admits the caller or refuses it
+// with an A-ASSOCIATE-RJ of its choosing. An SCP that lists its callers there
+// is closed to everyone else, and a refused caller learns nothing of what it
+// supports. It is asked only about well-formed AE titles, and the SCP goes on
+// checking the called AE title itself unless SCPConfig.AcceptAnyCalledAE is
+// set.
+//
+// A panic in a handler ends the association it happened on, with an A-ABORT
+// and its stack in the log, and nothing else: the server and its other
+// associations go on. A panic in an event handler is logged and passed over.
+// Goroutines a handler starts itself are its own to guard.
+//
+// Decoders reject input that would otherwise exhaust memory: a PDU's length
+// is checked against what one of its type can be before its body is read
+// ([MaxAssociatePDULength] before an association exists, the advertised
+// Maximum Length after, [MaxPDULengthLimit] in any case) and the body is
+// allocated as its bytes arrive, deflated data sets are capped at
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
 // actually available. The parsers have fuzz targets that run in CI.
 //
