@@ -138,6 +138,32 @@ type SCPConfig struct {
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
 	MaxAssociations int
 
+	// Admit, when set, decides who may associate. It is called once per
+	// association, after the A-ASSOCIATE-RQ is read and before it is answered
+	// or any presentation context is negotiated, so a caller it refuses
+	// learns nothing of what the SCP supports. It returns nil to admit the
+	// caller, or the A-ASSOCIATE-RJ to refuse it with; RejectCallingAE,
+	// RejectCalledAE and RejectBusy are the usual ones.
+	//
+	// When set, it decides the called AE title too: the SCP no longer
+	// refuses a title other than AETitle by itself, so one SCP can answer to
+	// several titles. A function that should answer only to AETitle refuses
+	// the rest with RejectCalledAE. When nil, the SCP admits every caller
+	// that asks for AETitle, as it always has.
+	//
+	// It runs on a goroutine of its own and has ARTIMTimeout to answer; its
+	// context is canceled then and the caller refused with RejectBusy. A
+	// panic in it refuses the caller (rejected-permanent, service-user,
+	// no-reason-given) and is logged. So is a result, source and reason that
+	// PS3.8 Table 9-21 does not define, which is sent as that refusal
+	// instead. Each refusal is reported to Events as EVTAssocRejected, whose
+	// Description names it. Callers turned away by MaxAssociations are
+	// refused before it is asked.
+	//
+	// It is called concurrently for different connections and must be safe
+	// for concurrent use.
+	Admit func(ctx context.Context, req *AssociationRequest) *AssociationRejection
+
 	// Events, when set, is told what happens on each association the SCP
 	// accepts, and on those it opens itself: C-MOVE sub-operations, storage
 	// commitment results and UPS event reports. A Server started with it

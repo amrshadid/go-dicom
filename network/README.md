@@ -130,6 +130,37 @@ scp := network.NewSCP(network.SCPConfig{
 
 `DialTLS` and `ListenTLS` remain for code that works with a `Transport` directly.
 
+### Refusing Callers
+
+An SCP admits every caller that asks for its AE title unless `Admit` says
+otherwise. It is asked once per association, before anything is negotiated,
+so a caller it refuses learns nothing of what the SCP supports; the peer is
+told the result, source and reason chosen (PS3.8 Table 9-21).
+
+```go
+known := map[string]bool{"CT_SCANNER": true, "MR_SCANNER": true}
+
+scp := network.NewSCP(network.SCPConfig{
+    AETitle: "ARCHIVE", Port: 11112,
+    Admit: func(ctx context.Context, req *network.AssociationRequest) *network.AssociationRejection {
+        if req.CalledAE != "ARCHIVE" {
+            return network.RejectCalledAE()
+        }
+        if !known[req.CallingAE] {
+            return network.RejectCallingAE()
+        }
+        return nil // admitted
+    },
+})
+```
+
+With `Admit` set, the SCP no longer refuses a called AE title other than its
+own by itself, so one SCP can answer to several; refuse the ones it should
+not answer to, as above. A calling AE title is whatever the caller sends: to
+admit by identity, use mutual TLS and check `req.VerifiedChains`. The function
+has `ARTIMTimeout` to answer, after which the caller is refused as busy, and a
+panic in it refuses the caller without stopping the server.
+
 ## Handler Patterns
 
 The `Handler` interface defines methods for all DIMSE services. Embed `BaseHandler` and override only what you need:

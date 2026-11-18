@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An SCP can refuse a caller before anything is negotiated** (#316). An SCP
+  accepted every association that reached its port, whatever the calling AE
+  title and wherever it came from; a handler learned who was calling only
+  after the association was accepted, and could do no more than fail each
+  message. `SCPConfig.Admit` is called once per association, after the
+  A-ASSOCIATE-RQ is read and before it is answered, with the calling and
+  called AE titles, the remote address and, over TLS, the verified
+  certificate chains. It admits the caller, or refuses it with the result,
+  source and reason it chose from PS3.8 Table 9-21, and a refused caller
+  learns nothing of what the SCP supports. dcmtk's `echoscu` and `storescu`
+  and pynetdicom print the refusal as it was chosen. When set, it decides the
+  called AE title too, so one SCP can answer to several. It has the ARTIM
+  timer to answer, and a panic in it refuses that caller without taking the
+  server down. Unset, nothing changes.
+- **`EVTAssocRejected` says why.** Its `Description` names the result, source
+  and reason of the A-ASSOCIATE-RJ. It was empty, so `LoggingEventHandlers`
+  logged "Association rejected: SCU -> SCP: " with nothing after the colon.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

@@ -345,19 +345,21 @@ jobs:
           go test ./examples/... -v
 
       # Services the shell script above cannot reach, because they have no CLI
-      # command to drive them: MPPS, print management, and cancelling a
-      # retrieval. They are driven from Go instead.
+      # command to drive them: MPPS, print management, cancelling a retrieval,
+      # and an SCP refusing a caller with the reason it chose. They are driven
+      # from Go instead.
       #
-      # These tests skip wherever pynetdicom is absent, which is every other job
+      # These tests skip wherever pynetdicom or dcmtk is absent, which is every other job
       # — so this is the one place they run, and GODICOM_REQUIRE_INTEROP makes a
       # skip here a failure rather than a silent pass.
-      - name: Verify N-DIMSE services and cancellation against pynetdicom
+      - name: Verify N-DIMSE services, cancellation and refusals against pynetdicom and dcmtk
         env:
           GODICOM_REQUIRE_INTEROP: "1"
+          DCMTK_BIN: /usr/bin
         run: |
           export PATH="$HOME/dicomvenv/bin:$PATH"
           go test ./network/ -race -v \
-            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom|TestUPSAgainstPynetdicom'
+            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom|TestUPSAgainstPynetdicom|TestDcmtkSeesTheChosenRefusal|TestPynetdicomSeesTheChosenRefusal'
 
       - name: Upload server logs on failure
         if: failure()
