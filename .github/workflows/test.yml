@@ -336,8 +336,11 @@ jobs:
           go test ./charset/ -run 'TestPersonNamesAgainstPydicomCharsetFiles|TestTextIsDecodedWithoutAskingForIt|TestDecodedDataSetDeclaresUTF8|TestSequenceItemCharacterSet' -v
           # The transcoding checks need a genuinely compressed instance, which
           # the corpus supplies; they skip without it, so this is the one job
-          # where they run.
-          go test ./network/ -run 'TestCompressedInstanceIsDecodedBeforeSending|TestTranscodingDoesNotMutateTheCaller' -v
+          # where they run. The whole package runs, not the tests that were
+          # named when this line was written: a named list does not include
+          # the next corpus test, and one that no job runs guards nothing
+          # (TestUnencodableCompressedTargetIsRefused went stale unseen, #327).
+          go test ./network/
           # The reference JPEG 2000 decoder, and the registry consulting it. The
           # library bundles no codec, so this is what verifies the documented
           # escape hatch actually works.
