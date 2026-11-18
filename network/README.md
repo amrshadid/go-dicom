@@ -132,6 +132,8 @@ scp := network.NewSCP(network.SCPConfig{
 
 ## Handler Patterns
 
+A panic in a handler ends the association it happened on: it is logged with its stack, the peer is sent an A-ABORT, and the server goes on serving its other associations. Goroutines a handler starts itself are its own to guard.
+
 The `Handler` interface defines methods for all DIMSE services. Embed `BaseHandler` and override only what you need:
 
 ### Echo-Only Server
