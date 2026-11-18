@@ -100,16 +100,30 @@ func transcodePixelData(ds *dataset.Dataset, targetSyntax string, config Network
 			return compressCopy(ds, source, targetSyntax, func(out *dataset.Dataset) error {
 				return out.CompressJPEGBaselineInPlace(config.JPEGQuality)
 			})
+		case JPEGExtendedUID:
+			// The same quality as JPEG Baseline: both scale the same tables,
+			// so the number means the same in either, and a sender who has
+			// accepted that much loss for one has accepted it for the other.
+			if config.JPEGQuality <= 0 {
+				return nil, fmt.Errorf("cannot encode pixel data as %s: JPEG Extended is lossy and "+
+					"nothing is sent that way unasked; set NetworkConfig.JPEGQuality to allow it",
+					targetSyntax)
+			}
+			// A copy: sending must not make the caller's image lossy.
+			return compressCopy(ds, source, targetSyntax, func(out *dataset.Dataset) error {
+				return out.CompressJPEGExtendedInPlace(config.JPEGQuality)
+			})
 		default:
 			// A send that cannot be satisfied fails rather than putting bytes on
 			// the wire described as something they are not, which the receiver
 			// could not detect.
 			return nil, fmt.Errorf("cannot encode pixel data as %s: this library writes "+
 				"RLE Lossless (%s), JPEG-LS Lossless (%s), JPEG-LS Near-Lossless (%s), "+
-				"JPEG 2000 Lossless (%s) and JPEG Lossless (%s, %s), and JPEG Baseline (%s) "+
-				"when NetworkConfig.JPEGQuality is set",
+				"JPEG 2000 Lossless (%s) and JPEG Lossless (%s, %s), and JPEG Baseline (%s) and "+
+				"JPEG Extended (%s) when NetworkConfig.JPEGQuality is set",
 				targetSyntax, RLELosslessUID, JPEGLSLosslessUID, JPEGLSNearLosslessUID,
-				JPEG2000LosslessUID, JPEGLosslessProcess14UID, JPEGLosslessSV1UID, JPEGBaselineUID)
+				JPEG2000LosslessUID, JPEGLosslessProcess14UID, JPEGLosslessSV1UID, JPEGBaselineUID,
+				JPEGExtendedUID)
 		}
 	}
 
