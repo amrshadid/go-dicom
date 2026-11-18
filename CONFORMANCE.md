@@ -459,14 +459,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
 
 - **JPEG 2000 decodes in pure Go**, `.90` and `.91`, both wavelets, 1 to 16 bits,
   signed or unsigned, single or multi component, any number of tiles and quality
-  layers, in all five progression orders, with the default precincts or the
+  layers, in all five progression orders and with progression order changes
+  in the main or a tile-part header, with the default precincts or the
   coding style's own, with any combination of the six code-block style options
   (selective arithmetic coding bypass, reset of context probabilities,
   termination on each coding pass, vertically causal context, predictable
   termination, segmentation symbols), with a region of interest coded by the
   Maxshift method in the main header or a tile-part header, and with the
-  reversible and irreversible component transforms. There is no CGO and
-  nothing to register.
+  reversible and irreversible component transforms, bare or in a JP2
+  container whose boxes may give their lengths in 32 or 64 bits. There is no
+  CGO and nothing to register.
 
   pydicom's corpus uses only the defaults, so what it does not exercise is
   checked against OpenJPEG instead: `opj_compress` writes a codestream with the
@@ -485,6 +487,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
   boundary between region and background follows H.1, 2^s, where OpenJPEG's
   decoder uses 2^(s-1). OpenJPEG's encoder never writes background that the
   difference would show, so `TestRegionOfInterestThreshold` pins H.1's rule.
+  Likewise, OpenJPEG's encoder writes progression order changes whose volumes
+  overlap so that a packet carried twice would read the same as one carried
+  once, and B.12.2's rule that it is carried once is checked on the walk
+  itself (`TestProgressionVolumesCarryEachPacketOnce`).
 
   A reversible codestream is required to match pydicom sample for sample. An
   irreversible one is held to a tolerance of one up to 12 bits and two at 16:
@@ -507,17 +513,14 @@ how decoded samples are shaped and coloured, and the one tolerance.
     A.19];
   - a region of interest coded by a method other than Maxshift, which Part 2
     defines: `region of interest style N` [A.6.3];
-  - progression order changes: `progression order change (POC)` [A.6.6];
   - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
   - subsampled components: `component subsampling` [A.5.1, B.2];
   - components deeper than 16 bits: `17-bit components` and so on [A.5.1];
-  - a JP2 box with a 64-bit length: `JP2 box with a 64-bit length` [I.4];
   - the Part 2 wavelets and quantization styles: `wavelet transform N`,
     `quantization style N`.
 
-  A POC segment in a tile-part header, rather than the main header, and any
-  marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) are refused
-  too, but as `unexpected marker` with its code rather than by name.
+  Any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) is
+  refused too, but as `unexpected marker` with its code rather than by name.
 
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/compress/jpeg2000"
@@ -240,6 +241,88 @@ func TestParseCodestreamReadsPrecinctSizes(t *testing.T) {
 		if _, err := jpeg2000.ParseCodestream(withPrecincts(sizes...)); err == nil {
 			t.Errorf("%s: parsed", name)
 		}
+	}
+}
+
+// withProgressionChanges inserts a POC segment of the given 7-byte entries
+// into buildCodestream's codestream, before its tile-part, and gives the tile
+// n bytes of empty packets.
+func withProgressionChanges(t *testing.T, patch func(cod, siz []byte), entries [][7]byte, n int) []byte {
+	t.Helper()
+	data := buildCodestream(t, patch)
+	sot := bytes.Index(data, []byte{0xFF, 0x90})
+	out := append([]byte{}, data[:sot]...)
+	out = binary.BigEndian.AppendUint16(out, 0xFF5F)
+	out = binary.BigEndian.AppendUint16(out, uint16(2+7*len(entries)))
+	for _, entry := range entries {
+		out = append(out, entry[:]...)
+	}
+	out = binary.BigEndian.AppendUint16(out, 0xFF90)
+	out = binary.BigEndian.AppendUint16(out, 10)
+	out = binary.BigEndian.AppendUint16(out, 0)              // tile 0
+	out = binary.BigEndian.AppendUint32(out, uint32(12+2+n)) // Psot
+	out = append(out, 0, 1)                                  // TPsot, TNsot
+	out = binary.BigEndian.AppendUint16(out, 0xFF93)         // SOD
+	out = append(out, make([]byte, n)...)                    // each 0 is an empty packet
+	return binary.BigEndian.AppendUint16(out, 0xFFD9)
+}
+
+// TestProgressionChangesCannotStallTheDecoder: a POC can name thousands of
+// volumes, each repeating the packets of the ones before it and adding one.
+// Skipping what was already read costs work without consuming a byte, so
+// without a bound the walk is quadratic in the tile's size. Here that is 4e7
+// skips, which is quick; but POC segments in a main header add up, and a
+// megabyte of them asks for about 1e10. The walk must stop with an error at
+// a bound that grows with the tile, not with the square of it.
+func TestProgressionChangesCannotStallTheDecoder(t *testing.T) {
+	entries := make([][7]byte, 9000)
+	for i := range entries {
+		// Resolutions 0 to 33, components 0 to 256, layers 0 to i+1, LRCP.
+		entries[i] = [7]byte{0, 0, byte((i + 1) >> 8), byte(i + 1), 33, 0, 0}
+	}
+	data := withProgressionChanges(t, func(cod, _ []byte) {
+		binary.BigEndian.PutUint16(cod[6:], 0xFFFF) // layers
+		cod[9] = 0                                  // one resolution: one precinct
+	}, entries, 60000)
+
+	c, err := jpeg2000.ParseCodestream(data)
+	if err != nil {
+		t.Fatalf("ParseCodestream: %v", err)
+	}
+	start := time.Now()
+	_, err = jpeg2000.ReadTilePacketsForTest(c, 0)
+	if err == nil || !strings.Contains(err.Error(), "progression order changes") {
+		t.Fatalf("read the tile with error %v, want the progression bound", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("took %v to refuse", took)
+	}
+}
+
+// TestParseCodestreamRefusesABrokenPOC: a POC whose length is not a whole
+// number of entries, or that names a progression order Table A.16 does not
+// define, is refused; the second by name.
+func TestParseCodestreamRefusesABrokenPOC(t *testing.T) {
+	plain := func(_, _ []byte) {}
+	good := [7]byte{0, 0, 0, 1, 6, 1, 2}
+	if _, err := jpeg2000.ParseCodestream(withProgressionChanges(t, plain, [][7]byte{good}, 1)); err != nil {
+		t.Fatalf("a well-formed POC: %v", err)
+	}
+
+	bad := good
+	bad[6] = 5
+	_, err := jpeg2000.ParseCodestream(withProgressionChanges(t, plain, [][7]byte{good, bad}, 1))
+	var unsupported *jpeg2000.ErrUnsupported
+	if !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "progression order 5") {
+		t.Errorf("progression 5 in a POC: %v, want it refused by name", err)
+	}
+
+	short := withProgressionChanges(t, plain, [][7]byte{good}, 1)
+	poc := bytes.Index(short, []byte{0xFF, 0x5F})
+	binary.BigEndian.PutUint16(short[poc+2:], 2+6) // one byte short of an entry
+	short = append(short[:poc+2+2+6], short[poc+2+2+7:]...)
+	if _, err := jpeg2000.ParseCodestream(short); err == nil {
+		t.Error("a POC of 6 bytes parsed")
 	}
 }
 

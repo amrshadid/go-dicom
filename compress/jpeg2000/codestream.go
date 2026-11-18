@@ -174,7 +174,35 @@ type Codestream struct {
 	ROIShift     map[int]int
 	TileROIShift map[TileComponentKey]int
 
+	// ProgressionChanges are the POC segment's volumes from the main header,
+	// and TileProgressionChanges a tile's own from its tile-part headers
+	// (A.6.6). Either replaces the coding style's single progression.
+	ProgressionChanges     []ProgressionChange
+	TileProgressionChanges map[int][]ProgressionChange
+
 	TileParts []TilePart
+}
+
+// ProgressionChange is one entry of a POC segment (A.6.6, B.12.2): a volume
+// of a tile's packets, written in its own progression order. It holds the
+// resolutions from ResolutionStart up to but not including ResolutionEnd, the
+// components likewise, and the layers below LayerEnd, less any packet a
+// volume before it already holds.
+type ProgressionChange struct {
+	ResolutionStart, ResolutionEnd int
+	ComponentStart, ComponentEnd   int
+	LayerEnd                       int
+	Progression                    int
+}
+
+// ProgressionChangesForTile returns the progression order changes in force
+// for a tile: its own, then the main header's. None means the coding style's
+// progression orders the whole tile.
+func (c *Codestream) ProgressionChangesForTile(tile int) []ProgressionChange {
+	if changes, ok := c.TileProgressionChanges[tile]; ok {
+		return changes
+	}
+	return c.ProgressionChanges
 }
 
 // ROIShiftForTile returns the region-of-interest shift in force for a
@@ -289,6 +317,8 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		TileComponentQuant:  map[TileComponentKey]Quantization{},
 		ROIShift:            map[int]int{},
 		TileROIShift:        map[TileComponentKey]int{},
+
+		TileProgressionChanges: map[int][]ProgressionChange{},
 	}
 	pos := 2
 	seenSIZ, seenCOD, seenQCD := false, false, false
@@ -348,7 +378,10 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		case markerPPM, markerPPT:
 			err = &ErrUnsupported{Feature: "packed packet headers (PPM/PPT)"}
 		case markerPOC:
-			err = &ErrUnsupported{Feature: "progression order change (POC)"}
+			var changes []ProgressionChange
+			if changes, err = parsePOC(c, segment); err == nil {
+				c.ProgressionChanges = append(c.ProgressionChanges, changes...)
+			}
 		case markerRGN:
 			var index, shift int
 			if index, shift, err = parseRGN(c, segment); err == nil {
@@ -377,9 +410,20 @@ func codestreamFromJP2(data []byte) ([]byte, error) {
 		length := int(be32(data[pos:]))
 		boxType := be32(data[pos+4:])
 		body := pos + 8
+		if length == 1 {
+			// I.4: the length is in the eight bytes after the type, XLBox, and
+			// counts them. It is compared before it is converted, since a
+			// 64-bit value does not fit an int everywhere this builds.
+			if pos+16 > len(data) {
+				return nil, fmt.Errorf("jpeg2000: JP2 box with a 64-bit length stops in its header")
+			}
+			xl := binary.BigEndian.Uint64(data[pos+8:])
+			if xl < 16 || xl > uint64(len(data)-pos) {
+				return nil, fmt.Errorf("jpeg2000: JP2 box declares %d bytes, %d remain", xl, len(data)-pos)
+			}
+			length, body = int(xl), pos+16
+		}
 		switch {
-		case length == 1:
-			return nil, &ErrUnsupported{Feature: "JP2 box with a 64-bit length"}
 		case length == 0:
 			length = len(data) - pos // to the end of the file
 		case length < 8 || pos+length > len(data):
@@ -553,6 +597,51 @@ func parseRGN(c *Codestream, s []byte) (index, shift int, err error) {
 		return 0, 0, &ErrUnsupported{Feature: fmt.Sprintf("region of interest style %d", rest[0])}
 	}
 	return index, int(rest[1]), nil
+}
+
+// parsePOC reads a POC segment's volumes (A.6.6): for each, the first
+// resolution and component, the layer, resolution and component it ends
+// before, and its progression order. Components are named in one byte below
+// 257 components and in two above, and an end of 0 in one byte means 256.
+func parsePOC(c *Codestream, s []byte) ([]ProgressionChange, error) {
+	if len(c.Components) == 0 {
+		return nil, fmt.Errorf("jpeg2000: POC before SIZ")
+	}
+	wide := len(c.Components) >= 257
+	size := 7
+	if wide {
+		size = 9
+	}
+	if len(s) == 0 || len(s)%size != 0 {
+		return nil, fmt.Errorf("jpeg2000: POC of %d bytes is not a whole number of %d-byte entries", len(s), size)
+	}
+	changes := make([]ProgressionChange, 0, len(s)/size)
+	for ; len(s) > 0; s = s[size:] {
+		var change ProgressionChange
+		change.ResolutionStart = int(s[0])
+		rest := s[1:]
+		if wide {
+			change.ComponentStart, rest = be16(rest), rest[2:]
+		} else {
+			change.ComponentStart, rest = int(rest[0]), rest[1:]
+		}
+		change.LayerEnd, rest = be16(rest), rest[2:]
+		change.ResolutionEnd, rest = int(rest[0]), rest[1:]
+		if wide {
+			change.ComponentEnd, rest = be16(rest), rest[2:]
+		} else {
+			change.ComponentEnd, rest = int(rest[0]), rest[1:]
+			if change.ComponentEnd == 0 {
+				change.ComponentEnd = 256
+			}
+		}
+		change.Progression = int(rest[0])
+		if change.Progression > ProgressionCPRL {
+			return nil, &ErrUnsupported{Feature: fmt.Sprintf("progression order %d", change.Progression)}
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
 }
 
 // parseTileQCC records quantization for one component of one tile.
@@ -769,6 +858,13 @@ func parseTilePart(c *Codestream, data []byte, pos int) (int, error) {
 			}
 		case markerPPT:
 			err = &ErrUnsupported{Feature: "packed packet headers (PPT)"}
+		case markerPOC:
+			// A tile's progression may continue in its later tile-parts, each
+			// adding volumes after those before it (A.6.6).
+			var changes []ProgressionChange
+			if changes, err = parsePOC(c, segment); err == nil {
+				c.TileProgressionChanges[tile] = append(c.TileProgressionChanges[tile], changes...)
+			}
 		case markerCOM, markerPLT:
 			// Nothing to decode.
 		default:

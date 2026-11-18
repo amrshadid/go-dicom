@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   precincts, the style options and the 9/7 filter. With selective
   arithmetic coding bypass as well, OpenJPEG 2.5.4 cannot decode its own
   lossless output, and this decoder returns every sample that was encoded.
+- **JPEG 2000 with progression order changes, and JP2 boxes with 64-bit
+  lengths** (#417). A POC segment, which divides a tile's packets into
+  volumes each in its own order, was refused in the main header and taken
+  for an unexpected marker in a tile-part header, which is where
+  `opj_compress -POC` writes it. Both now decode, and a packet an earlier
+  volume carried is not read again. A JP2 box giving its length in 64 bits
+  was refused, and is now read. OpenJPEG returns the same samples. Packed
+  packet headers and subsampled components are still refused by name.
 
 ### Fixed
 
