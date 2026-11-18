@@ -19,6 +19,7 @@ import (
 type QRSCPCommand struct {
 	tls       tlsFlags
 	events    eventsFlag
+	allow     allowFlag
 	web       webServeFlags
 	aeTitle   string
 	port      int
@@ -34,6 +35,7 @@ func (c *QRSCPCommand) Description() string { return "DICOM Query/Retrieve SCP (
 func (c *QRSCPCommand) AddFlags(fs *flag.FlagSet) {
 	addServerTLSFlags(fs, &c.tls)
 	c.events.add(fs)
+	c.allow.add(fs)
 	c.web.add(fs)
 	fs.StringVar(&c.aeTitle, "aet", "QRSCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
@@ -137,6 +139,7 @@ func (c *QRSCPCommand) Execute(args []string) error {
 		AETitle:          c.aeTitle,
 		Port:             c.port,
 		MoveDestinations: moveDests,
+		Admit:            c.allow.admission(printRefusal),
 	})
 
 	handler := dcmstore.NewHandler(store)
@@ -177,6 +180,9 @@ func (c *QRSCPCommand) Execute(args []string) error {
 	fmt.Printf("  AE Title:  %s\n", c.aeTitle)
 	fmt.Printf("  Port:      %d\n", c.port)
 	fmt.Printf("  Storage:   %s\n", c.outputDir)
+	if allowed := c.allow.describe(); allowed != "" {
+		fmt.Printf("  Allow:     %s\n", allowed)
+	}
 	fmt.Printf("  Indexed:   %d instance(s) already present\n", store.Count())
 	fmt.Printf("  Services:  Verification, Storage, Query/Retrieve\n")
 	fmt.Printf("  SOP Classes: %d\n", len(abstractSyntaxes))

@@ -64,6 +64,15 @@ func elementsFromDataset(ds *dataset.Dataset, enclosing []*dataset.Dataset) []*D
 		// bytes, text, or Go numbers, which were dropped here until #119. The
 		// network encoder uses the same function, so the two cannot disagree.
 		vr := ds.ResolveVR(t, elem, enclosing...)
+
+		// A value left in the file the data set was read from is copied
+		// from there when written (SetValueSource), under the VR a value in
+		// memory would get.
+		if ref, inFile := elem.GetValue().(dataelem.ValueInFile); inFile {
+			out = append(out, &DataElement{Tag: t, VR: string(vr), InFile: &ref})
+			continue
+		}
+
 		value, err := dataelem.ValueBytes(vr, elem.GetValue())
 		if err != nil {
 			// A value that cannot be rendered is reported rather than written as
