@@ -290,6 +290,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written in either syntax to the samples that went in, and the
   interoperability suite has dcmtk check it.
 
+- **JPEG 2000 in every progression order, with any precincts** (#346).
+  The decoder read only LRCP and RLCP with one precinct per resolution, and
+  refused the RPCL, PCRL and CPRL orders and a coding style with its own
+  precinct sizes. RPCL with precincts is a common encoder default, so a file
+  written for resolution or spatial access could not be displayed without
+  an external decoder. All five orders and user-defined precincts now
+  decode. OpenJPEG returns the same samples on 95 codestreams across depths,
+  signs, component counts, tiles, image offsets, layers and both wavelets,
+  and CI checks it on every push.
+  A codestream that declares a one-sample precinct above the lowest
+  resolution is refused, as T.800 A.6.1 requires and as OpenJPEG does.
+  `opj_compress -c` writes one when the precinct list runs out too soon.
+
+- **JPEG 2000 with the code-block style options** (#372). Selective
+  arithmetic coding bypass, reset of context probabilities, termination on
+  each coding pass, vertically causal context, predictable termination and
+  segmentation symbols were each refused. Encoders use them for error
+  resilience, speed and hardware. All six decode, in any combination, with
+  a block split into several codeword segments across layers. OpenJPEG
+  returns the same samples for all 63 combinations, and with tiles,
+  precincts, a position-driven order and the 9/7 filter. A block coded
+  without them takes the loop it took before.
+
+- **JPEG 2000 with a region of interest** (#396). An RGN segment, which an
+  encoder writes to give part of the image priority by the Maxshift method,
+  was refused in the main header and taken for an unexpected marker in a
+  tile-part header. Both now decode: the band's bit planes are counted s
+  higher and every coefficient of 2^s or more is scaled back down. OpenJPEG
+  returns the same samples across shifts, components, layers, tiles,
+  precincts, the style options and the 9/7 filter. With selective
+  arithmetic coding bypass as well, OpenJPEG 2.5.4 cannot decode its own
+  lossless output, and this decoder returns every sample that was encoded.
+
+- **JPEG 2000 with progression order changes, and JP2 boxes with 64-bit
+  lengths** (#417). A POC segment, which divides a tile's packets into
+  volumes each in its own order, was refused in the main header and taken
+  for an unexpected marker in a tile-part header, which is where
+  `opj_compress -POC` writes it. Both now decode, and a packet an earlier
+  volume carried is not read again. A JP2 box giving its length in 64 bits
+  was refused, and is now read. OpenJPEG returns the same samples. Packed
+  packet headers and subsampled components are still refused by name.
+
+- **The DICOMweb server serves frames** (#330). `…/instances/{uid}/frames/1`
+  answered 404, and a web viewer loads an image by frame, so none could show
+  what `qrscp -web` holds. `GET …/frames/{list}` now answers with one part
+  per frame, in the order asked: uncompressed (`application/octet-stream`,
+  Explicit VR Little Endian) by default, a compressed frame decoded for it;
+  as stored for `transfer-syntax=*` or the frame's own type (`image/jpeg`,
+  `image/jls`, `image/jp2`, `image/dicom-rle`). A frame is read from the file
+  by where it lies, so one frame of a 200-frame image costs that frame:
+  `filereader.DICOMFile.FrameRanges` says which bytes hold each frame, with
+  the Extended and Basic Offset Tables and a frame split over fragments
+  (`encaps.FrameRanges`, which shares its rules with `encaps.Frames`), and
+  `Dataset.DecodeFrame` decodes one. A frame number that is not in the image
+  is 404, a list that is not frame numbers 400, and a compressed type the
+  frame is not held in 406. Across pydicom's corpus, 56 files, seven of them
+  multi-frame: every frame is the bytes pydicom divides out of the same file,
+  and Orthanc sends the same bytes for 49 of them; two more are 32-bit big
+  endian, which Orthanc reverses in two-byte words and pydicom does not.
+
+- **The DICOMweb server serves bulk data, and metadata points at it**
+  (#368). Metadata left each value over 1 KiB out and named it by its VR
+  alone, so an overlay, an icon, a document or the pixels could be had only
+  by downloading the instance. Each now carries a `BulkDataURI`
+  (PS3.18 F.2.6), inside a sequence as well, and
+  `…/instances/{uid}/bulkdata/{tag}[/{item}/{tag}…]` serves the value, read
+  from the file by where it lies: `application/octet-stream`, little endian.
+  Pixel Data is sent as its frames are: one part a frame in their own type
+  when that is asked for, otherwise every frame in one part, uncompressed.
+  Across pydicom's corpus, all 61 URIs that metadata gives serve the bytes
+  pydicom reads at that place in the file.
+
+- **The DICOMweb server renders images and thumbnails** (#382).
+  `…/rendered` and `…/thumbnail` answered 404. They are served now for an
+  instance and for frames, and the thumbnail for a series and a study too,
+  as JPEG or PNG by `Accept`, through `Dataset.RenderFrame` on a frame read
+  by position. `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]`
+  and `quality` are applied. What is not done is refused, not ignored: a
+  flipped region, an ICC profile, a malformed parameter are 400, GIF and the
+  other types 406, a study or series rendered whole, or an instance with no
+  image, 501; `annotation` is answered with the picture and a `Warning: 299`
+  that says it was not drawn. `RenderOptions.Window` gains `Function`, so a
+  window given by the caller can be LINEAR_EXACT or SIGMOID. Across
+  pydicom's corpus, 21 grayscale frames are within one level of pydicom's
+  windowing and 26 color frames within two levels of its pixels, but for
+  four lossy JPEGs whose subsampled chroma the two decoders upsample
+  differently at color edges.
+
 - **A file or a send can be compressed to JPEG-LS Near-Lossless** (#337).
   The JPEG-LS encoder coded NEAR 0 only, so `1.2.840.10008.1.2.4.81` was
   refused by name and a peer that accepted only it could not be sent an
@@ -387,7 +475,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since the renderer reads samples from one slice and finds the range of an
   image with no window across all frames.
 
+- **A store costs the same at the hundred-thousandth instance as at the
+  first** (#410). Every store rewrote the archive's whole index, so it took
+  time in proportion to the archive: 11 ms an instance over the first
+  thousand and 865 ms over the hundredth, when the index had grown to
+  108 MB. A thousand-image study received at that size took a quarter of an
+  hour. A store now appends a record to `index.log` beside `index.json`;
+  `Open` replays it, and it is folded into a new `index.json` once it holds
+  more records than the archive has instances. Measured the same way, the
+  hundredth thousand cost 13 to 30 ms an instance, the first thousand 12 to
+  29: the cost of syncing each instance's file, which varies with the disk's
+  load. A crash between putting an instance's file in place and indexing it
+  was found only by a full rebuild; each change is now recorded and synced
+  before its file is put in place or deleted, and one left unfinished is
+  settled from the disk at the next `Open`. An index of version 3 is read
+  as it is and written again as version 4, which an older release rebuilds
+  rather than read without its log.
+
 ### Fixed
+
+- **A refused caller is left to close the connection** (#430). An SCP sent
+  its A-ASSOCIATE-RJ and closed the connection behind it. PS3.8 9.2 has the
+  acceptor start ARTIM and wait for the caller to close (AE-8, Sta13), and
+  close it itself only when the timer expires (AA-2). The close could reach
+  a caller before it had acted on the rejection: pynetdicom, on a loaded
+  machine, then held the PDU with the right result, source and reason and
+  did not count the association as rejected. The SCP now waits, up to
+  `NetworkConfig.ARTIMTimeout`, and answers nothing that arrives meanwhile.
 
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
@@ -414,12 +528,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its body being read. A body within its bound is allocated as its bytes
   arrive, so memory follows what a peer has sent: a P-DATA-TF stating
   128 MiB and sending 1 MiB costs 3 MiB.
+
 - **The conformance statement names every JPEG 2000 feature the decoder
   refuses** (#340). §8.1 listed five, and the decoder refuses more: three of
   the five progression orders (RPCL, PCRL, CPRL), a region of interest,
   predictable termination, components deeper than 16 bits and a JP2 box with
   a 64-bit length. A reader expecting an RPCL file to decode would have been
   told nothing. Each is now one line, with the error text a caller sees.
+
 - **The irreversible JPEG 2000 tolerance is stated as measured** (#360). The
   statement gave one sample against another decoder. Against OpenJPEG that
   holds up to 12 bits; at 16 bits OpenJPEG lands up to two away, and this

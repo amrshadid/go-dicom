@@ -216,6 +216,31 @@ func TestRenderVOIFunctions(t *testing.T) {
 	}
 }
 
+// TestRenderWindowOptionFunction: a window given as an option is applied by
+// the function it names, in either case, as the data set's own is, and a
+// function the standard does not have is refused.
+func TestRenderWindowOptionFunction(t *testing.T) {
+	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME2", px: []byte{10, 20, 30}}.dataset()
+	for function, want := range map[string][]uint8{
+		"":             {6, 134, 255},
+		"linear":       {6, 134, 255},
+		"LINEAR_EXACT": {0, 128, 255},
+		"sigmoid":      {30, 128, 225},
+	} {
+		width := 20.0
+		if function == "" || function == "linear" {
+			width = 21
+		}
+		opts := &dataset.RenderOptions{Window: &dataset.Window{Center: 20, Width: width, Function: function}}
+		if got := grays(t, ds, opts); !sameLevels(got, want) {
+			t.Errorf("%q: levels %v, want %v", function, got, want)
+		}
+	}
+	if _, err := ds.RenderFrame(0, &dataset.RenderOptions{Window: &dataset.Window{Center: 20, Width: 20, Function: "GAMMA"}}); err == nil {
+		t.Error("a VOI LUT Function the standard does not have was accepted")
+	}
+}
+
 func colors(t *testing.T, ds *dataset.Dataset, frame int) []color.NRGBA {
 	t.Helper()
 	img, err := ds.RenderFrame(frame, nil)
