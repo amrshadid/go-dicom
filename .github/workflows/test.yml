@@ -355,6 +355,11 @@ jobs:
           # pydicom's charset fixtures sit beside the corpus and are the only
           # multi-byte text this project has to check against.
           go test ./charset/ -run 'TestPersonNamesAgainstPydicomCharsetFiles|TestTextIsDecodedWithoutAskingForIt|TestDecodedDataSetDeclaresUTF8|TestSequenceItemCharacterSet' -v
+          # A file written with its pixels copied from the source is the file
+          # a whole read writes, and anonymize relies on it: every corpus file,
+          # every profile, byte for byte.
+          go test ./filewriter/ -run TestValuesCopiedFromTheFileAcrossThePydicomCorpus -v
+          go test ./cli/ -run TestAnonymizeLeavingValuesInTheFileWritesTheSameFile -v
           # The transcoding checks need a genuinely compressed instance, which
           # the corpus supplies; they skip without it, so this is the one job
           # where they run. The whole package runs, not the tests that were

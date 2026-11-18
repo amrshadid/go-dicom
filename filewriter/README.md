@@ -45,6 +45,12 @@ func (dfw *DCMFileWriter) SetCharacterSet(charset string) error
 func (dfw *DCMFileWriter) WriteWaveformSequence(waveform *Waveform) error
 func (dfw *DCMFileWriter) GetPosition() int64
 
+// The file a data set was read from with filereader.ReadOptions.SkipBulkData:
+// an element whose value is a dataelem.ValueInFile (InFile set) is copied
+// from it as it is written, a chunk at a time, byte for byte as a whole read
+// writes it. Also on DICOMFileWriter.
+func (dfw *DCMFileWriter) SetValueSource(source io.ReaderAt, littleEndian bool)
+
 func ValidateElement(elem *DataElement) error
 func SetValidationMode(mode ValidationMode) // ValidationNone, ValidationWarn, ValidationStrict
 
@@ -54,7 +60,11 @@ type FileMetaInfo struct {
     // ...
 }
 
-type DataElement struct { Tag tag.Tag; VR string; Value []byte; Length uint32 }
+type DataElement struct {
+    Tag tag.Tag; VR string; Value []byte; Length uint32
+    Items  []*SequenceItem
+    InFile *dataelem.ValueInFile // the value is in the value source, not in Value
+}
 ```
 
 ## References

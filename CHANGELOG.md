@@ -187,6 +187,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the three reports of the pydicom corpus and one more with what they lack:
   the same nodes in the same order with the same values.
 
+- **A data set can be written back without its pixels in memory** (#331).
+  `filereader.DICOMFile.GetDatasetWithValuesInFile` gives a file read with
+  `ReadOptions.SkipBulkData` as a data set whose skipped values say where
+  they are (`dataelem.ValueInFile`), and `filewriter`'s `SetValueSource`
+  copies them from that file as each element is written, a megabyte at a
+  time, swapping byte order when the target's differs. The file is the one a
+  whole read writes, lengths, sequences and encapsulated fragments included:
+  across pydicom's corpus, 151 writes in 11 transfer syntaxes are identical
+  byte for byte. A deflated file is refused by name, since its values are
+  not in the file; an element whose value is in the file, written with no
+  source, is an error and never an empty value, and `dataelem.ValueBytes`,
+  and with it the network encoder, refuses one too.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
@@ -202,6 +215,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
   for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
   its own. Only the data set's own elements are read now (#335).
+
+- **`anonymize` no longer holds the image in memory** (#331). A file was read
+  whole, Pixel Data included, to change a few hundred bytes of text, so
+  memory followed the size of the image: 220 MB for a 200 MB CT, and a
+  whole-slide image of several gigabytes could not be de-identified on a
+  small machine. Unless `-redact` is given, the pixels now stay in the input
+  and are copied into the output as it is written: the same CT takes 20 MB,
+  as a 39 KB one does. The output is the same, byte for byte, as before:
+  checked over every file of pydicom's corpus under every profile, with the
+  pixels left in the file and with every binary value left there.
 
 ### Fixed
 
