@@ -100,7 +100,14 @@
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves
 // whatever the archive holds to whoever reaches it, so a deployment wraps it
-// in a handler that decides who may. Rendered images are not served.
+// in a handler that decides who may.
+//
+// …/rendered and …/thumbnail, of an instance or of frames, and the
+// thumbnail of a series or a study, draw a frame with Dataset.RenderFrame,
+// as image/jpeg or image/png. The window, viewport and quality query
+// parameters are applied; what is not done, a flipped viewport region or an
+// ICC profile, is refused with 400, and a study or a series rendered whole
+// with 501.
 //
 // Instances are stored as the application/dicom parts of a multipart
 // request, to /studies or into a study. Each is kept or refused on its own,

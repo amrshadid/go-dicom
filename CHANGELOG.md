@@ -362,6 +362,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Across pydicom's corpus, all 61 URIs that metadata gives serve the bytes
   pydicom reads at that place in the file.
 
+- **The DICOMweb server renders images and thumbnails** (#382).
+  `…/rendered` and `…/thumbnail` answered 404. They are served now for an
+  instance and for frames, and the thumbnail for a series and a study too,
+  as JPEG or PNG by `Accept`, through `Dataset.RenderFrame` on a frame read
+  by position. `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]`
+  and `quality` are applied. What is not done is refused, not ignored: a
+  flipped region, an ICC profile, a malformed parameter are 400, GIF and the
+  other types 406, a study or series rendered whole, or an instance with no
+  image, 501; `annotation` is answered with the picture and a `Warning: 299`
+  that says it was not drawn. `RenderOptions.Window` gains `Function`, so a
+  window given by the caller can be LINEAR_EXACT or SIGMOID. Across
+  pydicom's corpus, 21 grayscale frames are within one level of pydicom's
+  windowing and 26 color frames within two levels of its pixels, but for
+  four lossy JPEGs whose subsampled chroma the two decoders upsample
+  differently at color edges.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

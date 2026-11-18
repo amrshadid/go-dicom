@@ -68,6 +68,8 @@ type Backend interface {
 //	GET each of these with /metadata
 //	GET /studies/{study}/series/{series}/instances/{instance}/frames/{list}
 //	GET /studies/{study}/series/{series}/instances/{instance}/bulkdata/{element}
+//	GET the instance, and its frames, with /rendered or /thumbnail
+//	GET /studies/{study}/thumbnail, /studies/{study}/series/{series}/thumbnail
 //
 // and the store service, STOW-RS (PS3.18 10.5):
 //
@@ -140,7 +142,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The studies resource and a study are where instances are stored to
 	// as well as searched for and retrieved from.
 	storesTo := (!isRetrieve && searched.level == levelStudy) ||
-		(isRetrieve && retrieved.series == "" && !retrieved.metadata)
+		(isRetrieve && retrieved.series == "" && !retrieved.metadata && retrieved.render == "")
 	switch {
 	case r.Method == http.MethodPost && storesTo:
 		s.store(w, r, retrieved.study)
@@ -155,6 +157,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.search(w, r, searched)
 	case retrieved.metadata:
 		s.metadata(w, r, retrieved)
+	case retrieved.render != "":
+		s.rendered(w, r, retrieved)
 	case retrieved.frames != "":
 		s.frames(w, r, retrieved)
 	case retrieved.bulkdata != nil:
