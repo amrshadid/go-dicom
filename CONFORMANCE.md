@@ -568,14 +568,29 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Three syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, and
-  JPEG Baseline when asked.** Pixel data is transcoded in both directions as
-  the negotiated context requires.
+- **Four syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, JPEG
+  2000 Lossless, and JPEG Baseline when asked.** Pixel data is transcoded in
+  both directions as the negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
   Lossless** encodes it — from native pixels, or by decoding a compressed source
-  and re-encoding.
+  and re-encoding — with `Dataset.CompressRLELosslessInPlace` and
+  `Dataset.CompressJPEGLSLosslessInPlace`, which write a file the same way.
+  Both code the samples pixel by pixel and say so: a color image becomes
+  Planar Configuration 0, and a native YBR_FULL_422 image, coded with its
+  chroma expanded, becomes YBR_FULL. RLE takes any whole number of bytes a
+  sample (up to the fifteen segments of its header); JPEG-LS takes 8 or 16
+  bits allocated, coded at Bits Stored, or at Bits Allocated when a sample
+  uses the bits above it, and a 16-bit image at no less than 9 bits so that
+  a decoder returns two bytes a sample.
+
+  *Verified* over every image in pydicom's corpus that this library reads
+  and decodes: dcmtk (`dcmdrle`, and `dcmdjpls`, which is CharLS) and pydicom
+  return the samples that were coded, for all 56 written as RLE and all 48
+  written as JPEG-LS. pydicom 2.4's own JPEG-LS path rearranges a color image
+  wrongly, for dcmtk's files and the corpus's own as much as for these, so
+  JPEG-LS color is checked with the libjpeg decoder it uses, called directly.
 
   The JPEG-LS encoder is lossless only, at 2 to 16 bits, one scan per component.
   **JPEG-LS Near-Lossless is refused although the same encoder could produce it**:

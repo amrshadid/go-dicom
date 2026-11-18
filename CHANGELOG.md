@@ -239,6 +239,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reader already treats differently (two truncated values it drops, two
   private sequences in an implicit VR file, #354).
 
+- **A data set is compressed to RLE Lossless and JPEG-LS Lossless in place**
+  (#363). Both were written only when a network send needed them, by code in
+  the network package, so a file could be written in neither.
+  `Dataset.CompressRLELosslessInPlace` and
+  `Dataset.CompressJPEGLSLosslessInPlace` sit beside the JPEG 2000 and JPEG
+  Baseline methods, and the network now uses them: one coder for a file and
+  a send. dcmtk (`dcmdrle`, and `dcmdjpls`, which is CharLS) and pydicom's
+  decoders return the samples coded for every image of pydicom's corpus that
+  can be written in each: 56 as RLE, 48 as JPEG-LS.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
@@ -411,6 +421,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read it back without complaint. About one frame in 256 sent as JPEG-LS
   Lossless ended so. A scan that ends on 0xFF now has the stuffed zero byte
   after it.
+
+- **A native 4:2:2 image sent as RLE or JPEG-LS was still called
+  YBR_FULL_422** (#363). Its chroma was expanded to every pixel before
+  coding, and a receiver believing the description expected half of it. It
+  is YBR_FULL now, with Planar Configuration 0 for any color image. A
+  JPEG-LS send of 8 bits stored in 16 allocated was refused, and so was one
+  whose samples used the bits above Bits Stored; both are coded exactly.
 
 ## [1.10.0] - 2026-11-17
 
