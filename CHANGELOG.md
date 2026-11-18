@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A caption over saturated texture no longer takes a third of the scan
+  with it** (#367). The text detector found the caption, then grew its
+  region over every pixel of the caption's color, and over texture
+  stretched to full white every pixel is: the region for a caption 94
+  pixels wide ran across the scan and down it, and `-redact auto` would
+  have blacked out a third of the picture. Over texture a line is now grown
+  only where its ground is plain. The detector's other known misses are now
+  measured by a test rather than remembered: blurred labels of two or three
+  characters and a blurred clock are still not found (0 of 7), so `auto`
+  stays not the default. Across pydicom's corpus every region is unchanged.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
