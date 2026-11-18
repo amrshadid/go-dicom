@@ -511,8 +511,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure was reported as success. Each response is now read whole, by its
   message ID, as the C-services read theirs. Its data set is in the
   response's `DataSet`, which was always nil, and a response that does not
-  decode is an error. The SCP still drops the data set a handler returns
-  (#399).
+  decode is an error. The SCP side had the mirror defect; see the next
+  entry.
+
+- **An SCP sends the data set its handler returns with an N-service
+  response** (#399). `NCreateResponse.DataSet`, `NSetResponse.DataSet`,
+  `NActionResponse.DataSet` and `NEventReportResponse.DataSet` were dropped:
+  the SCP sent only the status, with a Command Data Set Type saying no data
+  set follows. An MPPS SCP could not return the attribute list of the step
+  it created (PS3.4 F.7.2.1.2); pynetdicom read an empty one. An N-ACTION
+  whose reply carries information could not reply. Each is now sent after
+  its response, and the Command Data Set Type says a data set follows only
+  when one does (PS3.7 E.2). A data set that cannot be encoded is answered
+  with 0x0110 Processing failure and no data set. N-GET, the one that did
+  send its data set, sent an empty one after such a failure and reported
+  success.
 
 - **An HTJ2K or JPEG XL image is refused by name, not read as samples or
   sent as them** (#404). Pixel data in a syntax with no decoder here was
