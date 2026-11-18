@@ -2268,7 +2268,7 @@ PY
     fail "qrscp -web 0.0.0.0 failed for another reason: $(tail -2 "$WORKDIR/webarc_open.log")"
   fi
 else
-  skip "the archive over DICOMweb needs pydicom and pynetdicom"
+  skip "the archive over DICOMweb needs pydicom, pynetdicom and numpy"
 fi
 
 # ---------------------------------------------------------------------------

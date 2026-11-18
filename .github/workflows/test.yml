@@ -255,8 +255,10 @@ jobs:
         run: |
           python -m venv "$HOME/dicomvenv"
           "$HOME/dicomvenv/bin/pip" install --quiet --upgrade pip
-          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom
-          "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__)"
+          # numpy is named because pydicom 3 no longer brings it, and the
+          # DICOMweb steps compare pixels with it; without it they skip (#414).
+          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom numpy
+          "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom, numpy; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__, '/ numpy', numpy.__version__)"
 
       - name: Install dcmtk
         run: |
