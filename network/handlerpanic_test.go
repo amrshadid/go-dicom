@@ -180,9 +180,22 @@ func TestHandlerPanicEndsOnlyItsAssociation(t *testing.T) {
 				t.Errorf("the association open beside the panic: %v", err)
 			}
 			_ = steady.Release(ctx)
-			// Both slots are free again: two more callers are taken.
+			// Both slots are given back: two more callers are taken. A slot
+			// is freed when its goroutine ends, a moment after the peer
+			// has read the release or the abort, so each caller is given
+			// two seconds to get one.
 			for _, calling := range []string{"NEXT", "AFTER"} {
-				scu := associate(calling, nil)
+				var scu *SCU
+				for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+					scu = NewSCU(SCUConfig{CallingAE: calling, CalledAE: "ARCHIVE", Address: server.Addr()})
+					err := scu.Associate(ctx, nil)
+					if err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("%s: no slot given back within 2s: %v", calling, err)
+					}
+				}
 				if err := scu.Echo(ctx); err != nil {
 					t.Errorf("%s: %v", calling, err)
 				}
