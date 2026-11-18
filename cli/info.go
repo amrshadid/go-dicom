@@ -66,7 +66,9 @@ func (ic *InfoCommand) Execute(args []string) error {
 		return fmt.Errorf("info: file not found: %s", ic.filespec)
 	}
 
-	elements, err := readDICOMFile(ic.filespec)
+	// The values are not needed, only their names, sizes and the few that are
+	// printed, so bulk values stay in the file (#328).
+	elements, err := readDICOMElements(ic.filespec, listing{skipBulk: true})
 	if err != nil {
 		return fmt.Errorf("info: failed to read DICOM file: %v", err)
 	}
@@ -144,7 +146,7 @@ func (ic *InfoCommand) displayStatistics(elements []DicomElement) {
 		if isPrivateTag(elem.Tag) {
 			privateCount++
 		}
-		totalDataSize += int64(len(elem.Value))
+		totalDataSize += int64(elem.Length)
 	}
 
 	fmt.Printf("Private Tags:    %d\n", privateCount)
@@ -167,7 +169,7 @@ func (ic *InfoCommand) displayVerboseInfo(elements []DicomElement) {
 			break
 		}
 		fmt.Printf("%-12s %-20s %-3s %d bytes\n",
-			elem.Tag, elem.Name, elem.VR, len(elem.Value))
+			elem.Tag, elem.Name, elem.VR, elem.Length)
 		count++
 	}
 
