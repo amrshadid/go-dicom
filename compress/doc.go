@@ -172,9 +172,10 @@
 // EncodeJPEGLS — lossless, 2 to 16 bits, one scan per component; JPEG 2000
 // Lossless through EncodeJPEG2000Lossless; lossless JPEG (.57 and .70) through
 // EncodeJPEGLossless — Process 14, 2 to 16 bits, one to four components in one
-// scan, with Huffman tables built for each frame; and JPEG Baseline through
+// scan, with Huffman tables built for each frame; JPEG Baseline through
 // EncodeJPEGBaseline — lossy, 8 bits, one or three components at full
-// resolution. Decoding is broader than encoding, and a request to compress to
+// resolution; and JPEG Extended through EncodeJPEGExtended — lossy, 8 or 12
+// bits, its Huffman tables built for each frame. Decoding is broader than encoding, and a request to compress to
 // any other syntax fails rather than producing bytes described as something
 // they are not.
 //

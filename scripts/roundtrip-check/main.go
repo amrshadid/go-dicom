@@ -12,9 +12,11 @@
 // re-encoded on the way out, as RLE Lossless, JPEG 2000 Lossless or lossless
 // JPEG (.57 or .70), which exercises an encoder this library has. Another
 // toolkit reading the result is the only way to know the encoder is right
-// rather than merely self-consistent.
+// rather than merely self-consistent. With -jpeg-extended Q it is coded as JPEG
+// Extended at quality Q.
 //
-// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1] <source dir> <output dir>
+// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpeg-extended Q]
+// <source dir> <output dir>
 package main
 
 import (
@@ -22,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -43,10 +46,15 @@ func main() {
 			target, args = network.JPEGLosslessProcess14UID, args[1:]
 		case "-jpeg-lossless-sv1":
 			target, args = network.JPEGLosslessSV1UID, args[1:]
+		case "-jpeg-extended":
+			if len(args) > 1 {
+				quality, _ = strconv.Atoi(args[1])
+				target, args = network.JPEGExtendedUID, args[2:]
+			}
 		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1] "+
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpeg-extended Q] "+
 			"<source dir> <output dir>")
 		os.Exit(2)
 	}
@@ -66,6 +74,9 @@ func main() {
 	}
 	fmt.Printf("wrote %d, skipped %d\n", written, failed)
 }
+
+// quality is the JPEG quality for -jpeg-extended.
+var quality int
 
 func roundTrip(in, out, target string) (err error) {
 	defer func() {
@@ -91,7 +102,16 @@ func roundTrip(in, out, target string) (err error) {
 	}
 
 	ds := df.GetDataset()
-	if target != "" {
+	if target == network.JPEGExtendedUID {
+		// The data set's own method, which is what a send uses with
+		// NetworkConfig.JPEGQuality; EncodeDataset accepts no loss.
+		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
+			if err := ds.CompressJPEGExtendedInPlace(quality); err != nil {
+				return fmt.Errorf("encode as %s: %w", target, err)
+			}
+			ts = target
+		}
+	} else if target != "" {
 		// Re-encoding goes through the same path a C-STORE takes, so what is
 		// written here is what a peer negotiating the syntax would receive.
 		encoded, err := network.EncodeDataset(ds, target)

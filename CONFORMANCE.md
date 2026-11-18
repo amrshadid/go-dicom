@@ -525,9 +525,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Six syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, JPEG
-  2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG Baseline when
-  asked.** Pixel data is transcoded in both directions as the negotiated
+- **Seven syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, JPEG
+  2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG Baseline and JPEG
+  Extended when asked.** Pixel data is transcoded in both directions as the negotiated
   context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
@@ -592,6 +592,35 @@ how decoded samples are shaped and coloured, and the one tolerance.
   RGB conversion whenever the data set says RGB, which is wrong for lossless
   JPEG, and it misreads dcmtk's own lossless RGB output in the same way.
 
+  **JPEG Extended (`.51`) is written only when the sender sets
+  `NetworkConfig.JPEGQuality`**, the same quality JPEG Baseline takes: both
+  scale the example tables of T.81 Annex K as libjpeg does, so the number
+  means the same in either. It is T.81 Process 4 for images of 16 bits
+  allocated and up to 12 stored, MONOCHROME1 or MONOCHROME2, coded at 12
+  bits, and Process 2 for 8-bit images, gray or color, as for JPEG Baseline:
+  SOF1, sequential DCT, one scan, every component at full resolution, 16-bit
+  quantization table entries where a quality needs them, and Huffman tables
+  built for each frame, since Annex K's stop below the 15-bit DC differences
+  and 14-bit AC sizes of a 12-bit image. An image of fewer bits stored than
+  the codestream's precision is marked with the codestream's, since a
+  decoded sample may land just above the old top. The data set is marked
+  Lossy Image Compression `01` with its ratio and method `ISO_10918_1`, and
+  the SOP Instance UID is the caller's to change. Refused by name: a signed
+  image (two's complement through a DCT puts -1 beside the top of the
+  range), more than 12 bits stored, 12-bit color and PALETTE COLOR.
+  `Dataset.CompressJPEGExtendedInPlace(quality)` is the same encoder for
+  files.
+
+  *Verified:* dcmtk's `dcmdjpeg` (its 12-bit build of IJG libjpeg) and the
+  separate libjpeg of pylibjpeg-libjpeg decode every corpus image that fits,
+  32 files, and five generated edge cases (1x1 color, odd sizes at 8 and 12
+  bits, planar configuration 1, a 6000 by 5000 12-bit image). At quality 90
+  the corpus's grayscale images come back between 49 and 91 dB, the color
+  ones above 38, and the generated ones, which carry noise, above 36.
+  Against dcmtk's own encoder at the same quality (`dcmcjpeg +ee +q 90`) the
+  size is within 0.4% and the PSNR the same to a tenth of a dB. CI runs the
+  dcmtk check.
+
   *Verified:* OpenJPEG, which shares no code with this library, decodes what
   the encoder writes. `opj_decompress` returns every sample of 360 generated
   images of each depth, sign and shape, and of every uncompressed image in
@@ -599,7 +628,7 @@ how decoded samples are shaped and coloured, and the one tolerance.
   receives one over the network with its codestream intact. Both run in CI.
 
   Every other compressed target fails, naming the syntax asked for. There is no
-  lossy JPEG 2000 encoder here, nor a 12-bit JPEG one, and a send
+  lossy JPEG 2000 encoder here, and a send
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 

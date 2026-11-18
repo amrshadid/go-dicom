@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A file or a send can be compressed to 12-bit JPEG** (#338). JPEG
+  Baseline is 8-bit, so a CT, MR or CR of 12 bits could be written lossy
+  only by dropping 4 bits, which was refused, and a peer that accepted only
+  `1.2.840.10008.1.2.4.51` could not be sent one.
+  `Dataset.CompressJPEGExtendedInPlace(quality)` writes JPEG Extended: 12
+  bits for an image of up to 12 stored in 16, 8 bits for an 8-bit one, with
+  Huffman tables built for each frame since the example tables do not hold
+  12-bit coefficients, marked Lossy Image Compression `01` with its ratio
+  and `ISO_10918_1`. A send needing `.51` uses `NetworkConfig.JPEGQuality`,
+  as JPEG Baseline does, and is refused without it. Signed images and more
+  than 12 bits stored are refused by name. `compress.EncodeJPEGExtended`
+  codes one frame. dcmtk and libjpeg decode every corpus image that fits; at
+  quality 90 the size and PSNR match dcmtk's own encoder at the same
+  quality.
+
 - **A file or a send can be compressed to lossless JPEG** (#336). Nothing
   wrote T.81 Process 14, so a peer that accepted only `.57` or `.70` could
   not be sent an image, though both decoded here.
