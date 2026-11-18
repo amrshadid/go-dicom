@@ -359,6 +359,10 @@ go build -o go-dicom .
 ./go-dicom stow http://127.0.0.1:8080/dicom-web study/
 DICOMWEB_TOKEN=... ./go-dicom qrscp -output ./archive/ -web 0.0.0.0:8080
 
+# Admit only the callers listed: these AE titles, from these addresses. Any
+# other is refused before anything is negotiated
+./go-dicom qrscp -port 11112 -output ./archive/ -allow PRISMA1,CT_2,10.20.0.0/16
+
 # Any network command over TLS. With -tls-ca a server requires a client
 # certificate from that CA and a client verifies the server against it
 ./go-dicom storescp -port 2762 -output ./received/ \

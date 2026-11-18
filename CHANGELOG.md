@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one SCP can answer to several. It has the ARTIM timer to answer, and a
   panic in it refuses that caller without taking the server down. Unset,
   nothing changes.
+- **`storescp` and `qrscp` admit only the callers they are given** (#351).
+  Both answered anyone who reached the port and named their AE title.
+  `-allow` takes calling AE titles, and IP addresses or CIDR ranges, comma
+  separated and repeatable, and hands them to `SCPConfig.Admit`. With both
+  kinds a caller needs a listed title and a listed address. Any other caller
+  is refused before anything is negotiated: an unlisted title as
+  calling-AE-title-not-recognized, which dcmtk's `echoscu` prints as `Reason:
+  Calling AE Title Not Recognized`, and an unlisted address with no reason
+  given, since PS3.8 Table 9-21 has none for an address. The server prints
+  its list when it starts and a line for each caller it refuses. A host name
+  is not resolved. `-allow` covers DIMSE only: `qrscp -web` has its own
+  token.
 - **`EVTAssocRejected` says why.** Its `Description` names the result, source
   and reason of the A-ASSOCIATE-RJ. It was empty, so `LoggingEventHandlers`
   logged "Association rejected: SCU -> SCP: " with nothing after the colon.

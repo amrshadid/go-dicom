@@ -61,7 +61,9 @@ When deploying applications built with go-dicom:
 - DICOM over TCP is unauthenticated and unencrypted by default. Use `network.DialTLS`
   and `network.ListenTLS` for transport security, and set `SCPConfig.MaxAssociations`
   to bound concurrency on an exposed server. Checking the called AE title is a naming
-  convention, not authentication.
+  convention, not authentication. So is a list of calling AE titles (`storescp` and
+  `qrscp -allow`): a caller names itself. An address range on the same list, or TLS
+  with client certificates, is what keeps out a caller who knows a listed title.
 
 ### Limits enforced by the library
 
