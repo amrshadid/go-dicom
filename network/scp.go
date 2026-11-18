@@ -1071,10 +1071,26 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 	sopClassUID, _ := getUIValue(cmdDS, tagRequestedSOPClassUID)
 	sopInstanceUID, _ := GetRequestedSOPInstanceUID(cmdDS)
 
+	// The list is what the requester asked for. Without it a handler cannot
+	// tell a request for one attribute from a request for all of them
+	// (PS3.7 10.1.2.1.4), and the classes whose N-GET is defined by the list,
+	// such as Display System, Media Creation and UPS, answered with everything.
+	// A list that is not a list of tags is refused as this SCP refuses any
+	// request it cannot read, rather than answered as if it were absent.
+	attrs, err := attributeIdentifierList(cmdDS)
+	if err != nil {
+		DefaultLogger.Error("refusing an N-GET whose Attribute Identifier List does not decode: %v", err)
+		rspBytes, _ := EncodeCommandDataset(
+			BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure, false))
+		_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+		return
+	}
+
 	req := &NGetRequest{
 		MessageID:            messageID,
 		RequestedSOPClass:    sopClassUID,
 		RequestedSOPInstance: sopInstanceUID,
+		AttributeList:        attrs,
 	}
 
 	resp, err := handler.HandleNGet(ctx, req)

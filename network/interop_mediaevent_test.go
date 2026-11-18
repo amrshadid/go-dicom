@@ -187,7 +187,7 @@ info.NumberOfCopies = 3
 status, _ = assoc.send_n_action(info, 1, MediaCreationManagement, "`+mediaRequestUID+`")
 assert status.Status == 0x0000, "N-ACTION 0x%04X" % status.Status
 
-status, got = assoc.send_n_get([0x21000020], MediaCreationManagement, "`+mediaRequestUID+`")
+status, got = assoc.send_n_get([0x21000020, 0x21000030], MediaCreationManagement, "`+mediaRequestUID+`")
 assert status.Status == 0x0000, "N-GET 0x%04X" % status.Status
 assert got.ExecutionStatus == "DONE", "pynetdicom read Execution Status %r" % got.ExecutionStatus
 assoc.release()
@@ -196,9 +196,10 @@ assoc.release()
 	want := []nEvent{
 		{"N-CREATE", network.MediaCreationManagementUID, mediaRequestUID, 0, "PY MEDIA " + mediaReferencedUID},
 		{"N-ACTION", network.MediaCreationManagementUID, mediaRequestUID, 1, "3"},
-		// The detail is empty: pynetdicom asked for (2100,0020), and the SCP
-		// does not give a handler the Attribute Identifier List (#380).
-		{"N-GET", network.MediaCreationManagementUID, mediaRequestUID, 0, ""},
+		// The detail is the Attribute Identifier List the handler was given:
+		// Execution Status and Execution Status Info, in the order pynetdicom
+		// sent them. It was empty until the SCP read the list (#380).
+		{"N-GET", network.MediaCreationManagementUID, mediaRequestUID, 0, "(2100,0020),(2100,0030)"},
 	}
 	recorder.expect(t, want)
 }

@@ -872,9 +872,9 @@ go-dicom alone. Writing these tests found two defects in the N-DIMSE
 primitives, recorded on their own: an SCU leaves the data set of an N-CREATE,
 N-SET, N-ACTION or N-EVENT-REPORT response unread, so the next operation
 reads it as its response (#379); and an SCP never gives an N-GET handler the
-Attribute Identifier List (#380). The tests here do not lean on either: the
-media creation SCP answers N-CREATE without an attribute list, and the N-GET
-handler's list is not asserted.
+Attribute Identifier List (#380, fixed: the media creation SCP test now
+asserts the handler is given the two tags pynetdicom asks for, in order). The
+media creation SCP answers N-CREATE without an attribute list.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes
