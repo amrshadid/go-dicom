@@ -418,6 +418,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since the renderer reads samples from one slice and finds the range of an
   image with no window across all frames.
 
+- **A store costs the same at the hundred-thousandth instance as at the
+  first** (#410). Every store rewrote the archive's whole index, so it took
+  time in proportion to the archive: 11 ms an instance over the first
+  thousand and 865 ms over the hundredth, when the index had grown to
+  108 MB. A thousand-image study received at that size took a quarter of an
+  hour. A store now appends a record to `index.log` beside `index.json`;
+  `Open` replays it, and it is folded into a new `index.json` once it holds
+  more records than the archive has instances. Measured the same way, the
+  hundredth thousand cost 13 to 30 ms an instance, the first thousand 12 to
+  29: the cost of syncing each instance's file, which varies with the disk's
+  load. A crash between putting an instance's file in place and indexing it
+  was found only by a full rebuild; each change is now recorded and synced
+  before its file is put in place or deleted, and one left unfinished is
+  settled from the disk at the next `Open`. An index of version 3 is read
+  as it is and written again as version 4, which an older release rebuilds
+  rather than read without its log.
+
 ### Fixed
 
 - **A server at its association limit says it is full** (#318). A caller
