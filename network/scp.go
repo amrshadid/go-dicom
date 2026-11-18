@@ -239,15 +239,22 @@ func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	}
 
 	assoc := NewAssociation(transport)
-	// Result: rejected-transient, Source: service-user,
-	// Reason 2: local-limit-exceeded (PS3.8 Table 9-21).
-	_ = assoc.RejectAssociation(ctx, RJResultRejectedTransient, RJSourceServiceUser, 2)
+	// Rejected-transient, so the caller tries again later, from the DICOM UL
+	// service-provider (presentation related function) with reason 2,
+	// local-limit-exceeded (PS3.8 Table 9-21). A reason means something only
+	// with its source: sent as service-user, reason 2 told the caller its
+	// application context name was not supported (#318).
+	_ = assoc.RejectAssociation(ctx, RJResultRejectedTransient, RJSourceServiceProviderPresentation, 2)
 }
 
 func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 
 	assoc := NewAssociation(transport)
+	// A panic below, which is to say in a handler, ends this association and
+	// nothing else. Deferred after Close so that it runs first, while there
+	// is still a connection to send the A-ABORT on.
+	defer s.recoverAssociation(assoc)
 
 	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
 	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).
