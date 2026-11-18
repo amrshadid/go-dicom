@@ -124,15 +124,7 @@ type huffmanCode struct {
 // the way T.81 Annex C derives them from the counts.
 var baselineCodes = func() (tables [4][256]huffmanCode) {
 	for t, spec := range baselineHuffman {
-		code, next := uint32(0), 0
-		for length := 1; length <= 16; length++ {
-			for i := 0; i < int(spec.counts[length-1]); i++ {
-				tables[t][spec.symbols[next]] = huffmanCode{bits: code, length: uint8(length)}
-				code++
-				next++
-			}
-			code <<= 1
-		}
+		tables[t] = huffmanCodes(spec)
 	}
 	return tables
 }()

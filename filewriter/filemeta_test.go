@@ -3,6 +3,7 @@ package filewriter
 import (
 	"bytes"
 	"encoding/binary"
+	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/filebase"
@@ -293,4 +294,69 @@ func trimPad(b []byte) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// TestShortVRValueLongerThanItsLengthFieldIsRefused: UI, AE, SH and the other
+// short VRs state their length in 16 bits. A 70,000-byte Media Storage SOP
+// Instance UID was written with length 4466, the low 16 bits, while the group
+// length (0002,0000) counted all 70,000: the header said the data set began
+// 65,536 bytes after where a reader walking the elements found it. Both the
+// header and a single element now refuse the value, and nothing is written.
+func TestShortVRValueLongerThanItsLengthFieldIsRefused(t *testing.T) {
+	long := "1." + strings.Repeat("2", 70_000)
+	header, err := EncodeFileHeader(&FileMetaInfo{
+		MediaStorageSOPClassUID:    "1.2.840.10008.5.1.4.1.1.2",
+		MediaStorageSOPInstanceUID: long,
+		TransferSyntaxUID:          "1.2.840.10008.1.2.1",
+	})
+	if err == nil {
+		t.Fatalf("a 70,002-character UI value was written into a header of %d bytes", len(header))
+	}
+	if !strings.Contains(err.Error(), "65535") {
+		t.Errorf("the error does not say what the bound is: %v", err)
+	}
+
+	// Written straight to a file, the refusal comes before the group length:
+	// nothing of a header that cannot be finished is left in it.
+	direct := &seekableBuffer{}
+	err = NewDCMFileWriter(filebase.NewFileWriter(direct)).WriteFileMetaInfo(&FileMetaInfo{
+		MediaStorageSOPClassUID:    "1.2.840.10008.5.1.4.1.1.2",
+		MediaStorageSOPInstanceUID: long,
+		TransferSyntaxUID:          "1.2.840.10008.1.2.1",
+	})
+	if err == nil || direct.buf.Len() != 0 {
+		t.Errorf("WriteFileMetaInfo: error %v, with %d bytes of the group already written", err, direct.buf.Len())
+	}
+
+	// The longest value that fits is still written, and reads back whole.
+	fits := "1." + strings.Repeat("2", 0xFFFE-2)
+	header, err = EncodeFileHeader(&FileMetaInfo{
+		MediaStorageSOPClassUID:    "1.2.840.10008.5.1.4.1.1.2",
+		MediaStorageSOPInstanceUID: fits,
+		TransferSyntaxUID:          "1.2.840.10008.1.2.1",
+	})
+	if err != nil {
+		t.Fatalf("a %d-byte value fits a 16-bit length and was refused: %v", len(fits), err)
+	}
+	groupLength := binary.LittleEndian.Uint32(header[140:144])
+	if int(groupLength) != len(header)-144 {
+		t.Errorf("group length %d, and %d bytes of group 0002 follow it", groupLength, len(header)-144)
+	}
+	for _, e := range parseExplicitVRElements(t, header[132:]) {
+		if e.Tag == tag.New(0x0002, 0x0003) && string(e.Value) != fits {
+			t.Errorf("(0002,0003) read back as %d bytes, want %d", len(e.Value), len(fits))
+		}
+	}
+
+	// One element, outside the header.
+	buf := &seekableBuffer{}
+	w := NewDCMFileWriter(filebase.NewFileWriter(buf))
+	value := bytes.Repeat([]byte{'A'}, 0x10000)
+	err = w.WriteDataElement(&DataElement{Tag: tag.New(0x0008, 0x0050), VR: "SH", Value: value, Length: uint32(len(value))}, false)
+	if err == nil {
+		t.Fatal("a 65,536-byte SH value was written with a 16-bit length")
+	}
+	if buf.buf.Len() != 0 {
+		t.Errorf("%d bytes were written before the value was refused", buf.buf.Len())
+	}
 }
