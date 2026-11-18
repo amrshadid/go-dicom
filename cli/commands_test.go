@@ -30,6 +30,7 @@ func allCommands() []Command {
 		&ShareCommand{},
 		&DiffCommand{},
 		&DICOMDIRCommand{},
+		&SRCommand{},
 		&HelpCommand{},
 		&VersionCommand{},
 		&EchoSCUCommand{},

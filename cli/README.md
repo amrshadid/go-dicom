@@ -40,6 +40,8 @@ go-dicom diff a.dcm b.dcm --json --ignore-meta --ignore SOPInstanceUID
 go-dicom dicomdir study/                     # Write study/DICOMDIR; refuses file names that are not File IDs
 go-dicom dicomdir --copy-to media/ export/   # ...or copy the files as DICOM/IM000001... and index those
 go-dicom dicomdir --list study/DICOMDIR      # The records as a tree
+go-dicom sr report.dcm                       # A structured report's content tree, indented
+go-dicom sr report.dcm --json                # ...with each item's position
 go-dicom convert ct.dcm ct.png --format png  # Render as PNG (or jpeg), windowed
 go-dicom convert cine.dcm f.png --format png --frame all   # f-0001.png, f-0002.png, ...
 go-dicom codify patient.dcm -output struct.go # Generate Go code
