@@ -722,7 +722,7 @@ func (dfr *DCMFileReader) isBulk(element *DataElementValue) bool {
 	// An implicit VR file has the dictionary's VR, which may offer a choice,
 	// "OB or OW". It is bulk when every choice is binary: "US or OW" may
 	// yet be a short list of numbers.
-	for _, vr := range strings.Split(element.VR, " or ") {
+	for _, vr := range dataelem.VRChoices(element.VR) {
 		if !binaryVRs[vr] {
 			return false
 		}
@@ -1887,7 +1887,7 @@ func validateDataElement(elem *DataElementValue) error {
 	}
 
 	if elem.VR != "" && info.VR != "" {
-		if info.VR != elem.VR && !isValidVRVariant(elem.VR, info.VR) {
+		if !dataelem.VRMatchesDictionary(elem.VR, info.VR) {
 			return fmt.Errorf("VR mismatch for %s: expected %s, got %s",
 				elem.Tag, info.VR, elem.VR)
 		}
@@ -1923,30 +1923,10 @@ func dictionaryVRForUN(vr string, t tag.Tag, order filebase.ByteOrder) string {
 		return ""
 	}
 	known := t.GetVR()
-	if known == "" || known == "UN" || strings.Contains(known, " or ") {
+	if known == "" || known == "UN" || dataelem.OffersVRChoice(known) {
 		return ""
 	}
 	return known
-}
-
-// isValidVRVariant checks if a VR is a valid variant of the expected VR.
-// Some DICOM tags allow multiple VR types, represented as "X or Y" in the dictionary.
-// This function validates that the actual VR matches one of the allowed variants.
-func isValidVRVariant(actual, expected string) bool {
-	switch expected {
-	case "OB or OW":
-		return actual == "OB" || actual == "OW"
-	case "US or SS":
-		return actual == "US" || actual == "SS"
-	case "US or OW":
-		return actual == "US" || actual == "OW"
-	case "UL or OW":
-		return actual == "UL" || actual == "OW"
-	case "OB or OD or OF or OL or OW or UN":
-		return actual == "OB" || actual == "OD" || actual == "OF" || actual == "OL" || actual == "OW" || actual == "UN"
-	default:
-		return false
-	}
 }
 
 // normalizeByteOrder converts an element's value from big endian to the little

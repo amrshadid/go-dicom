@@ -387,6 +387,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
+| After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
@@ -617,10 +618,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Six syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, JPEG
-  2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG Baseline when
-  asked.** Pixel data is transcoded in both directions as the negotiated
-  context requires.
+- **Nine syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless and
+  Near-Lossless, JPEG 2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG
+  Baseline, JPEG Extended and lossy JPEG 2000 when asked.** Pixel data is
+  transcoded in both directions as the negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
@@ -643,10 +644,31 @@ how decoded samples are shaped and coloured, and the one tolerance.
   wrongly, for dcmtk's files and the corpus's own as much as for these, so
   JPEG-LS color is checked with the libjpeg decoder it uses, called directly.
 
-  The JPEG-LS encoder is lossless only, at 2 to 16 bits, one scan per component.
-  **JPEG-LS Near-Lossless is refused although the same encoder could produce it**:
-  it is lossy, and how much error to accept is the caller's decision rather than
-  one to make silently while transcoding.
+  The JPEG-LS encoder codes 2 to 16 bits, one scan per component, losslessly
+  or with an allowed error. **JPEG-LS Near-Lossless (`.81`) uses the error the
+  sender gives in `NetworkConfig.JPEGLSNear`**, NEAR of ITU-T T.87, 0 to 255:
+  every sample arrives within that much of its value. How much error to accept
+  is the caller's decision, so the default, zero, codes the image losslessly
+  under `.81`, which the syntax allows, and nothing is lost unasked. Each error
+  is quantized to a multiple of 2·NEAR+1 and every later sample is predicted
+  from the reconstructed ones (T.87 A.4.4). With an error allowed, the data set
+  is marked Lossy Image Compression `01` with its ratio and method
+  `ISO_14495_1` (PS3.3 C.7.6.1.1.5), and the SOP Instance UID is the caller's
+  to change. A signed image is coded only at NEAR 0: JPEG-LS codes samples as
+  unsigned numbers, and an error on the two's complement bits would carry the
+  top of the signed range to the bottom. dcmtk refuses the same images.
+  `Dataset.CompressJPEGLSNearLosslessInPlace(near)` is the same encoder for
+  files.
+
+  *Verified:* dcmtk's `dcmdjpls` (CharLS) and libjpeg (through
+  pylibjpeg-libjpeg) decode every unsigned corpus image of 8 or 16 bits
+  allocated, 32 files coded here at NEAR 1, 2 and 5, and seven generated edge
+  cases (1x1, odd sizes, planar configuration 1, a 6000 by 5000 image), every
+  sample within NEAR, and the two return the same samples as each other and as
+  this library's decoder. At NEAR 0 all 48 corpus images and ten edge cases,
+  the signed ones included, come back exact. The size matches dcmtk's own
+  encoder at the same NEAR to within a few hundred bytes. CI runs the dcmtk
+  check at NEAR 2.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
@@ -672,7 +694,53 @@ how decoded samples are shaped and coloured, and the one tolerance.
   sample uses the bits above Bits Stored, so that what was in the file comes
   back. `Dataset.CompressJPEG2000LosslessInPlace` is the same encoder for
   files, and it is what a send uses when a peer accepts only this syntax.
-  Lossy JPEG 2000 (`.91`) is not written.
+
+  *Verified:* OpenJPEG, which shares no code with this library, decodes what
+  the encoder writes. `opj_decompress` returns every sample of 360 generated
+  images of each depth, sign and shape, and of every uncompressed image in
+  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
+  receives one over the network with its codestream intact. Both run in CI.
+
+  **Lossy JPEG 2000 (`.91`) is written only when the sender sets
+  `NetworkConfig.JPEG2000Rate`**: a compression ratio or a PSNR, one of
+  them. `jpeg2000.EncodeLossy` codes the irreversible 9/7 wavelet (F.4.8.2),
+  the irreversible component transform for RGB (G.3; the data set then says
+  `YBR_ICT`, with Planar Configuration 0, PS3.5 8.2.4), and scalar deadzone
+  quantization with a step for each subband (E.1, expounded), at 1 to 16
+  bits, signed or unsigned, so a CT keeps its negative values. The steps are
+  one base step over each subband's synthesis norm, measured from this
+  library's own inverse filter, and the rate is met by searching for the
+  base step: the largest whose codestream fits the ratio, or whose decoded
+  image meets the PSNR. That is rate control by quantization, not the
+  pass-by-pass truncation of Annex J.14: one tile, one quality layer, every
+  bit plane of what is left coded. A ratio no codestream of the image can
+  meet, as for a very small image, is refused rather than met with one that
+  holds none of the picture, and so is PALETTE COLOR. The data set is marked
+  Lossy Image Compression `01` with its ratio and method `ISO_15444_1`, and
+  the SOP Instance UID is the caller's to change.
+  `Dataset.CompressJPEG2000InPlace` is the same encoder for files. A ratio
+  search on a 6000 by 5000 image takes about 20 seconds, a PSNR one about 4.
+
+  *Verified:* OpenJPEG's `opj_decompress` and pylibjpeg-openjpeg decode
+  every corpus image coded here (39 at 10:1, 44 at 45 dB; three corpus
+  files already `.91` are left alone, and five too small for 10:1 are
+  refused) and the generated edge cases (odd sizes, 16-bit signed, the full
+  16-bit range, planar configuration 1, 6000 by 5000, and at 45 dB 1x1 as
+  well), the two agreeing with each other on every file. At 10:1 the corpus
+  comes back at 40 dB or better, some of its simple images exactly; at a
+  PSNR of 45 every file decodes at 45.0 dB or better. Against
+  OpenJPEG's own encoder (`opj_compress -I -r`) at the same size the PSNR is
+  the same or a few tenths of a decibel better: `CT_small.dcm` 3268 bytes at
+  77.1 dB against 3140 at 76.4, `examples_rgb_color.dcm` 22964 at 40.0
+  against 22887 at 39.7. OpenJPEG counts a 12-bit sample as 1.5 bytes where
+  this library counts the 2 it is stored in, so `-r 7.5` is its 10:1 here.
+  CI runs the `opj_decompress` check at 10:1.
+
+  *Verified:* OpenJPEG, which shares no code with this library, decodes what
+  the encoder writes. `opj_decompress` returns every sample of 360 generated
+  images of each depth, sign and shape, and of every uncompressed image in
+  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
+  receives one over the network with its codestream intact. Both run in CI.
 
   **JPEG Lossless (`.57` and `.70`)** is ITU-T T.81 Process 14, in pure Go:
   one scan with every component interleaved at full resolution, Huffman
@@ -700,14 +768,36 @@ how decoded samples are shaped and coloured, and the one tolerance.
   RGB conversion whenever the data set says RGB, which is wrong for lossless
   JPEG, and it misreads dcmtk's own lossless RGB output in the same way.
 
-  *Verified:* OpenJPEG, which shares no code with this library, decodes what
-  the encoder writes. `opj_decompress` returns every sample of 360 generated
-  images of each depth, sign and shape, and of every uncompressed image in
-  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
-  receives one over the network with its codestream intact. Both run in CI.
+  **JPEG Extended (`.51`) is written only when the sender sets
+  `NetworkConfig.JPEGQuality`**, the same quality JPEG Baseline takes: both
+  scale the example tables of T.81 Annex K as libjpeg does, so the number
+  means the same in either. It is T.81 Process 4 for images of 16 bits
+  allocated and up to 12 stored, MONOCHROME1 or MONOCHROME2, coded at 12
+  bits, and Process 2 for 8-bit images, gray or color, as for JPEG Baseline:
+  SOF1, sequential DCT, one scan, every component at full resolution, 16-bit
+  quantization table entries where a quality needs them, and Huffman tables
+  built for each frame, since Annex K's stop below the 15-bit DC differences
+  and 14-bit AC sizes of a 12-bit image. An image of fewer bits stored than
+  the codestream's precision is marked with the codestream's, since a
+  decoded sample may land just above the old top. The data set is marked
+  Lossy Image Compression `01` with its ratio and method `ISO_10918_1`, and
+  the SOP Instance UID is the caller's to change. Refused by name: a signed
+  image (two's complement through a DCT puts -1 beside the top of the
+  range), more than 12 bits stored, 12-bit color and PALETTE COLOR.
+  `Dataset.CompressJPEGExtendedInPlace(quality)` is the same encoder for
+  files.
 
-  Every other compressed target fails, naming the syntax asked for. There is no
-  lossy JPEG 2000 encoder here, nor a 12-bit JPEG one, and a send
+  *Verified:* dcmtk's `dcmdjpeg` (its 12-bit build of IJG libjpeg) and the
+  separate libjpeg of pylibjpeg-libjpeg decode every corpus image that fits,
+  32 files, and five generated edge cases (1x1 color, odd sizes at 8 and 12
+  bits, planar configuration 1, a 6000 by 5000 12-bit image). At quality 90
+  the corpus's grayscale images come back between 49 and 91 dB, the color
+  ones above 38, and the generated ones, which carry noise, above 36.
+  Against dcmtk's own encoder at the same quality (`dcmcjpeg +ee +q 90`) the
+  size is within 0.4% and the PSNR the same to a tenth of a dB. CI runs the
+  dcmtk check.
+
+  Every other compressed target fails, naming the syntax asked for, and a send
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 
@@ -729,6 +819,11 @@ written back keeps every attribute it was read with (#216). Encapsulated pixel d
 is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
 requires, both to a file and on the network. Native pixel data is never sent under
 a compressed syntax: the send fails rather than describe pixels as fragments.
+In an Implicit VR file, a sequence whose tag the dictionary does not call a
+sequence, a private one above all, is written with undefined length and a
+Sequence Delimitation Item (PS3.5 7.5.1): nothing else tells a reader it holds
+items (Note 5 below). Every other sequence and every item has an explicit length.
+The network codec does not do this yet (#424).
 
 On reading, an element encoded as UN whose tag the dictionary knows takes that
 VR, and its value is read as Implicit VR Little Endian, which PS3.5 6.2.2 Note 2

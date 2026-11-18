@@ -226,60 +226,38 @@ func (dc *DICOMDIRCommand) runWrite(dir string) error {
 // scanForDICOMDIR returns the DICOM files under dir in the order of their
 // paths, and the files that are left out with the reason.
 // An existing DICOMDIR at the root is neither: it is what is being replaced.
+//
+// Which files can be indexed is the library's answer, a data set with no
+// file meta information included (fileset.ErrNoFileMeta): a file-set holds
+// Part 10 files (PS3.10 7.1), dcmmkdir refuses one that is not, and a reader
+// that loads what the DICOMDIR names cannot read it.
 func scanForDICOMDIR(dir string) (files, skipped []string, err error) {
 	set, err := fileset.NewFileSet(dir)
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := set.ScanDirectory(true); err != nil {
+	_, left, err := set.Scan(true)
+	if err != nil {
 		return nil, nil, err
 	}
 	existing := filepath.Join(dir, dicomdirName)
 	_ = set.RemoveFile(existing)
 
-	indexed := map[string]bool{}
 	for _, r := range set.ListFiles() {
-		indexed[r.FilePath] = true
-		// The library reads a bare data set as an instance when it has the
-		// UIDs of one. A file-set holds Part 10 files (PS3.10 7.1), and one
-		// with no file meta information is not one: dcmmkdir refuses it, and
-		// a reader that loads what the DICOMDIR names cannot read it.
-		if !hasPart10Prefix(r.FilePath) {
-			skipped = append(skipped, r.FilePath+" (a data set without the file meta information of PS3.10)")
-			continue
-		}
 		files = append(files, r.FilePath)
 	}
 	sort.Strings(files)
-	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, s := range left {
+		switch {
+		case s.Path == existing:
+		case errors.Is(s.Err, fileset.ErrNoFileMeta):
+			skipped = append(skipped, s.Path+" ("+fileset.ErrNoFileMeta.Error()+")")
+		default:
+			skipped = append(skipped, s.Path+" (not a DICOM instance)")
 		}
-		if !d.IsDir() && !indexed[path] && path != existing {
-			skipped = append(skipped, path+" (not a DICOM instance)")
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, nil, walkErr
 	}
 	sort.Strings(skipped)
 	return files, skipped, nil
-}
-
-// hasPart10Prefix reports whether a file has the preamble and the DICM
-// prefix that begin a PS3.10 file.
-func hasPart10Prefix(path string) bool {
-	f, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer func() { _ = f.Close() }()
-	head := make([]byte, 132)
-	if _, err := io.ReadFull(f, head); err != nil {
-		return false
-	}
-	return string(head[128:]) == "DICM"
 }
 
 // nonConformantFiles names every file whose path below root is not a File

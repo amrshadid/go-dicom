@@ -303,7 +303,7 @@ go build -o go-dicom .
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
 ./go-dicom modify -set PatientName=Doe^Jane -insert 'RequestAttributesSequence[0].RequestedProcedureID=RP1' in.dcm out.dcm  # Edit attributes; syntax and pixels kept
-./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # RLE, JPEG-LS, JPEG 2000 lossless; jpeg with -quality
+./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # Every syntax the library writes; lossy ones only with -quality, -near, -ratio or -psnr
 ./go-dicom decompress ct-jls.dcm ct.dcm                  # Native pixel data again
 ./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
 ./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF
@@ -498,7 +498,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Six syntaxes are compressed *to*, on a send and in a data set: **RLE Lossless** (`Dataset.CompressRLELosslessInPlace`), **JPEG-LS Lossless** (`Dataset.CompressJPEGLSLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, `Dataset.CompressJPEG2000LosslessInPlace`), **JPEG Lossless** (`.57` and `.70`, `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`), and **JPEG Baseline** for 8-bit images when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline needs a quality, and JPEG-LS Near-Lossless and lossy JPEG 2000 (`.91`) are refused. |
+| **Compressing pixel data** | Nine syntaxes are compressed *to*, on a send and in a data set: **RLE Lossless** (`Dataset.CompressRLELosslessInPlace`), **JPEG-LS Lossless** (`Dataset.CompressJPEGLSLosslessInPlace`), **JPEG-LS Near-Lossless** (`.81`, with the error allowed in `NetworkConfig.JPEGLSNear`, losslessly when none is, or `Dataset.CompressJPEGLSNearLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, `Dataset.CompressJPEG2000LosslessInPlace`), **JPEG Lossless** (`.57` and `.70`, `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`), **JPEG Baseline** for 8-bit images and **JPEG Extended** (`.51`) for unsigned images of 8 or up to 12 bits, both when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace` and `CompressJPEGExtendedInPlace`), and **lossy JPEG 2000** (`.91`) at the ratio or PSNR in `NetworkConfig.JPEG2000Rate` (or with `Dataset.CompressJPEG2000InPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline and Extended need a quality, JPEG-LS Near-Lossless an allowed error, lossy JPEG 2000 a rate. |
 | **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
@@ -715,7 +715,10 @@ with nothing skipped.
 `Dataset.CompressJPEG2000LosslessInPlace` produce `.90` with the reversible 5/3
 wavelet at 1 to 16 bits, signed or unsigned, gray or color, in pure Go. OpenJPEG
 decodes what they write to the samples that went in, which CI checks on every
-push over pydicom's corpus.
+push over pydicom's corpus. Lossy too: `jpeg2000.EncodeLossy` and
+`Dataset.CompressJPEG2000InPlace` write `.91` with the irreversible 9/7 wavelet
+at a compression ratio or a PSNR, and OpenJPEG decodes it at the PSNR its own
+encoder reaches at the same size.
 
 **Lossless JPEG is written as well as read**: `compress.EncodeJPEGLossless`,
 `Dataset.CompressJPEGLosslessInPlace` (`.57`, the predictor that codes each

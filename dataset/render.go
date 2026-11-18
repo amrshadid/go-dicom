@@ -440,8 +440,20 @@ var (
 // rescale returns the Rescale Slope and Intercept for a frame, 1 and 0 when
 // the image has none.
 func (r *renderer) rescale(f int) (slope, intercept float64) {
+	return rescaleOf(r.ds, f)
+}
+
+// rescaleOf returns the Rescale Slope and Intercept of frame f of a data set,
+// 1 and 0 when it has none: an absent Rescale Slope means no scaling, not a
+// slope of 0. A single frame image holds them in the data set itself; an
+// enhanced multi-frame image holds them per frame, in the Pixel Value
+// Transformation Sequence of the frame's functional group or of the shared one
+// (PS3.3 C.7.6.16.2.9). They are Type 1 together, so either one finds the
+// holder. A Rescale Slope of 0 is read as 1, since a slope of 0 would turn
+// every pixel into the intercept.
+func rescaleOf(ds *Dataset, f int) (slope, intercept float64) {
 	slope = 1
-	if src := r.holder(f, tagPixelValueXform, tagRescaleSlope); src != nil {
+	if src := frameHolder(ds, f, tagPixelValueXform, tagRescaleSlope, tagRescaleIntercept); src != nil {
 		if v, ok := firstNumber(src, tagRescaleSlope); ok && v != 0 {
 			slope = v
 		}
@@ -508,6 +520,11 @@ func (r *renderer) voi(f int) (*Window, string, *lut, error) {
 // first two. The nearest wins, so a frame's own window is not passed over
 // for a table the whole image has.
 func (r *renderer) holder(f int, group tag.Tag, attrs ...tag.Tag) *Dataset {
+	return frameHolder(r.ds, f, group, attrs...)
+}
+
+// frameHolder is holder for a data set that is not being rendered.
+func frameHolder(ds *Dataset, f int, group tag.Tag, attrs ...tag.Tag) *Dataset {
 	holds := func(ds *Dataset) bool {
 		for _, attr := range attrs {
 			if _, ok := ds.Get(attr); ok {
@@ -516,18 +533,18 @@ func (r *renderer) holder(f int, group tag.Tag, attrs ...tag.Tag) *Dataset {
 		}
 		return false
 	}
-	if item := nthItem(r.ds, tagPerFrameGroups, f); item != nil {
+	if item := nthItem(ds, tagPerFrameGroups, f); item != nil {
 		if macro := nthItem(item, group, 0); macro != nil && holds(macro) {
 			return macro
 		}
 	}
-	if item := nthItem(r.ds, tagSharedGroups, 0); item != nil {
+	if item := nthItem(ds, tagSharedGroups, 0); item != nil {
 		if macro := nthItem(item, group, 0); macro != nil && holds(macro) {
 			return macro
 		}
 	}
-	if holds(r.ds) {
-		return r.ds
+	if holds(ds) {
+		return ds
 	}
 	return nil
 }
