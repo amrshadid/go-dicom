@@ -943,9 +943,11 @@ All of them are now exercised end to end:
 
 pynetdicom 2.1 serves all three classes, so none of them is tested against
 go-dicom alone. Writing these tests found two defects in the N-DIMSE
-primitives, recorded on their own: an SCU leaves the data set of an N-CREATE,
+primitives, recorded on their own: an SCU left the data set of an N-CREATE,
 N-SET, N-ACTION or N-EVENT-REPORT response unread, so the next operation
-reads it as its response (#379); and an SCP never gives an N-GET handler the
+read it as its response (#379, fixed, as is the SCP's mirror of it, which
+never sent the data set its handler returned, #399; the MPPS SCP test now
+checks that pynetdicom receives the attribute list); and an SCP never gives an N-GET handler the
 Attribute Identifier List (#380). The tests here do not lean on either: the
 media creation SCP answers N-CREATE without an attribute list, and the N-GET
 handler's list is not asserted.
