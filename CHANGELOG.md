@@ -728,6 +728,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read. The network codec has the same defect, and refuses such a sequence
   on receipt (#424).
 
+- **A file-set does not take in a data set with no File Meta Information**
+  (#394). `FileSet.AddFile` and `ScanDirectory` accepted a bare data set,
+  with no preamble, no `DICM` and no group 0002, when it carried an
+  instance's UIDs, and `WriteDICOMDIR` gave it a record. A file in a
+  File-set is in the DICOM File Format (PS3.10 7.1, 8.1): dcmtk's `dcmmkdir`
+  refuses pydicom's `rtstruct.dcm` with "file not in part 10 format (no file
+  meta information)", and pydicom's `FileSet` could not load the file the
+  DICOMDIR named. `AddFile` now returns an error wrapping the new
+  `fileset.ErrNoFileMeta`. A directory scan leaves such a file out and goes
+  on, because a scan that failed on the first stray file would index
+  nothing. The new `FileSet.Scan` says which files it left out and why
+  (`ErrNoFileMeta`, `ErrNotDICOM`), and `ScanDirectory` is the same scan
+  returning the count. The `dicomdir` command checked the file's first
+  bytes itself; it now prints the library's answer, and its output is
+  unchanged. Over 68 corpus files, the files the library leaves out for
+  missing File Meta Information are the three `dcmmkdir` refuses for it,
+  and pydicom's `FileSet` loads all 64 the DICOMDIR names.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
