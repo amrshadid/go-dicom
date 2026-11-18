@@ -122,6 +122,16 @@
 //	[File Meta Information Group (0002)]
 //	[Data Elements (Groups 0004+)]
 //
+// # Sequences
+//
+// A sequence and its items are written with explicit lengths, with one
+// exception: in Implicit VR, a sequence whose tag the dictionary does not call
+// a sequence (tag.Tag.IsDictionarySequence), a private one above all, is
+// written with undefined length and closed by a Sequence Delimitation Item.
+// Implicit VR names no VR, so that is the only thing that tells a reader such
+// an element holds items (PS3.5 6.2.2 Note 5, 7.5.1); dcmtk and pydicom read
+// it with its byte count as one opaque value.
+//
 // # Values Copied From the Source File
 //
 // A data set read with filereader.ReadOptions.SkipBulkData and built with

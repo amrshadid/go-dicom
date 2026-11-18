@@ -619,6 +619,16 @@ func EncodeFileHeader(meta *FileMetaInfo) ([]byte, error) {
 // encoding is self-describing. Item tags always use the implicit-style header
 // — tag then 4-byte length, no VR — even inside an explicit VR transfer
 // syntax (PS3.5 Section 7.5).
+//
+// The sequence itself has an explicit length too, except in Implicit VR when
+// the dictionary does not call its tag a sequence: a private sequence above
+// all. There nothing but an undefined length tells a reader the element holds
+// items (PS3.5 6.2.2 Note 5, CP-246), so it is written with one and closed by
+// a Sequence Delimitation Item (PS3.5 7.5.1). With its byte count instead,
+// dcmtk and pydicom read the whole sequence as one opaque value, and so did
+// this library's own reader: a vendor's private sequence did not survive one
+// pass through anonymize or modify as a sequence. The items inside may keep
+// their lengths; both readers parse them once they know they are items.
 func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool) error {
 	// Serialize the items first so the sequence length is known up front.
 	itemBytes, err := dfw.encodeSequenceItems(elem.Items, forceExplicitVR)
@@ -626,11 +636,17 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 		return err
 	}
 
+	explicitVR := dfw.explicitVR || forceExplicitVR
+	length := uint32(len(itemBytes))
+	if !explicitVR && !elem.Tag.IsDictionarySequence() {
+		length = undefinedLength
+	}
+
 	if err := dfw.WriteTag(elem.Tag); err != nil {
 		return err
 	}
 
-	if dfw.explicitVR || forceExplicitVR {
+	if explicitVR {
 		if err := dfw.writer.WriteBytes([]byte("SQ")); err != nil {
 			return fmt.Errorf("failed to write SQ VR: %w", err)
 		}
@@ -640,7 +656,7 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 		dfw.position += 4
 	}
 
-	if err := dfw.writer.WriteUint32(uint32(len(itemBytes))); err != nil {
+	if err := dfw.writer.WriteUint32(length); err != nil {
 		return fmt.Errorf("failed to write sequence length: %w", err)
 	}
 	dfw.position += 4
@@ -652,6 +668,9 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 		dfw.position += int64(len(itemBytes))
 	}
 
+	if length == undefinedLength {
+		return dfw.writeSequenceDelimiter()
+	}
 	return nil
 }
 

@@ -819,6 +819,11 @@ written back keeps every attribute it was read with (#216). Encapsulated pixel d
 is written with undefined length and a closing sequence delimiter, as PS3.5 A.4
 requires, both to a file and on the network. Native pixel data is never sent under
 a compressed syntax: the send fails rather than describe pixels as fragments.
+In an Implicit VR file, a sequence whose tag the dictionary does not call a
+sequence, a private one above all, is written with undefined length and a
+Sequence Delimitation Item (PS3.5 7.5.1): nothing else tells a reader it holds
+items (Note 5 below). Every other sequence and every item has an explicit length.
+The network codec does not do this yet (#424).
 
 On reading, an element encoded as UN whose tag the dictionary knows takes that
 VR, and its value is read as Implicit VR Little Endian, which PS3.5 6.2.2 Note 2
