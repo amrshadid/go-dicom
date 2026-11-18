@@ -180,15 +180,23 @@ func (c *CLI) ShowHelp() {
 
 	// Display commands in a specific order
 	fmt.Printf("  FILE COMMANDS:\n")
-	fileCommands := []string{"show", "info", "convert", "create", "anonymize", "share", "tag-doc", "codify"}
+	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "diff", "dicomdir", "sr", "validate", "modify", "compress", "decompress", "create", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
 		"show":      "Display DICOM file contents",
 		"info":      "Show DICOM file metadata and information",
+		"validate":  "Check a file against what its SOP class requires (PS3.3)",
 		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
+		"modify":    "Set, insert or delete attributes of a DICOM file",
 		"anonymize": "De-identify a DICOM file or directory (PS3.15 Annex E)",
 		"share":     "Render an image as a PNG or JPEG that is safe to hand on",
+		"diff":      "Compare two DICOM files element by element",
+		"dicomdir":  "Write the DICOMDIR of a directory, or list one",
+		"sr":        "Print the content tree of a structured report",
 		"tag-doc":   "Generate documentation for DICOM tags",
 		"codify":    "Read a DICOM file and produce Go code to create it",
+
+		"compress":   "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG Baseline",
+		"decompress": "Write a file's pixel data uncompressed",
 		"create":    "Make a DICOM file from DICOM JSON, a picture or a PDF",
 	}
 	for _, cmdName := range fileCommands {

@@ -232,8 +232,9 @@ IMAGES (--format png or jpeg):
                       name-0001.png, name-0002.png and so on.
   --quality <1-100>   JPEG quality (default: 90). PNG is lossless.
 
-  The image is what a viewer shows: rescaled, windowed, MONOCHROME1 inverted,
-  and color converted to RGB, at 8 bits. It holds pixels only, so none of the
+  The image is what a viewer shows: through the file's lookup tables or its
+  rescale and window, inverted where MONOCHROME1 or Presentation LUT Shape
+  says, and color converted to RGB, at 8 bits. It holds pixels only, so none of the
   file's attributes are in it. Text burned into the picture itself still is.
 
 EXAMPLES:
