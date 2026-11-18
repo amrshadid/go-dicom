@@ -136,6 +136,9 @@ type SCPConfig struct {
 	Network NetworkConfig
 
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
+	// A caller over the limit is refused rejected-transient, by the
+	// service-provider (presentation related function), local-limit-exceeded
+	// (PS3.8 Table 9-21), so it knows to try again later.
 	MaxAssociations int
 
 	// Events, when set, is told what happens on each association the SCP
