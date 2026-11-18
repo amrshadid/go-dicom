@@ -81,6 +81,35 @@ func (ds *Dataset) DecompressInPlace() error {
 	return nil
 }
 
+// DecodeFrame decodes one compressed frame of this image into its samples:
+// codestream is the frame as it is encapsulated, its fragments joined, and
+// the data set says the rest, its transfer syntax and the attributes of the
+// Image Pixel Module. Pixel Data itself need not be in it, which is what
+// lets a frame be decoded from a file read without its bulk data.
+//
+// The samples come out as DecompressInPlace leaves them, which uses the
+// same decoders: pixel after pixel, little endian, chroma for every pixel,
+// a JPEG 2000 color transform undone.
+func (ds *Dataset) DecodeFrame(codestream []byte) ([]byte, error) {
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, fmt.Errorf("decode frame: %w", err)
+	}
+	compression, encapsulated := ds.pixelCompression(nil, info)
+	if !encapsulated {
+		return nil, fmt.Errorf("decode frame: transfer syntax %q does not compress frames", ds.TransferSyntaxUID())
+	}
+	samples, err := decompressPixelFrame(compression, codestream, info)
+	if err != nil {
+		return nil, fmt.Errorf("decode frame: %w", err)
+	}
+	if len(samples) < info.BytesPerFrame {
+		return nil, fmt.Errorf("decode frame: the frame decodes to %d bytes and the image needs %d",
+			len(samples), info.BytesPerFrame)
+	}
+	return samples[:info.BytesPerFrame], nil
+}
+
 // replaceElement sets an attribute, whether or not the data set had it.
 func replaceElement(ds *Dataset, t tag.Tag, vr dataelem.VR, value []byte) {
 	ds.Remove(t)

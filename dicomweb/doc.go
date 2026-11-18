@@ -83,11 +83,20 @@
 // the instances as DICOM JSON with Pixel Data and other bulk values named
 // and not carried.
 //
+// Frames of an instance, …/instances/{instance}/frames/1,2, come one part a
+// frame in the order asked. A request that says nothing gets them
+// uncompressed, application/octet-stream in Explicit VR Little Endian, as
+// PS3.18 makes the default, a compressed frame decoded for it. With
+// application/octet-stream and transfer-syntax=*, or the frame's own type
+// (image/jpeg, image/jls, image/jp2, image/dicom-rle), each frame is the bytes
+// the file holds. A frame is read from the file by where it lies, not by
+// loading the instance. A frame number the image does not have is 404.
+//
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves
 // whatever the archive holds to whoever reaches it, so a deployment wraps it
-// in a handler that decides who may. Frames, rendered images and bulk data
-// on their own are not served.
+// in a handler that decides who may. Rendered images and bulk data on their
+// own are not served.
 //
 // Instances are stored as the application/dicom parts of a multipart
 // request, to /studies or into a study. Each is kept or refused on its own,

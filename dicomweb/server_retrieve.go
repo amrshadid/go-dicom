@@ -42,10 +42,13 @@ const (
 
 // retrieveTarget is what a retrieve resource names: a study, one of its
 // series, or one instance of that series; and whether it is their metadata
-// that is asked for.
+// that is asked for, or frames of the instance.
 type retrieveTarget struct {
 	study, series, instance string
 	metadata                bool
+	// frames is the list of frame numbers of a frames resource, as the path
+	// gives it, or empty.
+	frames string
 }
 
 // retrieveTargetOf reads a request path as a retrieve resource, and reports
@@ -56,6 +59,9 @@ func retrieveTargetOf(path string) (retrieveTarget, bool, *requestError) {
 	if n := len(s); n > 1 && s[n-1] == "metadata" {
 		target.metadata = true
 		s = s[:n-1]
+	} else if n == 8 && s[6] == "frames" {
+		target.frames = s[7]
+		s = s[:6]
 	}
 	switch {
 	case len(s) == 2 && s[0] == "studies":
