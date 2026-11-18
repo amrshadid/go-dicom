@@ -63,6 +63,14 @@ type NetworkConfig struct {
 	// images; a deeper one is refused whatever this says.
 	JPEGQuality int
 
+	// JPEGLSNear is the allowed error, NEAR of ITU-T T.87, for an image sent
+	// as JPEG-LS Lossless and Near-Lossless (1.2.840.10008.1.2.4.81) when that
+	// is the only syntax the peer accepts for it: every sample arrives within
+	// this much of its value. Zero, the default, codes the image losslessly
+	// under that syntax, which it allows, so nothing is lost unasked. A signed
+	// image is sent only at zero. It runs from 0 to 255.
+	JPEGLSNear int
+
 	// MaxDataSetSize bounds the data set of one message, which is held in
 	// memory whole while it arrives. A peer sending more is aborted. Zero is
 	// no limit. A C-STORE given to a CStoreStreamer is not held whole; the

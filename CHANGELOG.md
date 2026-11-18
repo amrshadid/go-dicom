@@ -378,6 +378,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   four lossy JPEGs whose subsampled chroma the two decoders upsample
   differently at color edges.
 
+- **A file or a send can be compressed to JPEG-LS Near-Lossless** (#337).
+  The JPEG-LS encoder coded NEAR 0 only, so `1.2.840.10008.1.2.4.81` was
+  refused by name and a peer that accepted only it could not be sent an
+  image. `compress.EncodeJPEGLSNearLossless` takes the allowed error, and
+  every sample decodes to within it. `Dataset.CompressJPEGLSNearLosslessInPlace(near)`
+  writes a file in it, marked Lossy Image Compression `01` with its ratio
+  and `ISO_14495_1` when the error is above zero. A send that needs `.81`
+  uses `NetworkConfig.JPEGLSNear`; at the default, zero, the image is coded
+  losslessly under that syntax, so nothing is lost unasked. A signed image
+  is coded only losslessly, as dcmtk does. dcmtk and libjpeg decode every
+  unsigned image of pydicom's corpus coded at NEAR 1, 2 and 5 to within the
+  error and to the same samples as each other, and the interoperability
+  suite has dcmtk check it at NEAR 2.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

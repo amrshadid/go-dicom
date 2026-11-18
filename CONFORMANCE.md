@@ -617,10 +617,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Six syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, JPEG
-  2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG Baseline when
-  asked.** Pixel data is transcoded in both directions as the negotiated
-  context requires.
+- **Seven syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless and
+  Near-Lossless, JPEG 2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG
+  Baseline when asked.** Pixel data is transcoded in both directions as the
+  negotiated context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
@@ -643,10 +643,31 @@ how decoded samples are shaped and coloured, and the one tolerance.
   wrongly, for dcmtk's files and the corpus's own as much as for these, so
   JPEG-LS color is checked with the libjpeg decoder it uses, called directly.
 
-  The JPEG-LS encoder is lossless only, at 2 to 16 bits, one scan per component.
-  **JPEG-LS Near-Lossless is refused although the same encoder could produce it**:
-  it is lossy, and how much error to accept is the caller's decision rather than
-  one to make silently while transcoding.
+  The JPEG-LS encoder codes 2 to 16 bits, one scan per component, losslessly
+  or with an allowed error. **JPEG-LS Near-Lossless (`.81`) uses the error the
+  sender gives in `NetworkConfig.JPEGLSNear`**, NEAR of ITU-T T.87, 0 to 255:
+  every sample arrives within that much of its value. How much error to accept
+  is the caller's decision, so the default, zero, codes the image losslessly
+  under `.81`, which the syntax allows, and nothing is lost unasked. Each error
+  is quantized to a multiple of 2·NEAR+1 and every later sample is predicted
+  from the reconstructed ones (T.87 A.4.4). With an error allowed, the data set
+  is marked Lossy Image Compression `01` with its ratio and method
+  `ISO_14495_1` (PS3.3 C.7.6.1.1.5), and the SOP Instance UID is the caller's
+  to change. A signed image is coded only at NEAR 0: JPEG-LS codes samples as
+  unsigned numbers, and an error on the two's complement bits would carry the
+  top of the signed range to the bottom. dcmtk refuses the same images.
+  `Dataset.CompressJPEGLSNearLosslessInPlace(near)` is the same encoder for
+  files.
+
+  *Verified:* dcmtk's `dcmdjpls` (CharLS) and libjpeg (through
+  pylibjpeg-libjpeg) decode every unsigned corpus image of 8 or 16 bits
+  allocated, 32 files coded here at NEAR 1, 2 and 5, and seven generated edge
+  cases (1x1, odd sizes, planar configuration 1, a 6000 by 5000 image), every
+  sample within NEAR, and the two return the same samples as each other and as
+  this library's decoder. At NEAR 0 all 48 corpus images and ten edge cases,
+  the signed ones included, come back exact. The size matches dcmtk's own
+  encoder at the same NEAR to within a few hundred bytes. CI runs the dcmtk
+  check at NEAR 2.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
