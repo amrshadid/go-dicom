@@ -94,7 +94,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()` |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
@@ -271,9 +271,18 @@ are using that package.
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
 | JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
+| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`), JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
+
+A file in High-Throughput JPEG 2000 or JPEG XL is read, stored, de-identified
+and sent as it is, to a peer that accepts its syntax. Its pixel data is not
+decoded: rendering, reading the samples, redacting, and sending it over a
+context that needs it decoded are refused with the syntax's name. pydicom 3
+decodes HTJ2K through OpenJPEG 2.5, and OpenJPEG 2.5.4's `opj_decompress`
+decodes pydicom-data's two HTJ2K files to the same samples; nothing in pydicom,
+dcmtk 3.7.0 or this library decodes JPEG XL.
 
 ### 3.3 Extended negotiation
 
@@ -354,7 +363,8 @@ of, and does not name a file it could not read; both are counted as refused.
 | AE title | `SCPConfig.AETitle`, `SCUConfig.CallingAE` / `CalledAE` |
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
-| Concurrent association limit | `SCPConfig.MaxAssociations` |
+| Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
+| A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
@@ -702,16 +712,24 @@ and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
 presentation-context helpers provided.
 
-Three of them are now exercised end to end:
+All of them are now exercised end to end:
 
 | SOP class | Verified by |
 |---|---|
 | Relevant Patient Information Query (all three) | A C-FIND over a real association, and against pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it received |
 | Display System | An N-GET for the well-known instance `1.2.840.10008.5.1.1.40.1`, asserting the SCP is asked about that instance and not another |
 | Non-patient object information models | A C-FIND for hanging protocol, color palette and generic implant template, and against pynetdicom, which confirms the identifier carries **no** QueryRetrieveLevel |
+| Media Creation Management | Against pynetdicom in both directions (`network/interop_mediaevent_test.go`, run by `scripts/interop-test.sh`): N-CREATE of a request with a Referenced SOP Sequence, N-ACTION 1 to initiate it, N-GET of its Execution Status. Each side reports the instance, action type and attributes it read |
+| Procedural Event Logging, Substance Administration Logging | Against pynetdicom in both directions, the same way: N-ACTION 1 to each class's well-known instance, a Content Sequence item for the procedural event and a Product Name for the substance |
 
-Media Creation Management and the event logging classes still have no test
-against a peer.
+pynetdicom 2.1 serves all three classes, so none of them is tested against
+go-dicom alone. Writing these tests found two defects in the N-DIMSE
+primitives, recorded on their own: an SCU leaves the data set of an N-CREATE,
+N-SET, N-ACTION or N-EVENT-REPORT response unread, so the next operation
+reads it as its response (#379); and an SCP never gives an N-GET handler the
+Attribute Identifier List (#380). The tests here do not lean on either: the
+media creation SCP answers N-CREATE without an attribute list, and the N-GET
+handler's list is not asserted.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes
