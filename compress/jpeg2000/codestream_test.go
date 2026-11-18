@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/compress/jpeg2000"
@@ -160,12 +161,14 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 		// Offsets into the segments buildCodestream writes: Scod at 4,
 		// progression 5, code-block style 12, wavelet 13; in SIZ the first
 		// component's Ssiz is at 40 and its XRsiz at 41.
-		"code-block style": {func(cod, _ []byte) { cod[12] = 0x01 }, "code-block style"},
-		"precincts":        {func(cod, _ []byte) { cod[4] = 0x01 }, "precinct"},
-		"progression":      {func(cod, _ []byte) { cod[5] = 4 }, "progression order"},
-		"wavelet":          {func(cod, _ []byte) { cod[13] = 9 }, "wavelet"},
-		"subsampling":      {func(_, siz []byte) { siz[41] = 2 }, "subsampling"},
-		"bit depth":        {func(_, siz []byte) { siz[40] = 0x80 | 31 }, "32-bit"},
+		// Bit 6 is Part 15's High-Throughput block coder; Part 1's six
+		// options below it all decode.
+		"code-block style": {func(cod, _ []byte) { cod[12] = 0x40 }, "code-block style 0x40"},
+		// CPRL (4) is the last order Table A.16 defines.
+		"progression": {func(cod, _ []byte) { cod[5] = 5 }, "progression order"},
+		"wavelet":     {func(cod, _ []byte) { cod[13] = 9 }, "wavelet"},
+		"subsampling": {func(_, siz []byte) { siz[41] = 2 }, "subsampling"},
+		"bit depth":   {func(_, siz []byte) { siz[40] = 0x80 | 31 }, "32-bit"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -187,6 +190,139 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 	// And the unpatched one parses, so the refusals above are about the patch.
 	if _, err := jpeg2000.ParseCodestream(base); err != nil {
 		t.Fatalf("the unpatched codestream did not parse: %v", err)
+	}
+}
+
+// TestParseCodestreamReadsPrecinctSizes: a coding style with its own precincts
+// carries one byte per resolution after SPcod, the width's exponent in the low
+// four bits (A.6.1, Table A.21). They are read in order; a list shorter than
+// the resolutions, or a one-sample precinct above the lowest resolution, is an
+// error. opj_compress writes the second when asked for "-c [16,16]" over six
+// resolutions, and opj_decompress refuses it as this parser does.
+func TestParseCodestreamReadsPrecinctSizes(t *testing.T) {
+	withPrecincts := func(sizes ...byte) []byte {
+		data := buildCodestream(t, func(cod, _ []byte) { cod[4] = 0x01 })
+		// buildCodestream's COD is 14 bytes at offset 2+43; grow it by the
+		// precinct bytes and fix its length.
+		cod := 2 + 43
+		out := append([]byte{}, data[:cod+14]...)
+		out = append(out, sizes...)
+		out = append(out, data[cod+14:]...)
+		binary.BigEndian.PutUint16(out[cod+2:], uint16(12+len(sizes)))
+		return out
+	}
+
+	// Five levels: six resolutions, from 2^0 at the lowest to 2^5 by 2^7.
+	c, err := jpeg2000.ParseCodestream(withPrecincts(0x00, 0x11, 0x22, 0x33, 0x44, 0x75))
+	if err != nil {
+		t.Fatalf("ParseCodestream: %v", err)
+	}
+	want := []jpeg2000.PrecinctSize{{PPx: 0, PPy: 0}, {PPx: 1, PPy: 1}, {PPx: 2, PPy: 2},
+		{PPx: 3, PPy: 3}, {PPx: 4, PPy: 4}, {PPx: 5, PPy: 7}}
+	for r, size := range want {
+		if got := c.Coding.PrecinctFor(r); got != size {
+			t.Errorf("resolution %d: precinct %+v, want %+v", r, got, size)
+		}
+	}
+	// And a style without its own precincts has the default at every level.
+	plain, err := jpeg2000.ParseCodestream(buildCodestream(t, func(_, _ []byte) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plain.Coding.PrecinctFor(3); got != (jpeg2000.PrecinctSize{PPx: 15, PPy: 15}) {
+		t.Errorf("default precinct %+v, want 2^15 by 2^15", got)
+	}
+
+	for name, sizes := range map[string][]byte{
+		"too few sizes":                {0x00, 0x11, 0x22},
+		"one sample wide at level one": {0x00, 0x10, 0x22, 0x33, 0x44, 0x55},
+		"one sample high at the top":   {0x00, 0x11, 0x22, 0x33, 0x44, 0x05},
+	} {
+		if _, err := jpeg2000.ParseCodestream(withPrecincts(sizes...)); err == nil {
+			t.Errorf("%s: parsed", name)
+		}
+	}
+}
+
+// withProgressionChanges inserts a POC segment of the given 7-byte entries
+// into buildCodestream's codestream, before its tile-part, and gives the tile
+// n bytes of empty packets.
+func withProgressionChanges(t *testing.T, patch func(cod, siz []byte), entries [][7]byte, n int) []byte {
+	t.Helper()
+	data := buildCodestream(t, patch)
+	sot := bytes.Index(data, []byte{0xFF, 0x90})
+	out := append([]byte{}, data[:sot]...)
+	out = binary.BigEndian.AppendUint16(out, 0xFF5F)
+	out = binary.BigEndian.AppendUint16(out, uint16(2+7*len(entries)))
+	for _, entry := range entries {
+		out = append(out, entry[:]...)
+	}
+	out = binary.BigEndian.AppendUint16(out, 0xFF90)
+	out = binary.BigEndian.AppendUint16(out, 10)
+	out = binary.BigEndian.AppendUint16(out, 0)              // tile 0
+	out = binary.BigEndian.AppendUint32(out, uint32(12+2+n)) // Psot
+	out = append(out, 0, 1)                                  // TPsot, TNsot
+	out = binary.BigEndian.AppendUint16(out, 0xFF93)         // SOD
+	out = append(out, make([]byte, n)...)                    // each 0 is an empty packet
+	return binary.BigEndian.AppendUint16(out, 0xFFD9)
+}
+
+// TestProgressionChangesCannotStallTheDecoder: a POC can name thousands of
+// volumes, each repeating the packets of the ones before it and adding one.
+// Skipping what was already read costs work without consuming a byte, so
+// without a bound the walk is quadratic in the tile's size. Here that is 4e7
+// skips, which is quick; but POC segments in a main header add up, and a
+// megabyte of them asks for about 1e10. The walk must stop with an error at
+// a bound that grows with the tile, not with the square of it.
+func TestProgressionChangesCannotStallTheDecoder(t *testing.T) {
+	entries := make([][7]byte, 9000)
+	for i := range entries {
+		// Resolutions 0 to 33, components 0 to 256, layers 0 to i+1, LRCP.
+		entries[i] = [7]byte{0, 0, byte((i + 1) >> 8), byte(i + 1), 33, 0, 0}
+	}
+	data := withProgressionChanges(t, func(cod, _ []byte) {
+		binary.BigEndian.PutUint16(cod[6:], 0xFFFF) // layers
+		cod[9] = 0                                  // one resolution: one precinct
+	}, entries, 60000)
+
+	c, err := jpeg2000.ParseCodestream(data)
+	if err != nil {
+		t.Fatalf("ParseCodestream: %v", err)
+	}
+	start := time.Now()
+	_, err = jpeg2000.ReadTilePacketsForTest(c, 0)
+	if err == nil || !strings.Contains(err.Error(), "progression order changes") {
+		t.Fatalf("read the tile with error %v, want the progression bound", err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("took %v to refuse", took)
+	}
+}
+
+// TestParseCodestreamRefusesABrokenPOC: a POC whose length is not a whole
+// number of entries, or that names a progression order Table A.16 does not
+// define, is refused; the second by name.
+func TestParseCodestreamRefusesABrokenPOC(t *testing.T) {
+	plain := func(_, _ []byte) {}
+	good := [7]byte{0, 0, 0, 1, 6, 1, 2}
+	if _, err := jpeg2000.ParseCodestream(withProgressionChanges(t, plain, [][7]byte{good}, 1)); err != nil {
+		t.Fatalf("a well-formed POC: %v", err)
+	}
+
+	bad := good
+	bad[6] = 5
+	_, err := jpeg2000.ParseCodestream(withProgressionChanges(t, plain, [][7]byte{good, bad}, 1))
+	var unsupported *jpeg2000.ErrUnsupported
+	if !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "progression order 5") {
+		t.Errorf("progression 5 in a POC: %v, want it refused by name", err)
+	}
+
+	short := withProgressionChanges(t, plain, [][7]byte{good}, 1)
+	poc := bytes.Index(short, []byte{0xFF, 0x5F})
+	binary.BigEndian.PutUint16(short[poc+2:], 2+6) // one byte short of an entry
+	short = append(short[:poc+2+2+6], short[poc+2+2+7:]...)
+	if _, err := jpeg2000.ParseCodestream(short); err == nil {
+		t.Error("a POC of 6 bytes parsed")
 	}
 }
 

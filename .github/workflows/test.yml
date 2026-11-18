@@ -282,6 +282,42 @@ jobs:
           # A skip passes too, and here it must not.
           grep -q "OpenJPEG returned the samples" openjpeg.log
 
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeEveryBlockStyleMatchesOpenJPEG|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeEveryBlockStyleMatchesOpenJPEG|TestRegionOfInterest|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
+      # The decoder's features that pydicom's corpus does not use (#346):
+      # opj_compress writes each, and this decoder must return what
+      # opj_decompress returns. Skipped without OpenJPEG, so required here.
+      - name: Verify the JPEG 2000 decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestDecodeMatchesOpenJPEG|TestDecodeEveryBlockStyleMatchesOpenJPEG|TestRegionOfInterest|TestProgressionChangesByComponent|TestJP2BoxWithA64BitLength|TestDecodeOpenJPEGFixtures' -v > openjpeg-decode.log
+          grep -E "comparing with|agree on" openjpeg-decode.log
+          grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
+
       - name: Build CLI
         run: go build -o go-dicom .
 
@@ -312,7 +348,28 @@ jobs:
           export PYNETDICOM_BIN="$HOME/dicomvenv/bin"
           # pydicom supplies the fixture and the verifier.
           export PATH="$HOME/dicomvenv/bin:$PATH"
-          ./scripts/interop-test.sh
+          set -o pipefail
+          ./scripts/interop-test.sh 2>&1 | tee interop.log
+          # OpenJPEG is installed above, so the JPEG 2000 decoding section has
+          # what it needs and must have run. It skipped in every run for a
+          # module the venv does not have, and the job passed (#322).
+          grep -qF "an OpenJPEG-encoded frame decodes to the original pixels" interop.log
+
+      # A C-STORE streamed to a handler is written as the peer sent it: dcmtk
+      # and pynetdicom send corpus files, and the written file's data set is
+      # compared byte for byte with what was sent, then read by dcmdump and by
+      # pydicom. The tests skip without the corpus or either peer; here
+      # GODICOM_REQUIRE_INTEROP makes a skip a failure.
+      - name: Verify streamed C-STORE files against dcmtk and pynetdicom
+        env:
+          GODICOM_REQUIRE_INTEROP: "1"
+          DCMTK_BIN: /usr/bin
+        run: |
+          export PATH="$HOME/dicomvenv/bin:$PATH"
+          GODICOM_PYDICOM_DATA=$("$HOME/dicomvenv/bin/python" -c \
+            "import pydicom.data, os; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+          export GODICOM_PYDICOM_DATA
+          go test ./network/ -race -v -run 'TestDcmtkStoresAStreamedFile|TestPynetdicomStoresAStreamedFile'
 
       # Decoding is checked against pydicom's own reading of the same files,
       # not against this library's writer. Unit tests build their fixtures with
@@ -336,10 +393,22 @@ jobs:
           # pydicom's charset fixtures sit beside the corpus and are the only
           # multi-byte text this project has to check against.
           go test ./charset/ -run 'TestPersonNamesAgainstPydicomCharsetFiles|TestTextIsDecodedWithoutAskingForIt|TestDecodedDataSetDeclaresUTF8|TestSequenceItemCharacterSet' -v
+          # A file written with its pixels copied from the source is the file
+          # a whole read writes, and anonymize relies on it: every corpus file,
+          # every profile, byte for byte.
+          go test ./filewriter/ -run TestValuesCopiedFromTheFileAcrossThePydicomCorpus -v
+          go test ./cli/ -run TestAnonymizeLeavingValuesInTheFileWritesTheSameFile -v
+          # Checking an instance against its IOD is tested on corpus files:
+          # the broken CT is CT_small with eight changes.
+          go test ./validate/ -v
+          go test ./cli/ -run TestValidate -v
           # The transcoding checks need a genuinely compressed instance, which
           # the corpus supplies; they skip without it, so this is the one job
-          # where they run.
-          go test ./network/ -run 'TestCompressedInstanceIsDecodedBeforeSending|TestTranscodingDoesNotMutateTheCaller' -v
+          # where they run. The whole package runs, not the tests that were
+          # named when this line was written: a named list does not include
+          # the next corpus test, and one that no job runs guards nothing
+          # (TestUnencodableCompressedTargetIsRefused went stale unseen, #327).
+          go test ./network/
           # The reference JPEG 2000 decoder, and the registry consulting it. The
           # library bundles no codec, so this is what verifies the documented
           # escape hatch actually works.
@@ -347,19 +416,21 @@ jobs:
           go test ./examples/... -v
 
       # Services the shell script above cannot reach, because they have no CLI
-      # command to drive them: MPPS, print management, and cancelling a
-      # retrieval. They are driven from Go instead.
+      # command to drive them: MPPS, print management, cancelling a retrieval,
+      # and an SCP refusing a caller with the reason it chose. They are driven
+      # from Go instead.
       #
-      # These tests skip wherever pynetdicom is absent, which is every other job
+      # These tests skip wherever pynetdicom or dcmtk is absent, which is every other job
       # — so this is the one place they run, and GODICOM_REQUIRE_INTEROP makes a
       # skip here a failure rather than a silent pass.
-      - name: Verify N-DIMSE services and cancellation against pynetdicom
+      - name: Verify N-DIMSE services, cancellation and refusals against pynetdicom and dcmtk
         env:
           GODICOM_REQUIRE_INTEROP: "1"
+          DCMTK_BIN: /usr/bin
         run: |
           export PATH="$HOME/dicomvenv/bin:$PATH"
           go test ./network/ -race -v \
-            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom|TestUPSAgainstPynetdicom'
+            -run 'TestMPPSAgainstPynetdicom|TestMPPSSCPAgainstPynetdicom|TestPrintManagementAgainstPynetdicom|TestCGetCancelFromPynetdicom|TestUPSAgainstPynetdicom|TestDcmtkSeesTheChosenRefusal|TestPynetdicomSeesTheChosenRefusal'
 
       - name: Upload server logs on failure
         if: failure()
