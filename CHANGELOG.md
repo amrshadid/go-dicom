@@ -7,18 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **`anonymize` no longer holds the image in memory** (#331). A file was read
-  whole, Pixel Data included, to change a few hundred bytes of text, so
-  memory followed the size of the image: 220 MB for a 200 MB CT, and a
-  whole-slide image of several gigabytes could not be de-identified on a
-  small machine. Unless `-redact` is given, the pixels now stay in the input
-  and are copied into the output as it is written: the same CT takes 20 MB,
-  as a 39 KB one does. The output is the same, byte for byte, as before:
-  checked over every file of pydicom's corpus under every profile, with the
-  pixels left in the file and with every binary value left there.
-
 ### Added
 
 - **A data set can be written back without its pixels in memory** (#331).
@@ -33,6 +21,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not in the file; an element whose value is in the file, written with no
   source, is an error and never an empty value, and `dataelem.ValueBytes`,
   and with it the network encoder, refuses one too.
+
+### Changed
+
+- **`anonymize` no longer holds the image in memory** (#331). A file was read
+  whole, Pixel Data included, to change a few hundred bytes of text, so
+  memory followed the size of the image: 220 MB for a 200 MB CT, and a
+  whole-slide image of several gigabytes could not be de-identified on a
+  small machine. Unless `-redact` is given, the pixels now stay in the input
+  and are copied into the output as it is written: the same CT takes 20 MB,
+  as a 39 KB one does. The output is the same, byte for byte, as before:
+  checked over every file of pydicom's corpus under every profile, with the
+  pixels left in the file and with every binary value left there.
+
+### Fixed
+
+- **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
+  body was allocated from the length in its header before any of it had
+  arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
+  a connection is read before the called AE title is looked at, so eight
+  connections each sending the header of a 128 MiB A-ASSOCIATE-RQ and then
+  1 MiB took a default server's heap from 2 MiB to 1039 MiB and held it
+  until ARTIM expired. A length is now checked against what a PDU of its
+  type can be, from the header: an A-ASSOCIATE-RQ or -AC against the new
+  `MaxAssociatePDULength` (1 MiB; all 128 presentation contexts with 40
+  transfer syntaxes each are 358 KB), an A-ASSOCIATE-RJ, A-RELEASE-RQ,
+  A-RELEASE-RP and A-ABORT against the four bytes PS3.8 gives them, and a
+  P-DATA-TF against the Maximum Length the SCP advertises, before the
+  association as well as after. A PDU of an unknown type is refused without
+  its body being read. A body within its bound is allocated as its bytes
+  arrive, so memory follows what a peer has sent: a P-DATA-TF stating
+  128 MiB and sending 1 MiB costs 3 MiB.
 
 ## [1.10.0] - 2026-11-17
 
