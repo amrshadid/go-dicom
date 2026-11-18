@@ -105,6 +105,27 @@ func (d *JPEGLSDecompressor) Decompress(data []byte) ([]byte, error) {
 	return img.pack(), nil
 }
 
+// DecompressFrame decodes one JPEG-LS frame to samples bitsAllocated bits
+// wide, the layout a data set describes; see FrameDecompressor.
+//
+// T.87 allows any precision from 2 to 16, and an encoder may code the precision
+// Bits Stored names: a frame of 8 bits in an image of 16 bits allocated unpacked
+// by Decompress is half the image. bitsStored and pixelRepresentation are not
+// needed, since a JPEG-LS sample has no sign of its own.
+func (d *JPEGLSDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsStored,
+	pixelRepresentation int) ([]byte, error) {
+
+	img, err := decodeJPEGLS(data)
+	if err != nil {
+		return nil, err
+	}
+	samples, err := atBitsAllocated(img.pack(), img.precision, bitsAllocated)
+	if err != nil {
+		return nil, fmt.Errorf("jpegls: %w", err)
+	}
+	return samples, nil
+}
+
 // jpeglsImage is a decoded frame. Components are stored as separate planes and
 // interleaved on the way out.
 type jpeglsImage struct {

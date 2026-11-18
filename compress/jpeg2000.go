@@ -96,6 +96,14 @@ func (d *JPEG2000Decompressor) DecompressFrame(data []byte, bitsAllocated, bitsS
 		return nil, fmt.Errorf("jpeg2000: Bits Allocated is %d, which is not 8, 16 or 32",
 			bitsAllocated)
 	}
+	// A component deeper than the sample it is written into would keep only
+	// its low bits: a picture, and the wrong one.
+	for c, depth := range img.Depths {
+		if depth > bitsAllocated {
+			return nil, fmt.Errorf("jpeg2000: component %d is coded at %d bits, more than the %d bits allocated to a sample",
+				c, depth, bitsAllocated)
+		}
+	}
 	if bitsStored <= 0 || bitsStored > bitsAllocated {
 		bitsStored = bitsAllocated
 	}
