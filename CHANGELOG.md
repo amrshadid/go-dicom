@@ -127,6 +127,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decode is an error. The SCP still drops the data set a handler returns
   (#399).
 
+- **An HTJ2K or JPEG XL image is refused by name, not read as samples or
+  sent as them** (#404). Pixel data in a syntax with no decoder here was
+  taken for native. `storescu` sent pydicom-data's HTJ2K file to dcmtk's
+  `storescp` as Explicit VR Little Endian with its fragments as the pixels,
+  and both sides reported success; rendering and redacting refused with a
+  count of bytes, or, where the fragments were longer than the image,
+  rendered codestream bytes and wrote black into them. Encapsulated pixel
+  data in High-Throughput JPEG 2000 (`.201`, `.202`, `.203`) or JPEG XL
+  (`.110`, `.111`, `.112`), or any other syntax without a decoder, is now
+  refused by `RenderFrame`, `PixelArray*`, `DecompressInPlace`, redaction
+  and the network transcoder with the syntax's name, and the six UIDs are
+  in the `uid` dictionary. The file is still read, stored, de-identified
+  and sent as it is to a peer that accepts its syntax. What exists to
+  decode them against is in #403.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

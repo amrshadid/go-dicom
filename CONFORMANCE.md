@@ -271,9 +271,18 @@ are using that package.
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
 | JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
+| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`), JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
+
+A file in High-Throughput JPEG 2000 or JPEG XL is read, stored, de-identified
+and sent as it is, to a peer that accepts its syntax. Its pixel data is not
+decoded: rendering, reading the samples, redacting, and sending it over a
+context that needs it decoded are refused with the syntax's name. pydicom 3
+decodes HTJ2K through OpenJPEG 2.5, and OpenJPEG 2.5.4's `opj_decompress`
+decodes pydicom-data's two HTJ2K files to the same samples; nothing in pydicom,
+dcmtk 3.7.0 or this library decodes JPEG XL.
 
 ### 3.3 Extended negotiation
 
