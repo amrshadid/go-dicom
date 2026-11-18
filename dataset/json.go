@@ -97,19 +97,19 @@ func (ds *Dataset) elementToJSON(t tag.Tag, elem *dataelem.DataElement) JSONElem
 
 	case dataelem.OB, dataelem.OW, dataelem.OD, dataelem.OF, dataelem.OL:
 		// Binary data - encode as base64
-		if b, ok := value.([]byte); ok {
+		if b, ok := valueBytes(elem); ok {
 			jsonElem.Value = base64.StdEncoding.EncodeToString(b)
 		}
 
 	case dataelem.US, dataelem.SS, dataelem.UL, dataelem.SL, dataelem.FL, dataelem.FD:
 		// Numeric data - parse based on VR
-		if b, ok := value.([]byte); ok {
+		if b, ok := valueBytes(elem); ok {
 			jsonElem.Value = string(b) // Will be parsed appropriately
 		}
 
 	default:
 		// Text data - convert to string
-		if b, ok := value.([]byte); ok {
+		if b, ok := valueBytes(elem); ok {
 			jsonElem.Value = trimNullAndSpace(b)
 		} else {
 			jsonElem.Value = value

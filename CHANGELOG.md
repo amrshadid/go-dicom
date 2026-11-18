@@ -653,6 +653,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JPEG-LS send of 8 bits stored in 16 allocated was refused, and so was one
   whose samples used the bits above Bits Stored; both are coded exactly.
 
+- **A value held as a Go string is not absent** (#377). `Dataset.GetValue`
+  returned the value only when it was held as `[]byte`, and
+  `GetValueByKeyword`, `GetStringByKeyword`, `GetByKeywordWithDefault` and
+  `GetStringByKeywordWithDefault` went through it. The library builds some
+  elements with a string (de-identification records Patient Identity Removed
+  as `"YES"`), so after `Anonymize`, `GetStringByKeyword("PatientIdentityRemoved")`
+  answered `""` for an element `ContainsByKeyword` reported present, while
+  `show` on the written file printed `YES`. The private-element accessors,
+  `String`, `GetStatistics`, `ToJSON` and the text formatter had the same
+  assertion. They now ask one helper, which uses `dataelem.ValueBytes`, the
+  conversion the writer already used, so reading and writing agree on what an
+  element holds. A data set built in memory, one read from a file and one
+  decoded from DICOM JSON answer alike. Nothing `show` prints changed.
+  Packages other than `dataset` still assert `[]byte` in places; #420 lists
+  them.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
