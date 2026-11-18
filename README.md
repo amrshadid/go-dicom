@@ -326,6 +326,9 @@ go build -o go-dicom .
 # Query for patients/studies
 ./go-dicom findscu -patient-name "Smith*" -level STUDY pacs:11112
 
+# Ask the worklist what is scheduled for this MR today, steps included
+./go-dicom findscu -worklist -modality MR -date today -aec RIS ris:104
+
 # Retrieve studies to a destination
 ./go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 

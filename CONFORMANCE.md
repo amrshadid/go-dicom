@@ -94,7 +94,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()` |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
