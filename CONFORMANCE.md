@@ -94,7 +94,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()` |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
@@ -271,9 +271,18 @@ are using that package.
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
 | JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
+| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`), JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
+
+A file in High-Throughput JPEG 2000 or JPEG XL is read, stored, de-identified
+and sent as it is, to a peer that accepts its syntax. Its pixel data is not
+decoded: rendering, reading the samples, redacting, and sending it over a
+context that needs it decoded are refused with the syntax's name. pydicom 3
+decodes HTJ2K through OpenJPEG 2.5, and OpenJPEG 2.5.4's `opj_decompress`
+decodes pydicom-data's two HTJ2K files to the same samples; nothing in pydicom,
+dcmtk 3.7.0 or this library decodes JPEG XL.
 
 ### 3.3 Extended negotiation
 
@@ -354,9 +363,10 @@ of, and does not name a file it could not read; both are counted as refused.
 | AE title | `SCPConfig.AETitle`, `SCUConfig.CallingAE` / `CalledAE` |
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
-| Concurrent association limit | `SCPConfig.MaxAssociations` |
+| Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
+| A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
@@ -420,6 +430,7 @@ advisory.
 | Limit | Value | Guards against |
 |---|---|---|
 | `network.MaxPDULengthLimit` | 128 MiB | A PDU declaring a huge length before sending any payload |
+| `network.MaxAssociatePDULength` | 1 MiB | An A-ASSOCIATE-RQ or -AC declaring a huge length, before the caller is known; the four-byte PDUs are held to four bytes |
 | The Maximum Length advertised in the A-ASSOCIATE-RQ or -AC | `NetworkConfig.MaxPDUSize` | A P-DATA-TF longer than the receiver agreed to; aborted (PS3.8 D.1) |
 | Command set being assembled | 1 MiB | Command fragments never marked last; aborted |
 | `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory; aborted |
@@ -502,14 +513,24 @@ how decoded samples are shaped and coloured, and the one tolerance.
   with the attribute, not despite it.
 
 - **`RenderFrame` renders for display, within what it knows.** It applies the
-  sign of the samples, Rescale Slope and Intercept, a window (LINEAR,
-  LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
-  the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
-  not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
-  an ICC profile, and it refuses 64-bit samples and segmented palettes by
-  name. `go-dicom convert --format png|jpeg` is the same
-  rendering. Grayscale output is checked against pydicom, and color against
-  the lossless copy of the same picture.
+  sign of the samples, the Modality LUT Sequence or Rescale Slope and
+  Intercept, the VOI LUT Sequence or a window (LINEAR, LINEAR_EXACT or
+  SIGMOID) or the range of the data, the Presentation LUT Sequence or
+  Presentation LUT Shape, MONOCHROME1 inversion, the YBR to RGB conversion
+  and the Palette Color tables, at 8 bits (PS3.3 C.11). Where a data set has
+  both a VOI LUT Sequence and a window, which C.11.2 leaves to the viewer, the
+  table is used, as pydicom does; a caller's window wins over both.
+  Presentation LUT Shape decides the inversion when it is present, so
+  MONOCHROME1 with INVERSE is inverted once, as dcmtk does. A Presentation LUT
+  Sequence takes the VOI output range as its input range (C.11.4.1); pydicom
+  scales by the image's lowest and highest values instead, which agrees when
+  the image reaches both ends. It does not apply an ICC Profile (C.11.15):
+  color is not color managed. It refuses 64-bit samples, segmented palettes
+  and a Presentation LUT Shape other than IDENTITY or INVERSE by name.
+  `go-dicom convert --format png|jpeg` is the same rendering. Grayscale
+  output is checked against pydicom, the lookup tables on generated files
+  since no corpus file has one, and color against the lossless copy of the
+  same picture.
 
 ### 8.2 Network
 
@@ -703,16 +724,24 @@ and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
 presentation-context helpers provided.
 
-Three of them are now exercised end to end:
+All of them are now exercised end to end:
 
 | SOP class | Verified by |
 |---|---|
 | Relevant Patient Information Query (all three) | A C-FIND over a real association, and against pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it received |
 | Display System | An N-GET for the well-known instance `1.2.840.10008.5.1.1.40.1`, asserting the SCP is asked about that instance and not another |
 | Non-patient object information models | A C-FIND for hanging protocol, color palette and generic implant template, and against pynetdicom, which confirms the identifier carries **no** QueryRetrieveLevel |
+| Media Creation Management | Against pynetdicom in both directions (`network/interop_mediaevent_test.go`, run by `scripts/interop-test.sh`): N-CREATE of a request with a Referenced SOP Sequence, N-ACTION 1 to initiate it, N-GET of its Execution Status. Each side reports the instance, action type and attributes it read |
+| Procedural Event Logging, Substance Administration Logging | Against pynetdicom in both directions, the same way: N-ACTION 1 to each class's well-known instance, a Content Sequence item for the procedural event and a Product Name for the substance |
 
-Media Creation Management and the event logging classes still have no test
-against a peer.
+pynetdicom 2.1 serves all three classes, so none of them is tested against
+go-dicom alone. Writing these tests found two defects in the N-DIMSE
+primitives, recorded on their own: an SCU leaves the data set of an N-CREATE,
+N-SET, N-ACTION or N-EVENT-REPORT response unread, so the next operation
+reads it as its response (#379); and an SCP never gives an N-GET handler the
+Attribute Identifier List (#380). The tests here do not lean on either: the
+media creation SCP answers N-CREATE without an attribute list, and the N-GET
+handler's list is not asserted.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes

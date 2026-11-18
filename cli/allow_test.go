@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -160,27 +159,6 @@ func allowEcho(address, callingAE string) error {
 	return scu.Echo(ctx)
 }
 
-// syncBuffer is a bytes.Buffer a server subprocess writes to while the test
-// reads it.
-type syncBuffer struct {
-	mu  chan struct{}
-	buf bytes.Buffer
-}
-
-func newSyncBuffer() *syncBuffer { return &syncBuffer{mu: make(chan struct{}, 1)} }
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu <- struct{}{}
-	defer func() { <-b.mu }()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu <- struct{}{}
-	defer func() { <-b.mu }()
-	return b.buf.String()
-}
-
 // startAllowServer starts a server command on a free port of the loopback,
 // writing into a directory of the test's, and returns its address once it
 // listens.
@@ -195,7 +173,7 @@ func startAllowServer(t *testing.T, binary, command string, args ...string) (str
 
 	args = append([]string{command, "-port", port, "-output", t.TempDir()}, args...)
 	server := exec.Command(binary, args...)
-	output := newSyncBuffer()
+	output := &syncBuffer{}
 	server.Stdout, server.Stderr = output, output
 	if err := server.Start(); err != nil {
 		t.Fatal(err)
