@@ -68,6 +68,24 @@ func newMQDecoder(data []byte, contexts int) *mqDecoder {
 	return d
 }
 
+// start begins decoding a new codeword segment (D.4.1): INITDEC on the
+// segment's own bytes, with every context left as the passes before left it.
+// A code-block whose encoder terminated more than once is read this way, one
+// segment at a time.
+func (d *mqDecoder) start(data []byte) {
+	d.data = data
+	d.init()
+}
+
+// resetContexts puts every context back where a code-block starts (Table
+// D.7), which the reset style asks for after each pass (D.6).
+func (d *mqDecoder) resetContexts() {
+	clear(d.contexts)
+	for _, start := range initialContexts {
+		d.setContext(int(start[0]), start[1], 0)
+	}
+}
+
 // setContext puts one context into a starting state.
 func (d *mqDecoder) setContext(cx int, index, mps uint8) {
 	if cx >= 0 && cx < len(d.contexts) {
@@ -173,6 +191,44 @@ func (d *mqDecoder) lpsExchange(ctx *mqContext, entry *qeEntry, qe uint32) int {
 	}
 	ctx.index = entry.nlps
 	return bit
+}
+
+// rawDecoder reads the passes selective arithmetic coding bypass leaves
+// uncoded (D.6): bits taken straight from the segment, most significant first,
+// with the same stuffing as everywhere else in a codestream, so that after a
+// 0xFF only seven bits of the next byte are data.
+//
+// Past the end it reads 1 bits, which is what a decoder sees when it is fed
+// 0xFF bytes there: an encoder may drop a segment's trailing bytes, and the
+// reference decoder reads its own padding of 0xFF in their place.
+type rawDecoder struct {
+	data []byte
+	bp   int
+	c    uint32 // the byte being read
+	ct   int    // its bits not yet read
+}
+
+// bit returns the next raw bit.
+func (d *rawDecoder) bit() int {
+	if d.ct == 0 {
+		next := uint32(0xFF)
+		if d.bp < len(d.data) {
+			next = uint32(d.data[d.bp])
+		}
+		switch {
+		case d.c == 0xFF && next > 0x8F:
+			// A marker, or the end of the data: 1 bits from here on.
+			d.c, d.ct = 0xFF, 8
+		case d.c == 0xFF:
+			d.c, d.ct = next, 7
+			d.bp++
+		default:
+			d.c, d.ct = next, 8
+			d.bp++
+		}
+	}
+	d.ct--
+	return int(d.c>>uint(d.ct)) & 1
 }
 
 // renorm is RENORMD (Figure C.21): shift until the interval is large again,

@@ -232,6 +232,28 @@
 //		fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
 //	}
 //
+// GetDataset gives a skipped value as nothing. GetDatasetWithValuesInFile
+// gives it as a dataelem.ValueInFile, where its bytes are, and filewriter,
+// given the file with SetValueSource, copies them from there as it writes:
+// a data set can be changed and written back without its pixels in memory,
+// byte for byte as if it had been read whole. A deflated file is refused,
+// since its values are not in the file.
+//
+// ### DICOMFile.FrameRanges
+//
+//	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
+//
+// Where each frame of Pixel Data lies in the file, so one frame is read
+// without the rest: a range a frame for native data, and for encapsulated
+// data the fragments that hold it, found by the Extended Offset Table, the
+// Basic Offset Table, the counts and the end-of-image markers.
+//
+//	file, _ := os.Open(path)
+//	dicom, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),
+//		filereader.ReadOptions{SkipBulkData: true})
+//	frames, err := dicom.FrameRanges(file)
+//	// frames[i] are the byte ranges of frame i+1, to be read and joined.
+//
 // ### DICOMFile.FrameRanges
 //
 //	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)

@@ -4,7 +4,7 @@ DICOM file-set management: directory scanning, the Patient/Study/Series hierarch
 
 A DICOMDIR stores its records in one flat sequence and describes a tree. The links are byte offsets into the file, not sequence order, so `ReadDICOMDIR` builds the tree from the offsets and falls back to order only for a file that has none. `WriteDICOMDIR` computes those offsets by writing the file twice — once to learn the layout, once with the real values — and re-reads its own output before returning it, because a file with wrong offsets is worse than no file: a reader accepts it and follows it into a tree that is not there.
 
-Each instance gets the record type of its SOP Class (IMAGE, SR DOCUMENT, RT PLAN, RT DOSE and so on, per PS3.3 F.5) with that type's keys, and each record carries its instance's Specific Character Set. File paths must be valid File IDs (PS3.10 8.5: at most 8 components of at most 8 characters from A–Z, 0–9 and `_`). `DICOMDIROptions.AllowNonConformantFileIDs` indexes other names, for a local directory rather than media.
+Each instance gets the record type of its SOP Class (IMAGE, SR DOCUMENT, RT PLAN, RT DOSE and so on, per PS3.3 F.5) with that type's keys, and each record carries its instance's Specific Character Set. File paths must be valid File IDs (PS3.10 8.5: at most 8 components of at most 8 characters from A–Z, 0–9 and `_`). `DICOMDIROptions.AllowNonConformantFileIDs` indexes other names, for a local directory rather than media. `ValidFileID(components)` is that check, for a caller that wants to name every offending file and not only the first. `go-dicom dicomdir` is the command over all of this: it refuses such names, and `--copy-to` copies the files under names that pass.
 
 ## Quick Start
 

@@ -913,7 +913,22 @@ fi
 # needs no plugin — asking pydicom to decode the compressed fixture would test
 # whichever of pylibjpeg or gdcm happened to be installed, or fail on a machine
 # with neither while appearing to say the pixels disagree.
-if command -v opj_compress >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+#
+# The fixture is checked before go-dicom is asked anything (#322). It was
+# written as PGX, and OpenJPEG's PGX reader takes the precision from the
+# largest sample rather than from the header's depth: MR_small's samples reach
+# 2145, so the codestream came out signed 12-bit and every sample over 2047 was
+# clipped. go-dicom then decoded exactly what OpenJPEG had written and failed
+# for it. Now opj_compress is given the data set's own little endian samples as
+# raw input with the depth stated (-F), the codestream's SIZ marker must say
+# Bits Stored and the data set's sign, and opj_decompress must return the
+# original bytes. A fixture that is not lossless fails as a fixture.
+#
+# Raw input also needs no numpy, which the CI venv does not have: building the
+# PGX called pixel_array, and that failure was reported as a skip, so the
+# section passed in CI without ever running.
+if command -v opj_compress >/dev/null 2>&1 && command -v opj_decompress >/dev/null 2>&1 &&
+  command -v python3 >/dev/null 2>&1; then
   note "JPEG 2000: OpenJPEG encoder, pydicom ground truth"
 
   j2k_dir="$WORKDIR/jpeg2000"
@@ -929,31 +944,48 @@ from pydicom.uid import JPEG2000Lossless
 out = sys.argv[1]
 corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
 ds = pydicom.dcmread(os.path.join(corpus, "MR_small.dcm"))
-arr = ds.pixel_array
-height, width = arr.shape
+rows, cols = int(ds.Rows), int(ds.Columns)
+stored, allocated = int(ds.BitsStored), int(ds.BitsAllocated)
 signed = int(ds.PixelRepresentation) == 1
+if not ds.file_meta.TransferSyntaxUID.is_little_endian or int(ds.SamplesPerPixel) != 1 \
+        or stored != allocated or allocated != 16:
+    sys.exit("MR_small.dcm is no longer one 16-bit little endian plane; the raw input below assumes it")
 
-# PGX is the one raw format opj_compress reads that carries signed samples,
-# which a 16-bit MR needs.
-pgx = os.path.join(out, "orig.pgx")
+# .rawl is little endian raw samples, which is what this Pixel Data already is.
+raw = os.path.join(out, "orig.rawl")
 j2k = os.path.join(out, "orig.j2k")
-with open(pgx, "wb") as fh:
-    fh.write(f"PG ML {'-' if signed else '+'} {ds.BitsStored} {width} {height}\n".encode())
-    fh.write(arr.astype(">i2" if signed else ">u2").tobytes())
-subprocess.run(["opj_compress", "-i", pgx, "-o", j2k, "-r", "1"],
+back = os.path.join(out, "back.rawl")
+with open(raw, "wb") as fh:
+    fh.write(ds.PixelData)
+subprocess.run(["opj_compress", "-i", raw, "-o", j2k, "-r", "1",
+                "-F", "%d,%d,1,%d,%s" % (cols, rows, stored, "s" if signed else "u")],
                capture_output=True, check=True)
+codestream = open(j2k, "rb").read()
+
+# SIZ (ISO 15444-1 A.5.1): the first component's Ssiz is the sign in its top
+# bit and the precision minus one below it, at byte 42 of the codestream.
+if codestream[2:4] != b"\xff\x51":
+    sys.exit("opj_compress wrote no SIZ marker after SOC")
+ssiz = codestream[42]
+if (ssiz & 0x7F) + 1 != stored or bool(ssiz & 0x80) != signed:
+    sys.exit("the fixture's codestream is %s %d-bit; the data set is %s %d-bit" % (
+        "signed" if ssiz & 0x80 else "unsigned", (ssiz & 0x7F) + 1,
+        "signed" if signed else "unsigned", stored))
+subprocess.run(["opj_decompress", "-i", j2k, "-o", back], capture_output=True, check=True)
+if open(back, "rb").read() != bytes(ds.PixelData):
+    sys.exit("OpenJPEG does not return the original samples from the fixture it wrote")
 
 with open(os.path.join(out, "orig.pixels"), "wb") as fh:
     fh.write(ds.PixelData)
 
 ds.file_meta.TransferSyntaxUID = JPEG2000Lossless
-ds.PixelData = encapsulate([open(j2k, "rb").read()])
+ds.PixelData = encapsulate([codestream])
 ds["PixelData"].is_undefined_length = True
 ds.save_as(os.path.join(out, "openjpeg.dcm"))
 
 # Leave only the data set behind, so the checker sees one fixture.
-os.remove(pgx)
-os.remove(j2k)
+for leftover in (raw, j2k, back):
+    os.remove(leftover)
 PYEOF
   then
     if go run ./scripts/jpeglossless-check "$j2k_dir" "$j2k_dir/orig.pixels" > "$WORKDIR/j2k.log" 2>&1; then
@@ -964,7 +996,9 @@ PYEOF
       sed -n '1,20p' "$WORKDIR/j2k.log" >&2
     fi
   else
-    skip "could not build the JPEG 2000 fixture with opj_compress"
+    # Not a skip: OpenJPEG and pydicom are both here, so a fixture that cannot
+    # be built is a fault, and as a skip it passed CI unseen (#322).
+    fail "could not build a lossless JPEG 2000 fixture with OpenJPEG"
     sed -n '1,10p' "$WORKDIR/j2k-fixture.log" >&2
   fi
 fi
@@ -1402,6 +1436,33 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# Media Creation Management and the two event logging classes (#370).
+#
+# They are N-CREATE, N-ACTION and N-GET against pynetdicom, in both directions,
+# and no command line drives them, so the check is the Go tests that do: each
+# fails on what pynetdicom read of our bytes, or on what go-dicom read of its.
+# GODICOM_REQUIRE_INTEROP turns a test that cannot find pynetdicom into a
+# failure, since here it was found.
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "Media Creation Management and event logging against pynetdicom"
+  if PATH="$PYNETDICOM_BIN:$PATH" GODICOM_REQUIRE_INTEROP=1 go test ./network/ -count=1 -v \
+    -run 'TestMediaCreationAgainstPynetdicom|TestMediaCreationSCPAgainstPynetdicom|TestEventLoggingAgainstPynetdicom|TestEventLoggingSCPAgainstPynetdicom' \
+    > "$WORKDIR/mediaevent.log" 2>&1; then
+    passed=$(grep -c '^--- PASS' "$WORKDIR/mediaevent.log" || true)
+    if [ "$passed" -eq 4 ]; then
+      pass "Media Creation Management, Procedural Event Logging, Substance Administration Logging — both directions, $passed tests"
+      RAN_ANY=1
+    else
+      fail "expected 4 media creation and event logging tests to pass, $passed did"
+      grep -E '^(---|=== RUN)' "$WORKDIR/mediaevent.log" >&2 || true
+    fi
+  else
+    fail "media creation or event logging does not agree with pynetdicom"
+    grep -vE '^=== (RUN|PAUSE|CONT)' "$WORKDIR/mediaevent.log" | sed -n '1,30p' >&2
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # TLS, both directions. Until SCUConfig.TLS an SCU could not associate over TLS
 # at all, and TLSConfig.CAFile was never read, so a server that was meant to
 # require client certificates accepted anyone (#180, #182). The PKI is made by
@@ -1709,6 +1770,122 @@ PYEOF
   fi
 else
   skip "JPEG 2000 encoding needs opj_decompress (OpenJPEG) and pydicom"
+fi
+
+# ---------------------------------------------------------------------------
+# Lossless JPEG encoding: go-dicom compresses, dcmtk decompresses (#336)
+#
+# Each uncompressed corpus file with an image of 8 or 16 bits is written as
+# .57 (the predictor chosen per frame) and as .70 (predictor 1), dcmdjpeg
+# decodes it, and what dcmtk returns is held against the source's samples,
+# each masked to Bits Stored. dcmtk's lossless JPEG decoder shares no code
+# with this library. pydicom is not the second decoder here: its call into
+# pylibjpeg-libjpeg converts YCbCr to RGB whenever the data set says RGB,
+# which is wrong for lossless JPEG and misreads dcmtk's own RGB output too.
+# ---------------------------------------------------------------------------
+if [ -x "$DCMTK_BIN/dcmdjpeg" ] && python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "Lossless JPEG encoding: go-dicom encoder, dcmtk decoder"
+  RAN_ANY=1
+  jl_src="$WORKDIR/jl-enc-src"
+  mkdir -p "$jl_src"
+  if python3 - "$jl_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom
+import pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    path = os.path.join(corpus, name)
+    try:
+        ds = pydicom.dcmread(path)
+        if "PixelData" not in ds or ds.file_meta.TransferSyntaxUID.is_compressed:
+            continue
+        if int(ds.BitsAllocated) not in (8, 16):
+            continue
+    except Exception:
+        continue
+    shutil.copy(path, sys.argv[1])
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    for jl_mode in jpeg-lossless jpeg-lossless-sv1; do
+      jl_out="$WORKDIR/jl-enc-$jl_mode"
+      mkdir -p "$jl_out" "$jl_out-decoded"
+      if go run ./scripts/roundtrip-check "-$jl_mode" "$jl_src" "$jl_out" > "$WORKDIR/jl-enc.log" 2>&1; then
+        for written in "$jl_out"/*.dcm; do
+          [ -f "$written" ] || continue
+          "$DCMTK_BIN/dcmdjpeg" +cn "$written" "$jl_out-decoded/$(basename "$written")" \
+            2>>"$WORKDIR/jl-dcmdjpeg.log" || true
+        done
+        if jl=$(python3 - "$jl_src" "$jl_out" "$jl_out-decoded" <<'PYEOF'
+import os, struct, sys
+import pydicom
+
+src, out, decoded = sys.argv[1:4]
+
+def samples(ds, stored):
+    """Every sample as a number masked to Bits Stored, pixel by pixel."""
+    rows, cols, spp = int(ds.Rows), int(ds.Columns), int(ds.SamplesPerPixel)
+    frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    size = int(ds.BitsAllocated) // 8
+    order = "<" if ds.file_meta.TransferSyntaxUID.is_little_endian else ">"
+    n = rows * cols * spp * frames
+    raw = bytes(ds.PixelData)
+    if size == 1 and order == ">" and ds["PixelData"].VR == "OW":
+        swapped = bytearray(raw)
+        swapped[0::2], swapped[1::2] = raw[1::2], raw[0:len(raw) - len(raw) % 2:2]
+        raw = bytes(swapped)
+    values = struct.unpack(order + str(n) + ("B" if size == 1 else "H"), raw[:n * size])
+    mask = (1 << stored) - 1
+    if spp > 1 and int(getattr(ds, "PlanarConfiguration", 0)) == 1:
+        plane, per = rows * cols, rows * cols * spp
+        values = tuple(values[f * per + c * plane + i] for f in range(frames)
+                       for i in range(plane) for c in range(spp))
+    return [v & mask for v in values]
+
+checked, bad = 0, []
+for name in sorted(os.listdir(out)):
+    if not name.endswith(".dcm"):
+        continue
+    want = pydicom.dcmread(os.path.join(src, name))
+    frames = int(getattr(want, "NumberOfFrames", 1) or 1)
+    if len(want.PixelData) < int(want.Rows) * int(want.Columns) * int(want.SamplesPerPixel) * \
+            frames * int(want.BitsAllocated) // 8:
+        continue
+    path = os.path.join(decoded, name)
+    if not os.path.exists(path):
+        bad.append("%s: dcmdjpeg could not decode it" % name)
+        continue
+    got = pydicom.dcmread(path)
+    stored = int(want.BitsStored)
+    if samples(got, stored) != samples(want, stored):
+        bad.append("%s: dcmtk decodes other samples" % name)
+        continue
+    checked += 1
+for line in bad:
+    print("   " + line, file=sys.stderr)
+print("%d files" % checked)
+raise SystemExit(1 if bad or not checked else 0)
+PYEOF
+        ); then
+          pass "Lossless JPEG encoding ($jl_mode) — dcmdjpeg decodes every file to the original samples — $jl"
+        else
+          fail "this encoder's lossless JPEG ($jl_mode) does not survive dcmtk: $jl"
+        fi
+      else
+        fail "the lossless JPEG encoding harness failed"
+        sed -n '1,20p' "$WORKDIR/jl-enc.log" >&2
+      fi
+    done
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+else
+  skip "lossless JPEG encoding needs dcmdjpeg (dcmtk) and pydicom"
 fi
 
 # ---------------------------------------------------------------------------
