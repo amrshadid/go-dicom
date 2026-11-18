@@ -27,6 +27,7 @@ func allCommands() []Command {
 		&TagDocCommand{},
 		&CodifyCommand{},
 		&AnonymizeCommand{},
+		&ModifyCommand{},
 		&ShareCommand{},
 		&DiffCommand{},
 		&DICOMDIRCommand{},

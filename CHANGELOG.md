@@ -222,6 +222,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warnings. No other validator was at hand to compare with, so five corpus
   files were compared with the standard by hand.
 
+- **`modify` sets, inserts and deletes attributes of a file** (#332). The
+  library could change a data set and write it back in any syntax, and no
+  command reached it, so fixing a patient name meant writing Go or reaching
+  for `dcmodify`. `-set` changes what is there, `-insert` creates what is
+  not, with the sequences and items on its path, and `-delete` removes an
+  attribute or an item; paths are dcmodify's, by keyword or tag:
+  `ReferencedSeriesSequence[0].SeriesInstanceUID`, `[*]` for every item. A
+  private attribute is named with its creator, `(0029,xx10,"ACME 1.0")`,
+  and an insert reserves the block. Every value is checked against its VR
+  and multiplicity before anything is written. The transfer syntax is kept
+  and the pixel data copied as read; a new SOP Instance UID only with
+  `-new-uid`; the input is changed only with `-in-place`. Checked against
+  pydicom making the same edits over pydicom's corpus: identical, element by
+  element, in 73 of the 77 files either reads; the other four are files the
+  reader already treats differently (two truncated values it drops, two
+  private sequences in an implicit VR file, #354).
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
