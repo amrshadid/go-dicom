@@ -6,13 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/amrshadid/go-dicom/dataelem"
-	"github.com/amrshadid/go-dicom/dataset"
-	"github.com/amrshadid/go-dicom/filereader"
-	"github.com/amrshadid/go-dicom/filewriter"
-	"github.com/amrshadid/go-dicom/tag"
-	"github.com/amrshadid/go-dicom/uid"
 )
 
 // ModifyCommand sets, inserts and deletes attributes of a DICOM file.
@@ -70,12 +63,6 @@ func (mc *ModifyCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&mc.ignoreMissing, "ignore-missing", false, "Skip a -set or -delete whose attribute is not in the file")
 }
 
-// sopInstanceUIDTag is (0008,0018), and sopClassUIDTag (0008,0016).
-var (
-	sopInstanceUIDTag = tag.New(0x0008, 0x0018)
-	sopClassUIDTag    = tag.New(0x0008, 0x0016)
-)
-
 // Execute runs the modify command.
 func (mc *ModifyCommand) Execute(args []string) error {
 	flags := flag.NewFlagSet("modify", flag.ContinueOnError)
@@ -92,34 +79,16 @@ func (mc *ModifyCommand) Execute(args []string) error {
 		return nil
 	}
 
-	var input, output string
-	switch {
-	case mc.inPlace && len(positional) == 1:
-		input, output = positional[0], positional[0]
-	case mc.inPlace:
-		return fmt.Errorf("modify: -in-place takes one file, the one it changes")
-	case len(positional) == 2:
-		input, output = positional[0], positional[1]
-		if sameFile(input, output) {
-			return fmt.Errorf("modify: the output is the input; give -in-place to change the input itself")
-		}
-	default:
-		return fmt.Errorf("modify: expected an input and an output, or -in-place and one file\nRun 'go-dicom modify -h' for usage")
+	input, output, err := outputPaths("modify", positional, mc.inPlace)
+	if err != nil {
+		return err
 	}
 	if len(mc.edits.edits) == 0 && !mc.newUID {
 		return fmt.Errorf("modify: nothing to do; give -set, -insert, -delete or -new-uid")
 	}
-
-	if _, err := os.Stat(input); err != nil {
-		return fmt.Errorf("modify: %w", err)
-	}
-	df, err := readInstance(input)
+	df, ds, err := readForRewrite("modify", input)
 	if err != nil {
-		return fmt.Errorf("modify: %s: %w", input, err)
-	}
-	ds := df.GetDataset()
-	if ds.Length() == 0 {
-		return fmt.Errorf("modify: %s does not look like a DICOM file: no data elements could be read", input)
+		return err
 	}
 
 	// Everything is applied before anything is written, so a refused edit
@@ -137,73 +106,18 @@ func (mc *ModifyCommand) Execute(args []string) error {
 		changed += n
 	}
 	if mc.newUID {
-		if err := ds.Add(dataelem.NewDataElement(sopInstanceUIDTag, dataelem.UI, padUID(uid.Generate()))); err != nil {
+		if _, err := newInstanceUID(ds); err != nil {
 			return fmt.Errorf("modify: %w", err)
 		}
 		changed++
 	}
 
-	meta := modifiedMeta(df, ds)
-	if mc.inPlace {
-		err = replaceFile(output, meta, ds)
-	} else {
-		err = writeDICOMInstance(output, meta, ds)
-	}
-	if err != nil {
+	meta := instanceMeta(df, ds)
+	if err := writeOutput(output, mc.inPlace, meta, ds); err != nil {
 		return fmt.Errorf("modify: %w", err)
 	}
 	fmt.Printf("Wrote %s: %d change(s), transfer syntax %s\n", output, changed, meta.TransferSyntaxUID)
 	return nil
-}
-
-// padUID pads a UID to an even length with a NUL (PS3.5 9.1).
-func padUID(u string) []byte {
-	if len(u)%2 == 1 {
-		return append([]byte(u), 0)
-	}
-	return []byte(u)
-}
-
-// modifiedMeta is the file meta for the modified data set.
-//
-// The transfer syntax is the file's own, so pixel data is written back as it
-// was read: encapsulated fragments untouched, native pixels in the byte order
-// the syntax says. The SOP class and instance are taken from the data set
-// after the edit, since PS3.10 7.1 has the meta name the instance the file
-// holds, and an edit or -new-uid may have changed it.
-//
-// What else the source meta said about where the file came from is carried
-// across. The implementation that wrote the file is this one, so the writer
-// names itself in (0002,0012) and (0002,0013).
-func modifiedMeta(df *filereader.DICOMFile, ds *dataset.Dataset) *filewriter.FileMetaInfo {
-	meta := &filewriter.FileMetaInfo{}
-	if read := df.FileMetaInfo; read != nil {
-		meta.TransferSyntaxUID = read.TransferSyntaxUID
-		meta.MediaStorageSOPClassUID = read.MediaStorageSOPClassUID
-		meta.MediaStorageSOPInstanceUID = read.MediaStorageSOPInstanceUID
-		meta.SourceApplicationEntityTitle = read.SourceApplicationEntityTitle
-		meta.SendingApplicationEntityTitle = read.SendingApplicationEntityTitle
-		meta.ReceivingApplicationEntityTitle = read.ReceivingApplicationEntityTitle
-	}
-	if meta.TransferSyntaxUID == "" {
-		// A file with no meta, or a meta without (0002,0010), is written in
-		// the encoding the reader found its data set in.
-		switch {
-		case !df.IsLittleEndian:
-			meta.TransferSyntaxUID = uid.BigEndianTransferSyntax().String()
-		case df.ExplicitVR:
-			meta.TransferSyntaxUID = uid.ExplicitVRLittleEndian().String()
-		default:
-			meta.TransferSyntaxUID = uid.ImplicitVRLittleEndian().String()
-		}
-	}
-	if v := datasetText(ds, sopClassUIDTag); v != "" {
-		meta.MediaStorageSOPClassUID = v
-	}
-	if v := datasetText(ds, sopInstanceUIDTag); v != "" {
-		meta.MediaStorageSOPInstanceUID = v
-	}
-	return meta
 }
 
 func (mc *ModifyCommand) showHelp() {
