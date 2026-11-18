@@ -333,7 +333,11 @@
 //
 //	func (fs *FileSet) ScanDirectory(recursive bool) (int, error)
 //
-// Scans directory for files and adds them to the file-set.
+// Scans directory for files and adds them to the file-set. A file that is not
+// DICOM, and a data set with no File Meta Information, which a File-set may
+// not hold (PS3.10 7.1, 8.1), are left out without failing the scan; Scan
+// returns them as SkippedFile values with the reason (ErrNotDICOM,
+// ErrNoFileMeta). AddFile refuses both with an error wrapping the same.
 //
 // **Parameters:**
 // - `recursive`: If true, scans subdirectories; if false, only immediate children
@@ -459,7 +463,7 @@
 // | Operation | Error Condition |
 // |-----------|-----------------|
 // | NewFileSet | Root directory creation fails |
-// | AddFile | File not found, file already in set |
+// | AddFile | File not found, file already in set, not DICOM (ErrNotDICOM), no File Meta Information (ErrNoFileMeta) |
 // | RemoveFile | File not in set |
 // | ScanDirectory | Directory read fails |
 // | Validate | Root directory invalid or inaccessible, file records invalid |
