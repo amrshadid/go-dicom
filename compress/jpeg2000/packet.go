@@ -58,9 +58,18 @@ type precinctState struct {
 	inclusion *tagTree
 	zeroBits  *tagTree
 	// indexes says which of the band's code-blocks each entry of blocks is:
-	// the precinct's own blocks, in the order its packets list them.
+	// the precinct's own blocks, in the order its packets list them. Nil
+	// means the precinct holds the whole band, in the band's order.
 	indexes []int
 	blocks  []blockState
+}
+
+// bandBlock is which of the band's code-blocks entry i of the precinct is.
+func (p *precinctState) bandBlock(i int) int {
+	if p.indexes == nil {
+		return i
+	}
+	return p.indexes[i]
 }
 
 // ReadTilePackets reads every packet of a tile and returns the code-blocks with
@@ -130,7 +139,7 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 				continue
 			}
 			out.Blocks = append(out.Blocks, CodeBlockData{
-				Block:         bandInfo.Blocks[state.indexes[i]],
+				Block:         bandInfo.Blocks[state.bandBlock(i)],
 				BandType:      bandInfo.Type,
 				Resolution:    res,
 				Component:     comp,
@@ -325,7 +334,7 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 					inclusion: newTagTree(w, h),
 					zeroBits:  newTagTree(w, h),
 					indexes:   indexes,
-					blocks:    make([]blockState, len(indexes)),
+					blocks:    make([]blockState, w*h),
 				}
 				states[key] = state
 			}

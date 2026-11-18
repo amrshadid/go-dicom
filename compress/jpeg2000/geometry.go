@@ -179,7 +179,9 @@ func blockCount(band Band, xcb, ycb int) int {
 // precinctBlocks lists the code-blocks of a band that belong to precinct k of
 // its resolution (B.6), as indexes into band.Blocks in the raster order a
 // packet header walks them in, with the width and height of the grid they
-// form, which is the shape of the precinct's tag trees (B.10.2).
+// form, which is the shape of the precinct's tag trees (B.10.2). A nil list
+// with a grid of w*h blocks means the precinct holds the whole band, in the
+// band's own order.
 //
 // The precinct partition is anchored at the origin of the resolution's grid,
 // and each band inherits it at half the size above the lowest resolution,
@@ -213,6 +215,11 @@ func precinctBlocks(res Resolution, band Band, k int) (blocks []int, w, h int) {
 	r0, r1 := floorTo(y0, bh)/bh, ceilDivInt(y1, bh)
 
 	w, h = c1-c0, r1-r0
+	if w*h == len(band.Blocks) {
+		// The whole band, which with the default precincts is every band:
+		// the indexes would be 0 to n-1, and nil says so without a list.
+		return nil, w, h
+	}
 	blocks = make([]int, 0, w*h)
 	for row := r0; row < r1; row++ {
 		for column := c0; column < c1; column++ {
