@@ -303,7 +303,7 @@ go build -o go-dicom .
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
 ./go-dicom modify -set PatientName=Doe^Jane -insert 'RequestAttributesSequence[0].RequestedProcedureID=RP1' in.dcm out.dcm  # Edit attributes; syntax and pixels kept
-./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # RLE, JPEG-LS, JPEG 2000 lossless; jpeg with -quality
+./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # Every syntax the library writes; lossy ones only with -quality, -near, -ratio or -psnr
 ./go-dicom decompress ct-jls.dcm ct.dcm                  # Native pixel data again
 ./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
 ./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF

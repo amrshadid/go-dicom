@@ -336,6 +336,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is reached by quantization alone, in one quality layer, not by the
   pass-by-pass truncation of Annex J.14.
 
+- **`compress` writes every syntax the library writes.** It offered RLE,
+  JPEG-LS Lossless, JPEG 2000 Lossless and JPEG Baseline, and refused the
+  rest by name. It now also writes `-syntax jpeg-lossless` (`.57`) and
+  `jpeg-lossless-sv1` (`.70`), and the lossy ones only when asked with
+  their parameter: `jpeg-ls-near -near N` (`.81`; `-near 0` is lossless
+  and keeps the UID), `jpeg-extended -quality Q` (`.51`), and
+  `jpeg2000-lossy -ratio R` or `-psnr DB` (`.91`). A lossy file records
+  the loss and is a new instance, as `jpeg` already did; a parameter given
+  to a syntax that does not take it is refused. dcmtk, libjpeg and OpenJPEG
+  decode what it writes in each new syntax.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
