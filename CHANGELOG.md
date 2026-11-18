@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`findscu -worklist` queries a Modality Worklist** (#389). A worklist
+  could be reached only by naming its UID with `-sop-class`, and that query
+  was the patient hierarchy's: it sent a Query/Retrieve Level, which Basic
+  Worklist does not have and dcmtk's `wlmscpfs` reports as unsupported, sent
+  none of the worklist keys, and printed only top-level values, so the
+  scheduled step, which is held in a sequence, was not shown. `-worklist`
+  sends the keys a modality asks for (PS3.4 Table K.6-1), the Scheduled
+  Procedure Step Sequence among them, with `-modality`, `-date` (a date, a
+  range or `today`) and `-station-aet` matched inside it. Naming the model
+  by UID now sends the same query. Every `findscu` answer prints its
+  sequences, each item indented under its sequence. There is no command
+  for UPS, for MPPS or for serving a worklist.
+
 ### Fixed
 
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
