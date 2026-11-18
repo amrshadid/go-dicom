@@ -437,6 +437,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A private sequence written to an Implicit VR file is still a sequence**
+  (#354). Every sequence was written with its byte count. Implicit VR names
+  no VR, and a private tag has no dictionary entry, so the only thing that
+  tells a reader such an element holds items is an undefined length
+  (PS3.5 6.2.2 Note 5). dcmtk, pydicom and this library's own reader read the
+  rewritten sequence as one opaque value: pydicom's `nested_priv_SQ.dcm`
+  through `modify` came out with `(0001,0001) ?? fe\ff\00\e0...` in
+  `dcmdump`. Every command that writes a file did this to an Implicit VR
+  file, and to an Explicit VR file's private sequence when it was written
+  as Implicit VR. In Implicit VR a sequence the dictionary does not know is
+  now written with undefined length and a Sequence Delimitation Item; every
+  other sequence keeps its bytes. Across pydicom's corpus, every file written
+  back in its own syntax and in Implicit VR reads in pydicom to the elements
+  of the original, the three files with private sequences included,
+  except two truncated files whose cut-off element this library does not
+  read. The network codec has the same defect, and refuses such a sequence
+  on receipt (#424).
+
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
   reason 2, which from that source is "application context name not
