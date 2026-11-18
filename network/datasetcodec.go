@@ -75,13 +75,14 @@ func (e transferSyntaxEncoding) byteOrder() binary.ByteOrder {
 // the data will be sent on; encoding with a different syntax than the peer
 // agreed to produces a data set the peer cannot parse.
 func EncodeDataset(ds *dataset.Dataset, transferSyntax string) ([]byte, error) {
-	return encodeDataset(ds, transferSyntax, 0)
+	return encodeDataset(ds, transferSyntax, NetworkConfig{})
 }
 
 // encodeDataset is EncodeDataset for a sender that has said how much loss it
-// accepts: jpegQuality above zero lets an image be coded as JPEG Baseline
-// when that is the syntax negotiated (NetworkConfig.JPEGQuality).
-func encodeDataset(ds *dataset.Dataset, transferSyntax string, jpegQuality int) ([]byte, error) {
+// accepts: NetworkConfig.JPEGQuality above zero lets an image be coded as JPEG
+// Baseline, and NetworkConfig.JPEGLSNear says the error allowed under JPEG-LS
+// Near-Lossless, when that is the syntax negotiated.
+func encodeDataset(ds *dataset.Dataset, transferSyntax string, config NetworkConfig) ([]byte, error) {
 	if ds == nil {
 		return nil, nil
 	}
@@ -89,7 +90,7 @@ func encodeDataset(ds *dataset.Dataset, transferSyntax string, jpegQuality int) 
 	// Pixel data compressed under one syntax is not pixel data under another.
 	// Sending it unchanged puts encapsulated fragments on the wire described as
 	// native pixels, which the receiver cannot detect.
-	ds, err := transcodePixelData(ds, transferSyntax, jpegQuality)
+	ds, err := transcodePixelData(ds, transferSyntax, config)
 	if err != nil {
 		return nil, NewPDUErrorf("ENCODE_DS", "%s", err)
 	}
