@@ -92,11 +92,15 @@
 // the file holds. A frame is read from the file by where it lies, not by
 // loading the instance. A frame number the image does not have is 404.
 //
+// Metadata gives a BulkDataURI for each value it leaves out, and
+// …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level
+// of sequence, serves it from where it lies in the file, little endian.
+// Pixel Data there is its frames, joined in one part when uncompressed.
+//
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves
 // whatever the archive holds to whoever reaches it, so a deployment wraps it
-// in a handler that decides who may. Rendered images and bulk data on their
-// own are not served.
+// in a handler that decides who may. Rendered images are not served.
 //
 // Instances are stored as the application/dicom parts of a multipart
 // request, to /studies or into a study. Each is kept or refused on its own,

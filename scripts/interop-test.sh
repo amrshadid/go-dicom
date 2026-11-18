@@ -1943,7 +1943,7 @@ for name, ds in zip(names, files):
     for keyword in ("PatientName", "Rows", "Columns", "SOPClassUID", "PhotometricInterpretation"):
         if described[keyword].value != ds[keyword].value:
             sys.exit("%s: metadata %s is %r, the file has %r" % (name, keyword, described[keyword].value, ds[keyword].value))
-    if set(metadata[0].get("7FE00010", {})) - {"vr"}:
+    if set(metadata[0].get("7FE00010", {})) - {"vr", "BulkDataURI"}:
         sys.exit("%s: the metadata carries the pixel data" % name)
     if any(key.startswith("0002") for key in metadata[0]):
         sys.exit("%s: the metadata carries the file's meta information" % name)
@@ -2169,7 +2169,7 @@ def native_frames(ds, n, little):
         data = numpy.frombuffer(data[: len(data) // width * width], ">u%d" % width).astype("<u%d" % width).tobytes()
     return [data[i * length:(i + 1) * length] for i in range(n)], length
 
-checked = decoded = 0
+checked = decoded = bulk = 0
 agreed, disagreed, multi = [], [], []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
@@ -2214,6 +2214,42 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     checked += 1
     if n > 1:
         multi.append(name)
+
+    # Every BulkDataURI metadata gives serves the value pydicom reads at
+    # that place in the file (#368): Pixel Data as the frames above, joined
+    # when native, any other value its bytes in little endian.
+    status, _, described = request(ours, path[: -len("/frames/")] + "/metadata", "application/dicom+json")
+    if status != 200:
+        sys.exit("%s: metadata answered %d" % (name, status))
+    def uris(node, at, found):
+        for key, element in node.items():
+            here = at + [int(key, 16)]
+            if "BulkDataURI" in element:
+                found.append((here, element["BulkDataURI"]))
+            for i, item in enumerate(element.get("Value", []) if element.get("vr") == "SQ" else []):
+                uris(item, here + [i], found)
+        return found
+    for where, uri in uris(json.loads(described)[0], [], []):
+        element, holder = None, ds
+        for level in range(0, len(where), 2):
+            element = holder[where[level]]
+            if level + 1 < len(where):
+                holder = element.value[where[level + 1]]
+        if where == [0x7FE00010]:
+            status, ctype, body = request(uri, "", STORED)
+            sent = [d for _, d in parts(ctype, body)]
+            if sent != (want if syntax.is_compressed else [b"".join(want)]):
+                sys.exit("%s: the Pixel Data at its BulkDataURI is not its frames" % name)
+        else:
+            status, ctype, body = request(uri, "")
+            (_, sent), = parts(ctype, body)
+            value = element.value or b""
+            width = {"OW": 2, "OF": 4, "OL": 4, "OD": 8, "OV": 8}.get(element.VR, 1)
+            if not syntax.is_little_endian and width > 1:
+                value = numpy.frombuffer(value, ">u%d" % width).astype("<u%d" % width).tobytes()
+            if sent != value:
+                sys.exit("%s: %s at its BulkDataURI is %d bytes, pydicom reads %d" % (name, uri, len(sent), len(value)))
+        bulk += 1
 
     if orthanc:
         # Several corpus files share a SOP Instance UID and Orthanc keeps the
@@ -2276,8 +2312,8 @@ for frames, accept, want_status in (("0", None, 400), ("1,x", None, 400), ("16",
 
 if checked < 40 or not multi:
     sys.exit("only %d files checked, %d of them multi-frame" % (checked, len(multi)))
-print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d decoded frames equal to pydicom's%s"
-      % (checked, len(multi), ", ".join(multi), decoded,
+print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads; %d decoded frames equal to pydicom's%s"
+      % (checked, len(multi), ", ".join(multi), bulk, decoded,
          "; %d byte-equal to Orthanc's, %d where Orthanc swaps 32-bit big endian in words (%s)"
          % (len(agreed), len(disagreed), ", ".join(disagreed)) if orthanc else ""))
 PY
