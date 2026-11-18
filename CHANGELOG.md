@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The conformance statement names every JPEG 2000 feature the decoder
+  refuses** (#340). §8.1 listed five, and the decoder refuses more: three of
+  the five progression orders (RPCL, PCRL, CPRL), a region of interest,
+  predictable termination, components deeper than 16 bits and a JP2 box with
+  a 64-bit length. A reader expecting an RPCL file to decode would have been
+  told nothing. Each is now one line, with the error text a caller sees.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

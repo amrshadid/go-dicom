@@ -468,12 +468,33 @@ how decoded samples are shaped and coloured, and the one tolerance.
   equality. Against OpenJPEG the corpus's irreversible file is 22 samples of
   262144 out by one.
 
-  Features outside that set are refused by name rather than guessed at:
-  subsampled components, custom precinct sizes, the code-block style options
-  (bypass, termall, vertical causal, reset, segmentation marks), packed packet
-  headers, and progression-order changes. A decoder that quietly mis-decodes is
-  worse than none — the image looks plausible and the numbers are wrong, and in
-  an RT Dose that is a wrong dose.
+  Features outside that set are refused rather than guessed at. A decoder that
+  quietly mis-decodes is worse than none — the image looks plausible and the
+  numbers are wrong, and in an RT Dose that is a wrong dose. Each of these is
+  refused with an `ErrUnsupported` that names it, quoted here as the error
+  reads (ITU-T T.800 clauses in brackets):
+
+  - the RPCL, PCRL and CPRL progression orders: `progression order 2`, `3`
+    and `4` [A.6.1, B.12.1.3–B.12.1.5]. LRCP and RLCP decode;
+  - user-defined precinct sizes: `user-defined precinct sizes` [A.6.1, B.6];
+  - every code-block style option, alone or combined: `code-block style 0x..`
+    with the style byte in hex [A.6.1 Table A.19, D.5–D.7]. They are selective
+    arithmetic coding bypass (`0x01`), reset of context probabilities (`0x02`),
+    termination on each coding pass (`0x04`), vertically causal context
+    (`0x08`), predictable termination (`0x10`) and segmentation symbols
+    (`0x20`);
+  - a region of interest: `region of interest (RGN)` [A.6.3, Annex H];
+  - progression order changes: `progression order change (POC)` [A.6.6];
+  - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
+  - subsampled components: `component subsampling` [A.5.1, B.2];
+  - components deeper than 16 bits: `17-bit components` and so on [A.5.1];
+  - a JP2 box with a 64-bit length: `JP2 box with a 64-bit length` [I.4];
+  - the Part 2 wavelets and quantization styles: `wavelet transform N`,
+    `quantization style N`.
+
+  An RGN or POC segment in a tile-part header, rather than the main header, and
+  any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) are
+  refused too, but as `unexpected marker` with its code rather than by name.
 
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an
