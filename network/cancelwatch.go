@@ -196,7 +196,7 @@ func (s *SCP) streamCFindResponses(ctx context.Context, assoc *Association, stre
 	handlerDone := make(chan error, 1)
 	go func() {
 		defer close(out)
-		handlerDone <- streamer.StreamCFind(opCtx, req, out)
+		handlerDone <- guardHandler(func() error { return streamer.StreamCFind(opCtx, req, out) })
 	}()
 
 	for resp := range out {
@@ -211,7 +211,7 @@ func (s *SCP) streamCFindResponses(ctx context.Context, assoc *Association, stre
 		}
 	}
 
-	if err := <-handlerDone; err != nil && !watcher.wasCanceled() {
+	if err := awaitHandler(handlerDone); err != nil && !watcher.wasCanceled() {
 		DefaultLogger.Error("streaming C-FIND handler failed: %v", err)
 		return StatusUnableToProcess
 	}
