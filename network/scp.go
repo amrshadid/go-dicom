@@ -434,13 +434,13 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 
 	// A handler that reads the data set as it arrives is given the bytes
 	// before they are assembled, and is never handed a decoded copy.
-	if streamer, ok := handler.(CStoreStreamer); ok {
+	if streamer, ok := streamsCStore(handler); ok {
 		s.handleCStoreStream(ctx, assoc, streamer, ctxID, messageID, cmdDS)
 		return
 	}
 
-	sopClassUID, _ := GetAffectedSOPClassUID(cmdDS)
-	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+	req := cstoreRequest(messageID, cmdDS)
+	sopClassUID, sopInstanceUID := req.AffectedSOPClass, req.AffectedSOPInstance
 
 	// Read the data set if present
 	var ds *dataset.Dataset
@@ -462,12 +462,7 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 		}
 	}
 
-	req := &CStoreRequest{
-		MessageID:           messageID,
-		AffectedSOPClass:    sopClassUID,
-		AffectedSOPInstance: sopInstanceUID,
-		DataSet:             ds,
-	}
+	req.DataSet = ds
 
 	resp, err := handler.HandleCStore(ctx, req)
 	// A handler that returns nothing has not stored anything it has said.

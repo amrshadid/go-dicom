@@ -278,7 +278,7 @@ func TestStreamedStoreIsByteIdentical(t *testing.T) {
 	encapsulated := encapsulatedInstance("1.2.3.3", bytes.Repeat([]byte{1, 2, 3}, 9000), []byte{9, 8, 7, 6})
 
 	messageID := uint16(0)
-	for _, c := range []struct {
+	for ci, c := range []struct {
 		name      string
 		contextID byte
 		ts        string
@@ -288,7 +288,7 @@ func TestStreamedStoreIsByteIdentical(t *testing.T) {
 		{"explicit little endian", ctxExplicit, ExplicitVRLittleEndianUID, explicit},
 		{"RLE lossless, encapsulated", ctxRLE, RLELosslessUID, encapsulated},
 	} {
-		for _, split := range []struct{ fragment, perPDU int }{
+		for si, split := range []struct{ fragment, perPDU int }{
 			{1 << 20, 1}, // whole, each in a PDU of its own (the SCP reads up to its advertised maximum)
 			{4000, 1},
 			{4000, 3}, // the command's last fragment and the data set's first in one PDU
@@ -299,10 +299,11 @@ func TestStreamedStoreIsByteIdentical(t *testing.T) {
 				split.fragment = 16000 // the SCP advertised 16 KiB
 			}
 			messageID++
-			instance := c.name + "/" + strconv.Itoa(split.fragment) + "x" + strconv.Itoa(split.perPDU)
+			// Named for the case, as a UID: WriteCStoreFile writes only one.
+			instance := "1.2.3." + strconv.Itoa(ci+1) + "." + strconv.Itoa(si+1)
 			sendStore(ctx, t, scu, c.contextID, messageID, instance, c.data, split.fragment, split.perPDU)
 			if status, answers := responseStatus(ctx, t, scu); status != StatusSuccess || answers != messageID {
-				t.Fatalf("%s: status 0x%04X answering message %d, want 0x0000 answering %d", instance, status, answers, messageID)
+				t.Fatalf("%s %+v: status 0x%04X answering message %d, want 0x0000 answering %d", c.name, split, status, answers, messageID)
 			}
 			file, ts, err := rec.file(instance)
 			if err != nil {
@@ -404,7 +405,8 @@ func TestStreamedStoreHandlerStopsEarly(t *testing.T) {
 // with, and whether it returned.
 type streamOutcome struct {
 	read     int64
-	err      error
+	err      error // what WriteCStoreFile returned
+	readErr  error // what the stream's last Read returned
 	returned chan struct{}
 }
 
@@ -419,6 +421,9 @@ func outcomeHandler(out *streamOutcome, started chan struct{}) *streamHandler {
 			n, err := data.Read(p)
 			if n > 0 {
 				once.Do(func() { close(started) })
+			}
+			if err != nil {
+				out.readErr = err
 			}
 			return n, err
 		}))
@@ -450,9 +455,13 @@ func goroutinesSettle(t *testing.T, base int) {
 // TestStreamedStoreEndsWithoutWhole: when a data set does not arrive whole,
 // the handler's read fails, WriteCStoreFile returns that error rather than a
 // count that looks complete, no response is sent, and no goroutine is left:
-// the peer aborting midway, data on another presentation context, a command
-// where data was due, more than MaxDataSetSize, a peer that goes quiet, and
-// the server's context canceled.
+// the peer aborting midway, the peer closing the connection with no A-ABORT,
+// data on another presentation context, a command where data was due, more
+// than MaxDataSetSize, a peer that goes quiet, and the server's context
+// canceled. In each, neither the stream's error nor WriteCStoreFile's is one
+// a handler could take for the end of the data set: not io.EOF, by == or by
+// errors.Is. A connection closed partway read as errors.Is(err, io.EOF),
+// since the transport's error wraps it.
 func TestStreamedStoreEndsWithoutWhole(t *testing.T) {
 	half := bytes.Repeat([]byte{0x5A}, 40_000)
 	cases := []struct {
@@ -465,6 +474,9 @@ func TestStreamedStoreEndsWithoutWhole(t *testing.T) {
 	}{
 		{"peer aborts", NetworkConfig{}, func(ctx context.Context, scu *SCU, _ context.CancelFunc) {
 			_ = scu.Association().transport.WritePDU(ctx, &AbortPDU{Source: AbortSourceServiceUser})
+		}, false},
+		{"peer closes the connection", NetworkConfig{}, func(_ context.Context, scu *SCU, _ context.CancelFunc) {
+			_ = scu.Association().transport.Close()
 		}, false},
 		{"data on another context", NetworkConfig{}, func(ctx context.Context, scu *SCU, _ context.CancelFunc) {
 			_ = sendPDUs(ctx, scu, [][]PDVItem{{{PresentationContextID: ctxOther, IsLast: true, Data: []byte{1, 2}}}})
@@ -493,7 +505,7 @@ func TestStreamedStoreEndsWithoutWhole(t *testing.T) {
 			server, scu := streamServer(t, serverCtx, c.cfg, outcomeHandler(&out, started))
 
 			// The command, and the first half of the data set, not marked last.
-			pdvs := fragmentsOf(ctxImplicit, true, storeCommand(1, "partial"), 16000)
+			pdvs := fragmentsOf(ctxImplicit, true, storeCommand(1, "1.2.3.30"), 16000)
 			for _, f := range fragmentsOf(ctxImplicit, false, half, 16000) {
 				f.IsLast = false
 				pdvs = append(pdvs, f)
@@ -516,6 +528,18 @@ func TestStreamedStoreEndsWithoutWhole(t *testing.T) {
 				t.Errorf("read %d bytes", out.read)
 			}
 			t.Logf("the handler read %d bytes, then: %v", out.read, out.err)
+			for name, err := range map[string]error{"Read": out.readErr, "WriteCStoreFile": out.err} {
+				if err == nil || err == io.EOF || errors.Is(err, io.EOF) || !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Errorf("%s returned %v: a failure that reads as the end of the data set, or not as io.ErrUnexpectedEOF", name, err)
+				}
+			}
+			if c.name == "peer closes the connection" {
+				// The connection is gone; there is nothing to read the
+				// SCP's answer from.
+				server.Stop()
+				goroutinesSettle(t, base)
+				return
+			}
 
 			// What the peer gets is an A-ABORT or a closed connection; never
 			// a C-STORE-RSP for an instance not received whole.
@@ -566,39 +590,44 @@ func TestStreamedStoreIsInvalidAfterReturn(t *testing.T) {
 }
 
 // TestStreamedStoreWithoutDataSet: a C-STORE-RQ that says no data set follows
-// is streamed as an empty one, and the next message is not taken for it.
+// was handed to the handler as an empty data set, and stored with Success as
+// an empty instance. A C-STORE-RQ carries a data set (PS3.7 9.3.1.1), so the
+// SCP refuses it, 0xC000, without calling the handler; a data set the peer
+// sends anyway is not taken for the next message.
 func TestStreamedStoreWithoutDataSet(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var sizes []int
+	var called []string
 	var mu sync.Mutex
-	_, scu := streamServer(t, ctx, NetworkConfig{}, &streamHandler{fn: func(_ context.Context, _ *CStoreRequest, _ string, data io.Reader) (*CStoreResponse, error) {
-		b, err := io.ReadAll(data)
+	_, scu := streamServer(t, ctx, NetworkConfig{}, &streamHandler{fn: func(_ context.Context, req *CStoreRequest, _ string, data io.Reader) (*CStoreResponse, error) {
+		_, err := io.Copy(io.Discard, data)
 		mu.Lock()
-		sizes = append(sizes, len(b))
+		called = append(called, req.AffectedSOPInstance)
 		mu.Unlock()
 		return &CStoreResponse{Status: StatusSuccess}, err
 	}})
-	cmd := BuildCStoreRQ(1, CTImageStorageUID, "empty", PriorityMedium)
+	cmd := BuildCStoreRQ(1, CTImageStorageUID, "1.2.3.20", PriorityMedium)
 	addUSElement(cmd, tagCommandDataSetType, CommandDataSetTypeNull)
 	encoded, err := EncodeCommandDataset(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := scu.Association().SendPData(ctx, ctxImplicit, encoded, true); err != nil {
+	// The command, then a data set it said would not come.
+	pdvs := append(fragmentsOf(ctxImplicit, true, encoded, 16000), fragmentsOf(ctxImplicit, false, []byte("01234567"), 16000)...)
+	if err := sendPDUs(ctx, scu, [][]PDVItem{pdvs}); err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := responseStatus(ctx, t, scu); status != StatusSuccess {
-		t.Fatalf("status 0x%04X", status)
+	if status, answers := responseStatus(ctx, t, scu); status != StatusUnableToProcess || answers != 1 {
+		t.Fatalf("status 0x%04X answering %d, want 0xC000 answering 1", status, answers)
 	}
-	sendStore(ctx, t, scu, ctxImplicit, 2, "next", make([]byte, 30), 16000, 1)
+	sendStore(ctx, t, scu, ctxImplicit, 2, "1.2.3.21", make([]byte, 30), 16000, 1)
 	if status, answers := responseStatus(ctx, t, scu); status != StatusSuccess || answers != 2 {
 		t.Fatalf("status 0x%04X answering %d", status, answers)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if fmt.Sprint(sizes) != "[0 30]" {
-		t.Fatalf("the handler read data sets of %v bytes, want [0 30]", sizes)
+	if fmt.Sprint(called) != "[1.2.3.21]" {
+		t.Fatalf("the handler was called for %v, want only [1.2.3.21]", called)
 	}
 }
 

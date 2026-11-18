@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `storescu` and pynetdicom sent, byte for byte, for implicit and explicit
   little endian and RLE. `MaxDataSetSize` still applies, counted as the
   bytes pass. A handler that does not implement it is served as before.
+  A data set that does not arrive whole ends the read with an error that is
+  `io.ErrUnexpectedEOF` and never `io.EOF`, by `==` or by `errors.Is`,
+  whatever cut it short: a connection the peer closes reports an error that
+  wraps `io.EOF`, and a handler testing for the end with `errors.Is` would
+  have kept a truncated file as the instance. `WriteCStoreFile` checks the
+  UIDs the peer put in the command (PS3.5 9.1) before it writes anything and
+  refuses with `ErrInvalidSOPInstanceUID` or `ErrInvalidStoreCommand`, and
+  leaves out an AE title that is not one. A C-STORE-RQ that says no data set
+  follows is refused with 0xC000 without the handler being called.
+  `CompositeHandler` passes the stream to a store handler that implements
+  `CStoreStreamer`.
+- `CStoreRequest` carries the command's Priority, Move Originator AE Title
+  and Move Originator Message ID to the handler, whichever way it takes the
+  store. `HandleCStore` was given none of them.
 - `filewriter.EncodeFileHeader` returns the preamble, `DICM` and File Meta
   Information that come before a data set, for a writer that has the data
   set encoded already.
@@ -40,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its timeout ran out. What a read leaves of a P-DATA-TF now waits for the
   next read. dcmtk and pynetdicom send one PDV to a PDU, which is why it
   did not show against them.
+- **A value too long for a 16-bit length is refused, not written with a
+  wrong length.** UI, AE, SH and the other short VRs state their length in
+  16 bits in explicit VR. `filewriter` wrote a longer value with the low 16
+  bits of its length: a 70,002-byte Media Storage SOP Instance UID went out
+  as length 4466 while the group length (0002,0000) counted all of it, so
+  the File Meta Information pointed 65,536 bytes past where its elements
+  ended. `WriteDataElement` and `WriteFileMetaInfo` now return an error
+  before writing any of the element or the group.
 
 ## [1.10.0] - 2026-11-17
 
