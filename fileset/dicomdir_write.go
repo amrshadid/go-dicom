@@ -288,7 +288,7 @@ func newRecord(recordType string, source *dataset.Dataset) *Record {
 		// A required key that the source lacks is written empty rather than
 		// omitted: PS3.3 requires the attribute to be present, and a type 2
 		// attribute with no value is exactly how DICOM says "not known".
-		if strings.Contains(string(vr), " or ") || vr == "" {
+		if dataelem.OffersVRChoice(string(vr)) || vr == "" {
 			vr = dataelem.LO
 		}
 		_ = ds.Add(dataelem.NewDataElement(t, vr, []byte(padByVR(vr, value))))

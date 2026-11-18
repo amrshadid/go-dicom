@@ -682,6 +682,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a Pixel Value Transformation whose slope is absent but whose intercept is
   there. Compared with pydicom on the 62 corpus files that have pixels.
 
+- **LUT Data is not reported as a VR mismatch** (#352). The check made when an
+  element is added to a data set, when one is validated and when a file is read
+  accepted a dictionary entry that offers a choice only if the string was in a
+  hand-written list, and there were three lists, each different. None had both
+  `US or OW` (LUT Data, (0028,3006), the table in every Modality, VOI and
+  Presentation LUT Sequence item) and `US or SS or OW` (Gray Lookup Table
+  Data), so reading a file whose LUT Data is OW, or US, logged `VR mismatch for
+  (0028,3006): expected US or OW, got OW`, a warning on a conformant element.
+  There is now one function, `dataelem.VRMatchesDictionary`, used by all three,
+  and it reads the choices out of the dictionary's own string (`VRChoices`), so
+  `OB or OW`, `US or SS`, `US or OW` and `US or SS or OW` work, and so would a
+  choice a later edition adds. The other places that tested a VR for `" or "`
+  by hand use `OffersVRChoice`. Read with the LUT test files, the warning is
+  gone, and a VR the dictionary does not offer is still reported.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

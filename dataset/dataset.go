@@ -474,30 +474,13 @@ func validateElementSemantics(t tag.Tag, elem *dataelem.DataElement) error {
 	// Validate VR if present in element and dictionary
 	elemVR := elem.GetVR()
 	if elemVR != "" && info.VR != "" {
-		if string(elemVR) != info.VR && !isValidVRVariant(string(elemVR), info.VR) {
+		if !dataelem.VRMatchesDictionary(string(elemVR), info.VR) {
 			return fmt.Errorf("VR mismatch for %s: expected %s, got %s",
 				t.String(), info.VR, elemVR)
 		}
 	}
 
 	return nil
-}
-
-// isValidVRVariant checks if a VR is a valid variant of the expected VR.
-// Handles DICOM cases where multiple VRs are acceptable (e.g., "OB or OW").
-func isValidVRVariant(actual, expected string) bool {
-	switch expected {
-	case "OB or OW":
-		return actual == "OB" || actual == "OW"
-	case "OB or OD":
-		return actual == "OB" || actual == "OD"
-	case "US or SS":
-		return actual == "US" || actual == "SS"
-	case "OW or OB":
-		return actual == "OW" || actual == "OB"
-	default:
-		return false
-	}
 }
 
 // SortedDataset returns a new dataset with elements sorted by tag value.
