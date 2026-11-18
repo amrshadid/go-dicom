@@ -357,6 +357,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its body being read. A body within its bound is allocated as its bytes
   arrive, so memory follows what a peer has sent: a P-DATA-TF stating
   128 MiB and sending 1 MiB costs 3 MiB.
+- **The conformance statement names every JPEG 2000 feature the decoder
+  refuses** (#340). §8.1 listed five, and the decoder refuses more: three of
+  the five progression orders (RPCL, PCRL, CPRL), a region of interest,
+  predictable termination, components deeper than 16 bits and a JP2 box with
+  a 64-bit length. A reader expecting an RPCL file to decode would have been
+  told nothing. Each is now one line, with the error text a caller sees.
+- **The irreversible JPEG 2000 tolerance is stated as measured** (#360). The
+  statement gave one sample against another decoder. Against OpenJPEG that
+  holds up to 12 bits; at 16 bits OpenJPEG lands up to two away, and this
+  decoder is the nearer of the two to what was encoded.
 
 - **A panic in a handler ends its association, not the server** (#325).
   Nothing in `network` recovered from a panic. A handler is the

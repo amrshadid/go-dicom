@@ -726,12 +726,12 @@ write to the samples that went in, which CI checks over pydicom's corpus.
 **JPEG 2000 decodes too**, as of this version: `.90` and `.91`, both the 5/3
 reversible and 9/7 irreversible wavelets, with the reversible and irreversible
 component transforms. A reversible codestream matches pydicom sample for sample;
-an irreversible one is held to a tolerance of one, because the 9/7 filter is
-defined in real arithmetic and ISO 15444-4 grades a decoder on how close it
-comes rather than on equality. Features it does not implement — subsampled
-components, custom precincts, the code-block style options — are refused by
-name rather than decoded wrongly. See
-[CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data).
+an irreversible one is held to a tolerance of one up to 12 bits and two at 16,
+because the 9/7 filter is defined in real arithmetic and ISO 15444-4 grades a
+decoder on how close it comes rather than on equality. Features it does not implement, among them three
+of the five progression orders, user-defined precincts, the code-block style
+options and a region of interest, are refused by name rather than decoded
+wrongly. [CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data) lists every one.
 
 **Compressed frames can be extracted**, which is the step before decoding. For a
 compressed instance, `PixelData` holds the encapsulation exactly as it appears in
