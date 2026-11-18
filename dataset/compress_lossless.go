@@ -150,20 +150,12 @@ func (ds *Dataset) compressFramesInPlace(syntax, name string,
 	}
 
 	// Everything that can fail has; from here the data set changes.
-	ds.takeDescription(source)
 	elem.SetVR(dataelem.OB) // encapsulated pixel data is OB (PS3.5 A.4)
 	if err := ds.SetValue(pixelData, encapsulateFrames(frames)); err != nil {
 		return fmt.Errorf("compress: %w", err)
 	}
 	ds.SetTransferSyntaxUID(syntax)
-	if info.SamplesPerPixel > 1 {
-		if info.PhotometricInterpretation == "YBR_FULL_422" {
-			replaceElement(ds, tag.New(0x0028, 0x0004), dataelem.CS, []byte("YBR_FULL"))
-		}
-		planar := make([]byte, 2)
-		binary.LittleEndian.PutUint16(planar, 0)
-		replaceElement(ds, tag.New(0x0028, 0x0006), dataelem.US, planar)
-	}
+	ds.describeCoded(source, info, "")
 	return nil
 }
 
@@ -189,17 +181,49 @@ func (ds *Dataset) decodedForCompression(elem *dataelem.DataElement) (*Dataset, 
 	return decoded, nil
 }
 
-// takeDescription copies what describes a decoded image onto ds, when the
-// image coded was a decoded copy: a 4:2:2 JPEG decodes to chroma for every
-// pixel, and a JPEG 2000 color transform is undone.
-func (ds *Dataset) takeDescription(source *Dataset) {
-	if source == ds {
-		return
-	}
-	for _, t := range []tag.Tag{tag.New(0x0028, 0x0004), tag.New(0x0028, 0x0006)} {
-		if described, ok := source.Get(t); ok {
-			ds.Remove(t)
-			_ = ds.Add(described)
+// describeCoded makes ds describe the frames just coded from source, the
+// image info describes. It is how every Compress...InPlace method describes
+// its result, so that what one method gets right the others do too: the
+// JPEG 2000 method once had its own copy, which left a native 4:2:2 image
+// described as YBR_FULL_422 (#374).
+//
+// The samples coded are the ones pixelBytesForDecoding gives, and the
+// description follows them:
+//
+//   - when the image was decoded first, its decoded description: a 4:2:2
+//     JPEG decodes to chroma for every pixel, and a JPEG 2000 color transform
+//     is undone;
+//   - a native YBR_FULL_422 image had its chroma expanded to every pixel,
+//     so it is YBR_FULL, which is what PS3.5 8.2 allows for full chroma in
+//     every syntax written here, and JPEG 2000 allows nothing else
+//     (Table 8.2.4-1);
+//   - color is coded pixel by pixel, so Planar Configuration is 0 (PS3.5
+//     8.2: the codestream says how its components are arranged).
+//
+// photometric, when not empty, is a color transform the coder applied, which
+// names the samples instead: YBR_RCT for JPEG 2000's reversible transform of
+// RGB, YBR_FULL for JPEG Baseline's conversion.
+func (ds *Dataset) describeCoded(source *Dataset, info *PixelDataInfo, photometric string) {
+	if source != ds {
+		for _, t := range []tag.Tag{tag.New(0x0028, 0x0004), tag.New(0x0028, 0x0006)} {
+			if described, ok := source.Get(t); ok {
+				ds.Remove(t)
+				_ = ds.Add(described)
+			}
 		}
+	}
+	if photometric == "" && info.PhotometricInterpretation == "YBR_FULL_422" {
+		photometric = "YBR_FULL"
+	}
+	if photometric != "" {
+		if len(photometric)%2 == 1 {
+			photometric += " " // CS is padded to an even length with a space
+		}
+		replaceElement(ds, tag.New(0x0028, 0x0004), dataelem.CS, []byte(photometric))
+	}
+	if info.SamplesPerPixel > 1 {
+		planar := make([]byte, 2)
+		binary.LittleEndian.PutUint16(planar, 0)
+		replaceElement(ds, tag.New(0x0028, 0x0006), dataelem.US, planar)
 	}
 }

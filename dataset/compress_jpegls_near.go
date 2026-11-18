@@ -129,32 +129,13 @@ func (ds *Dataset) CompressJPEGLSNearLosslessInPlace(near int) error {
 		compressed += len(frames[f])
 	}
 
-	// Everything that can fail has; from here the data set changes. When the
-	// image was decoded first, what describes it has to be the decoded
-	// image's description: a 4:2:2 JPEG decodes to chroma for every pixel.
-	if source != ds {
-		for _, t := range []tag.Tag{tag.New(0x0028, 0x0004), tag.New(0x0028, 0x0006)} {
-			if described, ok := source.Get(t); ok {
-				ds.Remove(t)
-				_ = ds.Add(described)
-			}
-		}
-	}
+	// Everything that can fail has; from here the data set changes.
 	elem.SetVR(dataelem.OB) // encapsulated pixel data is OB (PS3.5 A.4)
 	if err := ds.SetValue(pixelData, encapsulateFrames(frames)); err != nil {
 		return fmt.Errorf("compress: %w", err)
 	}
 	ds.SetTransferSyntaxUID(jpeglsNearLosslessSyntax)
-	if info.PhotometricInterpretation == "YBR_FULL_422" {
-		// Native 4:2:2 samples came back from pixelBytesForDecoding with
-		// chroma for every pixel, and were coded so.
-		replaceElement(ds, tag.New(0x0028, 0x0004), dataelem.CS, []byte("YBR_FULL"))
-	}
-	if info.SamplesPerPixel > 1 {
-		planar := make([]byte, 2)
-		binary.LittleEndian.PutUint16(planar, 0)
-		replaceElement(ds, tag.New(0x0028, 0x0006), dataelem.US, planar)
-	}
+	ds.describeCoded(source, info, "")
 	if near > 0 {
 		replaceElement(ds, tag.New(0x0028, 0x2110), dataelem.CS, []byte("01"))
 		ratio := float64(frameLen*info.NumberOfFrames) / float64(compressed)

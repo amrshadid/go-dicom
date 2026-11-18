@@ -690,7 +690,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   unsigned. An RGB image is coded with the reversible component transform and
   the data set then says `YBR_RCT`, with Planar Configuration 0 (PS3.5 8.2.4);
   three samples that are not red, green and blue are coded component by
-  component. A frame is coded at Bits Stored, or at Bits Allocated when a
+  component, and a native YBR_FULL_422 image, coded with its chroma expanded,
+  becomes YBR_FULL, as it does in every syntax written here. A frame is coded at Bits Stored, or at Bits Allocated when a
   sample uses the bits above Bits Stored, so that what was in the file comes
   back. `Dataset.CompressJPEG2000LosslessInPlace` is the same encoder for
   files, and it is what a send uses when a peer accepts only this syntax.

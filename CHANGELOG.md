@@ -759,6 +759,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing File Meta Information are the three `dcmmkdir` refuses for it,
   and pydicom's `FileSet` loads all 64 the DICOMDIR names.
 
+- **A native YBR_FULL_422 image compressed to JPEG 2000 says YBR_FULL**
+  (#374). `CompressJPEG2000LosslessInPlace` coded the image with its chroma
+  expanded to every pixel and kept the description `YBR_FULL_422`, which
+  PS3.5 Table 8.2.4-1 does not allow for JPEG 2000, and a reader that
+  believed it looked for half the chroma there was. The RLE and JPEG-LS
+  methods had been fixed for the same thing, and the lossless JPEG and
+  JPEG-LS Near-Lossless methods had copies of that fix; every
+  `Compress…InPlace` method now describes its result through one method.
+  All of them, run on ten corpus and generated color and grayscale images,
+  give a Photometric Interpretation and Planar Configuration PS3.5 8.2 allows
+  for the syntax, and dcmtk decodes every lossless result to the samples
+  that were coded.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
