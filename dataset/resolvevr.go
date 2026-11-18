@@ -68,7 +68,7 @@ func (ds *Dataset) ResolveVR(t tag.Tag, elem *dataelem.DataElement, enclosing ..
 		}
 	}
 
-	if strings.Contains(string(vr), " or ") {
+	if dataelem.OffersVRChoice(string(vr)) {
 		vr = ds.resolveAmbiguousVR(t, vr, enclosing)
 	}
 	if len(vr) != 2 {

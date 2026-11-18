@@ -2,7 +2,6 @@ package cli
 
 import (
 	"io"
-	"strings"
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
@@ -83,7 +82,7 @@ func (s *displayScope) vr(e *filereader.DataElementValue) string {
 		}
 		return ""
 	}
-	if !strings.Contains(e.VR, " or ") {
+	if !dataelem.OffersVRChoice(e.VR) {
 		return e.VR
 	}
 	elem := dataelem.NewDataElement(e.Tag, dataelem.VR(e.VR), e.Value)

@@ -236,7 +236,7 @@ func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement, enclosin
 		}
 		if known := dataelem.VR(t.GetVR()); known != "" && known != dataelem.UN {
 			if !jsonBinaryVRs[known] && known != dataelem.SQ &&
-				!strings.Contains(string(known), " or ") {
+				!dataelem.OffersVRChoice(string(known)) {
 				return known
 			}
 		}
@@ -297,7 +297,7 @@ func (ds *Dataset) privateVR(t tag.Tag, elem *dataelem.DataElement) dataelem.VR 
 	if info := canonical.GetPrivateTagInfo(vendor); info != nil {
 		if known := dataelem.VR(info.VR); known != "" && known != dataelem.UN &&
 			known != dataelem.SQ && !jsonBinaryVRs[known] &&
-			!strings.Contains(string(known), " or ") && fitsVR(known, elem) {
+			!dataelem.OffersVRChoice(string(known)) && fitsVR(known, elem) {
 			return known
 		}
 	}
