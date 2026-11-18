@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An N-service response's data set is read with it** (#379).
+  `SCU.NCreate`, `NSet`, `NAction` and `NEventReport` read the response's
+  command and stopped. When the peer sent a data set after it, as PS3.7
+  10.1 lets it for each of them, the data set stayed on the association
+  and the next operation read it as its own response. Against pynetdicom
+  as an MPPS SCP that returns the attribute list on N-CREATE, the N-SET
+  that reports the step complete panicked. Where the stray data set
+  decoded as a command, the status read from it was usually 0, so a
+  failure was reported as success. Each response is now read whole, by its
+  message ID, as the C-services read theirs. Its data set is in the
+  response's `DataSet`, which was always nil, and a response that does not
+  decode is an error. The SCP still drops the data set a handler returns
+  (#399).
+
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
   arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
