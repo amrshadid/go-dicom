@@ -30,6 +30,8 @@ go-dicom show patient.dcm --full             # The table with whole values, not 
 go-dicom show patient.dcm --json             # Every element with its byte offsets in the file
 go-dicom info -verbose -stats patient.dcm    # File metadata
 go-dicom convert patient.dcm output.json     # Convert to JSON
+go-dicom modify -set PatientName=Doe^Jane in.dcm out.dcm  # Set, insert or delete attributes
+go-dicom modify -insert 'ReferencedImageSequence[0].ReferencedSOPInstanceUID=1.2.3' -in-place f.dcm
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
 go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom anonymize -redact 0,0,640,40 us.dcm clean.dcm   # Black out burned-in text

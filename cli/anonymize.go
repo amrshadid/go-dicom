@@ -14,8 +14,6 @@ import (
 	"github.com/amrshadid/go-dicom/anonymize"
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataset"
-	"github.com/amrshadid/go-dicom/filebase"
-	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/filewriter"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -215,12 +213,10 @@ const mediaStorageDirectory = "1.2.840.10008.1.3.10"
 
 // anonymizeFile reads input, de-identifies it and writes it to output.
 func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error {
-	in, err := os.Open(input)
-	if err != nil {
+	if _, err := os.Stat(input); err != nil {
 		return err
 	}
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(in))
-	_ = in.Close()
+	df, err := readInstance(input)
 	if err != nil {
 		return errNotDICOM
 	}
@@ -287,32 +283,12 @@ func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, inpu
 		syntax = filewriter.StorageTransferSyntax(ds)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
-		return err
-	}
-	out, err := os.Create(output)
-	if err != nil {
-		return err
-	}
-	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
-	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
+	// A partial file would pass for a de-identified one; writeDICOMInstance removes it.
+	return writeDICOMInstance(output, &filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    sopClass,
 		MediaStorageSOPInstanceUID: instance,
 		TransferSyntaxUID:          syntax,
-	})
-	err = w.AddDataElements(filewriter.ElementsFromDataset(ds))
-	if err == nil {
-		err = w.Write()
-	}
-	if closeErr := out.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		// A partial file would pass for a de-identified one.
-		_ = os.Remove(output)
-		return err
-	}
-	return nil
+	}, ds)
 }
 
 // datasetText reads a text value without its padding.

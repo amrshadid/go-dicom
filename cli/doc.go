@@ -16,6 +16,8 @@
 //   - show: Display DICOM file contents
 //   - info: Get file information and statistics
 //   - convert: Convert DICOM files to different formats
+//   - modify: Set, insert or delete attributes, into sequences by a path,
+//     keeping the transfer syntax and the pixel data as they are
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation
