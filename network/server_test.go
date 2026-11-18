@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"sync"
 	"testing"
@@ -125,7 +126,8 @@ func TestServerEvents(t *testing.T) {
 }
 
 // TestStartServerHonorsMaxAssociations: StartServer applies MaxAssociations,
-// as ListenAndServe does (#170).
+// as ListenAndServe does (#170), and the caller over the limit is refused as
+// PS3.8 Table 9-21 says a full server refuses (#318).
 func TestStartServerHonorsMaxAssociations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -148,9 +150,22 @@ func TestStartServerHonorsMaxAssociations(t *testing.T) {
 
 	// The first is still held, so the second is over the limit.
 	second := NewSCU(SCUConfig{CallingAE: "LIMIT_SCU", CalledAE: "LIMIT_SRV", Address: server.Addr()})
-	if err := second.Associate(ctx, DefaultVerificationContexts()); err == nil {
+	err = second.Associate(ctx, DefaultVerificationContexts())
+	if err == nil {
 		_ = second.Release(ctx)
 		t.Fatal("a second association was accepted with MaxAssociations 1")
+	}
+	// The caller is told the server is full, which it is, and not that it
+	// spoke the wrong application context (#318). Reason 2 means
+	// local-limit-exceeded only with source 3 (PS3.8 Table 9-21); with
+	// source 1 it is application-context-name-not-supported.
+	var rj *AssociationError
+	if !errors.As(err, &rj) {
+		t.Fatalf("second association: want an A-ASSOCIATE-RJ, got %v", err)
+	}
+	if rj.Result != RJResultRejectedTransient || rj.Source != RJSourceServiceProviderPresentation || rj.Reason != 2 {
+		t.Errorf("over the limit: got result %d, source %d, reason %d; want 2, 3, 2 (rejected-transient, "+
+			"service-provider presentation related, local-limit-exceeded)", rj.Result, rj.Source, rj.Reason)
 	}
 
 	// And releasing the first frees its slot.
