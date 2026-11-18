@@ -227,7 +227,10 @@ func bulkDataURIs(described map[string]dataset.DICOMJSONElement, elements []*fil
 			continue
 		}
 		at := bulkPath{tags: append(append([]tag.Tag{}, path.tags...), element.Tag), items: path.items}
-		if element.ValueSkipped && !(len(at.tags) > 1 && element.Tag == tagPixelData && element.UndefinedLength) {
+		// Encapsulated Pixel Data inside a sequence is fragments with no
+		// frames resource to send them, so it is not named.
+		nestedFragments := len(at.tags) > 1 && element.UndefinedLength
+		if element.ValueSkipped && !nestedFragments {
 			entry.BulkDataURI = base + "/bulkdata/" + at.String()
 			described[key] = entry
 			continue
