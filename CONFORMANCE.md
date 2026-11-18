@@ -45,6 +45,26 @@ classes it supports, and dispatches each DIMSE message to a handler. A handler
 that is absent causes the service to be refused rather than silently accepted —
 see [§2.4](#24-services-refused-when-unimplemented).
 
+A C-STORE is given to the handler one of two ways. `HandleCStore` receives the
+data set decoded, after the whole message has arrived and been held in memory. A
+handler that also implements `CStoreStreamer` receives the bytes of the data set
+exactly as the peer sent them, read from the association as it reads, so memory
+stays bounded by two PDUs whatever the instance's size; `WriteCStoreFile` writes
+them as a Part 10 file with File Meta Information built from the command (PS3.10
+7.1), the data set untouched. A data set that does not arrive whole fails the
+handler's read with an error that is never `io.EOF`, and no response is sent; one
+the handler stops reading early is read to its end and discarded before the
+handler's status is sent. A C-STORE-RQ that states no data set follows is
+refused with C000H without the handler being called (PS3.7 9.3.1.1).
+
+`WriteCStoreFile` checks the command's Affected SOP Class UID and Affected SOP
+Instance UID, and the transfer syntax, against PS3.5 9.1 before it writes
+anything, and refuses a command that fails; the handler chooses the status, and
+0117H (Invalid Object Instance) is the one PS3.7 9.1.1.1.9 gives for the instance
+UID. It does not compare those UIDs with the data set's own (0008,0016) and
+(0008,0018), which PS3.10 7.1 requires to be equal: the data set is copied, not
+parsed.
+
 ### 1.3 Sequencing
 
 The library imposes no ordering beyond what the standard requires. An
@@ -433,7 +453,7 @@ advisory.
 | `network.MaxAssociatePDULength` | 1 MiB | An A-ASSOCIATE-RQ or -AC declaring a huge length, before the caller is known; the four-byte PDUs are held to four bytes |
 | The Maximum Length advertised in the A-ASSOCIATE-RQ or -AC | `NetworkConfig.MaxPDUSize` | A P-DATA-TF longer than the receiver agreed to; aborted (PS3.8 D.1) |
 | Command set being assembled | 1 MiB | Command fragments never marked last; aborted |
-| `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory; aborted |
+| `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory, or will take from a stream; aborted |
 | `NetworkConfig.ARTIMTimeout` / `DIMSETimeout` | 30 s / 60 s | A peer that connects and sends nothing, or stops partway through a PDU |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file |

@@ -196,6 +196,58 @@ scp.SetHandler(&network.StorageHandler{
 })
 ```
 
+### Storage Server that Streams
+
+`HandleCStore` gets a decoded data set, which the SCP builds by holding the whole
+instance in memory. For an archive that writes what it receives, implement
+`CStoreStreamer` as well: the handler gets the bytes as the peer sent them, read
+from the association as it reads, so a multi-gigabyte instance costs two PDUs of
+memory, and `WriteCStoreFile` writes them as a Part 10 file without decoding them.
+
+```go
+type Archive struct{ network.BaseHandler }
+
+func (a *Archive) HandleCStoreStream(ctx context.Context, req *network.CStoreRequest,
+    transferSyntax string, data io.Reader) (*network.CStoreResponse, error) {
+    f, err := os.CreateTemp("incoming", "*.part")
+    if err != nil {
+        return nil, err // drained, then answered 0xC000
+    }
+    defer os.Remove(f.Name()) // a no-op once renamed
+    // The UIDs come from the peer. WriteCStoreFile checks them before it
+    // writes, so the one that names the file below is a UID and nothing else.
+    _, err = network.WriteCStoreFile(ctx, f, req, transferSyntax, data)
+    if closeErr := f.Close(); err == nil {
+        err = closeErr
+    }
+    if errors.Is(err, network.ErrInvalidSOPInstanceUID) {
+        return &network.CStoreResponse{Status: network.StatusInvalidObjectInstance}, nil
+    }
+    if err != nil {
+        return nil, err // not whole: never kept as the instance
+    }
+    if err := os.Rename(f.Name(), filepath.Join("archive", req.AffectedSOPInstance+".dcm")); err != nil {
+        return nil, err
+    }
+    return &network.CStoreResponse{Status: network.StatusSuccess}, nil
+}
+```
+
+A read error means the data set did not arrive whole (the peer aborted, closed
+the connection, sent too much, went quiet, or the context was canceled); the
+association is over and no response is sent. Such an error is never `io.EOF`,
+by `==` or by `errors.Is`: it is `io.ErrUnexpectedEOF` with the cause in its
+text. A handler that returns before reading to the end has the rest read and
+discarded, then its status sent; set `MaxDataSetSize` so that a refused instance
+is not received without bound. `HandleCStore` is not called for a handler that
+implements `CStoreStreamer`, and a `CompositeHandler` passes the stream on when
+its store handler implements it.
+
+The command's UIDs are not compared with the data set's own SOP Class and SOP
+Instance UIDs: the data set is copied, not parsed. An archive that indexes the
+file finds a disagreement there. The SCP puts no timeout on the handler, so one
+that waits on a disk or a database waits on `ctx` as well.
+
 ### Query/Retrieve Server
 
 ```go

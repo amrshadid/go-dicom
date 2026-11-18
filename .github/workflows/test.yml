@@ -317,6 +317,22 @@ jobs:
           # module the venv does not have, and the job passed (#322).
           grep -qF "an OpenJPEG-encoded frame decodes to the original pixels" interop.log
 
+      # A C-STORE streamed to a handler is written as the peer sent it: dcmtk
+      # and pynetdicom send corpus files, and the written file's data set is
+      # compared byte for byte with what was sent, then read by dcmdump and by
+      # pydicom. The tests skip without the corpus or either peer; here
+      # GODICOM_REQUIRE_INTEROP makes a skip a failure.
+      - name: Verify streamed C-STORE files against dcmtk and pynetdicom
+        env:
+          GODICOM_REQUIRE_INTEROP: "1"
+          DCMTK_BIN: /usr/bin
+        run: |
+          export PATH="$HOME/dicomvenv/bin:$PATH"
+          GODICOM_PYDICOM_DATA=$("$HOME/dicomvenv/bin/python" -c \
+            "import pydicom.data, os; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+          export GODICOM_PYDICOM_DATA
+          go test ./network/ -race -v -run 'TestDcmtkStoresAStreamedFile|TestPynetdicomStoresAStreamedFile'
+
       # Decoding is checked against pydicom's own reading of the same files,
       # not against this library's writer. Unit tests build their fixtures with
       # this library's encoder, so they cannot catch the two halves agreeing on

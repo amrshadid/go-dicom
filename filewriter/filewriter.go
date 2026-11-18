@@ -244,6 +244,17 @@ func (dfw *DCMFileWriter) WriteFileMetaInfo(metaInfo *FileMetaInfo) error {
 		addMeta(0x0018, "AE", metaInfo.ReceivingApplicationEntityTitle)
 	}
 
+	// Checked before anything is written: a value too long for its 16-bit
+	// length field was written with its length truncated while the group
+	// length counted it whole, so the header described a different file
+	// from the one that followed it.
+	for _, elem := range elements {
+		if isShortVR(elem.VR) && elem.Length > 0xFFFF {
+			return fmt.Errorf("file meta %s is %d bytes; a %s value holds at most 65535",
+				elem.Tag, elem.Length, elem.VR)
+		}
+	}
+
 	// Calculate total group length (all elements after group length tag)
 	groupLength := uint32(0)
 	for _, elem := range elements {
@@ -390,12 +401,21 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		}
 	}
 
+	explicitVR := dfw.explicitVR || forceExplicitVR
+
+	// A short VR states its length in 16 bits when the VR is explicit, and a
+	// longer value cannot be stated in it. Writing the low 16 bits of the
+	// length put every element after it in the wrong place. Refused before
+	// the tag is written, so a refusal leaves nothing of the element behind.
+	if explicitVR && isShortVR(elem.VR) && elem.Length > 0xFFFF {
+		return fmt.Errorf("%s value of %s is %d bytes; its explicit VR length field holds at most 65535",
+			elem.VR, elem.Tag, elem.Length)
+	}
+
 	// Write tag
 	if err := dfw.WriteTag(elem.Tag); err != nil {
 		return err
 	}
-
-	explicitVR := dfw.explicitVR || forceExplicitVR
 
 	if explicitVR {
 		// Write VR (2 bytes)
@@ -452,6 +472,29 @@ func (s *seekBuffer) Write(p []byte) (int, error) { return s.buf.Write(p) }
 func (s *seekBuffer) Seek(_ int64, _ int) (int64, error) { return int64(s.buf.Len()), nil }
 
 func (s *seekBuffer) Bytes() []byte { return s.buf.Bytes() }
+
+// EncodeFileHeader returns what comes before the data set in a Part 10 file:
+// the 128-byte preamble, "DICM", and the File Meta Information that
+// WriteFileMetaInfo writes for meta (PS3.10 7.1). The data set follows it,
+// encoded in meta.TransferSyntaxUID.
+//
+// It is for a writer that has the data set as bytes already encoded, such as
+// a C-STORE received over the network, and copies them after the header
+// without decoding them.
+func EncodeFileHeader(meta *FileMetaInfo) ([]byte, error) {
+	buf := &seekBuffer{}
+	w := NewDCMFileWriter(filebase.NewFileWriter(buf))
+	if err := w.WritePreamble(); err != nil {
+		return nil, err
+	}
+	if err := w.WriteDICMPrefix(); err != nil {
+		return nil, err
+	}
+	if err := w.WriteFileMetaInfo(meta); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
 
 // writeSequence serializes a Sequence (SQ) element and its nested items.
 //

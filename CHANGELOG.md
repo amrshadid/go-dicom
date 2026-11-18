@@ -124,6 +124,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is not resolved. `-allow` covers DIMSE only: `qrscp -web` has its own
   token.
 
+- **A C-STORE SCP can take the data set as a stream** (#317). `HandleCStore`
+  is given a decoded data set, which the SCP built by holding every
+  fragment of the message in memory and then decoding it: memory grew with
+  the instance, once for the bytes and again for the values, and a handler
+  that wrote a file wrote this library's encoding of the data set rather
+  than what the peer sent. A handler that also implements `CStoreStreamer`
+  is given the command, the transfer syntax of its presentation context,
+  and an `io.Reader` over the data set's bytes exactly as received, read
+  from the association as the handler reads. A 1 GiB instance is received
+  with the heap under 15 MiB, where `HandleCStore` peaks at 278 MiB for an
+  eighth of that, and a slow handler slows the peer through TCP.
+  `WriteCStoreFile` writes the stream as a Part 10 file, File Meta
+  Information built from the command and then the bytes untouched; dcmtk's
+  `dcmdump` and pydicom read the files, and their data sets are what
+  `storescu` and pynetdicom sent, byte for byte, for implicit and explicit
+  little endian and RLE. `MaxDataSetSize` still applies, counted as the
+  bytes pass. A handler that does not implement it is served as before.
+  A data set that does not arrive whole ends the read with an error that is
+  `io.ErrUnexpectedEOF` and never `io.EOF`, by `==` or by `errors.Is`,
+  whatever cut it short: a connection the peer closes reports an error that
+  wraps `io.EOF`, and a handler testing for the end with `errors.Is` would
+  have kept a truncated file as the instance. `WriteCStoreFile` checks the
+  UIDs the peer put in the command (PS3.5 9.1) before it writes anything and
+  refuses with `ErrInvalidSOPInstanceUID` or `ErrInvalidStoreCommand`, and
+  leaves out an AE title that is not one. A C-STORE-RQ that says no data set
+  follows is refused with 0xC000 without the handler being called.
+  `CompositeHandler` passes the stream to a store handler that implements
+  `CStoreStreamer`.
+
+- `CStoreRequest` carries the command's Priority, Move Originator AE Title
+  and Move Originator Message ID to the handler, whichever way it takes the
+  store. `HandleCStore` was given none of them.
+
+- `filewriter.EncodeFileHeader` returns the preamble, `DICM` and File Meta
+  Information that come before a data set, for a writer that has the data
+  set encoded already.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
@@ -238,6 +275,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-significant (PS3.8 Table 9-11), and only the trailing ones were
   removed: a caller asking for `"  ARCHIVE"` was refused as asking for
   another title, and a handler was told the calling title with its spaces.
+
+- **A data set that shares a P-DATA-TF with its command is no longer lost**
+  (#320). A P-DATA-TF may carry several PDVs, and the last fragment of a
+  command may travel with the first of its data set. The PDVs after the
+  fragment a read stopped at were dropped with the PDU, so the SCP waited
+  for a data set it had already received and aborted the association when
+  its timeout ran out. What a read leaves of a P-DATA-TF now waits for the
+  next read. dcmtk and pynetdicom send one PDV to a PDU, which is why it
+  did not show against them.
+
+- **A value too long for a 16-bit length is refused, not written with a
+  wrong length.** UI, AE, SH and the other short VRs state their length in
+  16 bits in explicit VR. `filewriter` wrote a longer value with the low 16
+  bits of its length: a 70,002-byte Media Storage SOP Instance UID went out
+  as length 4466 while the group length (0002,0000) counted all of it, so
+  the File Meta Information pointed 65,536 bytes past where its elements
+  ended. `WriteDataElement` and `WriteFileMetaInfo` now return an error
+  before writing any of the element or the group.
 
 ## [1.10.0] - 2026-11-17
 
