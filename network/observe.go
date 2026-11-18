@@ -132,7 +132,11 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 
 	case *AssociateRJ:
 		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocRejected))
+		e := with(EVTAssocRejected)
+		// The refusal in words, so a log of events says why without the
+		// reader decoding Table 9-21 from the PDU.
+		e.Description = AssociationRejection{p.Result, p.Source, p.Reason}.String()
+		o.events.Emit(e)
 
 	case *ReleaseRP:
 		o.events.Emit(with(eventType))

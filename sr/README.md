@@ -2,6 +2,8 @@
 
 DICOM Structured Report creation, validation, and management with template-based construction, standardized medical coding (SNOMED-CT, LOINC, DCM), fluent builders, and file I/O.
 
+`go-dicom sr report.dcm` prints a report's content tree (`ReadContentTree`) as an indented document, and `--json` as a document with each item's position; it checks against dcmtk's `dsrdump`.
+
 ## Quick Start
 
 ```go

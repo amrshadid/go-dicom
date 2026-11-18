@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/amrshadid/go-dicom/uid"
 )
@@ -878,12 +879,12 @@ func padAETitle(ae string) []byte {
 	return b
 }
 
+// trimAETitle returns an AE title field without its padding. Leading and
+// trailing spaces are both non-significant (PS3.8 Table 9-11, PS3.5 6.2):
+// only the trailing ones were removed, so a title a peer padded on the left
+// did not compare equal to itself.
 func trimAETitle(data []byte) string {
-	end := len(data)
-	for end > 0 && data[end-1] == ' ' {
-		end--
-	}
-	return string(data[:end])
+	return strings.Trim(string(data), " ")
 }
 
 func writeSubItem(w *bytes.Buffer, itemType byte, data []byte) error {
