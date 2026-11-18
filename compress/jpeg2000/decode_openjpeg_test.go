@@ -118,6 +118,16 @@ var openJPEGEncodings = []openJPEGEncoding{
 	{"ROI every style but bypass", []string{"-ROI", "c=0,U=4", "-M", "62"}},
 	{"ROI RPCL precincts tiles", []string{"-ROI", "c=0,U=6", "-p", "RPCL", "-c", "[32,32]", "-t", "48,40", "-n", "4"}},
 	{"ROI irreversible", []string{"-ROI", "c=0,U=6", "-I", "-r", "10"}},
+
+	// Progression order changes (A.6.6, B.12.2), which opj_compress writes in
+	// the tile-part header and numbers its tiles from 1 for: volumes that
+	// split the resolutions, that cover packets an earlier one carried, one
+	// set per tile, and the 9/7 filter. Volumes that split the components are
+	// in TestProgressionChangesByComponent, since a gray source has only one.
+	{"POC two volumes", []string{"-POC", "T1=0,0,1,3,3,CPRL/T1=0,0,3,6,3,LRCP", "-r", "20,5,1"}},
+	{"POC volumes overlap", []string{"-POC", "T1=0,0,2,6,3,RPCL/T1=0,0,3,6,3,PCRL", "-r", "20,5,1", "-c", "[32,32]"}},
+	{"POC per tile", []string{"-POC", "T1=0,0,1,4,3,CPRL/T1=0,0,2,4,3,LRCP/T2=0,0,2,4,3,RPCL", "-t", "48,40", "-n", "4", "-r", "10,1"}},
+	{"POC irreversible", []string{"-POC", "T1=0,0,1,2,3,RLCP/T1=0,0,2,6,3,CPRL", "-I", "-r", "20,5"}},
 }
 
 // openJPEGSource is one image the options are tried on.
@@ -382,6 +392,94 @@ func TestRegionOfInterestMatchesOpenJPEG(t *testing.T) {
 	}
 }
 
+// TestProgressionChangesByComponent splits a color image's packets into
+// volumes by component, each in its own order, which the matrix cannot try on
+// its gray sources.
+func TestProgressionChangesByComponent(t *testing.T) {
+	requireOpenJPEG(t)
+	for _, source := range openJPEGSources()[3:] { // the two color ones
+		for _, args := range [][]string{
+			{"-POC", "T1=0,0,2,6,1,LRCP/T1=0,1,2,6,3,RLCP", "-r", "10,1"},
+			{"-POC", "T1=0,2,3,6,3,CPRL/T1=0,0,3,6,2,RPCL", "-r", "20,5,1", "-c", "[32,32]"},
+		} {
+			label := strings.Join(args, " ") + ", " + source.name
+			data := encodeWithOpenJPEG(t, t.TempDir(), source.img, args)
+			codestream, err := ParseCodestream(data)
+			if err != nil {
+				t.Fatalf("%s: %v", label, err)
+			}
+			if len(codestream.ProgressionChangesForTile(0)) != 2 {
+				t.Fatalf("%s: read %d progression order changes, want 2",
+					label, len(codestream.ProgressionChangesForTile(0)))
+			}
+			compareWithOpenJPEG(t, label, data)
+		}
+	}
+}
+
+// TestJP2BoxWithA64BitLength rewrites the codestream box of a JP2 file that
+// opj_compress wrote into the form with a 64-bit length (I.4), and requires
+// what opj_decompress returns for the rewritten file.
+func TestJP2BoxWithA64BitLength(t *testing.T) {
+	requireOpenJPEG(t)
+	source := openJPEGSources()[3]
+	dir := t.TempDir()
+	raw := filepath.Join(dir, "source.raw")
+	writeRaw(t, raw, source.img)
+	jp2 := filepath.Join(dir, "source.jp2")
+	format := fmt.Sprintf("%d,%d,3,8,u", source.img.Width, source.img.Height)
+	if message, err := exec.Command("opj_compress", "-i", raw, "-F", format, "-o", jp2).CombinedOutput(); err != nil {
+		t.Fatalf("opj_compress: %v\n%s", err, message)
+	}
+	data, err := os.ReadFile(jp2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wide := widenCodestreamBox(t, data)
+
+	codestream, err := ParseCodestream(wide)
+	if err != nil {
+		t.Fatalf("ParseCodestream: %v", err)
+	}
+	img, err := Decode(codestream)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	widePath := filepath.Join(dir, "wide.jp2")
+	if err := os.WriteFile(widePath, wide, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "wide.pgx")
+	if message, err := exec.Command("opj_decompress", "-i", widePath, "-o", out).CombinedOutput(); err != nil {
+		t.Fatalf("opj_decompress refused the rewritten box: %v\n%s", err, message)
+	}
+	for c := range img.Components {
+		want := readPGX(t, filepath.Join(dir, fmt.Sprintf("wide_%d.pgx", c)))
+		if got := samplesDigest(img.Components[c : c+1]); got != samplesDigest([][]int32{want}) {
+			t.Fatalf("component %d differs from OpenJPEG's", c)
+		}
+	}
+}
+
+// widenCodestreamBox rewrites a JP2 file's jp2c box header from a 32-bit
+// length to the 64-bit form: a length of 1, the type, then XLBox.
+func widenCodestreamBox(t *testing.T, data []byte) []byte {
+	t.Helper()
+	at := bytes.Index(data, []byte("jp2c")) - 4
+	if at < 0 {
+		t.Fatal("no jp2c box")
+	}
+	length := uint64(binary.BigEndian.Uint32(data[at:]))
+	if length == 0 {
+		length = uint64(len(data) - at)
+	}
+	out := append([]byte{}, data[:at]...)
+	out = binary.BigEndian.AppendUint32(out, 1)
+	out = append(out, "jp2c"...)
+	out = binary.BigEndian.AppendUint64(out, length+8)
+	return append(out, data[at+8:]...)
+}
+
 // rgnIntoTilePart moves a single-tile codestream's RGN segment from the main
 // header to the header of its tile-part, correcting the tile-part's length.
 func rgnIntoTilePart(t *testing.T, data []byte) []byte {
@@ -439,6 +537,48 @@ var openJPEGFixtures = []openJPEGFixture{
 	// signed color one in two layers.
 	{"opj_roi.j2k", "-F 29,27,1,8,u -n 4 -ROI c=0,U=4", "4cdf9f925ac4841e"},
 	{"opj_roi_color_layers.j2k", "-F 22,19,3,12,s -n 3 -ROI c=2,U=6 -r 10,1", "8a24ebb94d6dc67f"},
+	// Progression order changes, by resolution in three layers, and by
+	// component in signed color.
+	{"opj_poc_volumes.j2k", "-F 35,29,1,8,u -n 4 -POC T1=0,0,1,2,1,RLCP/T1=0,0,3,4,1,CPRL -r 20,5,1", "8cf265c848188663"},
+	{"opj_poc_components.j2k", "-F 27,21,3,12,s -n 3 -POC T1=0,2,2,3,3,PCRL/T1=0,0,2,3,2,LRCP -r 10,1", "85a8c30dba9f6d14"},
+}
+
+// TestJP2BoxWithA64BitLengthAroundAFixture wraps a committed fixture in a JP2
+// container whose codestream box gives its length in 64 bits (I.4), and
+// requires the fixture's samples, without needing OpenJPEG.
+func TestJP2BoxWithA64BitLengthAroundAFixture(t *testing.T) {
+	fixture := openJPEGFixtures[0]
+	codestream, err := os.ReadFile(filepath.Join("testdata", fixture.file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jp2 := []byte{0, 0, 0, 12, 'j', 'P', ' ', ' ', 0x0D, 0x0A, 0x87, 0x0A}
+	jp2 = binary.BigEndian.AppendUint32(jp2, 1)
+	jp2 = append(jp2, "jp2c"...)
+	jp2 = binary.BigEndian.AppendUint64(jp2, uint64(16+len(codestream)))
+	jp2 = append(jp2, codestream...)
+
+	parsed, err := ParseCodestream(jp2)
+	if err != nil {
+		t.Fatalf("ParseCodestream: %v", err)
+	}
+	img, err := Decode(parsed)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if got := samplesDigest(img.Components); got != fixture.digest {
+		t.Errorf("the samples hash to %s, OpenJPEG's to %s", got, fixture.digest)
+	}
+
+	// A 64-bit length past the end, or too small to hold its own header, is
+	// an error, not a slice past the data.
+	for _, length := range []uint64{uint64(16 + len(codestream) + 1), 15, 1 << 63} {
+		bad := append([]byte{}, jp2...)
+		binary.BigEndian.PutUint64(bad[20:], length)
+		if _, err := ParseCodestream(bad); err == nil {
+			t.Errorf("a box declaring %d bytes parsed", length)
+		}
+	}
 }
 
 // TestRegionOfInterestThreshold pins H.1's rule on the boundary: with a shift

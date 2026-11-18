@@ -125,7 +125,7 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 	}
 	style := c.CodingForTile(tile, 0)
 	pos := 0
-	err = forEachPacket(style, precincts, func(step packetStep) (bool, error) {
+	err = forEachPacket(style, c.ProgressionChangesForTile(tile), precincts, len(data), func(step packetStep) (bool, error) {
 		if pos >= len(data) {
 			// Layers may simply stop: an encoder writes as many as it wrote,
 			// and the rest of the progression is empty. This is also what
@@ -187,6 +187,7 @@ type packetStep struct {
 type tilePrecinct struct {
 	component, resolution, precinct int
 	x, y                            int64
+	index                           int // its place in tilePrecincts' list
 }
 
 // tilePrecincts lists every precinct of a tile, resolution by resolution, and
@@ -238,6 +239,7 @@ func (c *Codestream) tilePrecincts(tile int, comps []TileComponent, tileBytes in
 				precincts = append(precincts, tilePrecinct{
 					component: comp, resolution: r, precinct: k,
 					x: max(x, int64(tx0)), y: max(y, int64(ty0)),
+					index: len(precincts),
 				})
 			}
 		}
@@ -246,28 +248,82 @@ func (c *Codestream) tilePrecincts(tile int, comps []TileComponent, tileBytes in
 }
 
 // forEachPacket calls visit for each packet of a tile in the order the coding
-// style's progression writes them (B.12.1), until visit returns false or an
-// error. precincts is tilePrecincts' list.
+// style's progression writes them (B.12.1), or the order its progression
+// order changes give (B.12.2), until visit returns false or an error.
+// precincts is tilePrecincts' list, and tileBytes the tile's length.
+func forEachPacket(style CodingStyle, changes []ProgressionChange, precincts []tilePrecinct,
+	tileBytes int, visit func(packetStep) (bool, error)) error {
+
+	step := func(p tilePrecinct, layer int) packetStep {
+		return packetStep{layer: layer, resolution: p.resolution, component: p.component, precinct: p.precinct}
+	}
+	if len(changes) == 0 {
+		_, err := walkVolume(style.Progression, style.Layers, precincts, func(p tilePrecinct, l int) (bool, error) {
+			return visit(step(p, l))
+		})
+		return err
+	}
+
+	// Each volume is a range of resolutions, components and layers in its own
+	// order, and a packet an earlier volume carried is not carried again.
+	// Every volume walks a precinct's layers upwards from 0, so the layers a
+	// precinct has given are always 0 to some n, and one count per precinct
+	// says which packets are done.
+	//
+	// Skipping is not free, and a POC can name thousands of volumes that
+	// repeat each other without consuming a byte: the work of skipping and of
+	// picking out each volume's precincts is bounded by the tile's size, far
+	// above what any real progression needs.
+	done := make([]int, len(precincts))
+	work, budget := 0, 64*(tileBytes+len(precincts))+1<<20
+	for _, change := range changes {
+		if work += len(precincts); work > budget {
+			return errorf("a tile's progression order changes name more than %d precincts", budget)
+		}
+		var volume []tilePrecinct
+		for _, p := range precincts {
+			if p.resolution >= change.ResolutionStart && p.resolution < change.ResolutionEnd &&
+				p.component >= change.ComponentStart && p.component < change.ComponentEnd {
+				volume = append(volume, p)
+			}
+		}
+		more, err := walkVolume(change.Progression, min(change.LayerEnd, style.Layers), volume,
+			func(p tilePrecinct, l int) (bool, error) {
+				if l < done[p.index] {
+					if work++; work > budget {
+						return false, errorf("a tile's progression order changes revisit more than %d packets", budget)
+					}
+					return true, nil
+				}
+				done[p.index] = l + 1
+				return visit(step(p, l))
+			})
+		if !more || err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// walkVolume calls emit for each packet of a volume of precincts in one
+// progression order (B.12.1), with layers 0 to layers-1, until emit returns
+// false or an error. It reports whether emit asked to go on.
 //
 // Each order is the list in some order, with the layer loop where the order
 // puts it: outermost for LRCP, second for RLCP, innermost for the three
 // position-driven ones, whose precincts are sorted by where on the grid the
 // standard's loops meet them.
-func forEachPacket(style CodingStyle, precincts []tilePrecinct, visit func(packetStep) (bool, error)) error {
-	emit := func(p tilePrecinct, layer int) (bool, error) {
-		return visit(packetStep{layer: layer, resolution: p.resolution, component: p.component, precinct: p.precinct})
-	}
-
-	switch style.Progression {
+func walkVolume(progression, layers int, precincts []tilePrecinct, emit func(tilePrecinct, int) (bool, error)) (bool, error) {
+	switch progression {
 	case ProgressionLRCP:
-		for l := 0; l < style.Layers; l++ {
+		for l := 0; l < layers; l++ {
 			for _, p := range precincts {
 				if more, err := emit(p, l); !more || err != nil {
-					return err
+					return more, err
 				}
 			}
 		}
-		return nil
+		return true, nil
 
 	case ProgressionRLCP:
 		// The list is in resolution order, so each resolution is a run of it.
@@ -276,21 +332,21 @@ func forEachPacket(style CodingStyle, precincts []tilePrecinct, visit func(packe
 			for end < len(precincts) && precincts[end].resolution == precincts[start].resolution {
 				end++
 			}
-			for l := 0; l < style.Layers; l++ {
+			for l := 0; l < layers; l++ {
 				for _, p := range precincts[start:end] {
 					if more, err := emit(p, l); !more || err != nil {
-						return err
+						return more, err
 					}
 				}
 			}
 			start = end
 		}
-		return nil
+		return true, nil
 	}
 
 	order := slices.Clone(precincts)
 	var key func(p tilePrecinct) [4]int64
-	switch style.Progression {
+	switch progression {
 	case ProgressionRPCL:
 		key = func(p tilePrecinct) [4]int64 { return [4]int64{int64(p.resolution), p.y, p.x, int64(p.component)} }
 	case ProgressionPCRL:
@@ -298,20 +354,20 @@ func forEachPacket(style CodingStyle, precincts []tilePrecinct, visit func(packe
 	case ProgressionCPRL:
 		key = func(p tilePrecinct) [4]int64 { return [4]int64{int64(p.component), p.y, p.x, int64(p.resolution)} }
 	default:
-		return &ErrUnsupported{Feature: fmt.Sprintf("progression order %d", style.Progression)}
+		return false, &ErrUnsupported{Feature: fmt.Sprintf("progression order %d", progression)}
 	}
 	slices.SortStableFunc(order, func(a, b tilePrecinct) int {
 		ka, kb := key(a), key(b)
 		return slices.Compare(ka[:], kb[:])
 	})
 	for _, p := range order {
-		for l := 0; l < style.Layers; l++ {
+		for l := 0; l < layers; l++ {
 			if more, err := emit(p, l); !more || err != nil {
-				return err
+				return more, err
 			}
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // readPacket reads one packet's header and body, returning the offset after it.
