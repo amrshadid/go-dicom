@@ -913,7 +913,22 @@ fi
 # needs no plugin — asking pydicom to decode the compressed fixture would test
 # whichever of pylibjpeg or gdcm happened to be installed, or fail on a machine
 # with neither while appearing to say the pixels disagree.
-if command -v opj_compress >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+#
+# The fixture is checked before go-dicom is asked anything (#322). It was
+# written as PGX, and OpenJPEG's PGX reader takes the precision from the
+# largest sample rather than from the header's depth: MR_small's samples reach
+# 2145, so the codestream came out signed 12-bit and every sample over 2047 was
+# clipped. go-dicom then decoded exactly what OpenJPEG had written and failed
+# for it. Now opj_compress is given the data set's own little endian samples as
+# raw input with the depth stated (-F), the codestream's SIZ marker must say
+# Bits Stored and the data set's sign, and opj_decompress must return the
+# original bytes. A fixture that is not lossless fails as a fixture.
+#
+# Raw input also needs no numpy, which the CI venv does not have: building the
+# PGX called pixel_array, and that failure was reported as a skip, so the
+# section passed in CI without ever running.
+if command -v opj_compress >/dev/null 2>&1 && command -v opj_decompress >/dev/null 2>&1 &&
+  command -v python3 >/dev/null 2>&1; then
   note "JPEG 2000: OpenJPEG encoder, pydicom ground truth"
 
   j2k_dir="$WORKDIR/jpeg2000"
@@ -929,31 +944,48 @@ from pydicom.uid import JPEG2000Lossless
 out = sys.argv[1]
 corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
 ds = pydicom.dcmread(os.path.join(corpus, "MR_small.dcm"))
-arr = ds.pixel_array
-height, width = arr.shape
+rows, cols = int(ds.Rows), int(ds.Columns)
+stored, allocated = int(ds.BitsStored), int(ds.BitsAllocated)
 signed = int(ds.PixelRepresentation) == 1
+if not ds.file_meta.TransferSyntaxUID.is_little_endian or int(ds.SamplesPerPixel) != 1 \
+        or stored != allocated or allocated != 16:
+    sys.exit("MR_small.dcm is no longer one 16-bit little endian plane; the raw input below assumes it")
 
-# PGX is the one raw format opj_compress reads that carries signed samples,
-# which a 16-bit MR needs.
-pgx = os.path.join(out, "orig.pgx")
+# .rawl is little endian raw samples, which is what this Pixel Data already is.
+raw = os.path.join(out, "orig.rawl")
 j2k = os.path.join(out, "orig.j2k")
-with open(pgx, "wb") as fh:
-    fh.write(f"PG ML {'-' if signed else '+'} {ds.BitsStored} {width} {height}\n".encode())
-    fh.write(arr.astype(">i2" if signed else ">u2").tobytes())
-subprocess.run(["opj_compress", "-i", pgx, "-o", j2k, "-r", "1"],
+back = os.path.join(out, "back.rawl")
+with open(raw, "wb") as fh:
+    fh.write(ds.PixelData)
+subprocess.run(["opj_compress", "-i", raw, "-o", j2k, "-r", "1",
+                "-F", "%d,%d,1,%d,%s" % (cols, rows, stored, "s" if signed else "u")],
                capture_output=True, check=True)
+codestream = open(j2k, "rb").read()
+
+# SIZ (ISO 15444-1 A.5.1): the first component's Ssiz is the sign in its top
+# bit and the precision minus one below it, at byte 42 of the codestream.
+if codestream[2:4] != b"\xff\x51":
+    sys.exit("opj_compress wrote no SIZ marker after SOC")
+ssiz = codestream[42]
+if (ssiz & 0x7F) + 1 != stored or bool(ssiz & 0x80) != signed:
+    sys.exit("the fixture's codestream is %s %d-bit; the data set is %s %d-bit" % (
+        "signed" if ssiz & 0x80 else "unsigned", (ssiz & 0x7F) + 1,
+        "signed" if signed else "unsigned", stored))
+subprocess.run(["opj_decompress", "-i", j2k, "-o", back], capture_output=True, check=True)
+if open(back, "rb").read() != bytes(ds.PixelData):
+    sys.exit("OpenJPEG does not return the original samples from the fixture it wrote")
 
 with open(os.path.join(out, "orig.pixels"), "wb") as fh:
     fh.write(ds.PixelData)
 
 ds.file_meta.TransferSyntaxUID = JPEG2000Lossless
-ds.PixelData = encapsulate([open(j2k, "rb").read()])
+ds.PixelData = encapsulate([codestream])
 ds["PixelData"].is_undefined_length = True
 ds.save_as(os.path.join(out, "openjpeg.dcm"))
 
 # Leave only the data set behind, so the checker sees one fixture.
-os.remove(pgx)
-os.remove(j2k)
+for leftover in (raw, j2k, back):
+    os.remove(leftover)
 PYEOF
   then
     if go run ./scripts/jpeglossless-check "$j2k_dir" "$j2k_dir/orig.pixels" > "$WORKDIR/j2k.log" 2>&1; then
@@ -964,7 +996,9 @@ PYEOF
       sed -n '1,20p' "$WORKDIR/j2k.log" >&2
     fi
   else
-    skip "could not build the JPEG 2000 fixture with opj_compress"
+    # Not a skip: OpenJPEG and pydicom are both here, so a fixture that cannot
+    # be built is a fault, and as a skip it passed CI unseen (#322).
+    fail "could not build a lossless JPEG 2000 fixture with OpenJPEG"
     sed -n '1,10p' "$WORKDIR/j2k-fixture.log" >&2
   fi
 fi
