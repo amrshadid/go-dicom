@@ -90,8 +90,9 @@ func TestDcmtkSeesTheChosenRefusal(t *testing.T) {
 	}
 }
 
-// TestPynetdicomSeesTheChosenRefusal: pynetdicom reports the association
-// rejected, with the result, source and reason the admission function chose.
+// TestPynetdicomSeesTheChosenRefusal: pynetdicom receives the A-ASSOCIATE-RJ
+// with the result, source and reason the admission function chose, names each
+// as the standard does, and establishes no association.
 func TestPynetdicomSeesTheChosenRefusal(t *testing.T) {
 	requirePynetdicom(t)
 	script := filepath.Join(t.TempDir(), "associate.py")
@@ -111,7 +112,12 @@ ae.add_requested_context(Verification)
 assoc = ae.associate(sys.argv[1], int(sys.argv[2]), ae_title="ARCHIVE",
                      evt_handlers=[(evt.EVT_PDU_RECV, on_pdu)])
 rj = seen[0]
-print("rejected=%s result=%d source=%d reason=%d" % (assoc.is_rejected, rj.result, rj.source, rj.reason_diagnostic))
+# What is checked is the PDU pynetdicom received and that no association
+# came of it. Its own is_rejected flag is not: on a loaded machine pynetdicom
+# 2.1 was seen to hold the A-ASSOCIATE-RJ and leave that flag False for good,
+# about once in sixty runs, which is between its DUL and ACSE threads and
+# nothing this SCP sends decides (#430).
+print("established=%s result=%d source=%d reason=%d" % (assoc.is_established, rj.result, rj.source, rj.reason_diagnostic))
 print("%s|%s|%s" % (rj.result_str, rj.source_str, rj.reason_str))
 `), 0o600); err != nil {
 		t.Fatal(err)
@@ -125,7 +131,7 @@ print("%s|%s|%s" % (rj.result_str, rj.source_str, rj.reason_str))
 		}
 		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 		r := c.rejection
-		wantNumbers := "rejected=True result=" + itoa(r.Result) + " source=" + itoa(r.Source) + " reason=" + itoa(r.Reason)
+		wantNumbers := "established=False result=" + itoa(r.Result) + " source=" + itoa(r.Source) + " reason=" + itoa(r.Reason)
 		wantWords := c.pyResult + "|" + c.pySource + "|" + c.pyWhy
 		if len(lines) < 2 || lines[len(lines)-2] != wantNumbers || !strings.HasPrefix(lines[len(lines)-1], wantWords) {
 			t.Errorf("refused with %s, pynetdicom reported:\n%s\nwant:\n%s\n%s", r, out, wantNumbers, wantWords)
