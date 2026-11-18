@@ -1402,6 +1402,33 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# Media Creation Management and the two event logging classes (#370).
+#
+# They are N-CREATE, N-ACTION and N-GET against pynetdicom, in both directions,
+# and no command line drives them, so the check is the Go tests that do: each
+# fails on what pynetdicom read of our bytes, or on what go-dicom read of its.
+# GODICOM_REQUIRE_INTEROP turns a test that cannot find pynetdicom into a
+# failure, since here it was found.
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "Media Creation Management and event logging against pynetdicom"
+  if PATH="$PYNETDICOM_BIN:$PATH" GODICOM_REQUIRE_INTEROP=1 go test ./network/ -count=1 -v \
+    -run 'TestMediaCreationAgainstPynetdicom|TestMediaCreationSCPAgainstPynetdicom|TestEventLoggingAgainstPynetdicom|TestEventLoggingSCPAgainstPynetdicom' \
+    > "$WORKDIR/mediaevent.log" 2>&1; then
+    passed=$(grep -c '^--- PASS' "$WORKDIR/mediaevent.log" || true)
+    if [ "$passed" -eq 4 ]; then
+      pass "Media Creation Management, Procedural Event Logging, Substance Administration Logging — both directions, $passed tests"
+      RAN_ANY=1
+    else
+      fail "expected 4 media creation and event logging tests to pass, $passed did"
+      grep -E '^(---|=== RUN)' "$WORKDIR/mediaevent.log" >&2 || true
+    fi
+  else
+    fail "media creation or event logging does not agree with pynetdicom"
+    grep -vE '^=== (RUN|PAUSE|CONT)' "$WORKDIR/mediaevent.log" | sed -n '1,30p' >&2
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # TLS, both directions. Until SCUConfig.TLS an SCU could not associate over TLS
 # at all, and TLSConfig.CAFile was never read, so a server that was meant to
 # require client certificates accepted anyone (#180, #182). The PKI is made by

@@ -702,16 +702,24 @@ and the two event logging classes are the same shape: C-FIND or a single
 N-service against a well-known instance, with UID constants and
 presentation-context helpers provided.
 
-Three of them are now exercised end to end:
+All of them are now exercised end to end:
 
 | SOP class | Verified by |
 |---|---|
 | Relevant Patient Information Query (all three) | A C-FIND over a real association, and against pynetdicom in `scripts/interop-test.sh`, which reports the abstract syntax it received |
 | Display System | An N-GET for the well-known instance `1.2.840.10008.5.1.1.40.1`, asserting the SCP is asked about that instance and not another |
 | Non-patient object information models | A C-FIND for hanging protocol, color palette and generic implant template, and against pynetdicom, which confirms the identifier carries **no** QueryRetrieveLevel |
+| Media Creation Management | Against pynetdicom in both directions (`network/interop_mediaevent_test.go`, run by `scripts/interop-test.sh`): N-CREATE of a request with a Referenced SOP Sequence, N-ACTION 1 to initiate it, N-GET of its Execution Status. Each side reports the instance, action type and attributes it read |
+| Procedural Event Logging, Substance Administration Logging | Against pynetdicom in both directions, the same way: N-ACTION 1 to each class's well-known instance, a Content Sequence item for the procedural event and a Product Name for the substance |
 
-Media Creation Management and the event logging classes still have no test
-against a peer.
+pynetdicom 2.1 serves all three classes, so none of them is tested against
+go-dicom alone. Writing these tests found two defects in the N-DIMSE
+primitives, recorded on their own: an SCU leaves the data set of an N-CREATE,
+N-SET, N-ACTION or N-EVENT-REPORT response unread, so the next operation
+reads it as its response (#379); and an SCP never gives an N-GET handler the
+Attribute Identifier List (#380). The tests here do not lean on either: the
+media creation SCP answers N-CREATE without an attribute list, and the N-GET
+handler's list is not asserted.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Media Creation Management and the two event logging classes are
+  verified against a peer** (#370). CONFORMANCE §8.5 said they "still have
+  no test against a peer": they had UID constants and presentation context
+  helpers, and no message of theirs had reached another implementation.
+  Each is now run against pynetdicom in both directions by
+  `scripts/interop-test.sh`. Media Creation goes through N-CREATE with a
+  Referenced SOP Sequence, N-ACTION to initiate and N-GET of the Execution
+  Status. Procedural Event Logging and Substance Administration Logging go
+  through N-ACTION to their well-known instances. Each side reports what it
+  read. Writing them found two defects in the N-DIMSE primitives, #379 and
+  #380, which are recorded separately.
+
 ### Fixed
 
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
