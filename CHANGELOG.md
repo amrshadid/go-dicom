@@ -669,6 +669,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Packages other than `dataset` still assert `[]byte` in places; #420 lists
   them.
 
+- **`GetPixelDataInfo` holds the rescale** (#378). `PixelDataInfo` has
+  `RescaleSlope` and `RescaleIntercept`, and nothing ever set them, so both
+  were 0 for every image: a CT with intercept -1024 read `0 0`, and
+  `624*slope + intercept` came to 0 rather than -400, as pydicom's
+  `apply_modality_lut` gives. They now hold Rescale Slope (0028,1053) and
+  Intercept (0028,1052), and 1 and 0 when the image has none, since an absent
+  slope means no scaling and not a slope of 0. An enhanced multi-frame image
+  keeps them per frame in the functional groups; there the fields hold frame
+  0's values, its own group's or else the shared one's, and the doc comment
+  says so. The rendering code and this share one lookup, which now also finds
+  a Pixel Value Transformation whose slope is absent but whose intercept is
+  there. Compared with pydicom on the 62 corpus files that have pixels.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
