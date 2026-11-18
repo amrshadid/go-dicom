@@ -37,7 +37,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 	handlerDone := make(chan error, 1)
 	go func() {
 		defer close(out)
-		handlerDone <- streamer.StreamCGet(handlerCtx, req, out)
+		handlerDone <- guardHandler(func() error { return streamer.StreamCGet(handlerCtx, req, out) })
 	}()
 
 	canceled := &cancelFlag{}
@@ -62,12 +62,12 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 			stopHandler()
 			for range out { //nolint:revive // draining so the handler can return
 			}
-			<-handlerDone
+			_ = awaitHandler(handlerDone)
 			return StatusUnableToProcess
 		}
 	}
 
-	handlerErr := <-handlerDone
+	handlerErr := awaitHandler(handlerDone)
 
 	remaining := remainingAfter(total, sent)
 
@@ -117,7 +117,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 	handlerDone := make(chan error, 1)
 	go func() {
 		defer close(out)
-		handlerDone <- streamer.StreamCMove(handlerCtx, req, out)
+		handlerDone <- guardHandler(func() error { return streamer.StreamCMove(handlerCtx, req, out) })
 	}()
 
 	// The destination association is opened lazily: a query that matches
@@ -160,12 +160,12 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 			stopHandler()
 			for range out { //nolint:revive // draining so the handler can return
 			}
-			<-handlerDone
+			_ = awaitHandler(handlerDone)
 			return
 		}
 	}
 
-	handlerErr := <-handlerDone
+	handlerErr := awaitHandler(handlerDone)
 
 	remaining := remainingAfter(total, sent)
 
