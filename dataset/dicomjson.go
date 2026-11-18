@@ -284,7 +284,7 @@ func (ds *Dataset) privateVR(t tag.Tag, elem *dataelem.DataElement) dataelem.VR 
 	if !ok {
 		return "" // the block was never claimed, so nothing can say what this is
 	}
-	raw, ok := creator.GetValue().([]byte)
+	raw, ok := valueBytes(creator)
 	if !ok {
 		return ""
 	}
@@ -313,7 +313,7 @@ func fitsVR(vr dataelem.VR, elem *dataelem.DataElement) bool {
 	if info == nil || info.ByteLength <= 0 || elem == nil {
 		return true
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := valueBytes(elem)
 	return !ok || len(raw)%info.ByteLength == 0
 }
 
@@ -550,7 +550,7 @@ func (ds *Dataset) declareUTF8(topLevel bool) {
 	if elem, declared := ds.Get(specificCharacterSet); declared {
 		// An empty declaration over ASCII text is already true: it names the
 		// default repertoire, which ASCII is.
-		raw, _ := elem.GetValue().([]byte)
+		raw, _ := valueBytes(elem)
 		if strings.TrimSpace(string(raw)) != "" || hasNonASCIIText(ds) {
 			_ = ds.Add(dataelem.NewDataElement(specificCharacterSet, dataelem.CS, []byte(utf8CharacterSet)))
 		}
@@ -573,7 +573,7 @@ func hasNonASCIIText(ds *Dataset) bool {
 			}
 			continue
 		}
-		raw, ok := elem.GetValue().([]byte)
+		raw, ok := valueBytes(elem)
 		if !ok || !dataelem.IsCharacterSetVR(elem.GetVR()) {
 			continue
 		}

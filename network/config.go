@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataset"
 )
 
@@ -56,11 +57,13 @@ type NetworkConfig struct {
 	// NetworkTimeout is the timeout for establishing TCP connections.
 	NetworkTimeout time.Duration
 
-	// JPEGQuality allows an image to be sent as JPEG Baseline, at this
-	// quality from 1 to 100, when that is the only syntax the peer accepts
-	// for it. JPEG Baseline is lossy, so nothing is sent that way unless
-	// this is set: zero refuses, and the send fails. It applies to 8-bit
-	// images; a deeper one is refused whatever this says.
+	// JPEGQuality allows an image to be sent as JPEG Baseline or JPEG
+	// Extended, at this quality from 1 to 100, when that is the only syntax
+	// the peer accepts for it. Both are lossy, so nothing is sent that way
+	// unless this is set: zero refuses, and the send fails. JPEG Baseline
+	// applies to 8-bit images; JPEG Extended to unsigned images of 8 bits,
+	// or of no more than 12 stored in 16. Anything else is refused whatever
+	// this says.
 	JPEGQuality int
 
 	// JPEGLSNear is the allowed error, NEAR of ITU-T T.87, for an image sent
@@ -70,6 +73,13 @@ type NetworkConfig struct {
 	// under that syntax, which it allows, so nothing is lost unasked. A signed
 	// image is sent only at zero. It runs from 0 to 255.
 	JPEGLSNear int
+
+	// JPEG2000Rate allows an image to be sent as lossy JPEG 2000
+	// (1.2.840.10008.1.2.4.91) when that is the only syntax the peer accepts
+	// for it, at this compression ratio or this PSNR, one of them. It is
+	// lossy, so nothing is sent that way unless this is set: the zero value
+	// refuses, and the send fails.
+	JPEG2000Rate compress.JPEG2000Rate
 
 	// MaxDataSetSize bounds the data set of one message, which is held in
 	// memory whole while it arrives. A peer sending more is aborted. Zero is

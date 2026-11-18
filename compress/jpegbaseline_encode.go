@@ -250,14 +250,7 @@ func EncodeJPEGBaseline(samples []byte, width, height, components, quality int) 
 // scaledQuantization scales a base table for a quality, as libjpeg's
 // jpeg_set_quality does, keeping every entry within a byte.
 func scaledQuantization(base [64]int, quality int) (table [64]int) {
-	scale := 200 - 2*quality
-	if quality < 50 {
-		scale = 5000 / quality
-	}
-	for i, v := range base {
-		table[i] = min(max((v*scale+50)/100, 1), 255)
-	}
-	return table
+	return scaledQuantizationTo(base, quality, 255)
 }
 
 type baselineEncoder struct {

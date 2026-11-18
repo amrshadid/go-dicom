@@ -18,6 +18,13 @@ import (
 
 // GetPixelDataInfo extracts pixel data metadata from the dataset.
 // Returns an error if required pixel data tags are missing.
+//
+// RescaleSlope and RescaleIntercept hold Rescale Slope (0028,1053) and Rescale
+// Intercept (0028,1052), and 1 and 0 when the image has none: an absent slope
+// means no scaling, not a slope of 0. An enhanced multi-frame image holds them
+// per frame in the functional groups, so there the fields hold frame 0's values
+// (its own group, or else the shared one) and later frames can differ; the
+// rescale of a frame is part of what RenderFrame applies.
 func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 	info := &PixelDataInfo{
 		BitsAllocated:       8,
@@ -104,6 +111,11 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 			info.PhotometricInterpretation = val
 		}
 	}
+
+	// Rescale Slope (0028,1053) and Intercept (0028,1052). They were never read
+	// from the data set, so both were 0 for every image and a slope of 0 turned
+	// each pixel into the intercept.
+	info.RescaleSlope, info.RescaleIntercept = rescaleOf(ds, 0)
 
 	// Validate required fields
 	if info.Rows == 0 || info.Columns == 0 {
