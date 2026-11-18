@@ -2,6 +2,8 @@ package dataset_test
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"strconv"
@@ -341,6 +343,38 @@ func TestRenderFrames(t *testing.T) {
 	}
 	if _, err := dataset.NewDataset().RenderFrame(0, nil); err == nil {
 		t.Error("a data set with no image was rendered")
+	}
+}
+
+// TestRenderEachFrame: each frame is handed over in order, the same image
+// RenderFrames gives, and an error from the caller stops it and comes back.
+func TestRenderEachFrame(t *testing.T) {
+	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME2", frames: 3, px: []byte{0, 255, 255, 0, 9, 9},
+		text: map[tag.Tag]string{tagWindowCenter: "128", tagWindowWidth: "256"}}.dataset()
+	all, err := ds.RenderFrames(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []int
+	err = ds.RenderEachFrame(nil, func(f int, img image.Image) error {
+		seen = append(seen, f)
+		if !sameLevels(img.(*image.Gray).Pix, all[f].(*image.Gray).Pix) {
+			t.Errorf("frame %d differs from RenderFrames'", f)
+		}
+		return nil
+	})
+	if err != nil || fmt.Sprint(seen) != "[0 1 2]" {
+		t.Errorf("frames %v handed over, %v", seen, err)
+	}
+
+	stop := errors.New("disk full")
+	seen = nil
+	err = ds.RenderEachFrame(nil, func(f int, _ image.Image) error {
+		seen = append(seen, f)
+		return stop
+	})
+	if !errors.Is(err, stop) || len(seen) != 1 {
+		t.Errorf("after an error: frames %v, %v", seen, err)
 	}
 }
 

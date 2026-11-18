@@ -49,16 +49,9 @@ func (ds *Dataset) CompressJPEG2000LosslessInPlace() error {
 
 	// The decoded image, described as decoded, on a copy when decoding is
 	// needed so that a refusal below leaves the caller's data set alone.
-	source := ds
-	if stored, err := extractBytesValue(elem); err == nil {
-		if info, err := ds.GetPixelDataInfo(); err == nil {
-			if _, encapsulated := ds.pixelCompression(stored, info); encapsulated {
-				source = ds.Clone()
-				if err := source.DecompressInPlace(); err != nil {
-					return fmt.Errorf("compress: %w", err)
-				}
-			}
-		}
+	source, err := ds.decodedForCompression(elem)
+	if err != nil {
+		return err
 	}
 	info, err := source.GetPixelDataInfo()
 	if err != nil {
@@ -103,14 +96,7 @@ func (ds *Dataset) CompressJPEG2000LosslessInPlace() error {
 	// Everything that can fail has; from here the data set changes. When the
 	// image was decoded first, what describes it has to be the decoded
 	// image's description: a 4:2:2 JPEG decodes to chroma for every pixel.
-	if source != ds {
-		for _, t := range []tag.Tag{tag.New(0x0028, 0x0004), tag.New(0x0028, 0x0006)} {
-			if described, ok := source.Get(t); ok {
-				ds.Remove(t)
-				_ = ds.Add(described)
-			}
-		}
-	}
+	ds.takeDescription(source)
 	elem.SetVR(dataelem.OB) // encapsulated pixel data is OB (PS3.5 A.4)
 	if err := ds.SetValue(pixelData, encapsulateFrames(frames)); err != nil {
 		return fmt.Errorf("compress: %w", err)

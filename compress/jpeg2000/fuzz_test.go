@@ -8,6 +8,50 @@ import (
 	"github.com/amrshadid/go-dicom/compress/jpeg2000"
 )
 
+// FuzzDecodeBlockStyles runs tier-1 under every code-block style option with
+// arbitrary data, pass counts and codeword segments. FuzzParseCodestream
+// reaches these only through a packet header that parses, which constrains
+// the segments to what an encoder writes; here a segment can claim any number
+// of passes and bytes, and a raw pass can land in a segment opened for MQ.
+// Any error is fine; a panic, or coefficients that do not fit the block, is
+// not.
+func FuzzDecodeBlockStyles(f *testing.F) {
+	f.Add([]byte{0x00, 0x11, 0x22, 0xFF, 0x7F, 0xFF, 0x90}, byte(0x3F), uint8(30), uint8(5), uint8(16), uint8(4))
+	f.Add([]byte{0xFF, 0xFF, 0xFF}, byte(0x01), uint8(19), uint8(0), uint8(32), uint8(3))
+	f.Add([]byte{0x80, 0x00}, byte(0x04), uint8(7), uint8(9), uint8(1), uint8(0))
+
+	f.Fuzz(func(t *testing.T, data []byte, style byte, passes, zero, size, split uint8) {
+		w, h := int(size%65)+1, int(size/3%65)+1
+		block := jpeg2000.CodeBlockData{
+			Block:         jpeg2000.CodeBlock{X0: 0, Y0: 0, X1: w, Y1: h},
+			BandType:      int(split % 4),
+			ZeroBitPlanes: int(zero % 20),
+			Passes:        int(passes % 90),
+			Data:          data,
+			Style:         style & 0x3F,
+		}
+		// Up to four segments, cutting the data and the passes anywhere.
+		for k := 0; k < int(split%5) && len(data) > 0; k++ {
+			block.Segments = append(block.Segments, jpeg2000.CodewordSegment{
+				Passes: int(passes)%(k+3) + 1,
+				Length: len(data) * (k + 1) / (int(split%5) + 1) / (k + 1),
+			})
+		}
+		values, err := jpeg2000.DecodeBlock(block, 20)
+		if err != nil {
+			return
+		}
+		if len(values) != w*h {
+			t.Fatalf("a %dx%d block decoded to %d values", w, h, len(values))
+		}
+		for _, v := range values {
+			if v >= 1<<21 || v <= -(1<<21) {
+				t.Fatalf("a coefficient of %d from 20 magnitude bits", v)
+			}
+		}
+	})
+}
+
 // FuzzParseCodestream runs the parser against arbitrary bytes. Every length in
 // a codestream comes from the file, and this file came from a peer: a segment
 // length, a component count, a tile index or a Psot can each point past the end

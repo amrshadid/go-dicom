@@ -1267,10 +1267,32 @@ type DICOMFile struct {
 // GetDataset converts the parsed file into a Dataset, recursively materializing
 // any nested sequences as sequence.Sequence values holding child Datasets.
 func (df *DICOMFile) GetDataset() *dataset.Dataset {
+	return df.dataset(false)
+}
+
+// GetDatasetWithValuesInFile is GetDataset for a file read with
+// ReadOptions.SkipBulkData, keeping where each skipped value is: its element
+// holds a dataelem.ValueInFile instead of nothing. filewriter, given the file
+// as its value source, writes the data set back whole with the bytes copied
+// from the file, so an image can be rewritten without its pixels in memory.
+//
+// A deflated file is refused: its values are in the inflated bytes, which are
+// not in the file to be copied from (PS3.5 A.5).
+func (df *DICOMFile) GetDatasetWithValuesInFile() (*dataset.Dataset, error) {
+	if df.Deflated {
+		return nil, fmt.Errorf("the data set is deflated (%s), so its values are not in the file "+
+			"to be copied from; read it whole", DeflatedExplicitVRLittleEndianUID)
+	}
+	return df.dataset(true), nil
+}
+
+// dataset builds the data set, with values left in the file as references
+// when inFile is set and as nothing otherwise.
+func (df *DICOMFile) dataset(inFile bool) *dataset.Dataset {
 	// Character set decisions are recorded on the file, not only logged: a
 	// caller writing the data set back is the one who needs to know a guess was
 	// made. GetDataset may be called more than once, so each is recorded once.
-	ds := elementsToDataset(df.DataElements, nil, func(warning string) {
+	ds := elementsToDataset(df.DataElements, nil, inFile, func(warning string) {
 		for _, existing := range df.Warnings {
 			if existing == warning {
 				return
@@ -1297,8 +1319,9 @@ func (df *DICOMFile) GetDataset() *dataset.Dataset {
 // and it applies to that item and anything below it. Passing nil at the top
 // level means "read it from these elements".
 //
-// warn records a decision the caller should know about; it may be nil.
-func elementsToDataset(elements []*DataElementValue, inherited []string, warn func(string)) *dataset.Dataset {
+// inFile keeps a skipped value as a dataelem.ValueInFile. warn records a
+// decision the caller should know about; it may be nil.
+func elementsToDataset(elements []*DataElementValue, inherited []string, inFile bool, warn func(string)) *dataset.Dataset {
 	ds := dataset.NewDataset()
 
 	encodings, fellBack := encodingsFor(elements, inherited)
@@ -1361,9 +1384,14 @@ func elementsToDataset(elements []*DataElementValue, inherited []string, warn fu
 		if d.elem.Items != nil || isSequenceVR(d.elem.VR) {
 			seq := sequence.New()
 			for _, item := range d.elem.Items {
-				_ = seq.Append(elementsToDataset(item.Elements, encodings, warn))
+				_ = seq.Append(elementsToDataset(item.Elements, encodings, inFile, warn))
 			}
 			_ = ds.AddSequence(d.elem.Tag, seq)
+			continue
+		}
+
+		if inFile && d.elem.ValueSkipped {
+			_ = ds.Add(dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), valueInFile(d.elem)))
 			continue
 		}
 
@@ -1384,6 +1412,21 @@ func elementsToDataset(elements []*DataElementValue, inherited []string, warn fu
 	}
 
 	return ds
+}
+
+// valueInFile is where a skipped value's bytes are. Encapsulated Pixel Data
+// runs from its first item to the delimiter that closes it, or to where the
+// reader stopped in a file that ends without one: the bytes a whole read puts
+// in the value.
+func valueInFile(elem *DataElementValue) dataelem.ValueInFile {
+	if !elem.UndefinedLength {
+		return dataelem.ValueInFile{Offset: elem.Position.ValueOffset, Length: int64(elem.Length)}
+	}
+	end := elem.Position.DelimiterOffset
+	if end == 0 {
+		end = elem.Position.End
+	}
+	return dataelem.ValueInFile{Offset: elem.Position.ValueOffset, Length: end - elem.Position.ValueOffset}
 }
 
 // specificCharacterSetTag is (0008,0005).

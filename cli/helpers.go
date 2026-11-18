@@ -58,43 +58,49 @@ type DicomInfo struct {
 // never descended into sequences, and received none of the fixes made to the
 // real reader.
 func readDICOMFile(filename string) ([]DicomElement, error) {
-	return readDICOMElements(filename, false, false)
+	return readDICOMElements(filename, listing{})
 }
 
 // shownBytes is how much of a value the table prints at most.
 const shownBytes = 100
 
-// readDICOMElements is readDICOMFile, and with forDisplay it lists a file as
-// show prints it, which differs in two ways.
-//
-// The File Meta Information Group Length (0002,0000) leads the list, as it
-// leads the file. The element is not content: it counts the bytes of the
-// group it opens, and a writer works it out. What converts a file or
-// generates code to rebuild one must not carry the old count along.
-//
-// And bulk values stay in the file. The table prints the first hundred
-// bytes of a value at most, and read all of it to do so: a 200 MB image
-// took 200 MB to show one line of (#274). Only the part that is printed is
-// read; Length still says how long the value is.
-//
-// With whole as well, every value that can be printed is held whole, for a
-// listing that is not cut. Bulk binary still stays in the file: it is
-// printed as a count of bytes either way.
-func readDICOMElements(filename string, forDisplay, whole bool) ([]DicomElement, error) {
+// listing says how readDICOMElements lists a file. The zero value reads every
+// value whole, which is what a command that works with the values needs.
+type listing struct {
+	// skipBulk leaves bulk values in the file. The table and the summary
+	// print the first hundred bytes of a value at most, and read all of it to
+	// do so: a 200 MB image took 200 MB to show one line of (#274), and to
+	// print a few lines of info (#328). Only the part that is printed is
+	// read; Length still says how long the value is.
+	skipBulk bool
+	// metaGroupLength puts the File Meta Information Group Length (0002,0000)
+	// first, as it leads the file. The element is not content: it counts the
+	// bytes of the group it opens, and a writer works it out. What converts a
+	// file or generates code to rebuild one must not carry the old count
+	// along, and info has never listed it, so only show asks for it.
+	metaGroupLength bool
+	// whole holds every value that can be printed whole, for a listing that
+	// is not cut. Bulk binary still stays in the file with skipBulk: it is
+	// printed as a count of bytes either way.
+	whole bool
+}
+
+// readDICOMElements is readDICOMFile, listed as how says.
+func readDICOMElements(filename string, how listing) ([]DicomElement, error) {
 	file, err := os.Open(filename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
-	options := filereader.ReadOptions{SkipBulkData: forDisplay, BulkDataThreshold: shownBytes}
+	options := filereader.ReadOptions{SkipBulkData: how.skipBulk, BulkDataThreshold: shownBytes}
 	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file), options)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 	}
 	// A deflated data set is read after inflating it, and its positions are
 	// in the inflated bytes, which are not on disk to go back to.
-	if forDisplay && df.Deflated {
+	if how.skipBulk && df.Deflated {
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 		}
@@ -103,11 +109,11 @@ func readDICOMElements(filename string, forDisplay, whole bool) ([]DicomElement,
 		}
 	}
 	// Where the start of a value left in the file is read from.
-	root := &displayScope{deciding: dataset.NewDataset(), source: file, whole: whole}
+	root := &displayScope{deciding: dataset.NewDataset(), source: file, whole: how.whole}
 
 	// The file meta header first, as it appears in the file, then the data set.
 	elements := make([]DicomElement, 0, 1+len(df.MetaElements)+len(df.DataElements))
-	if forDisplay && df.MetaGroupLength != nil {
+	if how.metaGroupLength && df.MetaGroupLength != nil {
 		elements = appendElements(elements, []*filereader.DataElementValue{df.MetaGroupLength}, 0, root)
 	}
 	elements = appendElements(elements, df.MetaElements, 0, root)
@@ -300,10 +306,19 @@ func isPrivateTag(tag string) bool {
 }
 
 // extractDICOMInfo extracts key metadata from elements.
+//
+// Only the data set's own elements are looked at, not those of the items of
+// its sequences. The list is flat, so an Icon Image Sequence item's Rows and
+// Columns, or an Other Patient IDs Sequence item's Patient ID, came after the
+// top-level ones and replaced them: info gave the icon's size as the image's
+// (#335).
 func extractDICOMInfo(elements []DicomElement) DicomInfo {
 	info := DicomInfo{}
 
 	for _, elem := range elements {
+		if elem.Depth > 0 {
+			continue
+		}
 		switch elem.Tag {
 		case "0010,0010": // PatientName
 			info.PatientName = strings.TrimSpace(formatValueRawIn("PN", elem.Value, elem.Encodings))
@@ -317,7 +332,7 @@ func extractDICOMInfo(elements []DicomElement) DicomInfo {
 			info.StudyDescription = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
 		case "0008,103E": // SeriesDescription
 			info.SeriesDescription = strings.TrimSpace(formatValueRawIn("LO", elem.Value, elem.Encodings))
-		case "0020,1209": // NumberOfFrames
+		case "0028,0008": // NumberOfFrames, an IS: decimal digits as text
 			if len(elem.Value) > 0 {
 				_, _ = fmt.Sscanf(string(elem.Value), "%d", &info.NumberOfFrames)
 			}

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -32,23 +33,35 @@ type RenderOptions struct {
 // can show: an *image.Gray for a grayscale image and an *image.NRGBA for a
 // color one.
 //
-// A grayscale frame goes through what PS3.3 C.11 calls the Modality LUT and
-// the VOI LUT. The stored values are read with their sign, Rescale Slope and
-// Intercept are applied, and the result is windowed: by the option's window,
-// or the data set's first Window Center and Width with its VOI LUT Function
-// (LINEAR, LINEAR_EXACT or SIGMOID), or, when it has neither, the range of
-// the values across all frames. MONOCHROME1 is inverted. An enhanced
-// multi-frame image takes its rescale and window from the frame's functional
+// A grayscale frame goes through the Modality LUT, the VOI LUT and the
+// Presentation LUT of PS3.3 C.11. The stored values are read with their sign
+// and put through the Modality LUT Sequence, or Rescale Slope and Intercept
+// when there is no table. The result goes through the option's window, or
+// else the data set's first VOI LUT Sequence item, or else its first Window
+// Center and Width with its VOI LUT Function (LINEAR, LINEAR_EXACT or
+// SIGMOID), or, when it has none of these, the range of the values across all
+// frames. A Presentation LUT Sequence then maps that to what is shown; without
+// one, Presentation LUT Shape INVERSE inverts and IDENTITY does not, and when
+// there is no shape either, MONOCHROME1 is inverted. An enhanced multi-frame
+// image takes its rescale, window and VOI LUT from the frame's functional
 // group, then the shared one.
+//
+// PS3.3 C.11.2 lets a viewer apply either a VOI LUT Sequence or a window when
+// a data set has both. The table is chosen, as pydicom's apply_voi_lut does;
+// pass Window in the options to choose a window instead. A Presentation LUT
+// Sequence takes the whole output range of the VOI LUT as its input range
+// (C.11.4.1), where pydicom scales by the lowest and highest value in the
+// image; the two agree whenever the image reaches both ends of the range.
 //
 // A color frame is converted to RGB: YBR_FULL and YBR_FULL_422 by the
 // standard's equations, PALETTE COLOR through its lookup tables. Samples
 // wider than 8 bits keep their most significant 8.
 //
 // ApplyWindowing, which this does not replace, reads samples as unsigned and
-// applies no rescale. A VOI LUT Sequence and a Modality LUT Sequence are not
-// applied, and neither is a Presentation LUT or an ICC profile. Samples of
-// 64 bits and segmented palettes are refused.
+// applies no rescale. An ICC Profile (PS3.3 C.11.15) is not applied: color is
+// shown as the samples say, without color management. Samples of 64 bits,
+// segmented palettes and a Presentation LUT Shape other than IDENTITY or
+// INVERSE are refused.
 func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, error) {
 	r, err := ds.newRenderer(opts)
 	if err != nil {
@@ -63,17 +76,42 @@ func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, err
 
 // RenderFrames renders every frame; see RenderFrame.
 func (ds *Dataset) RenderFrames(opts *RenderOptions) ([]image.Image, error) {
-	r, err := ds.newRenderer(opts)
+	var out []image.Image
+	err := ds.RenderEachFrame(opts, func(_ int, img image.Image) error {
+		out = append(out, img)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]image.Image, r.info.NumberOfFrames)
-	for f := range out {
-		if out[f], err = r.frame(f); err != nil {
-			return nil, err
+	return out, nil
+}
+
+// RenderEachFrame renders every frame in turn, as RenderFrames does, and
+// hands each to use as it is made, counted from 0. An error from use stops
+// it and is returned.
+//
+// It is RenderFrames for a caller that writes each frame and lets it go:
+// RenderFrames holds all of them at once, and a hundred frames of a
+// megapixel image are a hundred megabytes before the first is written
+// (#331). Calling RenderFrame for each frame instead decodes a compressed
+// image once per frame, and finds the range of an image with no window
+// once per frame, over all of them.
+func (ds *Dataset) RenderEachFrame(opts *RenderOptions, use func(frame int, img image.Image) error) error {
+	r, err := ds.newRenderer(opts)
+	if err != nil {
+		return err
+	}
+	for f := 0; f < r.info.NumberOfFrames; f++ {
+		img, err := r.frame(f)
+		if err != nil {
+			return err
+		}
+		if err := use(f, img); err != nil {
+			return err
 		}
 	}
-	return out, nil
+	return nil
 }
 
 // renderer holds what every frame of one image shares.
@@ -87,6 +125,14 @@ type renderer struct {
 	// dataRange is the lowest and highest output value over all frames, for
 	// an image with no window. Found on first use.
 	dataRange *[2]float64
+
+	// The grayscale tables, read once: the Modality LUT, the Presentation LUT
+	// or the inversion that stands for one, and the VOI LUTs by the data set
+	// that holds them, since an enhanced image may give each frame its own.
+	modalityLUT *lut
+	presentLUT  *lut
+	invert      bool
+	voiLUTs     map[*Dataset]*lut
 }
 
 func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
@@ -116,6 +162,11 @@ func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
 	if w := r.opts.Window; w != nil && w.Width < 1 {
 		return nil, fmt.Errorf("render: a window width of %v; it has to be at least 1", w.Width)
 	}
+	if info.SamplesPerPixel == 1 && info.PhotometricInterpretation != "PALETTE COLOR" {
+		if err := r.readGrayTables(); err != nil {
+			return nil, err
+		}
+	}
 	if w := r.opts.Window; w != nil {
 		switch strings.ToUpper(w.Function) {
 		case "", "LINEAR", "LINEAR_EXACT", "SIGMOID":
@@ -124,6 +175,115 @@ func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
 		}
 	}
 	return r, nil
+}
+
+var (
+	tagModalityLUTSequence     = tag.New(0x0028, 0x3000)
+	tagVOILUTSequence          = tag.New(0x0028, 0x3010)
+	tagLUTDescriptor           = tag.New(0x0028, 0x3002)
+	tagLUTData                 = tag.New(0x0028, 0x3006)
+	tagPresentationLUTSequence = tag.New(0x2050, 0x0010)
+	tagPresentationLUTShape    = tag.New(0x2050, 0x0020)
+)
+
+// readGrayTables reads the Modality LUT and the Presentation LUT, which the
+// whole image shares.
+func (r *renderer) readGrayTables() error {
+	var err error
+	if item := nthItem(r.ds, tagModalityLUTSequence, 0); item != nil {
+		// The first value mapped is a stored value, so it has the stored
+		// values' sign (PS3.3 C.11.1.1.1).
+		if r.modalityLUT, err = readLUT(item, r.info.PixelRepresentation == 1, "Modality LUT"); err != nil {
+			return err
+		}
+	}
+	if item := nthItem(r.ds, tagPresentationLUTSequence, 0); item != nil {
+		// Its output is P-values, brighter as they rise (PS3.3 C.11.6), so it
+		// leaves nothing for an inversion to do.
+		r.presentLUT, err = readLUT(item, false, "Presentation LUT")
+		return err
+	}
+	r.invert = r.info.PhotometricInterpretation == "MONOCHROME1"
+	if elem, ok := r.ds.Get(tagPresentationLUTShape); ok {
+		shape, _ := extractStringValue(elem)
+		switch shape = strings.ToUpper(strings.TrimSpace(shape)); shape {
+		case "IDENTITY":
+			r.invert = false
+		case "INVERSE":
+			// DX, MG and IO require INVERSE with MONOCHROME1 (PS3.3
+			// C.8.11.1.1.1): it is that image's inversion, not a second one.
+			r.invert = true
+		default:
+			return fmt.Errorf("render: a Presentation LUT Shape of %q is not supported; IDENTITY and INVERSE are", shape)
+		}
+	}
+	return nil
+}
+
+// lut is a Modality, VOI or Presentation lookup table (PS3.3 C.11).
+type lut struct {
+	first   int // the input value the first entry is for
+	entries []uint16
+	top     float64 // the largest value an entry can hold: 2^bits - 1
+}
+
+// at looks up an input value. One before the first entry takes the first,
+// and one past the last takes the last (PS3.3 C.11.1.1.1, C.11.2.1.1).
+func (t *lut) at(x float64) float64 {
+	i := min(max(int(math.Floor(x))-t.first, 0), len(t.entries)-1)
+	return float64(t.entries[i])
+}
+
+// readLUT reads the LUT Descriptor and LUT Data of a table's item.
+// signedFirst says the first value mapped is a signed number when the
+// descriptor's VR does not say so itself: its VR is "US or SS", decided by
+// whether the input to the table is signed, and a reader that cannot tell
+// records US.
+func readLUT(item *Dataset, signedFirst bool, name string) (*lut, error) {
+	descriptor, okDescriptor := item.Get(tagLUTDescriptor)
+	data, okData := item.Get(tagLUTData)
+	if !okDescriptor || !okData {
+		return nil, fmt.Errorf("render: the %s Sequence item has no LUT Descriptor or no LUT Data", name)
+	}
+	d, err := extractBytesValue(descriptor)
+	if err != nil || len(d) < 6 {
+		return nil, fmt.Errorf("render: the %s's LUT Descriptor is not three values", name)
+	}
+	count := int(binary.LittleEndian.Uint16(d))
+	if count == 0 {
+		count = 1 << 16 // PS3.3 C.11.1.1.1: 0 stands for 65536
+	}
+	first := int(binary.LittleEndian.Uint16(d[2:]))
+	if signedFirst || descriptor.GetVR() == dataelem.SS {
+		first = int(int16(binary.LittleEndian.Uint16(d[2:])))
+	}
+	bits := int(binary.LittleEndian.Uint16(d[4:]))
+	if bits < 1 || bits > 16 {
+		return nil, fmt.Errorf("render: the %s's LUT Descriptor gives %d bits per entry; it can be 1 to 16", name, bits)
+	}
+
+	raw, err := extractBytesValue(data)
+	if err != nil {
+		return nil, fmt.Errorf("render: the %s's LUT Data: %w", name, err)
+	}
+	t := &lut{first: first, entries: make([]uint16, count), top: float64(uint32(1)<<uint(bits) - 1)}
+	mask := uint16(uint32(1)<<uint(bits) - 1)
+	switch {
+	case len(raw) >= count*2:
+		// One entry to a 16-bit word, the usual form whatever the bits.
+		for i := range t.entries {
+			t.entries[i] = binary.LittleEndian.Uint16(raw[i*2:]) & mask
+		}
+	case bits <= 8 && len(raw) >= count:
+		// 8-bit entries packed one to a byte, as some writers do and
+		// pydicom reads for a Presentation LUT.
+		for i := range t.entries {
+			t.entries[i] = uint16(raw[i]) & mask
+		}
+	default:
+		return nil, fmt.Errorf("render: the %s's LUT Data holds %d bytes for %d entries", name, len(raw), count)
+	}
+	return t, nil
 }
 
 func (r *renderer) frame(f int) (image.Image, error) {
@@ -171,36 +331,55 @@ func (r *renderer) sample(i int) float64 {
 }
 
 func (r *renderer) gray(f int) (image.Image, error) {
-	slope, intercept := r.rescale(f)
+	modality := r.modality(f)
 	perFrame := r.info.Rows * r.info.Columns
 	base := f * perFrame
 
-	window, function, err := r.window(f)
+	window, function, voiLUT, err := r.voi(f)
 	if err != nil {
 		return nil, err
 	}
 	var low, high float64
-	if window == nil {
+	if window == nil && voiLUT == nil {
 		low, high = r.outputRange()
 	}
 
 	img := image.NewGray(image.Rect(0, 0, r.info.Columns, r.info.Rows))
-	invert := r.info.PhotometricInterpretation == "MONOCHROME1"
 	for i := 0; i < perFrame; i++ {
-		x := r.sample(base+i)*slope + intercept
+		x := modality(r.sample(base + i))
 		var y float64
-		if window != nil {
+		switch {
+		case window != nil:
 			y = windowed(x, window.Center, window.Width, function)
-		} else if high > low {
+		case voiLUT != nil:
+			y = voiLUT.at(x) / voiLUT.top * 255
+		case high > low:
 			y = (x - low) / (high - low) * 255
 		}
-		level := uint8(math.Round(math.Min(255, math.Max(0, y))))
-		if invert {
+		y = math.Min(255, math.Max(0, y))
+		if p := r.presentLUT; p != nil {
+			// The VOI output range, here 0 to 255, is scaled linearly to the
+			// table's entries (PS3.3 C.11.4.1), truncating as pydicom does.
+			y = p.at(float64(p.first)+y*float64(len(p.entries)-1)/255) / p.top * 255
+		}
+		level := uint8(math.Round(y))
+		if r.invert {
 			level = 255 - level
 		}
 		img.Pix[i] = level
 	}
 	return img, nil
+}
+
+// modality returns the Modality LUT for a frame as a function from stored
+// value to output value: the Modality LUT Sequence's table, or else Rescale
+// Slope and Intercept. PS3.3 C.11.1 allows one or the other, not both.
+func (r *renderer) modality(f int) func(float64) float64 {
+	if t := r.modalityLUT; t != nil {
+		return t.at
+	}
+	slope, intercept := r.rescale(f)
+	return func(x float64) float64 { return x*slope + intercept }
 }
 
 // windowed maps x through a window to 0..255, by PS3.3 C.11.2.1.2.
@@ -236,9 +415,9 @@ func (r *renderer) outputRange() (low, high float64) {
 	perFrame := r.info.Rows * r.info.Columns
 	low, high = math.Inf(1), math.Inf(-1)
 	for f := 0; f < r.info.NumberOfFrames; f++ {
-		slope, intercept := r.rescale(f)
+		modality := r.modality(f)
 		for i := f * perFrame; i < (f+1)*perFrame; i++ {
-			x := r.sample(i)*slope + intercept
+			x := modality(r.sample(i))
 			low, high = math.Min(low, x), math.Max(high, x)
 		}
 	}
@@ -273,26 +452,46 @@ func (r *renderer) rescale(f int) (slope, intercept float64) {
 	return slope, intercept
 }
 
-// window returns the window for a frame and its VOI LUT Function, or nil
-// when the image has none and the caller gave none.
-func (r *renderer) window(f int) (*Window, string, error) {
+// voi returns the VOI LUT for a frame: a window and its VOI LUT Function, or
+// a table, or neither when the image has none and the caller gave none. A
+// caller's window names its own function, linear when it names none.
+func (r *renderer) voi(f int) (*Window, string, *lut, error) {
 	if w := r.opts.Window; w != nil {
 		if w.Function == "" {
-			return w, "LINEAR", nil
+			return w, "LINEAR", nil, nil
 		}
-		return w, strings.ToUpper(w.Function), nil
+		return w, strings.ToUpper(w.Function), nil, nil
 	}
-	src := r.holder(f, tagFrameVOILUT, tagWindowWidth)
+	src := r.holder(f, tagFrameVOILUT, tagWindowWidth, tagVOILUTSequence)
 	if src == nil {
-		return nil, "", nil
+		return nil, "", nil, nil
+	}
+	if item := nthItem(src, tagVOILUTSequence, 0); item != nil {
+		if t, ok := r.voiLUTs[src]; ok {
+			return nil, "", t, nil
+		}
+		// The table's input is the Modality LUT's output, signed when the
+		// stored values are or the rescale can take them below 0. A Modality
+		// LUT Sequence's output is unsigned (PS3.3 C.11.1.1.1).
+		_, intercept := r.rescale(f)
+		signed := r.modalityLUT == nil && (r.info.PixelRepresentation == 1 || intercept < 0)
+		t, err := readLUT(item, signed, "VOI LUT")
+		if err != nil {
+			return nil, "", nil, err
+		}
+		if r.voiLUTs == nil {
+			r.voiLUTs = map[*Dataset]*lut{}
+		}
+		r.voiLUTs[src] = t
+		return nil, "", t, nil
 	}
 	center, okCenter := firstNumber(src, tagWindowCenter)
 	width, okWidth := firstNumber(src, tagWindowWidth)
 	if !okCenter || !okWidth {
-		return nil, "", nil
+		return nil, "", nil, nil
 	}
 	if width < 1 {
-		return nil, "", fmt.Errorf("render: the image's Window Width is %v; it has to be at least 1", width)
+		return nil, "", nil, fmt.Errorf("render: the image's Window Width is %v; it has to be at least 1", width)
 	}
 	function := "LINEAR"
 	if elem, ok := src.Get(tagVOILUTFunction); ok {
@@ -300,28 +499,34 @@ func (r *renderer) window(f int) (*Window, string, error) {
 			function = strings.ToUpper(v)
 		}
 	}
-	return &Window{Center: center, Width: width}, function, nil
+	return &Window{Center: center, Width: width}, function, nil, nil
 }
 
-// holder returns the data set that holds attr for a frame: the frame's own
-// functional group, the shared one, or the image itself. An enhanced
-// multi-frame image keeps its rescale and window in the first two.
-func (r *renderer) holder(f int, group, attr tag.Tag) *Dataset {
-	if item := nthItem(r.ds, tagPerFrameGroups, f); item != nil {
-		if macro := nthItem(item, group, 0); macro != nil {
-			if _, ok := macro.Get(attr); ok {
-				return macro
+// holder returns the data set that holds any of attrs for a frame: the
+// frame's own functional group, the shared one, or the image itself. An
+// enhanced multi-frame image keeps its rescale, window and VOI LUT in the
+// first two. The nearest wins, so a frame's own window is not passed over
+// for a table the whole image has.
+func (r *renderer) holder(f int, group tag.Tag, attrs ...tag.Tag) *Dataset {
+	holds := func(ds *Dataset) bool {
+		for _, attr := range attrs {
+			if _, ok := ds.Get(attr); ok {
+				return true
 			}
+		}
+		return false
+	}
+	if item := nthItem(r.ds, tagPerFrameGroups, f); item != nil {
+		if macro := nthItem(item, group, 0); macro != nil && holds(macro) {
+			return macro
 		}
 	}
 	if item := nthItem(r.ds, tagSharedGroups, 0); item != nil {
-		if macro := nthItem(item, group, 0); macro != nil {
-			if _, ok := macro.Get(attr); ok {
-				return macro
-			}
+		if macro := nthItem(item, group, 0); macro != nil && holds(macro) {
+			return macro
 		}
 	}
-	if _, ok := r.ds.Get(attr); ok {
+	if holds(r.ds) {
 		return r.ds
 	}
 	return nil
