@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,6 +57,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.CodifyCommand{})
 	dicomCLI.RegisterCommand(&cli.AnonymizeCommand{})
 	dicomCLI.RegisterCommand(&cli.ShareCommand{})
+	dicomCLI.RegisterCommand(&cli.ValidateCommand{})
 	dicomCLI.RegisterCommand(&cli.HelpCommand{})
 	dicomCLI.RegisterCommand(&cli.VersionCommand{
 		AppName:    "go-dicom",
@@ -81,6 +83,11 @@ func main() {
 	// Run CLI with command-line arguments
 	if err := dicomCLI.Run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		// A command whose status says more than failure, as validate does.
+		var status interface{ ExitCode() int }
+		if errors.As(err, &status) {
+			os.Exit(status.ExitCode())
+		}
 		os.Exit(1)
 	}
 }

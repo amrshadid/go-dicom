@@ -32,7 +32,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 21 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
+- **CLI tools** — 22 commands: file inspection and conversion (`show`, `info`, `validate`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -298,6 +298,7 @@ go build -o go-dicom .
 ./go-dicom show patient.dcm           # Every element, as stored
 ./go-dicom show patient.dcm --json    # The same as JSON, with where each element sits in the file
 ./go-dicom info patient.dcm           # Key metadata and image dimensions
+./go-dicom validate ct.dcm            # What its SOP class requires and it lacks (PS3.3 IOD tables)
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
@@ -418,6 +419,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
 | [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. A tree read and written back keeps everything it was read with. `StructuredReport` alongside it is a simpler bespoke model, written as a content tree that dcmtk and pydicom read |
+| [validate](./validate/) | An instance checked against its IOD: modules, attribute Types, value multiplicity, Enumerated Values and Defined Terms, generated from PS3.3; conditions in prose reported as not checked |
 | [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities

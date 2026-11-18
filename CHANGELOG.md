@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An instance is checked against what its SOP class requires** (#383).
+  Nothing in the library knew what a CT must hold: a CT with no Modality,
+  Patient ID or study and series UIDs, and Bits Stored 99, was read, shown
+  and sent without a word. Package `validate` and `go-dicom validate` check
+  an instance against its IOD: the modules PS3.3 Annex A gives it, and in
+  each one that is Mandatory or present, every attribute's Type, its value
+  multiplicity, its Enumerated Values (an error) and Defined Terms (a
+  warning), and the number of items of a sequence, into sequences at any
+  depth. Each finding names the tag, the path through the sequences, the
+  module, the rule and the section of PS3.3 it is in. The tables are
+  generated from the standard's own XML, PS3.3 and PS3.4 2026d, by
+  `scripts/iod-tables.py`: 153 IODs and 528 module and macro tables, for 164
+  Storage SOP classes, and none of it is typed by hand. Conditions are prose
+  in PS3.3, and none is evaluated: a Conditional module, an absent Type 1C
+  or 2C attribute, and a macro included under a condition are reported as
+  not checked, with the condition, never passed. That CT gets its eight
+  errors and nothing else; across pydicom's corpus 71 files are checked and
+  the rest are refused by name for having no SOP Class UID. `--json` gives
+  the findings to a program, and the exit status is 3 for errors and 2 for
+  warnings. No other validator was at hand to compare with, so five corpus
+  files were compared with the standard by hand.
+
 ### Fixed
 
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
