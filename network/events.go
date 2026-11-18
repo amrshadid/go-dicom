@@ -1,6 +1,7 @@
 package network
 
 import (
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -239,8 +240,21 @@ func (em *EventManager) Emit(event *Event) {
 	}
 
 	for _, handler := range handlers {
-		handler(event)
+		callEventHandler(handler, event)
 	}
+}
+
+// callEventHandler calls one event handler, and logs a panic in it rather
+// than passing it on. Events are emitted from the accept loop and from every
+// association, so a handler that panicked ended the process it was only
+// observing; the handlers registered after it are still called.
+func callEventHandler(handler EventHandler, event *Event) {
+	defer func() {
+		if p := recover(); p != nil {
+			DefaultLogger.Error("panic in a handler of %s: %v\n%s", EventTypeString(event.Type), p, debug.Stack())
+		}
+	}()
+	handler(event)
 }
 
 // HasHandlers returns true if any handlers are registered for the event type.
