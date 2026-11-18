@@ -63,7 +63,12 @@ var (
 	reDS = regexp.MustCompile(`^ *[+\-]?(\d+|\d+\.\d*|\.\d+)([eE][+\-]?\d+)? *$`)
 	reIS = regexp.MustCompile(`^ *[+\-]?\d+ *$`)
 	reDA = regexp.MustCompile(`^\d{4}(0[1-9]|1[0-2])([0-2]\d|3[01])$`)
-	reTM = regexp.MustCompile(`^([01]\d|2[0-3])([0-5]\d((60|[0-5]\d))?)?$`)
+	// TM is HH[MM[SS[.F{1,6}]]], the seconds up to 60 for a leap second
+	// (PS3.5 Table 6.2-1). A fraction needs the seconds before it.
+	reTM = regexp.MustCompile(`^([01]\d|2[0-3])([0-5]\d((60|[0-5]\d)(\.\d{1,6})?)?)?$`)
+	// DT is YYYY[MM[DD[HH[MM[SS[.F{1,6}]]]]]][&ZZXX], each part only after the
+	// one before it, and an offset from UTC of sign, hours and minutes.
+	reDT = regexp.MustCompile(`^\d{4}((0[1-9]|1[0-2])(([0-2]\d|3[01])(([01]\d|2[0-3])([0-5]\d((60|[0-5]\d)(\.\d{1,6})?)?)?)?)?)?([+-]\d{4})?$`)
 	reUI = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))*$`)
 	reUR = regexp.MustCompile(`^[A-Za-z_\d:/?#\[\]@!$&'()*+,;=%\-.~]* *$`)
 )
@@ -155,6 +160,8 @@ func ValidateRegex(vr string, value interface{}) (bool, string) {
 		re = reDA
 	case "TM":
 		re = reTM
+	case "DT":
+		re = reDT
 	case "UI":
 		re = reUI
 	case "UR":

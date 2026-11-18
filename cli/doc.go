@@ -16,6 +16,12 @@
 //   - show: Display DICOM file contents
 //   - info: Get file information and statistics
 //   - convert: Convert DICOM files to different formats
+//   - diff: Compare two files element by element; its exit status is the
+//     answer (0 equal, 1 different, 2 error), carried by ExitError
+//   - dicomdir: Write the DICOMDIR of a directory, or list one
+//   - sr: Print the content tree of a structured report
+//   - modify: Set, insert or delete attributes, into sequences by a path,
+//     keeping the transfer syntax and the pixel data as they are
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation
