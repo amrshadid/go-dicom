@@ -453,6 +453,29 @@ func (s *seekBuffer) Seek(_ int64, _ int) (int64, error) { return int64(s.buf.Le
 
 func (s *seekBuffer) Bytes() []byte { return s.buf.Bytes() }
 
+// EncodeFileHeader returns what comes before the data set in a Part 10 file:
+// the 128-byte preamble, "DICM", and the File Meta Information that
+// WriteFileMetaInfo writes for meta (PS3.10 7.1). The data set follows it,
+// encoded in meta.TransferSyntaxUID.
+//
+// It is for a writer that has the data set as bytes already encoded, such as
+// a C-STORE received over the network, and copies them after the header
+// without decoding them.
+func EncodeFileHeader(meta *FileMetaInfo) ([]byte, error) {
+	buf := &seekBuffer{}
+	w := NewDCMFileWriter(filebase.NewFileWriter(buf))
+	if err := w.WritePreamble(); err != nil {
+		return nil, err
+	}
+	if err := w.WriteDICMPrefix(); err != nil {
+		return nil, err
+	}
+	if err := w.WriteFileMetaInfo(meta); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // writeSequence serializes a Sequence (SQ) element and its nested items.
 //
 // Items are written with explicit lengths rather than delimiters, so the

@@ -124,6 +124,12 @@
 // combine separate handlers per service. For full control, implement [Handler]
 // directly, embedding [BaseHandler] to inherit defaults for the rest.
 //
+// A C-STORE handler that also implements [CStoreStreamer] is given the data
+// set as the bytes the peer sent, read from the association as it reads,
+// instead of a decoded copy assembled in memory. Memory stays bounded whatever
+// the instance's size, and [WriteCStoreFile] writes the bytes as a Part 10 file
+// untouched, so what is stored is what was sent.
+//
 // [AssociationInfoFromContext] gives a handler the calling AE title, peer
 // address, negotiated contexts, and peer implementation details without
 // changing the Handler signature. It returns nil outside an association.

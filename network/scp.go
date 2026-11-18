@@ -432,6 +432,13 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Handler,
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
+	// A handler that reads the data set as it arrives is given the bytes
+	// before they are assembled, and is never handed a decoded copy.
+	if streamer, ok := handler.(CStoreStreamer); ok {
+		s.handleCStoreStream(ctx, assoc, streamer, ctxID, messageID, cmdDS)
+		return
+	}
+
 	sopClassUID, _ := GetAffectedSOPClassUID(cmdDS)
 	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
 

@@ -65,7 +65,8 @@ type NetworkConfig struct {
 
 	// MaxDataSetSize bounds the data set of one message, which is held in
 	// memory whole while it arrives. A peer sending more is aborted. Zero is
-	// no limit.
+	// no limit. A C-STORE given to a CStoreStreamer is not held whole; the
+	// bound still applies to it, counted as its bytes are read.
 	MaxDataSetSize int64
 }
 

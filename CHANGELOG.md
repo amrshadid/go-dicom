@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A C-STORE SCP can take the data set as a stream** (#317). `HandleCStore`
+  is given a decoded data set, which the SCP built by holding every
+  fragment of the message in memory and then decoding it: memory grew with
+  the instance, once for the bytes and again for the values, and a handler
+  that wrote a file wrote this library's encoding of the data set rather
+  than what the peer sent. A handler that also implements `CStoreStreamer`
+  is given the command, the transfer syntax of its presentation context,
+  and an `io.Reader` over the data set's bytes exactly as received, read
+  from the association as the handler reads. A 1 GiB instance is received
+  with the heap under 15 MiB, where `HandleCStore` peaks at 278 MiB for an
+  eighth of that, and a slow handler slows the peer through TCP.
+  `WriteCStoreFile` writes the stream as a Part 10 file, File Meta
+  Information built from the command and then the bytes untouched; dcmtk's
+  `dcmdump` and pydicom read the files, and their data sets are what
+  `storescu` and pynetdicom sent, byte for byte, for implicit and explicit
+  little endian and RLE. `MaxDataSetSize` still applies, counted as the
+  bytes pass. A handler that does not implement it is served as before.
+- `filewriter.EncodeFileHeader` returns the preamble, `DICM` and File Meta
+  Information that come before a data set, for a writer that has the data
+  set encoded already.
+
+### Fixed
+
+- **A data set that shares a P-DATA-TF with its command is no longer lost**
+  (#320). A P-DATA-TF may carry several PDVs, and the last fragment of a
+  command may travel with the first of its data set. The PDVs after the
+  fragment a read stopped at were dropped with the PDU, so the SCP waited
+  for a data set it had already received and aborted the association when
+  its timeout ran out. What a read leaves of a P-DATA-TF now waits for the
+  next read. dcmtk and pynetdicom send one PDV to a PDU, which is why it
+  did not show against them.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
