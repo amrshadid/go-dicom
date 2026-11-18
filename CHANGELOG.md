@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A JPEG-LS frame that ends on 0xFF decodes everywhere** (#385). The
+  encoder stopped after the last byte of a scan, and when that byte was
+  0xFF the EOI marker followed it at once. The byte after a 0xFF in a
+  JPEG-LS scan has its high bit clear (T.87 A.1), so CharLS and libjpeg
+  ended the scan a byte early: dcmtk refused the frame, libjpeg decoded its
+  last samples wrong, and this library, which reads zeros past the end,
+  read it back without complaint. About one frame in 256 sent as JPEG-LS
+  Lossless ended so. A scan that ends on 0xFF now has the stuffed zero byte
+  after it.
+
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
   arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
