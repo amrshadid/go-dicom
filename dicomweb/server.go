@@ -67,6 +67,7 @@ type Backend interface {
 //	GET /studies/{study}/series/{series}/instances/{instance}
 //	GET each of these with /metadata
 //	GET /studies/{study}/series/{series}/instances/{instance}/frames/{list}
+//	GET /studies/{study}/series/{series}/instances/{instance}/bulkdata/{element}
 //
 // and the store service, STOW-RS (PS3.18 10.5):
 //
@@ -156,6 +157,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.metadata(w, r, retrieved)
 	case retrieved.frames != "":
 		s.frames(w, r, retrieved)
+	case retrieved.bulkdata != nil:
+		s.bulkdata(w, r, retrieved)
 	default:
 		s.retrieve(w, r, retrieved)
 	}

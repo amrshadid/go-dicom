@@ -350,6 +350,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and Orthanc sends the same bytes for 49 of them; two more are 32-bit big
   endian, which Orthanc reverses in two-byte words and pydicom does not.
 
+- **The DICOMweb server serves bulk data, and metadata points at it**
+  (#368). Metadata left each value over 1 KiB out and named it by its VR
+  alone, so an overlay, an icon, a document or the pixels could be had only
+  by downloading the instance. Each now carries a `BulkDataURI`
+  (PS3.18 F.2.6), inside a sequence as well, and
+  `…/instances/{uid}/bulkdata/{tag}[/{item}/{tag}…]` serves the value, read
+  from the file by where it lies: `application/octet-stream`, little endian.
+  Pixel Data is sent as its frames are: one part a frame in their own type
+  when that is asked for, otherwise every frame in one part, uncompressed.
+  Across pydicom's corpus, all 61 URIs that metadata gives serve the bytes
+  pydicom reads at that place in the file.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

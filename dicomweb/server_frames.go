@@ -312,17 +312,7 @@ func (s *Server) frames(w http.ResponseWriter, r *http.Request, target retrieveT
 		s.fail(w, refused)
 		return
 	}
-	wants, accept := frameWantsOf(r)
-	uids, err := s.backend.Locate(r.Context(), target.study, target.series, target.instance)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	if len(uids) == 0 {
-		s.fail(w, refuse(http.StatusNotFound, "the archive holds no such instance"))
-		return
-	}
-	file, err := s.backend.Open(r.Context(), uids[0])
+	file, err := s.openInstance(r, target)
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -342,6 +332,27 @@ func (s *Server) frames(w http.ResponseWriter, r *http.Request, target retrieveT
 			return
 		}
 	}
+	s.sendFrames(w, r, source, numbers, false)
+}
+
+// openInstance opens the file of the one instance a target names.
+func (s *Server) openInstance(r *http.Request, target retrieveTarget) (io.ReadSeekCloser, error) {
+	uids, err := s.backend.Locate(r.Context(), target.study, target.series, target.instance)
+	if err != nil {
+		return nil, err
+	}
+	if len(uids) == 0 {
+		return nil, refuse(http.StatusNotFound, "the archive holds no such instance")
+	}
+	return s.backend.Open(r.Context(), uids[0])
+}
+
+// sendFrames writes frames, counted from 1, in the form the request
+// accepts: one part each, or, when joined is set and they are sent
+// uncompressed, one part holding them all, which is how Pixel Data is sent
+// as bulk data.
+func (s *Server) sendFrames(w http.ResponseWriter, r *http.Request, source *frameSource, numbers []int, joined bool) {
+	wants, accept := frameWantsOf(r)
 	media, syntax, decode, ok := source.choose(wants)
 	if !ok {
 		s.fail(w, refuse(http.StatusNotAcceptable,
@@ -349,6 +360,7 @@ func (s *Server) frames(w http.ResponseWriter, r *http.Request, target retrieveT
 			source.syntax, accept))
 		return
 	}
+	joined = joined && media == mediaOctetStream
 
 	// The first frame is made ready before anything is written, so a frame
 	// that cannot be read or decoded can still be answered with a status.
@@ -370,6 +382,7 @@ func (s *Server) frames(w http.ResponseWriter, r *http.Request, target retrieveT
 	w.WriteHeader(http.StatusOK)
 	header := textproto.MIMEHeader{}
 	header.Set("Content-Type", media+"; transfer-syntax="+syntax)
+	var out io.Writer
 	for i, n := range numbers {
 		data := first
 		if i > 0 {
@@ -379,11 +392,12 @@ func (s *Server) frames(w http.ResponseWriter, r *http.Request, target retrieveT
 				panic(http.ErrAbortHandler)
 			}
 		}
-		out, err := body.CreatePart(header)
-		if err == nil {
-			_, err = io.Copy(out, bytes.NewReader(data))
+		if out == nil || !joined {
+			if out, err = body.CreatePart(header); err != nil {
+				panic(http.ErrAbortHandler)
+			}
 		}
-		if err != nil {
+		if _, err := io.Copy(out, bytes.NewReader(data)); err != nil {
 			panic(http.ErrAbortHandler)
 		}
 	}
