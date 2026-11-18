@@ -42,10 +42,19 @@ const (
 
 // retrieveTarget is what a retrieve resource names: a study, one of its
 // series, or one instance of that series; and whether it is their metadata
-// that is asked for.
+// that is asked for, or frames of the instance.
 type retrieveTarget struct {
 	study, series, instance string
 	metadata                bool
+	// frames is the list of frame numbers of a frames resource, as the path
+	// gives it, or empty.
+	frames string
+	// bulkdata is the path to an element of a bulk data resource, a
+	// segment a level, or nil.
+	bulkdata []string
+	// render is "rendered" or "thumbnail" for those resources, of a study,
+	// a series, an instance or frames; otherwise empty.
+	render string
 }
 
 // retrieveTargetOf reads a request path as a retrieve resource, and reports
@@ -53,9 +62,19 @@ type retrieveTarget struct {
 func retrieveTargetOf(path string) (retrieveTarget, bool, *requestError) {
 	var target retrieveTarget
 	s := pathSegments(path)
-	if n := len(s); n > 1 && s[n-1] == "metadata" {
+	if n := len(s); n > 2 && (s[n-1] == "rendered" || s[n-1] == "thumbnail") {
+		target.render = s[n-1]
+		s = s[:n-1]
+	}
+	if n := len(s); target.render == "" && n > 1 && s[n-1] == "metadata" {
 		target.metadata = true
 		s = s[:n-1]
+	} else if n == 8 && s[6] == "frames" {
+		target.frames = s[7]
+		s = s[:6]
+	} else if n >= 8 && s[6] == "bulkdata" && target.render == "" {
+		target.bulkdata = s[7:]
+		s = s[:6]
 	}
 	switch {
 	case len(s) == 2 && s[0] == "studies":
@@ -328,12 +347,9 @@ func (s *Server) retrieve(w http.ResponseWriter, r *http.Request, target retriev
 const metadataThreshold = 1 << 10
 
 // metadata answers a request for the metadata of instances: each data set
-// as DICOM JSON with its bulk data left out (PS3.18 10.4.1.1.2).
-//
-// The standard has a server put a BulkDataURI where each bulk value was.
-// This server does not serve bulk data on its own, so the element is given
-// with its VR and no value: it says the attribute is there and names no URL
-// that would not answer.
+// as DICOM JSON with its bulk data left out (PS3.18 10.4.1.1.2), and a
+// BulkDataURI where each bulk value was, at which the bulk data resource
+// serves it (PS3.18 F.2.6).
 func (s *Server) metadata(w http.ResponseWriter, r *http.Request, target retrieveTarget) {
 	contentType, refused := jsonContentType(r)
 	if refused != nil {
@@ -383,5 +399,16 @@ func (s *Server) instanceMetadata(r *http.Request, uid string) (map[string]datas
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", uid, err)
 	}
-	return parsed.GetDataset().ToDICOMJSON()
+	ds := parsed.GetDataset()
+	described, err := ds.ToDICOMJSON()
+	if err != nil {
+		return nil, err
+	}
+	// The instance's own resource, by the UIDs it holds, which are the ones
+	// the archive found it by.
+	base := retrieveURL(serviceRoot(r), ds, levelInstance)
+	if base != "" {
+		bulkDataURIs(described, parsed.DataElements, base, bulkPath{})
+	}
+	return described, nil
 }

@@ -46,6 +46,12 @@ func (r *Reframer) ReframeData() (*compress.EncapsulatedData, error)
 
 func GetStatistics(encData *compress.EncapsulatedData) *Statistics
 
+// Frames divides fragments held in memory into frames; FrameRanges makes
+// the same division from where the fragments lie in a file, reading only
+// the offset table and, when it must, the last bytes of a fragment.
+func Frames(encData *compress.EncapsulatedData, numberOfFrames int) ([][]byte, error)
+func FrameRanges(src io.ReaderAt, items []Range, extendedOffsets []uint64, numberOfFrames int) ([][]Range, error)
+
 type Statistics struct {
     FrameCount, FragmentCount int
     TotalSize, AverageFrameSize uint64
