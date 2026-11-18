@@ -451,6 +451,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refused caller is left to close the connection** (#430). An SCP sent
+  its A-ASSOCIATE-RJ and closed the connection behind it. PS3.8 9.2 has the
+  acceptor start ARTIM and wait for the caller to close (AE-8, Sta13), and
+  close it itself only when the timer expires (AA-2). The close could reach
+  a caller before it had acted on the rejection: pynetdicom, on a loaded
+  machine, then held the PDU with the right result, source and reason and
+  did not count the association as rejected. The SCP now waits, up to
+  `NetworkConfig.ARTIMTimeout`, and answers nothing that arrives meanwhile.
+
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
   reason 2, which from that source is "application context name not
