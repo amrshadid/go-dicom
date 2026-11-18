@@ -126,7 +126,16 @@ func (strokeDetector) DetectText(img image.Image) []image.Rectangle {
 					// for ground that is not plain.
 					continue
 				}
-				line = extended(line, ink, planes, strict)
+				if !overTexture || onPlainGround(line, ink, planes) {
+					// Growing a line trusts color to stop it at the edge of
+					// the picture. The over-texture map holds only full
+					// white, the caption's color and the brightest of the
+					// texture's alike, so there it cannot: a caption over
+					// saturated texture ran on across the scan and down it,
+					// and the region took a third of the picture. On a plain
+					// ground it still can, and large lettering needs it.
+					line = extended(line, ink, planes, strict)
+				}
 				// Back to the picture's coordinates, with a margin: the
 				// edge of a stroke is blurred over a pixel or two, and a
 				// letter's edge is as readable as its middle.

@@ -81,6 +81,14 @@ type Association struct {
 	// next ReceivePData, so reading ahead is transparent to whoever reads next.
 	pending []pendingMessage
 
+	// fragments holds the PDVs of the last P-DATA-TF read that no reader has
+	// taken yet. A P-DATA-TF may carry several PDVs (PS3.8 9.3.5), and the
+	// last fragment of one message may share it with the first of the next:
+	// the end of a command set with the start of its data set, typically.
+	// Whatever follows the fragment a reader stops at waits here for the
+	// next reader, rather than being dropped with the PDU (#320).
+	fragments []PDVItem
+
 	// maxDataSetSize bounds the data set of one message being assembled.
 	// Zero is no bound.
 	maxDataSetSize int64
@@ -660,84 +668,121 @@ func (a *Association) ReceivePData(ctx context.Context) (byte, []byte, bool, err
 	var isCommand bool
 
 	for {
+		pdv, err := a.readFragment(ctx)
+		if err != nil {
+			return 0, nil, false, err
+		}
+
+		// The fragments of one message share its context and its kind
+		// (PS3.8 E.2). One that switches is not a fragment of this message,
+		// and switching would let a command grow past its bound as data.
+		if assembled != nil && (pdv.PresentationContextID != contextID || pdv.IsCommand != isCommand) {
+			return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDUParameter,
+				"a fragment changed presentation context or kind partway through a message")
+		}
+		if assembled == nil {
+			if err := a.checkContextAccepted(ctx, pdv.PresentationContextID); err != nil {
+				return 0, nil, false, err
+			}
+			assembled = []byte{}
+		}
+		contextID = pdv.PresentationContextID
+		isCommand = pdv.IsCommand
+		assembled = append(assembled, pdv.Data...)
+
+		// Fragments are appended until one is marked last, so without a
+		// bound a peer that never marks one holds the buffer growing (#208).
+		if isCommand && len(assembled) > maxCommandSetSize {
+			return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter,
+				fmt.Sprintf("command set over %d bytes", maxCommandSetSize))
+		}
+		if !isCommand && maxDataSet > 0 && int64(len(assembled)) > maxDataSet {
+			return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter,
+				fmt.Sprintf("data set over the %d bytes MaxDataSetSize allows", maxDataSet))
+		}
+
+		if pdv.IsLast {
+			return contextID, assembled, isCommand, nil
+		}
+	}
+}
+
+// checkContextAccepted aborts the association when a message begins on a
+// presentation context that was never accepted.
+//
+// P-DATA on such a context has no transfer syntax to decode it with, and was
+// decoded as Implicit VR Little Endian; PS3.8 9.3.5 calls for an A-ABORT
+// (#209).
+func (a *Association) checkContextAccepted(ctx context.Context, contextID byte) error {
+	a.mu.RLock()
+	_, accepted := a.acceptedContexts[contextID]
+	a.mu.RUnlock()
+	if !accepted {
+		return a.abortReceive(ctx, abortUnexpectedPDUParameter,
+			fmt.Sprintf("P-DATA on presentation context %d, which was not accepted", contextID))
+	}
+	return nil
+}
+
+// readFragment returns the next PDV the peer sent: the next one left over
+// from the last P-DATA-TF read, or the first of a new one.
+//
+// It is the one place P-DATA is read from the connection, so whichever reader
+// asks next, a whole message or a data set streamed fragment by fragment,
+// sees every PDV once and in order. A PDU other than P-DATA-TF ends the read
+// as the state machine requires: an A-ABORT and an A-RELEASE-RQ end the
+// association, anything else is answered with an A-ABORT.
+func (a *Association) readFragment(ctx context.Context) (PDVItem, error) {
+	for {
+		a.mu.Lock()
+		if len(a.fragments) > 0 {
+			pdv := a.fragments[0]
+			a.fragments = a.fragments[1:]
+			a.mu.Unlock()
+			return pdv, nil
+		}
+		a.mu.Unlock()
+
 		pdu, err := a.transport.ReadPDU(ctx)
 		if err != nil {
 			var pduErr *PDUError
 			if errors.As(err, &pduErr) && pduErr.Code == errPDUOverMaxLength {
-				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter, err.Error())
+				return PDVItem{}, a.abortReceive(ctx, abortInvalidPDUParameter, err.Error())
 			}
 			// An unrecognized PDU is answered with an A-ABORT, not a closed
 			// connection (PS3.8 Table 9-10, AA-8).
 			if errors.As(err, &pduErr) && pduErr.Code == "UNKNOWN_TYPE" {
-				return 0, nil, false, a.abortReceive(ctx, abortUnrecognizedPDU, err.Error())
+				return PDVItem{}, a.abortReceive(ctx, abortUnrecognizedPDU, err.Error())
 			}
-			return 0, nil, false, err
+			return PDVItem{}, err
 		}
 
-		dataTF, ok := pdu.(*PDataTF)
-		if !ok {
-			// Handle non-data PDUs during data transfer
-			switch p := pdu.(type) {
-			case *AbortPDU:
-				a.mu.Lock()
-				a.state = StateIdle
-				a.mu.Unlock()
-				return 0, nil, false, NewAssociationError("ABORTED",
-					fmt.Sprintf("association aborted: source=%d, reason=%d", p.Source, p.Reason))
-			case *ReleaseRQ:
-				// Peer wants to release during data transfer
-				_ = a.transport.WritePDU(ctx, &ReleaseRP{})
-				a.mu.Lock()
-				a.state = StateIdle
-				a.mu.Unlock()
-				return 0, nil, false, NewAssociationError("RELEASED", "peer released association")
-			default:
-				// A second A-ASSOCIATE-RQ, an AC or an RJ on an established
-				// association: AA-8, an A-ABORT naming an unexpected PDU (#209).
-				return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDU,
-					fmt.Sprintf("expected P-DATA-TF, got %T", pdu))
-			}
-		}
-
-		for _, pdv := range dataTF.PDVItems {
-			// The fragments of one message share its context and its kind
-			// (PS3.8 E.2). One that switches is not a fragment of this message,
-			// and switching would let a command grow past its bound as data.
-			if assembled != nil && (pdv.PresentationContextID != contextID || pdv.IsCommand != isCommand) {
-				return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDUParameter,
-					"a fragment changed presentation context or kind partway through a message")
-			}
-			if assembled == nil {
-				// P-DATA on a context that was never accepted has no transfer
-				// syntax to decode it with, and was decoded as Implicit VR
-				// Little Endian; PS3.8 9.3.5 calls for an A-ABORT (#209).
-				a.mu.RLock()
-				_, accepted := a.acceptedContexts[pdv.PresentationContextID]
-				a.mu.RUnlock()
-				if !accepted {
-					return 0, nil, false, a.abortReceive(ctx, abortUnexpectedPDUParameter,
-						fmt.Sprintf("P-DATA on presentation context %d, which was not accepted", pdv.PresentationContextID))
-				}
-				assembled = []byte{}
-			}
-			contextID = pdv.PresentationContextID
-			isCommand = pdv.IsCommand
-			assembled = append(assembled, pdv.Data...)
-
-			// Fragments are appended until one is marked last, so without a
-			// bound a peer that never marks one holds the buffer growing (#208).
-			if isCommand && len(assembled) > maxCommandSetSize {
-				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter,
-					fmt.Sprintf("command set over %d bytes", maxCommandSetSize))
-			}
-			if !isCommand && maxDataSet > 0 && int64(len(assembled)) > maxDataSet {
-				return 0, nil, false, a.abortReceive(ctx, abortInvalidPDUParameter,
-					fmt.Sprintf("data set over the %d bytes MaxDataSetSize allows", maxDataSet))
-			}
-
-			if pdv.IsLast {
-				return contextID, assembled, isCommand, nil
-			}
+		switch p := pdu.(type) {
+		case *PDataTF:
+			a.mu.Lock()
+			a.fragments = p.PDVItems
+			a.mu.Unlock()
+			// Taken from the queue at the top of the loop. One with no PDV
+			// carries nothing, and the next PDU is read.
+			continue
+		case *AbortPDU:
+			a.mu.Lock()
+			a.state = StateIdle
+			a.mu.Unlock()
+			return PDVItem{}, NewAssociationError("ABORTED",
+				fmt.Sprintf("association aborted: source=%d, reason=%d", p.Source, p.Reason))
+		case *ReleaseRQ:
+			// Peer wants to release during data transfer
+			_ = a.transport.WritePDU(ctx, &ReleaseRP{})
+			a.mu.Lock()
+			a.state = StateIdle
+			a.mu.Unlock()
+			return PDVItem{}, NewAssociationError("RELEASED", "peer released association")
+		default:
+			// A second A-ASSOCIATE-RQ, an AC or an RJ on an established
+			// association: AA-8, an A-ABORT naming an unexpected PDU (#209).
+			return PDVItem{}, a.abortReceive(ctx, abortUnexpectedPDU,
+				fmt.Sprintf("expected P-DATA-TF, got %T", pdu))
 		}
 	}
 }
