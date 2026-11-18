@@ -585,6 +585,17 @@ how decoded samples are shaped and coloured, and the one tolerance.
   would leave a reader to convert a second time. This matches pydicom. Convert
   with the attribute, not despite it.
 
+- **Subsampled JPEG chroma is filtered as libjpeg filters it.** T.81 leaves
+  the filter to the decoder. A 4:2:2 or 4:2:0 frame is brought to full
+  resolution with libjpeg's default "fancy upsampling", the triangle filter
+  of its `jdsample.c` (3:1 between neighbors, edges repeated, a component one
+  or two samples wide repeated), so a color image decodes to what dcmtk and
+  pydicom show: within one level of both in YCbCr on every subsampled color
+  JPEG in pydicom's corpus and on generated frames of odd sizes, the one
+  level being the inverse DCT, as on frames that are not subsampled. Other
+  layouts (4:4:0, 4:1:1) are repeated, as libjpeg 6b does. 12-bit frames are
+  repeated too; DICOM has no 12-bit color (PS3.5 Table 8.2.1-1).
+
 - **`RenderFrame` renders for display, within what it knows.** It applies the
   sign of the samples, the Modality LUT Sequence or Rescale Slope and
   Intercept, the VOI LUT Sequence or a window (LINEAR, LINEAR_EXACT or

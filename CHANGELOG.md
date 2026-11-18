@@ -437,6 +437,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A subsampled color JPEG decodes to the picture libjpeg gives** (#398).
+  The decoder repeated each chroma sample of a 4:2:2 or 4:2:0 frame, where
+  libjpeg, which both dcmtk and pydicom decode with, filters between
+  neighboring samples by default. Neither is wrong under T.81, but the same
+  file came out up to 43 levels away from dcmtk and pydicom at a color edge
+  in pydicom's corpus (`SC_rgb_jpeg_lossy_gdcm.dcm`), and up to 75 once
+  rendered to RGB. The chroma is now filtered as libjpeg's "fancy
+  upsampling" does, and every subsampled color JPEG in the corpus decodes
+  within one level of both, the inverse DCT's difference. The interop
+  script's rendered-frame check holds subsampled JPEG to two levels, like
+  every other color frame, instead of to a mean of three.
+
 - **`info` no longer holds the image to print a few lines.** It read every
   value of the file, Pixel Data included, so a 200 MB image took 218 MB of
   memory to print the patient, the modality and the dimensions. Bulk values

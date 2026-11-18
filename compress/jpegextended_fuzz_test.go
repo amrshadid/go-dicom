@@ -27,6 +27,12 @@ func FuzzJPEGExtendedDecompress(f *testing.F) {
 			f.Add(data)
 		}
 	}
+	// Subsampled color, which goes through the chroma filter.
+	for _, name := range []string{"422_9x7.jpg", "420_9x7.jpg", "420_4x9.jpg"} {
+		if data, err := os.ReadFile("testdata/upsample/" + name); err == nil {
+			f.Add(data)
+		}
+	}
 
 	// A 12-bit frame header claiming a size nothing backs, so the router sends
 	// it here and the decoder meets an empty scan.
