@@ -7,21 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`show --json` and the `-events` log have a written contract.** Two other
+  programs read them, and what `schemaVersion` 1 promised was written nowhere.
+  `docs/show-json.md` and `docs/events.md` say what each property means and
+  what a version number covers, and `docs/show-json.schema.json` and
+  `docs/events.schema.json` are JSON Schemas for them. The tests check the
+  output of every corpus file, and of real associations over TCP, against the
+  schemas, and fail on a property the schemas do not describe. Nothing the
+  commands print changed. The `-events` lines carry no `schemaVersion`; the
+  document says so and what a future one would mean.
+
+### Changed
+
+- **`info` no longer holds the image to print a few lines.** It read every
+  value of the file, Pixel Data included, so a 200 MB image took 218 MB of
+  memory to print the patient, the modality and the dimensions. Bulk values
+  now stay in the file, as they have for `show` since 1.9.1: the same file
+  takes 17 MB. What `info` prints does not change, including the sizes of
+  `--stats` and `--verbose`, which count the bytes in the file (#328).
+
+- **`info` prints the frames, and the image's own size and patient.** It read
+  Number of Frames from (0020,1209), so a multi-frame file never got a
+  `Frames:` line. And it took the last match of every key element, items of
+  sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
+  for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
+  its own. Only the data set's own elements are read now (#335).
+
 ### Fixed
 
-- **An N-service response's data set is read with it** (#379).
-  `SCU.NCreate`, `NSet`, `NAction` and `NEventReport` read the response's
-  command and stopped. When the peer sent a data set after it, as PS3.7
-  10.1 lets it for each of them, the data set stayed on the association
-  and the next operation read it as its own response. Against pynetdicom
-  as an MPPS SCP that returns the attribute list on N-CREATE, the N-SET
-  that reports the step complete panicked. Where the stray data set
-  decoded as a command, the status read from it was usually 0, so a
-  failure was reported as success. Each response is now read whole, by its
-  message ID, as the C-services read theirs. Its data set is in the
-  response's `DataSet`, which was always nil, and a response that does not
-  decode is an error. The SCP still drops the data set a handler returns
-  (#399).
+- **A server at its association limit says it is full** (#318). A caller
+  over `SCPConfig.MaxAssociations` was refused from the service-user with
+  reason 2, which from that source is "application context name not
+  supported": dcmtk's `echoscu` printed `Reason: App Context Name Not
+  Supported`, a misconfiguration on the caller's side, when the server was
+  only busy. The refusal now comes from the service-provider (presentation
+  related function), and reason 2 from there is local-limit-exceeded
+  (PS3.8 Table 9-21). It is still transient, so a caller tries again.
 
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
@@ -39,6 +62,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its body being read. A body within its bound is allocated as its bytes
   arrive, so memory follows what a peer has sent: a P-DATA-TF stating
   128 MiB and sending 1 MiB costs 3 MiB.
+
+- **A panic in a handler ends its association, not the server** (#325).
+  Nothing in `network` recovered from a panic. A handler is the
+  application's code, called on a goroutine the SCP started, so a nil map
+  or an index out of range in one, reached by a single instance from a
+  single peer, ended the process: the listener and every other association
+  in progress. A panic in a DIMSE handler, including the streamed C-FIND,
+  C-GET and C-MOVE handlers that run on a goroutine of their own, is now
+  logged with its stack, the peer is sent an A-ABORT (service-provider,
+  reason-not-specified), and that association's slot is given back; the
+  associations beside it go on and the next caller is served. No status is
+  sent for the message in progress, since how far it got is not known. A
+  panic in an event handler is logged and the handlers registered after it
+  are still called.
+
+- **The JPEG 2000 decoder is checked against OpenJPEG in CI** (#322). The
+  interoperability check that decodes an OpenJPEG codestream built its
+  fixture with numpy, which the CI venv does not have, and reported that as
+  a skip, so it never ran. Where it did run, the fixture was wrong:
+  OpenJPEG's PGX reader takes the precision from the largest sample, so
+  `MR_small.dcm` was encoded signed 12-bit and every sample over 2047
+  clipped. The fixture is now built from the data set's own samples with
+  the depth stated, OpenJPEG must say 16 bits and return the original before
+  the decoder is asked, a fixture that cannot be built fails, and the job
+  fails if the check did not pass. The decoder itself was right.
+
+- **An N-service response's data set is read with it** (#379).
+  `SCU.NCreate`, `NSet`, `NAction` and `NEventReport` read the response's
+  command and stopped. When the peer sent a data set after it, as PS3.7
+  10.1 lets it for each of them, the data set stayed on the association
+  and the next operation read it as its own response. Against pynetdicom
+  as an MPPS SCP that returns the attribute list on N-CREATE, the N-SET
+  that reports the step complete panicked. Where the stray data set
+  decoded as a command, the status read from it was usually 0, so a
+  failure was reported as success. Each response is now read whole, by its
+  message ID, as the C-services read theirs. Its data set is in the
+  response's `DataSet`, which was always nil, and a response that does not
+  decode is an error. The SCP still drops the data set a handler returns
+  (#399).
 
 ## [1.10.0] - 2026-11-17
 
