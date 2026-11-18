@@ -249,6 +249,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decoders return the samples coded for every image of pydicom's corpus that
   can be written in each: 56 as RLE, 48 as JPEG-LS.
 
+- **`compress` and `decompress` write a file in another transfer syntax**
+  (#390). The library's four coders and its decoders had no command, so
+  this meant writing Go or using dcmtk. `compress -syntax rle|jpeg-ls|
+  jpeg2000` is lossless and keeps the instance's UID; `-syntax jpeg` is
+  JPEG Baseline, lossy, and refused without `-quality`; its file records the
+  loss and is a new instance with a new SOP Instance UID (PS3.3
+  C.7.6.1.1.5). A UID works as well as a name. What no coder here writes is
+  refused by name: lossy JPEG 2000, JPEG Lossless, 12-bit JPEG, JPEG-LS
+  Near-Lossless. `decompress` writes native pixel data and keeps the UID and
+  any record of a loss. Over pydicom's corpus, pydicom and dcmtk decode
+  every lossless output to the source's samples (RLE 47, JPEG-LS 47, JPEG
+  2000 44 by pydicom), and the 16 JPEG outputs to within 2 of each other.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

@@ -180,7 +180,7 @@ func (c *CLI) ShowHelp() {
 
 	// Display commands in a specific order
 	fmt.Printf("  FILE COMMANDS:\n")
-	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "diff", "dicomdir", "sr", "validate", "modify", "tag-doc", "codify"}
+	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "diff", "dicomdir", "sr", "validate", "modify", "compress", "decompress", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
 		"show":      "Display DICOM file contents",
 		"info":      "Show DICOM file metadata and information",
@@ -194,6 +194,9 @@ func (c *CLI) ShowHelp() {
 		"sr":        "Print the content tree of a structured report",
 		"tag-doc":   "Generate documentation for DICOM tags",
 		"codify":    "Read a DICOM file and produce Go code to create it",
+
+		"compress":   "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG Baseline",
+		"decompress": "Write a file's pixel data uncompressed",
 	}
 	for _, cmdName := range fileCommands {
 		if desc, ok := fileDescriptions[cmdName]; ok {

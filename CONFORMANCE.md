@@ -576,7 +576,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
   Lossless** encodes it — from native pixels, or by decoding a compressed source
   and re-encoding — with `Dataset.CompressRLELosslessInPlace` and
-  `Dataset.CompressJPEGLSLosslessInPlace`, which write a file the same way.
+  `Dataset.CompressJPEGLSLosslessInPlace`, which write a file the same way
+  (`go-dicom compress`).
   Both code the samples pixel by pixel and say so: a color image becomes
   Planar Configuration 0, and a native YBR_FULL_422 image, coded with its
   chroma expanded, becomes YBR_FULL. RLE takes any whole number of bytes a

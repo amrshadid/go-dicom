@@ -22,6 +22,9 @@
 //   - sr: Print the content tree of a structured report
 //   - modify: Set, insert or delete attributes, into sequences by a path,
 //     keeping the transfer syntax and the pixel data as they are
+//   - compress, decompress: Write a file in another transfer syntax: RLE,
+//     JPEG-LS and JPEG 2000 lossless, JPEG Baseline when given a quality, or
+//     native
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation

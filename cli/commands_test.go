@@ -26,6 +26,8 @@ func allCommands() []Command {
 		&ConvertCommand{},
 		&TagDocCommand{},
 		&CodifyCommand{},
+		&CompressCommand{},
+		&DecompressCommand{},
 		&AnonymizeCommand{},
 		&ModifyCommand{},
 		&ShareCommand{},
