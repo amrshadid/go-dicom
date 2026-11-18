@@ -42,7 +42,8 @@ store.Rebuild(ctx)                         // re-read the index from the files
 
 ```
 archive/
-  index.json
+  index.json             <- the index as of its last snapshot
+  index.log              <- what has changed since
   1.2.1/                 <- StudyInstanceUID
     1.2.1.1/             <- SeriesInstanceUID
       1.2.1.1.1.dcm      <- SOPInstanceUID
@@ -54,7 +55,7 @@ Every UID that becomes a path component is validated first, through `fileutil.In
 
 ## The index
 
-`index.json` holds the query attributes of every instance, so answering a query does not mean reading the archive. It is written atomically. A store whose index is missing or unreadable rebuilds it by walking the tree — losing an index costs a slow start, not the archive — and a file that cannot be read is skipped with a warning rather than failing the rebuild.
+`index.json` holds the query attributes of every instance, so answering a query does not mean reading the archive. A store or a removal does not rewrite it: it appends a record to `index.log`, which `Open` replays, and the log is folded into a new `index.json` once it holds more records than the archive has instances. So a store costs the same at the hundred-thousandth instance as at the first. Each change is recorded and synced before its file is put in place or deleted, and one a crash interrupted is settled from the disk at the next `Open`. `index.json` is written atomically; an index of version 3, from before the log, is read as it is. A store whose index is missing or unreadable rebuilds it by walking the tree — losing an index costs a slow start, not the archive — and a file that cannot be read is skipped with a warning rather than failing the rebuild.
 
 Only the keys PS3.4 C.6.1.1 and C.6.2.1 define are indexed:
 

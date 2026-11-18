@@ -31,7 +31,8 @@
 // study and series:
 //
 //	archive/
-//	  index.json
+//	  index.json             <- the index as of its last snapshot
+//	  index.log              <- what has changed since
 //	  1.2.1/                 <- StudyInstanceUID
 //	    1.2.1.1/             <- SeriesInstanceUID
 //	      1.2.1.1.1.dcm      <- SOPInstanceUID
@@ -48,7 +49,16 @@
 // # The index
 //
 // index.json holds the query attributes of every instance, so answering a query
-// does not mean reading the archive. It is written atomically, and a store whose
+// does not mean reading the archive. A store or a removal does not rewrite it:
+// it appends a record to index.log, which Open replays onto it. When the log
+// holds more records than the archive has instances it is folded into a new
+// index.json, so a store costs the same in an archive of a hundred thousand
+// instances as in an empty one. Each change is recorded before its file is
+// put in place or deleted, and synced, so a store stopped between the two is
+// settled from the disk at the next Open: a file written and not indexed is
+// indexed, and an entry whose file never arrived is not kept.
+//
+// index.json is written atomically, and a store whose
 // index is missing or unreadable rebuilds it by walking the tree — losing an
 // index costs a slow start, not the archive. A file that cannot be read is
 // skipped with a warning, so one corrupt instance does not make the rest
@@ -72,7 +82,9 @@
 //
 // The index file carries a version. One written in an earlier form, where an
 // instance was indexed in the bytes it arrived with, is rebuilt from the files
-// the first time the store is opened.
+// the first time the store is opened. Version 3, written before the log, is
+// read as it is and written again as version 4, which an older release
+// rebuilds rather than read without its log.
 //
 // # Matching
 //
