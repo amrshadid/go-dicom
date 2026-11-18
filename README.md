@@ -668,6 +668,7 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
+| HTJ2K (`.201`-`.203`), JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
 `YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
