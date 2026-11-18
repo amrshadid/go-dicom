@@ -392,6 +392,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error and to the same samples as each other, and the interoperability
   suite has dcmtk check it at NEAR 2.
 
+- **A file or a send can be compressed to 12-bit JPEG** (#338). JPEG
+  Baseline is 8-bit, so a CT, MR or CR of 12 bits could be written lossy
+  only by dropping 4 bits, which was refused, and a peer that accepted only
+  `1.2.840.10008.1.2.4.51` could not be sent one.
+  `Dataset.CompressJPEGExtendedInPlace(quality)` writes JPEG Extended: 12
+  bits for an image of up to 12 stored in 16, 8 bits for an 8-bit one, with
+  Huffman tables built for each frame since the example tables do not hold
+  12-bit coefficients, marked Lossy Image Compression `01` with its ratio
+  and `ISO_10918_1`. A send needing `.51` uses `NetworkConfig.JPEGQuality`,
+  as JPEG Baseline does, and is refused without it. Signed images and more
+  than 12 bits stored are refused by name. `compress.EncodeJPEGExtended`
+  codes one frame. dcmtk and libjpeg decode every corpus image that fits; at
+  quality 90 the size and PSNR match dcmtk's own encoder at the same
+  quality.
+
+- **A file or a send can be compressed to lossy JPEG 2000** (#339). The
+  JPEG 2000 encoder was lossless only, so `1.2.840.10008.1.2.4.91` was
+  refused by name and a peer that accepted only it could not be sent an
+  image. `jpeg2000.EncodeLossy` codes the irreversible 9/7 wavelet, the
+  irreversible component transform and a quantization step for each
+  subband, and meets a compression ratio or a PSNR by searching for the
+  step. `Dataset.CompressJPEG2000InPlace` writes a file in it: an RGB image
+  becomes `YBR_ICT`, a signed one stays signed, and the data set is marked
+  Lossy Image Compression `01` with its ratio and `ISO_15444_1`. A send
+  needing `.91` uses `NetworkConfig.JPEG2000Rate` and is refused without
+  it. A ratio a small image cannot meet is refused rather than met with an
+  empty picture. OpenJPEG and pylibjpeg-openjpeg decode every corpus image
+  coded at 10:1 and at 45 dB, and at the same size the PSNR matches
+  OpenJPEG's own encoder or betters it by a few tenths of a decibel. The rate
+  is reached by quantization alone, in one quality layer, not by the
+  pass-by-pass truncation of Annex J.14.
+
+- **`compress` writes every syntax the library writes.** It offered RLE,
+  JPEG-LS Lossless, JPEG 2000 Lossless and JPEG Baseline, and refused the
+  rest by name. It now also writes `-syntax jpeg-lossless` (`.57`) and
+  `jpeg-lossless-sv1` (`.70`), and the lossy ones only when asked with
+  their parameter: `jpeg-ls-near -near N` (`.81`; `-near 0` is lossless
+  and keeps the UID), `jpeg-extended -quality Q` (`.51`), and
+  `jpeg2000-lossy -ratio R` or `-psnr DB` (`.91`). A lossy file records
+  the loss and is a new instance, as `jpeg` already did; a parameter given
+  to a syntax that does not take it is refused. dcmtk, libjpeg and OpenJPEG
+  decode what it writes in each new syntax.
+
 ### Changed
 
 - **A subsampled color JPEG decodes to the picture libjpeg gives** (#398).
@@ -462,6 +505,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than read without its log.
 
 ### Fixed
+
+- **A refused caller is left to close the connection** (#430). An SCP sent
+  its A-ASSOCIATE-RJ and closed the connection behind it. PS3.8 9.2 has the
+  acceptor start ARTIM and wait for the caller to close (AE-8, Sta13), and
+  close it itself only when the timer expires (AA-2). The close could reach
+  a caller before it had acted on the rejection: pynetdicom, on a loaded
+  machine, then held the PDU with the right result, source and reason and
+  did not count the association as rejected. The SCP now waits, up to
+  `NetworkConfig.ARTIMTimeout`, and answers nothing that arrives meanwhile.
 
 - **A server at its association limit says it is full** (#318). A caller
   over `SCPConfig.MaxAssociations` was refused from the service-user with
@@ -537,8 +589,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure was reported as success. Each response is now read whole, by its
   message ID, as the C-services read theirs. Its data set is in the
   response's `DataSet`, which was always nil, and a response that does not
-  decode is an error. The SCP still drops the data set a handler returns
-  (#399).
+  decode is an error. The SCP side had the mirror defect; see the next
+  entry.
+
+- **An SCP sends the data set its handler returns with an N-service
+  response** (#399). `NCreateResponse.DataSet`, `NSetResponse.DataSet`,
+  `NActionResponse.DataSet` and `NEventReportResponse.DataSet` were dropped:
+  the SCP sent only the status, with a Command Data Set Type saying no data
+  set follows. An MPPS SCP could not return the attribute list of the step
+  it created (PS3.4 F.7.2.1.2); pynetdicom read an empty one. An N-ACTION
+  whose reply carries information could not reply. Each is now sent after
+  its response, and the Command Data Set Type says a data set follows only
+  when one does (PS3.7 E.2). A data set that cannot be encoded is answered
+  with 0x0110 Processing failure and no data set. N-GET, the one that did
+  send its data set, sent an empty one after such a failure and reported
+  success.
 
 - **An HTJ2K or JPEG XL image is refused by name, not read as samples or
   sent as them** (#404). Pixel data in a syntax with no decoder here was
@@ -612,6 +677,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is YBR_FULL now, with Planar Configuration 0 for any color image. A
   JPEG-LS send of 8 bits stored in 16 allocated was refused, and so was one
   whose samples used the bits above Bits Stored; both are coded exactly.
+
+- **A value held as a Go string is not absent** (#377). `Dataset.GetValue`
+  returned the value only when it was held as `[]byte`, and
+  `GetValueByKeyword`, `GetStringByKeyword`, `GetByKeywordWithDefault` and
+  `GetStringByKeywordWithDefault` went through it. The library builds some
+  elements with a string (de-identification records Patient Identity Removed
+  as `"YES"`), so after `Anonymize`, `GetStringByKeyword("PatientIdentityRemoved")`
+  answered `""` for an element `ContainsByKeyword` reported present, while
+  `show` on the written file printed `YES`. The private-element accessors,
+  `String`, `GetStatistics`, `ToJSON` and the text formatter had the same
+  assertion. They now ask one helper, which uses `dataelem.ValueBytes`, the
+  conversion the writer already used, so reading and writing agree on what an
+  element holds. A data set built in memory, one read from a file and one
+  decoded from DICOM JSON answer alike. Nothing `show` prints changed.
+  Packages other than `dataset` still assert `[]byte` in places; #420 lists
+  them.
+
+- **`GetPixelDataInfo` holds the rescale** (#378). `PixelDataInfo` has
+  `RescaleSlope` and `RescaleIntercept`, and nothing ever set them, so both
+  were 0 for every image: a CT with intercept -1024 read `0 0`, and
+  `624*slope + intercept` came to 0 rather than -400, as pydicom's
+  `apply_modality_lut` gives. They now hold Rescale Slope (0028,1053) and
+  Intercept (0028,1052), and 1 and 0 when the image has none, since an absent
+  slope means no scaling and not a slope of 0. An enhanced multi-frame image
+  keeps them per frame in the functional groups; there the fields hold frame
+  0's values, its own group's or else the shared one's, and the doc comment
+  says so. The rendering code and this share one lookup, which now also finds
+  a Pixel Value Transformation whose slope is absent but whose intercept is
+  there. Compared with pydicom on the 62 corpus files that have pixels.
+
+- **LUT Data is not reported as a VR mismatch** (#352). The check made when an
+  element is added to a data set, when one is validated and when a file is read
+  accepted a dictionary entry that offers a choice only if the string was in a
+  hand-written list, and there were three lists, each different. None had both
+  `US or OW` (LUT Data, (0028,3006), the table in every Modality, VOI and
+  Presentation LUT Sequence item) and `US or SS or OW` (Gray Lookup Table
+  Data), so reading a file whose LUT Data is OW, or US, logged `VR mismatch for
+  (0028,3006): expected US or OW, got OW`, a warning on a conformant element.
+  There is now one function, `dataelem.VRMatchesDictionary`, used by all three,
+  and it reads the choices out of the dictionary's own string (`VRChoices`), so
+  `OB or OW`, `US or SS`, `US or OW` and `US or SS or OW` work, and so would a
+  choice a later edition adds. The other places that tested a VR for `" or "`
+  by hand use `OffersVRChoice`. Read with the LUT test files, the warning is
+  gone, and a VR the dictionary does not offer is still reported.
+
+- **`show file::Element` takes a keyword** (#384). The element was matched
+  against its tag and its dictionary name, which for Patient's Name is
+  `Patient's Name`, so `show ct.dcm::PatientName` answered `element
+  'PatientName' not found` for an element that was there, and so did every
+  keyword of two words or more, `StudyInstanceUID` among them. The help's own
+  example, `patient.dcm::ImageComments`, was one. The element is now read
+  with the parser `diff` uses for its tags, `parseTagOrKeyword`: a keyword, or
+  a tag as `0010,0010`, `(0010,0010)` or `00100010`. The dictionary name still
+  works, and is all a private element has. A test runs every example in
+  `show`'s help text against a file that has what they ask for, so the help
+  cannot go stale again. `show --json` is untouched. dcmtk's `dcmdump +P
+  PatientName` prints the same value.
+
+- **A private sequence written to an Implicit VR file is still a sequence**
+  (#354). Every sequence was written with its byte count. Implicit VR names
+  no VR, and a private tag has no dictionary entry, so the only thing that
+  tells a reader such an element holds items is an undefined length
+  (PS3.5 6.2.2 Note 5). dcmtk, pydicom and this library's own reader read the
+  rewritten sequence as one opaque value: pydicom's `nested_priv_SQ.dcm`
+  through `modify` came out with `(0001,0001) ?? fe\ff\00\e0...` in
+  `dcmdump`. Every command that writes a file did this to an Implicit VR
+  file, and to an Explicit VR file's private sequence when it was written
+  as Implicit VR. In Implicit VR a sequence the dictionary does not know is
+  now written with undefined length and a Sequence Delimitation Item; every
+  other sequence keeps its bytes. Across pydicom's corpus, every file written
+  back in its own syntax and in Implicit VR reads in pydicom to the elements
+  of the original, the three files with private sequences included,
+  except two truncated files whose cut-off element this library does not
+  read. The network codec has the same defect, and refuses such a sequence
+  on receipt (#424).
+
+- **A file-set does not take in a data set with no File Meta Information**
+  (#394). `FileSet.AddFile` and `ScanDirectory` accepted a bare data set,
+  with no preamble, no `DICM` and no group 0002, when it carried an
+  instance's UIDs, and `WriteDICOMDIR` gave it a record. A file in a
+  File-set is in the DICOM File Format (PS3.10 7.1, 8.1): dcmtk's `dcmmkdir`
+  refuses pydicom's `rtstruct.dcm` with "file not in part 10 format (no file
+  meta information)", and pydicom's `FileSet` could not load the file the
+  DICOMDIR named. `AddFile` now returns an error wrapping the new
+  `fileset.ErrNoFileMeta`. A directory scan leaves such a file out and goes
+  on, because a scan that failed on the first stray file would index
+  nothing. The new `FileSet.Scan` says which files it left out and why
+  (`ErrNoFileMeta`, `ErrNotDICOM`), and `ScanDirectory` is the same scan
+  returning the count. The `dicomdir` command checked the file's first
+  bytes itself; it now prints the library's answer, and its output is
+  unchanged. Over 68 corpus files, the files the library leaves out for
+  missing File Meta Information are the three `dcmmkdir` refuses for it,
+  and pydicom's `FileSet` loads all 64 the DICOMDIR names.
+
+- **A native YBR_FULL_422 image compressed to JPEG 2000 says YBR_FULL**
+  (#374). `CompressJPEG2000LosslessInPlace` coded the image with its chroma
+  expanded to every pixel and kept the description `YBR_FULL_422`, which
+  PS3.5 Table 8.2.4-1 does not allow for JPEG 2000, and a reader that
+  believed it looked for half the chroma there was. The RLE and JPEG-LS
+  methods had been fixed for the same thing, and the lossless JPEG and
+  JPEG-LS Near-Lossless methods had copies of that fix; every
+  `Compress…InPlace` method now describes its result through one method.
+  All of them, run on ten corpus and generated color and grayscale images,
+  give a Photometric Interpretation and Planar Configuration PS3.5 8.2 allows
+  for the syntax, and dcmtk decodes every lossless result to the samples
+  that were coded.
+
+- **A frame coded at 8 bits in a 16-bit image decodes to the whole image**
+  (#362). The JPEG-LS, lossless JPEG and JPEG Baseline/Extended decoders
+  unpacked a frame at its own precision, one byte a sample at 8 bits or
+  fewer, so an image of 16 bits allocated whose frames were coded at 8 came
+  back from `DecodedPixelData` at half its size with no error, and was read
+  as 16-bit samples by everything after it. T.81 and T.87 allow such a frame;
+  dcmtk's `dcmdjpeg` decodes it, `dcmdjpls` refuses it, and pydicom's main
+  branch widens a JPEG-LS one. Every bundled decoder now writes the width
+  Bits Allocated says, through the new `compress.FrameDecompressor`
+  interface that JPEG 2000's `DecompressFrame` already had the shape of, and
+  refuses a frame coded at more bits than Bits Allocated instead of writing
+  it two bytes a sample or, for JPEG 2000, keeping its low bits. A decoded
+  frame shorter than the image is now an error from `DecodedPixelData` too,
+  as it already was from `DecompressInPlace`.
 
 ## [1.10.0] - 2026-11-17
 

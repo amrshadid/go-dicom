@@ -1,7 +1,6 @@
 package dataset
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -28,7 +27,9 @@ const jpeg2000LosslessSyntax = "1.2.840.10008.1.2.4.90"
 //     becomes YBR_RCT, which is how PS3.5 8.2.4 has it described, with Planar
 //     Configuration 0. Decoding it returns RGB. An image of three samples
 //     that are not red, green and blue is coded component by component and
-//     keeps its Photometric Interpretation.
+//     keeps its Photometric Interpretation, except that a native
+//     YBR_FULL_422 image, whose chroma is expanded for every pixel before
+//     coding, becomes YBR_FULL.
 //
 // Each frame is coded at Bits Stored, or at Bits Allocated when a sample
 // uses the bits above Bits Stored: they are meant to be empty and in old
@@ -93,24 +94,16 @@ func (ds *Dataset) CompressJPEG2000LosslessInPlace() error {
 		}
 	}
 
-	// Everything that can fail has; from here the data set changes. When the
-	// image was decoded first, what describes it has to be the decoded
-	// image's description: a 4:2:2 JPEG decodes to chroma for every pixel.
-	ds.takeDescription(source)
+	// Everything that can fail has; from here the data set changes.
 	elem.SetVR(dataelem.OB) // encapsulated pixel data is OB (PS3.5 A.4)
 	if err := ds.SetValue(pixelData, encapsulateFrames(frames)); err != nil {
 		return fmt.Errorf("compress: %w", err)
 	}
 	ds.SetTransferSyntaxUID(jpeg2000LosslessSyntax)
+	transform := ""
 	if rgb {
-		replaceElement(ds, tag.New(0x0028, 0x0004), dataelem.CS, []byte("YBR_RCT "))
+		transform = "YBR_RCT"
 	}
-	if info.SamplesPerPixel > 1 {
-		// The codestream says how its components are arranged, so Planar
-		// Configuration has nothing to say and is 0 (PS3.5 8.2.4).
-		planar := make([]byte, 2)
-		binary.LittleEndian.PutUint16(planar, 0)
-		replaceElement(ds, tag.New(0x0028, 0x0006), dataelem.US, planar)
-	}
+	ds.describeCoded(source, info, transform)
 	return nil
 }

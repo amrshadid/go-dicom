@@ -24,6 +24,48 @@ import (
 // lossless, and the caller knows whether the bits above depth mean anything.
 func EncodeJPEG2000Lossless(samples []byte, width, height, components, bitsAllocated, depth int,
 	signed, colorTransform bool) ([]byte, error) {
+	img, err := jpeg2000Image(samples, width, height, components, bitsAllocated, depth, signed)
+	if err != nil {
+		return nil, err
+	}
+	return jpeg2000.EncodeWithOptions(img, jpeg2000.EncodeOptions{NoComponentTransform: !colorTransform})
+}
+
+// JPEG2000Rate is how much a lossy JPEG 2000 encode may lose, given as one of
+// two targets. Exactly one is set.
+type JPEG2000Rate struct {
+	// Ratio is the compression ratio to meet: the samples' size over the
+	// codestream's, the codestream being no larger than that allows.
+	Ratio float64
+	// PSNR is the peak signal-to-noise ratio, in decibels, the decoded image
+	// is to have at least.
+	PSNR float64
+}
+
+// EncodeJPEG2000 encodes one frame as a lossy JPEG 2000 codestream, the
+// irreversible 9/7 wavelet and scalar quantization at the rate given, which
+// is what goes in an encapsulated pixel data fragment under transfer syntax
+// 1.2.840.10008.1.2.4.91.
+//
+// samples, depth and signed are as EncodeJPEG2000Lossless has them.
+// colorTransform codes three components with the irreversible component
+// transform, which is for red, green and blue: a data set coded so says
+// Photometric Interpretation YBR_ICT (PS3.5 8.2.4).
+func EncodeJPEG2000(samples []byte, width, height, components, bitsAllocated, depth int,
+	signed, colorTransform bool, rate JPEG2000Rate) ([]byte, error) {
+	img, err := jpeg2000Image(samples, width, height, components, bitsAllocated, depth, signed)
+	if err != nil {
+		return nil, err
+	}
+	return jpeg2000.EncodeLossy(img, jpeg2000.LossyOptions{
+		NoComponentTransform: !colorTransform, Ratio: rate.Ratio, PSNR: rate.PSNR,
+	})
+}
+
+// jpeg2000Image takes interleaved native samples apart into the planes of a
+// jpeg2000.Image, checking the arguments both encoders share.
+func jpeg2000Image(samples []byte, width, height, components, bitsAllocated, depth int,
+	signed bool) (*jpeg2000.Image, error) {
 	if bitsAllocated != 8 && bitsAllocated != 16 {
 		return nil, fmt.Errorf("jpeg2000: Bits Allocated is %d; samples of 8 and 16 bits are encoded", bitsAllocated)
 	}
@@ -63,7 +105,7 @@ func EncodeJPEG2000Lossless(samples []byte, width, height, components, bitsAlloc
 			at += bytesPer
 		}
 	}
-	return jpeg2000.EncodeWithOptions(img, jpeg2000.EncodeOptions{NoComponentTransform: !colorTransform})
+	return img, nil
 }
 
 // JPEG2000Depth is the depth to encode samples at: bitsStored when every

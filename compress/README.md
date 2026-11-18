@@ -32,6 +32,13 @@ type Decompressor interface {
     CanDecompress(data []byte) bool
 }
 
+// Satisfied by every bundled decoder: samples at the width Bits Allocated says,
+// whatever precision the codestream states; a wider precision is refused.
+type FrameDecompressor interface {
+    Decompressor
+    DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
+}
+
 type Compressor interface {
     Compress(data []byte) ([]byte, error)
 }

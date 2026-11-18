@@ -34,7 +34,10 @@ func writtenDICOMDIR(t *testing.T, fs *fileset.FileSet, opts fileset.DICOMDIROpt
 // record, so an SR was not an SR DOCUMENT nor a plan an RT PLAN (PS3.3 F.5),
 // and none carried the keys of its own type (#215).
 func TestLeafRecordTypeFollowsSOPClass(t *testing.T) {
-	fs := scannedFileSet(t, "test-SR.dcm", "rtplan.dcm", "rtdose.dcm", "rtstruct.dcm", "CT_small.dcm")
+	fs := scannedFileSet(t, "test-SR.dcm", "rtplan.dcm", "rtdose.dcm", "CT_small.dcm")
+	// rtstruct.dcm has no File Meta Information, which a file-set member
+	// must have, so it goes in written as a Part 10 file.
+	addAsPart10(t, fs, "rtstruct.dcm", "RTSTRUCT")
 	if len(fs.ListFiles()) != 5 {
 		t.Skip("all five fixtures are needed for this")
 	}
