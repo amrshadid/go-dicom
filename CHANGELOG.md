@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
+  body was allocated from the length in its header before any of it had
+  arrived, for every PDU type, up to `MaxPDULengthLimit`. The first PDU on
+  a connection is read before the called AE title is looked at, so eight
+  connections each sending the header of a 128 MiB A-ASSOCIATE-RQ and then
+  1 MiB took a default server's heap from 2 MiB to 1039 MiB and held it
+  until ARTIM expired. A length is now checked against what a PDU of its
+  type can be, from the header: an A-ASSOCIATE-RQ or -AC against the new
+  `MaxAssociatePDULength` (1 MiB; all 128 presentation contexts with 40
+  transfer syntaxes each are 358 KB), an A-ASSOCIATE-RJ, A-RELEASE-RQ,
+  A-RELEASE-RP and A-ABORT against the four bytes PS3.8 gives them, and a
+  P-DATA-TF against the Maximum Length the SCP advertises, before the
+  association as well as after. A PDU of an unknown type is refused without
+  its body being read. A body within its bound is allocated as its bytes
+  arrive, so memory follows what a peer has sent: a P-DATA-TF stating
+  128 MiB and sending 1 MiB costs 3 MiB.
 - **A panic in a handler ends its association, not the server** (#325).
   Nothing in `network` recovered from a panic. A handler is the
   application's code, called on a goroutine the SCP started, so a nil map

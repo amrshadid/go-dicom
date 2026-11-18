@@ -170,8 +170,11 @@
 // associations go on. A panic in an event handler is logged and passed over.
 // Goroutines a handler starts itself are its own to guard.
 //
-// Decoders reject input that would otherwise exhaust memory: PDU lengths are
-// capped at [MaxPDULengthLimit], deflated data sets at
+// Decoders reject input that would otherwise exhaust memory: a PDU's length
+// is checked against what one of its type can be before its body is read
+// ([MaxAssociatePDULength] before an association exists, the advertised
+// Maximum Length after, [MaxPDULengthLimit] in any case) and the body is
+// allocated as its bytes arrive, deflated data sets are capped at
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
 // actually available. The parsers have fuzz targets that run in CI.
 //
