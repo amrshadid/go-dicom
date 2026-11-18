@@ -1712,6 +1712,122 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Lossless JPEG encoding: go-dicom compresses, dcmtk decompresses (#336)
+#
+# Each uncompressed corpus file with an image of 8 or 16 bits is written as
+# .57 (the predictor chosen per frame) and as .70 (predictor 1), dcmdjpeg
+# decodes it, and what dcmtk returns is held against the source's samples,
+# each masked to Bits Stored. dcmtk's lossless JPEG decoder shares no code
+# with this library. pydicom is not the second decoder here: its call into
+# pylibjpeg-libjpeg converts YCbCr to RGB whenever the data set says RGB,
+# which is wrong for lossless JPEG and misreads dcmtk's own RGB output too.
+# ---------------------------------------------------------------------------
+if [ -x "$DCMTK_BIN/dcmdjpeg" ] && python3 -c "import pydicom" >/dev/null 2>&1; then
+  note "Lossless JPEG encoding: go-dicom encoder, dcmtk decoder"
+  RAN_ANY=1
+  jl_src="$WORKDIR/jl-enc-src"
+  mkdir -p "$jl_src"
+  if python3 - "$jl_src" <<'PYEOF'
+import os, shutil, sys
+import pydicom
+import pydicom.data
+
+corpus = os.path.join(os.path.dirname(pydicom.data.__file__), "test_files")
+copied = 0
+for name in sorted(os.listdir(corpus)):
+    if not name.endswith(".dcm"):
+        continue
+    path = os.path.join(corpus, name)
+    try:
+        ds = pydicom.dcmread(path)
+        if "PixelData" not in ds or ds.file_meta.TransferSyntaxUID.is_compressed:
+            continue
+        if int(ds.BitsAllocated) not in (8, 16):
+            continue
+    except Exception:
+        continue
+    shutil.copy(path, sys.argv[1])
+    copied += 1
+raise SystemExit(0 if copied else 1)
+PYEOF
+  then
+    for jl_mode in jpeg-lossless jpeg-lossless-sv1; do
+      jl_out="$WORKDIR/jl-enc-$jl_mode"
+      mkdir -p "$jl_out" "$jl_out-decoded"
+      if go run ./scripts/roundtrip-check "-$jl_mode" "$jl_src" "$jl_out" > "$WORKDIR/jl-enc.log" 2>&1; then
+        for written in "$jl_out"/*.dcm; do
+          [ -f "$written" ] || continue
+          "$DCMTK_BIN/dcmdjpeg" +cn "$written" "$jl_out-decoded/$(basename "$written")" \
+            2>>"$WORKDIR/jl-dcmdjpeg.log" || true
+        done
+        if jl=$(python3 - "$jl_src" "$jl_out" "$jl_out-decoded" <<'PYEOF'
+import os, struct, sys
+import pydicom
+
+src, out, decoded = sys.argv[1:4]
+
+def samples(ds, stored):
+    """Every sample as a number masked to Bits Stored, pixel by pixel."""
+    rows, cols, spp = int(ds.Rows), int(ds.Columns), int(ds.SamplesPerPixel)
+    frames = int(getattr(ds, "NumberOfFrames", 1) or 1)
+    size = int(ds.BitsAllocated) // 8
+    order = "<" if ds.file_meta.TransferSyntaxUID.is_little_endian else ">"
+    n = rows * cols * spp * frames
+    raw = bytes(ds.PixelData)
+    if size == 1 and order == ">" and ds["PixelData"].VR == "OW":
+        swapped = bytearray(raw)
+        swapped[0::2], swapped[1::2] = raw[1::2], raw[0:len(raw) - len(raw) % 2:2]
+        raw = bytes(swapped)
+    values = struct.unpack(order + str(n) + ("B" if size == 1 else "H"), raw[:n * size])
+    mask = (1 << stored) - 1
+    if spp > 1 and int(getattr(ds, "PlanarConfiguration", 0)) == 1:
+        plane, per = rows * cols, rows * cols * spp
+        values = tuple(values[f * per + c * plane + i] for f in range(frames)
+                       for i in range(plane) for c in range(spp))
+    return [v & mask for v in values]
+
+checked, bad = 0, []
+for name in sorted(os.listdir(out)):
+    if not name.endswith(".dcm"):
+        continue
+    want = pydicom.dcmread(os.path.join(src, name))
+    frames = int(getattr(want, "NumberOfFrames", 1) or 1)
+    if len(want.PixelData) < int(want.Rows) * int(want.Columns) * int(want.SamplesPerPixel) * \
+            frames * int(want.BitsAllocated) // 8:
+        continue
+    path = os.path.join(decoded, name)
+    if not os.path.exists(path):
+        bad.append("%s: dcmdjpeg could not decode it" % name)
+        continue
+    got = pydicom.dcmread(path)
+    stored = int(want.BitsStored)
+    if samples(got, stored) != samples(want, stored):
+        bad.append("%s: dcmtk decodes other samples" % name)
+        continue
+    checked += 1
+for line in bad:
+    print("   " + line, file=sys.stderr)
+print("%d files" % checked)
+raise SystemExit(1 if bad or not checked else 0)
+PYEOF
+        ); then
+          pass "Lossless JPEG encoding ($jl_mode) — dcmdjpeg decodes every file to the original samples — $jl"
+        else
+          fail "this encoder's lossless JPEG ($jl_mode) does not survive dcmtk: $jl"
+        fi
+      else
+        fail "the lossless JPEG encoding harness failed"
+        sed -n '1,20p' "$WORKDIR/jl-enc.log" >&2
+      fi
+    done
+  else
+    skip "pydicom is not available to supply the corpus"
+  fi
+else
+  skip "lossless JPEG encoding needs dcmdjpeg (dcmtk) and pydicom"
+fi
+
+# ---------------------------------------------------------------------------
 # DICOMweb against a server that is not this library (#285)
 #
 # The client had its own test server and nothing else in CI. Checked by hand

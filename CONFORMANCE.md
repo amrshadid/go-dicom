@@ -525,9 +525,10 @@ how decoded samples are shaped and coloured, and the one tolerance.
   slice or stream. `IsCanceled` tells a cancel apart from a failure, since a
   canceled retrieval is reported as status 0xFE00 with the number of
   sub-operations still outstanding.
-- **Three syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, and
-  JPEG Baseline when asked.** Pixel data is transcoded in both directions as
-  the negotiated context requires.
+- **Six syntaxes are compressed *to*: RLE Lossless, JPEG-LS Lossless, JPEG
+  2000 Lossless, JPEG Lossless (`.57` and `.70`), and JPEG Baseline when
+  asked.** Pixel data is transcoded in both directions as the negotiated
+  context requires.
 
   Sending over a context that negotiated an uncompressed syntax decodes the pixel
   data first. Sending over one that negotiated **RLE Lossless** or **JPEG-LS
@@ -565,6 +566,32 @@ how decoded samples are shaped and coloured, and the one tolerance.
   files, and it is what a send uses when a peer accepts only this syntax.
   Lossy JPEG 2000 (`.91`) is not written.
 
+  **JPEG Lossless (`.57` and `.70`)** is ITU-T T.81 Process 14, in pure Go:
+  one scan with every component interleaved at full resolution, Huffman
+  tables built for each frame (T.81 K.2), since the example tables of Annex K
+  stop at a difference of 11 bits, at 2 to 16 bits, signed or unsigned, one
+  to four components. `.70` predicts each sample from the one to its left
+  (Selection Value 1); `.57` codes each frame with the predictor of the
+  seven that makes it smallest. There is no point transform and no restart
+  interval. Color is coded as it is, so an RGB image stays RGB, with Planar
+  Configuration 0. A frame is coded at Bits Stored, or at Bits Allocated
+  when a sample uses the bits above it, and at no fewer than 9 bits in an
+  image of 16 bits allocated; a signed sample is coded as its two's
+  complement bits (PS3.5 8.2.1). Lossy Image Compression is not touched.
+  `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`
+  are the same encoder for files, and what a send uses when a peer accepts
+  only one of these.
+
+  *Verified:* dcmtk's `dcmdjpeg` and libjpeg (through pylibjpeg-libjpeg),
+  neither of which shares code with this library, decode every image of
+  pydicom's corpus of 8 or 16 bits allocated, 48 files, written in each
+  syntax, and ten generated edge cases (1x1, odd sizes, 16-bit signed, the
+  full 16-bit range, 12-bit signed, planar configuration 1, a 6000 by 5000
+  image), to every sample. CI runs the dcmtk half. pydicom's own pixel
+  access is not the check for color: it asks pylibjpeg-libjpeg for a YCbCr to
+  RGB conversion whenever the data set says RGB, which is wrong for lossless
+  JPEG, and it misreads dcmtk's own lossless RGB output in the same way.
+
   *Verified:* OpenJPEG, which shares no code with this library, decodes what
   the encoder writes. `opj_decompress` returns every sample of 360 generated
   images of each depth, sign and shape, and of every uncompressed image in
@@ -572,7 +599,7 @@ how decoded samples are shaped and coloured, and the one tolerance.
   receives one over the network with its codestream intact. Both run in CI.
 
   Every other compressed target fails, naming the syntax asked for. There is no
-  lossy JPEG 2000 encoder here, nor a 12-bit or lossless JPEG one, and a send
+  lossy JPEG 2000 encoder here, nor a 12-bit JPEG one, and a send
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 
