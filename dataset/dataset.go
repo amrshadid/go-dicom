@@ -405,15 +405,35 @@ func (ds *Dataset) String() string {
 		elem := ds.elements[tagVal]
 		t := tag.FromInt(tagVal)
 		vr := elem.GetVR()
-		value := elem.GetValue()
 		var valueLen int
-		if b, ok := value.([]byte); ok {
+		if b, ok := valueBytes(elem); ok {
 			valueLen = len(b)
 		}
 		result += fmt.Sprintf("  [%d] %s (%s): %d bytes\n", i, t.Hex(), vr, valueLen)
 	}
 
 	return result
+}
+
+// valueBytes returns the bytes an element's value stands for, whatever Go type
+// it is held as, and false when it holds none (a sequence, a value still in a
+// file, or nothing).
+//
+// Elements read from a file hold []byte, but dataelem.NewDataElement takes any
+// value and the library builds some itself (de-identification records Patient
+// Identity Removed as the string "YES"). An accessor that asserted []byte read
+// those as absent, so every accessor that wants the bytes goes through here, and
+// through dataelem.ValueBytes, which is also what the writer uses: one answer to
+// "what does this element hold" for reading and for writing.
+func valueBytes(elem *dataelem.DataElement) ([]byte, bool) {
+	if elem == nil {
+		return nil, false
+	}
+	b, err := dataelem.ValueBytes(elem.GetVR(), elem.GetValue())
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
 
 // Helper function to copy byte slice
@@ -454,30 +474,13 @@ func validateElementSemantics(t tag.Tag, elem *dataelem.DataElement) error {
 	// Validate VR if present in element and dictionary
 	elemVR := elem.GetVR()
 	if elemVR != "" && info.VR != "" {
-		if string(elemVR) != info.VR && !isValidVRVariant(string(elemVR), info.VR) {
+		if !dataelem.VRMatchesDictionary(string(elemVR), info.VR) {
 			return fmt.Errorf("VR mismatch for %s: expected %s, got %s",
 				t.String(), info.VR, elemVR)
 		}
 	}
 
 	return nil
-}
-
-// isValidVRVariant checks if a VR is a valid variant of the expected VR.
-// Handles DICOM cases where multiple VRs are acceptable (e.g., "OB or OW").
-func isValidVRVariant(actual, expected string) bool {
-	switch expected {
-	case "OB or OW":
-		return actual == "OB" || actual == "OW"
-	case "OB or OD":
-		return actual == "OB" || actual == "OD"
-	case "US or SS":
-		return actual == "US" || actual == "SS"
-	case "OW or OB":
-		return actual == "OW" || actual == "OB"
-	default:
-		return false
-	}
 }
 
 // SortedDataset returns a new dataset with elements sorted by tag value.
@@ -513,8 +516,7 @@ func (ds *Dataset) GetValue(t tag.Tag) []byte {
 		return nil
 	}
 
-	value := elem.GetValue()
-	if b, ok := value.([]byte); ok {
+	if b, ok := valueBytes(elem); ok {
 		return b
 	}
 	return nil
@@ -617,9 +619,8 @@ func (ds *Dataset) GetStatistics() Statistics {
 	for _, tagVal := range ds.order {
 		elem := ds.elements[tagVal]
 		vr := elem.GetVR()
-		value := elem.GetValue()
 
-		if b, ok := value.([]byte); ok {
+		if b, ok := valueBytes(elem); ok {
 			stats.TotalBytes += len(b)
 		}
 		stats.ByVR[string(vr)]++

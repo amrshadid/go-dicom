@@ -37,8 +37,7 @@ $ go-dicom show ct.dcm::0010,0010   # one element, whole
 $ go-dicom show ct.dcm --json       # every element, with where it sits in the file
 ```
 
-`show file::Element` takes the tag. A keyword such as `PatientName` is not
-taken yet ([#384](https://github.com/amrshadid/go-dicom/issues/384)).
+`show file::Element` takes a tag (`0010,0010`) or a keyword (`PatientName`).
 
 In Go (`Example_read`):
 
