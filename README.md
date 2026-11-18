@@ -28,7 +28,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
 - **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
 - **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: rescale, window, MONOCHROME1, YBR and palette color
-- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines
+- **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines. Both formats are written down, each with a JSON Schema: [`show --json`](docs/show-json.md) and [`-events`](docs/events.md)
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)

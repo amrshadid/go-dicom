@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`show --json` and the `-events` log have a written contract.** Two other
+  programs read them, and what `schemaVersion` 1 promised was written nowhere.
+  `docs/show-json.md` and `docs/events.md` say what each property means and
+  what a version number covers, and `docs/show-json.schema.json` and
+  `docs/events.schema.json` are JSON Schemas for them. The tests check the
+  output of every corpus file, and of real associations over TCP, against the
+  schemas, and fail on a property the schemas do not describe. Nothing the
+  commands print changed. The `-events` lines carry no `schemaVersion`; the
+  document says so and what a future one would mean.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
