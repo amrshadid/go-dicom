@@ -40,6 +40,11 @@ type ReadOptions struct {
     SkipBulkData      bool
     BulkDataThreshold uint32 // the longest binary value still read
 }
+
+// A file read that way as a data set whose skipped values say where they
+// are (dataelem.ValueInFile), for filewriter to copy them from the file
+// with SetValueSource. A deflated file is refused.
+func (df *DICOMFile) GetDatasetWithValuesInFile() (*dataset.Dataset, error)
 func NewDCMFileReader(reader filebase.Reader) *DCMFileReader
 
 func (dfr *DCMFileReader) ReadPreamble() error

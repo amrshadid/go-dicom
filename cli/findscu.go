@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,13 @@ type FindSCUCommand struct {
 	patientName string
 	sopClass    string
 	keys        queryKeys
+
+	// worklist queries Modality Worklist with its own keys; modality, date
+	// and stationAET are matched inside its Scheduled Procedure Step.
+	worklist   bool
+	modality   string
+	date       string
+	stationAET string
 }
 
 // queryKeys collects repeated -key flags.
@@ -62,6 +70,14 @@ func (c *FindSCUCommand) AddFlags(fs *flag.FlagSet) {
 	fs.Var(&c.keys, "key",
 		"Additional query key as GGGG,EEEE[=value], repeatable. An empty value requests the "+
 			"attribute without matching on it")
+	fs.BoolVar(&c.worklist, "worklist", false,
+		"Query Modality Worklist with the keys a modality asks for: the patient, the order and "+
+			"the requested procedure, and the Scheduled Procedure Step Sequence. -patient-name and "+
+			"-patient-id match as usual; -level does not apply")
+	fs.StringVar(&c.modality, "modality", "", "With -worklist: the scheduled step's Modality (e.g. MR)")
+	fs.StringVar(&c.date, "date", "",
+		"With -worklist: the scheduled step's start date, YYYYMMDD, a range YYYYMMDD-YYYYMMDD, or today")
+	fs.StringVar(&c.stationAET, "station-aet", "", "With -worklist: the Scheduled Station AE Title")
 }
 
 func (c *FindSCUCommand) Execute(args []string) error {
@@ -82,6 +98,27 @@ func (c *FindSCUCommand) Execute(args []string) error {
 
 	if fs.NArg() < 1 {
 		return fmt.Errorf("usage: findscu [options] host:port")
+	}
+
+	// Naming Modality Worklist by its UID is a worklist query too. It used to
+	// send the patient hierarchy's keys, a Query/Retrieve Level among them,
+	// which Basic Worklist does not have (PS3.4 K.6.1.2.2).
+	if c.sopClass == network.ModalityWorklistInformationModelFindUID {
+		c.worklist = true
+	}
+	if c.worklist {
+		if c.sopClass != "" && c.sopClass != network.ModalityWorklistInformationModelFindUID {
+			return fmt.Errorf("-worklist queries Modality Worklist; drop -sop-class %s", c.sopClass)
+		}
+		levelGiven := false
+		fs.Visit(func(f *flag.Flag) { levelGiven = levelGiven || f.Name == "level" })
+		if levelGiven {
+			return fmt.Errorf("-level has no meaning in a worklist query: Basic Worklist has no " +
+				"Query/Retrieve Level (PS3.4 K.6.1.2.2)")
+		}
+		c.sopClass = network.ModalityWorklistInformationModelFindUID
+	} else if c.modality != "" || c.date != "" || c.stationAET != "" {
+		return fmt.Errorf("-modality, -date and -station-aet need -worklist")
 	}
 
 	address := fs.Arg(0)
@@ -119,12 +156,19 @@ func (c *FindSCUCommand) Execute(args []string) error {
 
 	// Build query dataset
 	queryDS := dataset.NewDataset()
+	if c.worklist {
+		queryDS, err = worklistIdentifier(c.patientName, c.patientID, c.modality,
+			worklistDate(c.date, time.Now()), c.stationAET)
+		if err != nil {
+			return fmt.Errorf("building the worklist query: %w", err)
+		}
+	}
 
 	// The patient hierarchy keys are only sent for a model that has one. A
 	// non-patient model — Hanging Protocol, Color Palette — has a single level and
 	// no QueryRetrieveLevel at all (PS3.4 GG.2), and sending patient keys to it
 	// would be asking about attributes its objects do not carry.
-	if c.sopClass == "" || isPatientHierarchyModel(c.sopClass) {
+	if !c.worklist && (c.sopClass == "" || isPatientHierarchyModel(c.sopClass)) {
 		_ = queryDS.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0052), dataelem.CS, []byte(c.level)))
 
 		if c.patientName != "" {
@@ -157,7 +201,9 @@ func (c *FindSCUCommand) Execute(args []string) error {
 			"return, or drop -sop-class to query a patient hierarchy model")
 	}
 
-	if c.sopClass != "" {
+	if c.worklist {
+		fmt.Printf("Querying %s (Modality Worklist)\n", address)
+	} else if c.sopClass != "" {
 		fmt.Printf("Querying %s (SOP class: %s)\n", address, c.sopClass)
 	} else {
 		fmt.Printf("Querying %s (level: %s)\n", address, c.level)
@@ -181,18 +227,7 @@ func (c *FindSCUCommand) Execute(args []string) error {
 		count++
 		fmt.Printf("\n--- Result %d ---\n", count)
 		if result.DataSet != nil {
-			elements := result.DataSet.GetAll()
-			for _, elem := range elements {
-				t := elem.GetTag()
-				name := ""
-				if elemTag, ok := t.(tag.Tag); ok {
-					name = elemTag.GetName()
-				}
-				val := elem.GetValue()
-				if data, ok := val.([]byte); ok {
-					fmt.Printf("  %-40s %s\n", name, string(data))
-				}
-			}
+			printDataSet(os.Stdout, result.DataSet, "  ")
 		}
 	}
 
@@ -203,16 +238,16 @@ func (c *FindSCUCommand) Execute(args []string) error {
 // isPatientHierarchyModel reports whether a query model organizes its objects
 // under a patient, and so uses QueryRetrieveLevel and the patient keys.
 //
-// The three query/retrieve roots and Modality Worklist do. The non-patient object
-// models and Relevant Patient Information Query do not: they have a single level,
-// so a QueryRetrieveLevel in the identifier is meaningless and the patient keys
-// name attributes their objects do not carry.
+// The three query/retrieve roots do. The non-patient object models and Relevant
+// Patient Information Query do not: they have a single level, so a
+// QueryRetrieveLevel in the identifier is meaningless and the patient keys name
+// attributes their objects do not carry. Modality Worklist is never asked: it
+// has patients and no levels, and keys of its own (worklistIdentifier).
 func isPatientHierarchyModel(sopClassUID string) bool {
 	switch sopClassUID {
 	case network.PatientRootQueryRetrieveFind,
 		network.StudyRootQueryRetrieveFind,
-		network.PatientStudyOnlyQueryRetrieveFind,
-		network.ModalityWorklistInformationModelFindUID:
+		network.PatientStudyOnlyQueryRetrieveFind:
 		return true
 	default:
 		return false

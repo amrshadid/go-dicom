@@ -1,13 +1,14 @@
 package cli
 
 import (
-	"bytes"
+	"bufio"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -71,6 +72,14 @@ func readImageDataset(input string) (*dataset.Dataset, error) {
 }
 
 // writeImages renders the frames of ds that opts asks for and writes them.
+//
+// Each frame is rendered, encoded straight into a file and let go before the
+// next is made, so memory holds one picture and none of the encoded bytes
+// (#331). Rendering every frame first and encoding each into memory held all
+// of them and their encodings: 418 MB for a hundred megapixel frames, and a
+// 200 MB image of noise took 482 MB to become one PNG of 100 MB. The files
+// are written under temporary names and take theirs only when every one is
+// written, so a failure still leaves nothing.
 func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]string, error) {
 	render, err := parseWindow(opts.window)
 	if err != nil {
@@ -81,17 +90,26 @@ func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]strin
 		return nil, fmt.Errorf("the instance has no image to convert: %w", err)
 	}
 
-	var frames []image.Image
-	var names []string
+	var pending imageFiles
+	defer pending.discard()
+
 	switch opts.frame {
 	case "all":
-		if frames, err = ds.RenderFrames(render); err != nil {
-			return nil, err
-		}
 		ext := filepath.Ext(output)
 		stem := strings.TrimSuffix(output, ext)
-		for i := range frames {
-			names = append(names, fmt.Sprintf("%s-%04d%s", stem, i+1, ext))
+		err = ds.RenderEachFrame(render, func(f int, img image.Image) error {
+			if err := pending.write(fmt.Sprintf("%s-%04d%s", stem, f+1, ext), img, f+1, opts); err != nil {
+				return err
+			}
+			// The frame is garbage now, and the collector would leave it
+			// until the heap had doubled: with 200 MB of pixels held, that
+			// is 200 MB of written frames. The pixels are bytes, which the
+			// collector does not scan, so collecting costs little.
+			runtime.GC()
+			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
 	default:
 		// Counted from 1, as viewers and the numbered file names do.
@@ -108,28 +126,78 @@ func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]strin
 		if err != nil {
 			return nil, err
 		}
-		frames, names = []image.Image{img}, []string{output}
-	}
-
-	for i, img := range frames {
-		if len(opts.outline) > 0 {
-			img = outlined(img, opts.outline)
-		}
-		// Encoded before the file is created, so a failure leaves nothing.
-		var buf bytes.Buffer
-		if opts.format == "jpeg" {
-			err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: opts.quality})
-		} else {
-			err = png.Encode(&buf, img)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("encoding frame %d: %w", i+1, err)
-		}
-		if err := os.WriteFile(names[i], buf.Bytes(), 0o644); err != nil {
+		if err := pending.write(output, img, 1, opts); err != nil {
 			return nil, err
 		}
 	}
-	return names, nil
+	return pending.keep()
+}
+
+// imageFiles are pictures written under temporary names beside the names
+// they will have.
+type imageFiles struct {
+	names, temporary []string
+}
+
+// write encodes img into a temporary file beside name. frame numbers it in an
+// error.
+func (p *imageFiles) write(name string, img image.Image, frame int, opts imageOptions) error {
+	if len(opts.outline) > 0 {
+		img = outlined(img, opts.outline)
+	}
+	f, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+".*.partial")
+	if err != nil {
+		return err
+	}
+	p.names, p.temporary = append(p.names, name), append(p.temporary, f.Name())
+
+	// A megabyte at a time: the encoders write in small pieces, and a write
+	// to the file for each made a hundred frames take twice as long.
+	out := bufio.NewWriterSize(f, 1<<20)
+	if opts.format == "jpeg" {
+		err = jpeg.Encode(out, img, &jpeg.Options{Quality: opts.quality})
+	} else {
+		err = png.Encode(out, img)
+	}
+	if err != nil {
+		_ = f.Close()
+		return fmt.Errorf("encoding frame %d: %w", frame, err)
+	}
+	if err := out.Flush(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	// CreateTemp makes the file readable by its owner alone; a picture is
+	// written as os.WriteFile wrote it before.
+	return os.Chmod(f.Name(), 0o644)
+}
+
+// keep gives every file its name, and returns the names. When one cannot
+// take its name, those that already have theirs are removed: some of the
+// frames would pass for all of them.
+func (p *imageFiles) keep() ([]string, error) {
+	for i, name := range p.names {
+		if err := os.Rename(p.temporary[i], name); err != nil {
+			for _, kept := range p.names[:i] {
+				_ = os.Remove(kept)
+			}
+			return nil, err
+		}
+		p.temporary[i] = ""
+	}
+	return p.names, nil
+}
+
+// discard removes whatever is still under a temporary name.
+func (p *imageFiles) discard() {
+	for _, name := range p.temporary {
+		if name != "" {
+			_ = os.Remove(name)
+		}
+	}
 }
 
 // parseWindow reads --window center,width.

@@ -65,7 +65,8 @@ type NetworkConfig struct {
 
 	// MaxDataSetSize bounds the data set of one message, which is held in
 	// memory whole while it arrives. A peer sending more is aborted. Zero is
-	// no limit.
+	// no limit. A C-STORE given to a CStoreStreamer is not held whole; the
+	// bound still applies to it, counted as its bytes are read.
 	MaxDataSetSize int64
 }
 
@@ -136,7 +137,56 @@ type SCPConfig struct {
 	Network NetworkConfig
 
 	// MaxAssociations is the maximum number of concurrent associations. 0 means unlimited.
+	// A caller over the limit is refused rejected-transient, by the
+	// service-provider (presentation related function), local-limit-exceeded
+	// (PS3.8 Table 9-21), so it knows to try again later.
 	MaxAssociations int
+
+	// Admit, when set, decides who may associate. It is called once per
+	// association, after the A-ASSOCIATE-RQ is read and before it is answered
+	// or any presentation context is negotiated, so a caller it refuses
+	// learns nothing of what the SCP supports. It returns nil to admit the
+	// caller, or the A-ASSOCIATE-RJ to refuse it with; RejectCallingAE,
+	// RejectCalledAE and RejectBusy are the usual ones.
+	//
+	// It is asked only about a request whose two AE titles are well formed
+	// (PS3.5 6.2: 1 to 16 printable characters of the default repertoire, no
+	// backslash, not all spaces), and is given them without their leading and
+	// trailing spaces. A request with a title that is not is refused by the
+	// SCP, as calling-AE-title-not-recognized or called-AE-title-not-recognized,
+	// without the function being asked: an allow list would refuse such a
+	// title anyway, and a deny list or a log line should never meet one.
+	//
+	// The called AE title is still the SCP's to check. A caller the function
+	// admits is refused, called-AE-title-not-recognized, when it asked for a
+	// title other than AETitle, so adding a function that only observes does
+	// not open the SCP to every title. Set AcceptAnyCalledAE for the function
+	// to decide the called title as well.
+	//
+	// It runs on a goroutine of its own and has ARTIMTimeout to answer; its
+	// context is canceled then and the caller refused with RejectBusy. ARTIM
+	// also bounds how long the caller takes to send its request, so a
+	// connection can be held for up to twice ARTIM before it is answered. A
+	// function that ignores its context keeps its goroutine until it returns.
+	// A panic in it refuses the caller (rejected-permanent, service-user,
+	// no-reason-given) and is logged. So is a result, source and reason that
+	// PS3.8 Table 9-21 does not define, which is sent as that refusal
+	// instead. Each refusal is logged at the info level, the AE titles
+	// quoted, and reported to Events as EVTAssocRejected, whose Description
+	// names it; a server that also logs its events (LoggingEventHandlers)
+	// has it in its log twice.
+	// Callers turned away by MaxAssociations are refused before it is asked.
+	//
+	// It is called concurrently for different connections and must be safe
+	// for concurrent use.
+	Admit func(ctx context.Context, req *AssociationRequest) *AssociationRejection
+
+	// AcceptAnyCalledAE leaves the called AE title to Admit: the SCP does
+	// not refuse a title other than AETitle by itself, so one SCP can answer
+	// to several. Admit then refuses the titles it does not answer to, with
+	// RejectCalledAE. It has no effect without Admit: an SCP with no
+	// admission function answers only to AETitle.
+	AcceptAnyCalledAE bool
 
 	// Events, when set, is told what happens on each association the SCP
 	// accepts, and on those it opens itself: C-MOVE sub-operations, storage

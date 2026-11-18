@@ -129,6 +129,14 @@ var conditionalRecordKeys = map[string][]tag.Tag{
 
 var tagSpecificCharacterSet = tag.New(0x0008, 0x0005)
 
+// ValidFileID reports whether components form a File ID PS3.10 8.5 allows:
+// one to eight components of one to eight characters from A-Z, 0-9 and
+// underscore. A caller that is to refuse a set of files can check each one
+// and name them all, where WriteDICOMDIR stops at the first.
+func ValidFileID(components []string) bool {
+	return conformantFileID(components)
+}
+
 // conformantFileID reports whether components form a File ID PS3.10 8.5
 // allows.
 func conformantFileID(components []string) bool {
