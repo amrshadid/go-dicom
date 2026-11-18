@@ -41,10 +41,14 @@ const (
 	markerEOC = 0xFFD9 // end of codestream
 )
 
-// Progression orders (Annex A.6.1). Only the two the corpus uses are decoded.
+// Progression orders (Annex A.6.1, Table A.16): the order the packets of a
+// tile are written in, named by its loops from the outermost in (B.12.1).
 const (
 	ProgressionLRCP = 0 // layer, resolution, component, position
 	ProgressionRLCP = 1 // resolution, layer, component, position
+	ProgressionRPCL = 2 // resolution, position, component, layer
+	ProgressionPCRL = 3 // position, component, resolution, layer
+	ProgressionCPRL = 4 // component, position, resolution, layer
 )
 
 // Wavelet transforms (Annex A.6.1, SPcod transformation).
@@ -81,8 +85,31 @@ type CodingStyle struct {
 	CodeBlockHt    int
 	BlockStyle     byte // Annex A.6.1 SPcod code-block style; only 0 is decoded
 	Wavelet        int
-	UsePrecincts   bool
-	SOP, EPH       bool
+	// UsePrecincts says the style declares its own precinct sizes, one per
+	// resolution in Precincts. Without it every precinct is 2^15 on a side,
+	// which in practice is one precinct per resolution (A.6.1).
+	UsePrecincts bool
+	Precincts    []PrecinctSize
+	SOP, EPH     bool
+}
+
+// PrecinctSize is one resolution's precinct size as powers of two (A.6.1,
+// Table A.21): a precinct is 2^PPx samples wide and 2^PPy high on the
+// resolution's grid.
+type PrecinctSize struct {
+	PPx, PPy int
+}
+
+// defaultPrecinct is the exponent of a precinct when the coding style
+// declares none (A.6.1).
+const defaultPrecinct = 15
+
+// PrecinctFor returns the precinct size in force at a resolution.
+func (s CodingStyle) PrecinctFor(resolution int) PrecinctSize {
+	if !s.UsePrecincts || resolution < 0 || resolution >= len(s.Precincts) {
+		return PrecinctSize{PPx: defaultPrecinct, PPy: defaultPrecinct}
+	}
+	return s.Precincts[resolution]
 }
 
 // Quantization is a QCD segment, or a QCC override for one component.
@@ -417,7 +444,7 @@ func parseCOD(s []byte) (CodingStyle, error) {
 	if style.Layers == 0 {
 		return CodingStyle{}, fmt.Errorf("jpeg2000: COD declares zero layers")
 	}
-	if style.Progression != ProgressionLRCP && style.Progression != ProgressionRLCP {
+	if style.Progression < ProgressionLRCP || style.Progression > ProgressionCPRL {
 		return CodingStyle{}, &ErrUnsupported{
 			Feature: fmt.Sprintf("progression order %d", style.Progression)}
 	}
@@ -481,8 +508,9 @@ func parseTileQCC(c *Codestream, tile int, s []byte) error {
 	return nil
 }
 
-// parseCodingParameters reads SPcod/SPcoc: levels, code-block size, style and
-// wavelet, which COD and COC share.
+// parseCodingParameters reads SPcod/SPcoc: levels, code-block size, style,
+// wavelet and, when style.UsePrecincts is set, the precinct sizes, which COD
+// and COC share.
 func parseCodingParameters(style *CodingStyle, s []byte) error {
 	if len(s) < 5 {
 		return fmt.Errorf("jpeg2000: coding parameters are %d bytes, want 5", len(s))
@@ -492,6 +520,32 @@ func parseCodingParameters(style *CodingStyle, s []byte) error {
 	style.CodeBlockHt = 1 << (int(s[2]&0x0F) + 2)
 	style.BlockStyle = s[3]
 	style.Wavelet = int(s[4])
+
+	// A COC that inherits a COD's style also inherits its precincts unless it
+	// says otherwise, and a COC without precincts says otherwise: its own flag
+	// is the whole answer, so the inherited list is dropped first.
+	style.Precincts = nil
+	if style.UsePrecincts && style.Levels <= 32 {
+		// Table A.21: one byte per resolution, lowest first, the width's
+		// exponent in the low four bits and the height's in the high four.
+		resolutions := style.Levels + 1
+		if len(s) < 5+resolutions {
+			return fmt.Errorf("jpeg2000: coding parameters declare precincts for %d resolutions and hold %d",
+				resolutions, len(s)-5)
+		}
+		style.Precincts = make([]PrecinctSize, resolutions)
+		for r := range style.Precincts {
+			size := PrecinctSize{PPx: int(s[5+r] & 0x0F), PPy: int(s[5+r] >> 4)}
+			// A.6.1: a size of 1 is allowed only at the lowest resolution. Above
+			// it the precinct is halved on its way into the subbands (B.6), and
+			// half of one sample is not a precinct.
+			if r > 0 && (size.PPx == 0 || size.PPy == 0) {
+				return fmt.Errorf("jpeg2000: a precinct of 2^%d by 2^%d at resolution %d",
+					size.PPx, size.PPy, r)
+			}
+			style.Precincts[r] = size
+		}
+	}
 
 	switch {
 	case style.Levels > 32:
@@ -507,8 +561,6 @@ func parseCodingParameters(style *CodingStyle, s []byte) error {
 			Feature: fmt.Sprintf("code-block style 0x%02X", style.BlockStyle)}
 	case style.Wavelet != Wavelet53Reversible && style.Wavelet != Wavelet97Irreversible:
 		return &ErrUnsupported{Feature: fmt.Sprintf("wavelet transform %d", style.Wavelet)}
-	case style.UsePrecincts:
-		return &ErrUnsupported{Feature: "user-defined precinct sizes"}
 	}
 	return nil
 }

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **JPEG 2000 in every progression order, with any precincts** (#346).
+  The decoder read only LRCP and RLCP with one precinct per resolution, and
+  refused the RPCL, PCRL and CPRL orders and a coding style with its own
+  precinct sizes. RPCL with precincts is a common encoder default, so a file
+  written for resolution or spatial access could not be displayed without
+  an external decoder. All five orders and user-defined precincts now
+  decode. OpenJPEG returns the same samples on 95 codestreams across depths,
+  signs, component counts, tiles, image offsets, layers and both wavelets,
+  and CI checks it on every push.
+  A codestream that declares a one-sample precinct above the lowest
+  resolution is refused, as T.800 A.6.1 requires and as OpenJPEG does.
+  `opj_compress -c` writes one when the precinct list runs out too soon.
+
 ### Fixed
 
 - **The conformance statement names every JPEG 2000 feature the decoder

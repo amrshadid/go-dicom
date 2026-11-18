@@ -23,8 +23,9 @@ const (
 // CodeBlock is one code-block's place in a band.
 type CodeBlock struct {
 	X0, Y0, X1, Y1 int
-	// Index within the precinct, in raster order, which is the order a packet
-	// header walks them in.
+	// Index within the band, in raster order. A packet header walks the
+	// blocks of one precinct at a time (see precinctBlocks), which with the
+	// default precincts is the whole band in this order.
 	Index int
 }
 
@@ -115,17 +116,17 @@ func (c *Codestream) TileComponentFor(tile, component int) (TileComponent, error
 	style := c.CodingForTile(tile, component)
 	levels := style.Levels
 
+	blocks := 0
 	for r := 0; r <= levels; r++ {
 		// B.5: the resolution's grid is the component's, scaled down by the
 		// decompositions still to be undone.
 		shift := levels - r
+		precinct := style.PrecinctFor(r)
 		res := Resolution{
 			Index: r,
 			X0:    ceilDivPow2(tc.X0, shift), Y0: ceilDivPow2(tc.Y0, shift),
 			X1: ceilDivPow2(tc.X1, shift), Y1: ceilDivPow2(tc.Y1, shift),
-			// Default precincts: the whole resolution in one, which is what
-			// every fixture uses. User-defined sizes are refused in the parser.
-			PPx: 15, PPy: 15,
+			PPx: precinct.PPx, PPy: precinct.PPy,
 		}
 
 		// B.7: a code-block cannot be larger than a precinct, and at
@@ -146,12 +147,79 @@ func (c *Codestream) TileComponentFor(tile, component int) (TileComponent, error
 		}
 
 		for _, band := range bandsOf(tc, r, levels) {
+			// Counted before they are laid out. Small precincts shrink the
+			// code-blocks with them (B.7), down to a single sample, and a block
+			// costs far more to describe than the sample it holds; a header
+			// could otherwise ask for a few hundred bytes of bookkeeping per
+			// sample of the largest image accepted. Blocks of four samples on
+			// average are as small as this decoder goes, which still admits
+			// the 4x4 blocks the standard's own code-block size allows.
+			blocks += blockCount(band, res.CodeBlockW, res.CodeBlockH)
+			if limit := maxInt(1<<16, tc.Width()*tc.Height()/4); blocks > limit {
+				return TileComponent{}, errorf("tile %d component %d is divided into more than %d code-blocks",
+					tile, component, limit)
+			}
 			band.Blocks = codeBlocksOf(band, res.CodeBlockW, res.CodeBlockH)
 			res.Bands = append(res.Bands, band)
 		}
 		tc.Resolutions = append(tc.Resolutions, res)
 	}
 	return tc, nil
+}
+
+// blockCount is how many code-blocks codeBlocksOf will cut a band into.
+func blockCount(band Band, xcb, ycb int) int {
+	if band.X1 <= band.X0 || band.Y1 <= band.Y0 {
+		return 0
+	}
+	w, h := 1<<xcb, 1<<ycb
+	return (ceilDivInt(band.X1, w) - floorTo(band.X0, w)/w) * (ceilDivInt(band.Y1, h) - floorTo(band.Y0, h)/h)
+}
+
+// precinctBlocks lists the code-blocks of a band that belong to precinct k of
+// its resolution (B.6), as indexes into band.Blocks in the raster order a
+// packet header walks them in, with the width and height of the grid they
+// form, which is the shape of the precinct's tag trees (B.10.2).
+//
+// The precinct partition is anchored at the origin of the resolution's grid,
+// and each band inherits it at half the size above the lowest resolution,
+// since a band is half the resolution in each direction. Precinct k counts
+// from the partition's first column and row that reach into the resolution.
+// Code-blocks are never larger than the band's precinct (B.7), so every block
+// falls in exactly one precinct and the blocks of a precinct are a rectangle
+// of the band's block grid, found by arithmetic rather than by a search.
+func precinctBlocks(res Resolution, band Band, k int) (blocks []int, w, h int) {
+	if len(band.Blocks) == 0 || res.PrecinctsWide <= 0 || k < 0 || k >= res.Precincts() {
+		return nil, 0, 0
+	}
+	ppx, ppy := res.PPx, res.PPy
+	if res.Index > 0 {
+		ppx, ppy = ppx-1, ppy-1
+	}
+	px := floorDivPow2(res.X0, res.PPx) + k%res.PrecinctsWide
+	py := floorDivPow2(res.Y0, res.PPy) + k/res.PrecinctsWide
+	x0, x1 := maxInt(px<<ppx, band.X0), minInt((px+1)<<ppx, band.X1)
+	y0, y1 := maxInt(py<<ppy, band.Y0), minInt((py+1)<<ppy, band.Y1)
+	if x0 >= x1 || y0 >= y1 {
+		return nil, 0, 0
+	}
+
+	// The band's block grid, as codeBlocksOf laid it out, and the part of it
+	// this precinct covers.
+	bw, bh := 1<<res.CodeBlockW, 1<<res.CodeBlockH
+	firstColumn, firstRow := floorTo(band.X0, bw)/bw, floorTo(band.Y0, bh)/bh
+	columns := ceilDivInt(band.X1, bw) - firstColumn
+	c0, c1 := floorTo(x0, bw)/bw, ceilDivInt(x1, bw)
+	r0, r1 := floorTo(y0, bh)/bh, ceilDivInt(y1, bh)
+
+	w, h = c1-c0, r1-r0
+	blocks = make([]int, 0, w*h)
+	for row := r0; row < r1; row++ {
+		for column := c0; column < c1; column++ {
+			blocks = append(blocks, (row-firstRow)*columns+(column-firstColumn))
+		}
+	}
+	return blocks, w, h
 }
 
 // bandsOf gives the subbands of one resolution (B.5, Table B.1): the LL band

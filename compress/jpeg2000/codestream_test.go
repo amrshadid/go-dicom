@@ -161,11 +161,11 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 		// progression 5, code-block style 12, wavelet 13; in SIZ the first
 		// component's Ssiz is at 40 and its XRsiz at 41.
 		"code-block style": {func(cod, _ []byte) { cod[12] = 0x01 }, "code-block style"},
-		"precincts":        {func(cod, _ []byte) { cod[4] = 0x01 }, "precinct"},
-		"progression":      {func(cod, _ []byte) { cod[5] = 4 }, "progression order"},
-		"wavelet":          {func(cod, _ []byte) { cod[13] = 9 }, "wavelet"},
-		"subsampling":      {func(_, siz []byte) { siz[41] = 2 }, "subsampling"},
-		"bit depth":        {func(_, siz []byte) { siz[40] = 0x80 | 31 }, "32-bit"},
+		// CPRL (4) is the last order Table A.16 defines.
+		"progression": {func(cod, _ []byte) { cod[5] = 5 }, "progression order"},
+		"wavelet":     {func(cod, _ []byte) { cod[13] = 9 }, "wavelet"},
+		"subsampling": {func(_, siz []byte) { siz[41] = 2 }, "subsampling"},
+		"bit depth":   {func(_, siz []byte) { siz[40] = 0x80 | 31 }, "32-bit"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -187,6 +187,57 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 	// And the unpatched one parses, so the refusals above are about the patch.
 	if _, err := jpeg2000.ParseCodestream(base); err != nil {
 		t.Fatalf("the unpatched codestream did not parse: %v", err)
+	}
+}
+
+// TestParseCodestreamReadsPrecinctSizes: a coding style with its own precincts
+// carries one byte per resolution after SPcod, the width's exponent in the low
+// four bits (A.6.1, Table A.21). They are read in order; a list shorter than
+// the resolutions, or a one-sample precinct above the lowest resolution, is an
+// error. opj_compress writes the second when asked for "-c [16,16]" over six
+// resolutions, and opj_decompress refuses it as this parser does.
+func TestParseCodestreamReadsPrecinctSizes(t *testing.T) {
+	withPrecincts := func(sizes ...byte) []byte {
+		data := buildCodestream(t, func(cod, _ []byte) { cod[4] = 0x01 })
+		// buildCodestream's COD is 14 bytes at offset 2+43; grow it by the
+		// precinct bytes and fix its length.
+		cod := 2 + 43
+		out := append([]byte{}, data[:cod+14]...)
+		out = append(out, sizes...)
+		out = append(out, data[cod+14:]...)
+		binary.BigEndian.PutUint16(out[cod+2:], uint16(12+len(sizes)))
+		return out
+	}
+
+	// Five levels: six resolutions, from 2^0 at the lowest to 2^5 by 2^7.
+	c, err := jpeg2000.ParseCodestream(withPrecincts(0x00, 0x11, 0x22, 0x33, 0x44, 0x75))
+	if err != nil {
+		t.Fatalf("ParseCodestream: %v", err)
+	}
+	want := []jpeg2000.PrecinctSize{{PPx: 0, PPy: 0}, {PPx: 1, PPy: 1}, {PPx: 2, PPy: 2},
+		{PPx: 3, PPy: 3}, {PPx: 4, PPy: 4}, {PPx: 5, PPy: 7}}
+	for r, size := range want {
+		if got := c.Coding.PrecinctFor(r); got != size {
+			t.Errorf("resolution %d: precinct %+v, want %+v", r, got, size)
+		}
+	}
+	// And a style without its own precincts has the default at every level.
+	plain, err := jpeg2000.ParseCodestream(buildCodestream(t, func(_, _ []byte) {}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plain.Coding.PrecinctFor(3); got != (jpeg2000.PrecinctSize{PPx: 15, PPy: 15}) {
+		t.Errorf("default precinct %+v, want 2^15 by 2^15", got)
+	}
+
+	for name, sizes := range map[string][]byte{
+		"too few sizes":                {0x00, 0x11, 0x22},
+		"one sample wide at level one": {0x00, 0x10, 0x22, 0x33, 0x44, 0x55},
+		"one sample high at the top":   {0x00, 0x11, 0x22, 0x33, 0x44, 0x05},
+	} {
+		if _, err := jpeg2000.ParseCodestream(withPrecincts(sizes...)); err == nil {
+			t.Errorf("%s: parsed", name)
+		}
 	}
 }
 
