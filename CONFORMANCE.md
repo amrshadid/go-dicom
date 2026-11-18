@@ -354,7 +354,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | AE title | `SCPConfig.AETitle`, `SCUConfig.CallingAE` / `CalledAE` |
 | Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
-| Concurrent association limit | `SCPConfig.MaxAssociations` |
+| Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
 | Supported SOP classes | `SetSupportedAbstractSyntaxes` |
 | Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
