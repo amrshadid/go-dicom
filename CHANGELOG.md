@@ -402,6 +402,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DT. Both now follow the table; `DataElement.ValidateVR` and
   `SetValueWithValidation`, which use it, follow with them.
 
+- **A JPEG-LS frame that ends on 0xFF decodes everywhere** (#385). The
+  encoder stopped after the last byte of a scan, and when that byte was
+  0xFF the EOI marker followed it at once. The byte after a 0xFF in a
+  JPEG-LS scan has its high bit clear (T.87 A.1), so CharLS and libjpeg
+  ended the scan a byte early: dcmtk refused the frame, libjpeg decoded its
+  last samples wrong, and this library, which reads zeros past the end,
+  read it back without complaint. About one frame in 256 sent as JPEG-LS
+  Lossless ended so. A scan that ends on 0xFF now has the stuffed zero byte
+  after it.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
