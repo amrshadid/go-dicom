@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`info` no longer holds the image to print a few lines.** It read every
+  value of the file, Pixel Data included, so a 200 MB image took 218 MB of
+  memory to print the patient, the modality and the dimensions. Bulk values
+  now stay in the file, as they have for `show` since 1.9.1: the same file
+  takes 17 MB. What `info` prints does not change, including the sizes of
+  `--stats` and `--verbose`, which count the bytes in the file (#328).
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
