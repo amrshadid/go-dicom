@@ -292,7 +292,7 @@ func nonConformantFiles(root string, files []string) []string {
 			rel = f
 		}
 		if !fileset.ValidFileID(strings.Split(filepath.ToSlash(rel), "/")) {
-			bad = append(bad, rel)
+			bad = append(bad, filepath.ToSlash(rel))
 		}
 	}
 	return bad
