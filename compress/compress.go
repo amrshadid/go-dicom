@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"io"
 	"strings"
@@ -1115,6 +1116,25 @@ func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 
 	case *image.YCbCr:
 		out := make([]byte, 0, width*height*3)
+		// 4:2:2 and 4:2:0 chroma is filtered as libjpeg filters it, so a
+		// subsampled frame decodes to the picture dcmtk and pydicom show;
+		// see upsample.go. Other layouts are repeated, through YCbCrAt.
+		if cb, cr, ok := fancyChroma(src); ok {
+			i := 0
+			for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+				for x := bounds.Min.X; x < bounds.Max.X; x++ {
+					c := color.YCbCr{Y: src.Y[src.YOffset(x, y)], Cb: cb[i], Cr: cr[i]}
+					i++
+					if keepYCbCr {
+						out = append(out, c.Y, c.Cb, c.Cr)
+						continue
+					}
+					r, g, b, _ := c.RGBA()
+					out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+				}
+			}
+			return out
+		}
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
 				if keepYCbCr {

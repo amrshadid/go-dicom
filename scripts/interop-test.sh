@@ -2632,9 +2632,9 @@ fi
 # Frame 1 of each corpus image pydicom can decode is rendered as PNG and held
 # against pydicom. Grayscale: pydicom's Modality LUT and VOI LUT with the same
 # window, which has to agree within one level of 255. Color: pydicom's pixels
-# in RGB, within two levels, except JPEG with chroma subsampled, where two
-# decoders upsample the chroma differently at color edges and only the mean
-# difference is held to three.
+# in RGB, within two levels, JPEG with chroma subsampled included: its chroma
+# is filtered as libjpeg filters it (#398), where it was repeated and differed
+# from pydicom's by up to 75 at a color edge.
 # ---------------------------------------------------------------------------
 if python3 -c "import pydicom, numpy, PIL" >/dev/null 2>&1; then
   note "DICOMweb: rendered frames held against pydicom's windowing"
@@ -2668,12 +2668,11 @@ def request(url, accept=None, data=None, content_type=None):
     except urllib.error.HTTPError as e:
         return e.code, e.headers.get("Content-Type", ""), e.read()
 
-gray = color = edged = 0
+gray = color = 0
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
         ds = pydicom.dcmread(os.path.join(corpus, name))
         n = int(ds.get("NumberOfFrames", 1) or 1)
-        syntax = ds.file_meta.TransferSyntaxUID
         array = ds.pixel_array
     except Exception:
         continue  # not read, or no decoder for it here: nothing to hold the picture to
@@ -2723,15 +2722,13 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         if photometric in ("YBR_FULL", "YBR_FULL_422") and not ALREADY_RGB:
             rgb = convert_color_space(frame, "YBR_FULL", "RGB")
         diff = numpy.abs(mine - rgb.astype(numpy.int16))
-        subsampled = syntax in ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51") and photometric.startswith("YBR")
-        if mine.shape != rgb.shape or (diff.max() > 2 and not (subsampled and diff.mean() <= 3)):
+        if mine.shape != rgb.shape or diff.max() > 2:
             sys.exit("%s: the rendered frame differs from pydicom's pixels by up to %d" % (name, diff.max()))
         color += 1
-        edged += diff.max() > 2
 if gray < 10 or color < 10:
     sys.exit("only %d grayscale and %d color frames compared" % (gray, color))
-print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels "
-      "(%d JPEG with chroma subsampled within a mean of three)" % (gray, color, edged))
+print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels"
+      % (gray, color))
 PY
     ); then
       pass "qrscp -web rendered — $rendered"
