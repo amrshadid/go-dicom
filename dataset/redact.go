@@ -57,6 +57,9 @@ func (ds *Dataset) redact(frame int, regions []PixelRegion) error {
 		return fmt.Errorf("redact: %w", err)
 	}
 	if compression, encapsulated := ds.pixelCompression(stored, info); encapsulated {
+		if compression == "" {
+			return fmt.Errorf("redact: %w", ds.undecodedSyntax())
+		}
 		return fmt.Errorf("redact: the pixel data is compressed (%s); "+
 			"it has to be decompressed before a region of it can be filled", compression)
 	}

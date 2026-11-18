@@ -10,12 +10,13 @@
 //
 // With -rle, -jpeg2000, -jpeg-lossless or -jpeg-lossless-sv1 the pixel data is
 // re-encoded on the way out, as RLE Lossless, JPEG 2000 Lossless or lossless
-// JPEG (.57 or .70), which exercises an encoder this library has. Another
-// toolkit reading the result is the only way to know the encoder is right
-// rather than merely self-consistent. With -jpeg-extended Q it is coded as JPEG
-// Extended at quality Q.
+// JPEG (.57 or .70), which exercises an encoder this library has. With
+// -jpegls-near N it is coded as JPEG-LS Near-Lossless with an allowed error of
+// N, and with -jpeg-extended Q as JPEG Extended at quality Q. Another toolkit
+// reading the result is the only way to know the encoder is right rather than
+// merely self-consistent.
 //
-// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpeg-extended Q]
+// Usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N|-jpeg-extended Q]
 // <source dir> <output dir>
 package main
 
@@ -46,6 +47,11 @@ func main() {
 			target, args = network.JPEGLosslessProcess14UID, args[1:]
 		case "-jpeg-lossless-sv1":
 			target, args = network.JPEGLosslessSV1UID, args[1:]
+		case "-jpegls-near":
+			if len(args) > 1 {
+				near, _ = strconv.Atoi(args[1])
+				target, args = network.JPEGLSNearLosslessUID, args[2:]
+			}
 		case "-jpeg-extended":
 			if len(args) > 1 {
 				quality, _ = strconv.Atoi(args[1])
@@ -54,7 +60,7 @@ func main() {
 		}
 	}
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpeg-extended Q] "+
+		fmt.Fprintln(os.Stderr, "usage: roundtrip-check [-rle|-jpeg2000|-jpeg-lossless|-jpeg-lossless-sv1|-jpegls-near N|-jpeg-extended Q] "+
 			"<source dir> <output dir>")
 		os.Exit(2)
 	}
@@ -75,8 +81,12 @@ func main() {
 	fmt.Printf("wrote %d, skipped %d\n", written, failed)
 }
 
-// quality is the JPEG quality for -jpeg-extended.
-var quality int
+// near is the allowed error for -jpegls-near, and quality the JPEG quality
+// for -jpeg-extended.
+var (
+	near    int
+	quality int
+)
 
 func roundTrip(in, out, target string) (err error) {
 	defer func() {
@@ -102,7 +112,16 @@ func roundTrip(in, out, target string) (err error) {
 	}
 
 	ds := df.GetDataset()
-	if target == network.JPEGExtendedUID {
+	if target == network.JPEGLSNearLosslessUID {
+		// The data set's own method, which is what a send uses with
+		// NetworkConfig.JPEGLSNear; EncodeDataset allows no error.
+		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {
+			if err := ds.CompressJPEGLSNearLosslessInPlace(near); err != nil {
+				return fmt.Errorf("encode as %s: %w", target, err)
+			}
+			ts = target
+		}
+	} else if target == network.JPEGExtendedUID {
 		// The data set's own method, which is what a send uses with
 		// NetworkConfig.JPEGQuality; EncodeDataset accepts no loss.
 		if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); hasPixels {

@@ -19,9 +19,13 @@ import (
 //
 // # Scope
 //
-// Lossless only, NEAR=0. Near-lossless encoding is a different rate decision — how
-// much error to accept — and belongs to the caller rather than being chosen here.
-// The decoder reads both.
+// Lossless, NEAR=0, and near-lossless, NEAR>0, with the allowed error chosen by
+// the caller: how much error to accept is a decision about the image, not one to
+// make here. With NEAR>0 each error is quantized to a multiple of 2*NEAR+1 and
+// every later prediction is made from the reconstructed samples, the ones a
+// decoder will hold, not from the originals (T.87 A.4.4). An encoder that
+// predicted from the originals would drift from its decoder by up to NEAR a
+// sample, and the drift would compound.
 //
 // Components are coded non-interleaved (ILV=0), one scan each, which is what
 // T.87 B.2.3 defines for separate planes and what keeps the encoder a single loop
@@ -46,7 +50,8 @@ type jpeglsEncoder struct {
 	cur  []int32
 }
 
-// EncodeJPEGLS encodes samples as a lossless JPEG-LS frame.
+// EncodeJPEGLS encodes samples as a lossless JPEG-LS frame. It is
+// EncodeJPEGLSNearLossless with NEAR 0.
 //
 // samples holds the components interleaved per pixel, width*height pixels in
 // raster order, each 16-bit sample little endian — the layout DICOM native pixel
@@ -56,6 +61,17 @@ type jpeglsEncoder struct {
 // The result is a complete JPEG-LS codestream: SOI, SOF55, one SOS per component,
 // EOI. It is what goes in an encapsulated pixel data fragment.
 func EncodeJPEGLS(samples []byte, width, height, components, bitsStored int) ([]byte, error) {
+	return EncodeJPEGLSNearLossless(samples, width, height, components, bitsStored, 0)
+}
+
+// EncodeJPEGLSNearLossless encodes samples as a JPEG-LS frame in which every
+// sample decodes to within near of its value: the allowed error NEAR of ITU-T
+// T.87. Zero is lossless. The samples and the result are as EncodeJPEGLS has
+// them; the scan headers carry near, which is all a decoder needs to know.
+//
+// near runs from 0 to the smaller of 255 and half the largest sample value
+// bitsStored can hold (T.87 C.2.4.1).
+func EncodeJPEGLSNearLossless(samples []byte, width, height, components, bitsStored, near int) ([]byte, error) {
 	if width <= 0 || height <= 0 {
 		return nil, fmt.Errorf("jpegls: %dx%d is not an image", width, height)
 	}
@@ -79,7 +95,12 @@ func EncodeJPEGLS(samples []byte, width, height, components, bitsStored int) ([]
 			"%d component(s) at %d bits", len(samples), want, width, height, components, bitsStored)
 	}
 
-	params := &jpeglsParams{maxVal: (1 << bitsStored) - 1, near: 0}
+	maxVal := (1 << bitsStored) - 1
+	if near < 0 || near > min(255, maxVal/2) {
+		return nil, fmt.Errorf("jpegls: NEAR %d is outside the 0 to %d T.87 allows at %d bits",
+			near, min(255, maxVal/2), bitsStored)
+	}
+	params := &jpeglsParams{maxVal: maxVal, near: near}
 	params.computeDefaults(false)
 
 	out := make([]byte, 0, len(samples)/2+64)
@@ -89,7 +110,7 @@ func EncodeJPEGLS(samples []byte, width, height, components, bitsStored int) ([]
 	// One scan per component. Each is coded independently, which is what ILV=0
 	// means, so a flat channel cannot lend its run state to a busy one.
 	for c := 0; c < components; c++ {
-		out = appendJPEGLSScanHeader(out, c)
+		out = appendJPEGLSScanHeader(out, c, near)
 
 		plane := extractPlane(samples, width, height, components, c, bytesPerSample)
 
@@ -207,9 +228,13 @@ func (e *jpeglsEncoder) encodeRow(y, width int) error {
 			continue
 		}
 
-		if err := e.encodeRegular(e.cur[x], ra, rb, rc, d1, d2, d3); err != nil {
+		reconstructed, err := e.encodeRegular(e.cur[x], ra, rb, rc, d1, d2, d3)
+		if err != nil {
 			return fmt.Errorf("at row %d column %d: %w", y, x-1, err)
 		}
+		// What the decoder will hold, which the samples after this one are
+		// predicted from. The sample itself when NEAR is 0.
+		e.cur[x] = reconstructed
 		x++
 	}
 	return nil
@@ -221,11 +246,12 @@ func (e *jpeglsEncoder) isFlat(d1, d2, d3 int32) bool {
 	return abs32(d1) <= near && abs32(d2) <= near && abs32(d3) <= near
 }
 
-// encodeRegular codes one sample in regular mode, T.87 A.4 through A.6.
+// encodeRegular codes one sample in regular mode, T.87 A.4 through A.6, and
+// returns the value the decoder will reconstruct for it.
 //
 // Every step is the decoder's in reverse, in the same order, because the context
 // update depends on the error and the error mapping depends on the context.
-func (e *jpeglsEncoder) encodeRegular(sample, ra, rb, rc, d1, d2, d3 int32) error {
+func (e *jpeglsEncoder) encodeRegular(sample, ra, rb, rc, d1, d2, d3 int32) (int32, error) {
 	q1 := e.params.quantize(d1)
 	q2 := e.params.quantize(d2)
 	q3 := e.params.quantize(d3)
@@ -237,14 +263,14 @@ func (e *jpeglsEncoder) encodeRegular(sample, ra, rb, rc, d1, d2, d3 int32) erro
 		sign = -1
 	}
 	if q >= runContextBase {
-		return fmt.Errorf("jpegls: context %d is outside the %d the standard defines", q, runContextBase)
+		return 0, fmt.Errorf("jpegls: context %d is outside the %d the standard defines", q, runContextBase)
 	}
 	ctx := &e.contexts[q]
 
 	px := medianPredict(ra, rb, rc)
 	px = clamp32(px+sign*ctx.c, 0, int32(e.params.maxVal))
 
-	errval := sign * (sample - px)
+	errval := e.quantizeError(sign * (sample - px))
 
 	// The error is reduced modulo the range, so a prediction that lands far from
 	// the sample still costs a bounded number of bits. This is on the error, not
@@ -280,7 +306,30 @@ func (e *jpeglsEncoder) encodeRegular(sample, ra, rb, rc, d1, d2, d3 int32) erro
 
 	e.writer.writeGolomb(mErrval, k, e.params.limit, e.params.qbpp)
 	e.updateContext(ctx, errval)
-	return nil
+	return e.reconstruct(px + sign*errval*int32(2*e.params.near+1)), nil
+}
+
+// quantizeError maps a prediction error to the multiple of 2*NEAR+1 nearest
+// it, counted in those multiples, T.87 A.4.4. Rounding half away from zero
+// keeps every reconstructed sample within NEAR of its value. With NEAR 0 the
+// error is unchanged.
+func (e *jpeglsEncoder) quantizeError(errval int32) int32 {
+	near := int32(e.params.near)
+	if near == 0 {
+		return errval
+	}
+	if errval > 0 {
+		return (errval + near) / (2*near + 1)
+	}
+	return -(near - errval) / (2*near + 1)
+}
+
+// reconstruct is the decoder's: a value carried past either end of the range
+// by the modulo reduction is folded back, then clamped. The encoder takes its
+// reconstructed samples from the same function, so the two cannot differ about
+// the edges of the range.
+func (e *jpeglsEncoder) reconstruct(value int32) int32 {
+	return (&jpeglsDecoder{params: e.params}).reconstruct(value)
 }
 
 // updateContext is the decoder's, unchanged. Both sides must fold the error into
@@ -333,9 +382,13 @@ func (e *jpeglsEncoder) updateContext(ctx *jpeglsContext, errval int32) {
 func (e *jpeglsEncoder) encodeRun(x, width int, ra int32) (int, error) {
 	remaining := width - x + 1
 
-	// How far the run actually goes, bounded by the line.
+	// How far the run actually goes, bounded by the line: every sample within
+	// NEAR of the run value, each of which decodes to the run value (T.87
+	// A.7.1).
+	near := int32(e.params.near)
 	runLength := 0
-	for runLength < remaining && e.cur[x+runLength] == ra {
+	for runLength < remaining && abs32(e.cur[x+runLength]-ra) <= near {
+		e.cur[x+runLength] = ra
 		runLength++
 	}
 
@@ -371,9 +424,11 @@ func (e *jpeglsEncoder) encodeRun(x, width int, ra int32) (int, error) {
 	}
 
 	// The sample that broke the run.
-	if err := e.encodeRunInterruption(e.cur[x+count], ra, e.prev[x+count]); err != nil {
+	reconstructed, err := e.encodeRunInterruption(e.cur[x+count], ra, e.prev[x+count])
+	if err != nil {
 		return 0, err
 	}
+	e.cur[x+count] = reconstructed
 	e.decrementRunIndex()
 	return count + 1, nil
 }
@@ -382,8 +437,9 @@ func (e *jpeglsEncoder) encodeRun(x, width int, ra int32) (int, error) {
 //
 // The mirror of decodeRunInterruption, including the two things its comments warn
 // about: which of the two reserved contexts applies, and the sign convention whose
-// second half reads as 2*nn >= n rather than <.
-func (e *jpeglsEncoder) encodeRunInterruption(sample, ra, rb int32) error {
+// second half reads as 2*nn >= n rather than <. It returns the value the decoder
+// will reconstruct for the sample.
+func (e *jpeglsEncoder) encodeRunInterruption(sample, ra, rb int32) (int32, error) {
 	riType := 0
 	if abs32(ra-rb) <= int32(e.params.near) {
 		riType = 1
@@ -407,9 +463,11 @@ func (e *jpeglsEncoder) encodeRunInterruption(sample, ra, rb int32) error {
 	// A run interrupted against a smaller neighbor is coded with its error
 	// negated so both directions share one set of statistics. The decoder undoes
 	// this after the mapping, so the encoder applies it before.
-	if riType == 0 && ra > rb {
+	negated := riType == 0 && ra > rb
+	if negated {
 		errval = -errval
 	}
+	errval = e.quantizeError(errval)
 
 	// Reduced modulo the range, as in regular mode. Without this a 16-bit sample
 	// predicted from zero gives an error near 65536, whose mapped value needs 17
@@ -469,7 +527,11 @@ func (e *jpeglsEncoder) encodeRunInterruption(sample, ra, rb int32) error {
 	}
 	ctx.n++
 
-	return nil
+	// The decoder un-negates the error it read, then reconstructs.
+	if negated {
+		errval = -errval
+	}
+	return e.reconstruct(px + errval*int32(2*e.params.near+1)), nil
 }
 
 // decrementRunIndex is the decoder's, T.87 A.7.1.2.
@@ -531,20 +593,28 @@ func (w *jpeglsBitWriter) emitFullBytes() {
 //
 // Zeros rather than ones: a trailing run of ones could form the first half of a
 // marker, and the decoder reads a set high bit after 0xFF as the end of the scan.
+//
+// For the same reason a segment may not end on 0xFF: the byte after it has to
+// be one with its high bit clear, and the marker that follows the scan is
+// 0xFF. A stream whose last byte was 0xFF ended, for CharLS and libjpeg, one
+// byte early, and the last samples of the frame decoded wrong; this library's
+// own decoder reads zeros past the end and did not notice. A zero byte after
+// it is the stuffed byte the decoder expects, and carries no data.
 func (w *jpeglsBitWriter) flush() {
-	if w.n == 0 {
-		return
+	if w.n > 0 {
+		width := uint(8)
+		if len(w.out) > 0 && w.out[len(w.out)-1] == 0xFF {
+			width = 7
+		}
+		for w.n < width {
+			w.bits <<= 1
+			w.n++
+		}
+		w.emitFullBytes()
 	}
-
-	width := uint(8)
 	if len(w.out) > 0 && w.out[len(w.out)-1] == 0xFF {
-		width = 7
+		w.out = append(w.out, 0x00)
 	}
-	for w.n < width {
-		w.bits <<= 1
-		w.n++
-	}
-	w.emitFullBytes()
 }
 
 func (w *jpeglsBitWriter) bytes() []byte { return w.out }
@@ -602,7 +672,7 @@ func appendJPEGLSFrameHeader(out []byte, width, height, components, bitsStored i
 }
 
 // appendJPEGLSScanHeader appends an SOS segment for one component, T.87 C.3.
-func appendJPEGLSScanHeader(out []byte, comp int) []byte {
+func appendJPEGLSScanHeader(out []byte, comp, near int) []byte {
 	out = appendMarker(out, markerSOS)
 
 	// Length 8: the two length bytes, the component count, one component's two
@@ -610,7 +680,7 @@ func appendJPEGLSScanHeader(out []byte, comp int) []byte {
 	out = append(out, 0x00, 0x08)
 	out = append(out, 0x01)               // one component in this scan
 	out = append(out, byte(comp+1), 0x00) // its identifier, no mapping table
-	out = append(out, 0x00)               // NEAR: lossless
+	out = append(out, byte(near))         // NEAR, 0 for lossless
 	out = append(out, 0x00)               // ILV: non-interleaved
 	out = append(out, 0x00)               // point transform
 	return out
