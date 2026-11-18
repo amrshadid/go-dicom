@@ -16,6 +16,9 @@
 //   - show: Display DICOM file contents
 //   - info: Get file information and statistics
 //   - convert: Convert DICOM files to different formats
+//   - compress, decompress: Write a file in another transfer syntax: RLE,
+//     JPEG-LS and JPEG 2000 lossless, JPEG Baseline when given a quality, or
+//     native
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation

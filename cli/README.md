@@ -30,6 +30,8 @@ go-dicom show patient.dcm --full             # The table with whole values, not 
 go-dicom show patient.dcm --json             # Every element with its byte offsets in the file
 go-dicom info -verbose -stats patient.dcm    # File metadata
 go-dicom convert patient.dcm output.json     # Convert to JSON
+go-dicom compress -syntax rle ct.dcm ct-rle.dcm   # Also jpeg-ls, jpeg2000; jpeg -quality 90 is lossy
+go-dicom decompress ct-rle.dcm ct.dcm        # Native pixel data
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
 go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom anonymize -redact 0,0,640,40 us.dcm clean.dcm   # Black out burned-in text
