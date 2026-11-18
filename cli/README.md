@@ -30,6 +30,10 @@ go-dicom show patient.dcm --full             # The table with whole values, not 
 go-dicom show patient.dcm --json             # Every element with its byte offsets in the file
 go-dicom info -verbose -stats patient.dcm    # File metadata
 go-dicom convert patient.dcm output.json     # Convert to JSON
+go-dicom convert patient.dcm dicom.json --format dicom-json   # DICOM JSON, which create reads back
+go-dicom create dicom.json patient-copy.dcm  # A file from DICOM JSON
+go-dicom create -template ct.dcm screen.png sc.dcm   # A Secondary Capture in the CT's study
+go-dicom create -patient-id 123 report.pdf report.dcm  # An Encapsulated PDF
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
 go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom anonymize -redact 0,0,640,40 us.dcm clean.dcm   # Black out burned-in text

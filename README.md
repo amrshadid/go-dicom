@@ -32,7 +32,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 21 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
+- **CLI tools** — 22 commands: file inspection and conversion (`show`, `info`, `convert`, `codify`, `tag-doc`), making a file (`create`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -301,6 +301,9 @@ go build -o go-dicom .
 ./go-dicom convert patient.dcm out.json  # Convert to JSON, CSV or NIfTI
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
+./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
+./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF
+./go-dicom create -template ct.dcm report.pdf report.dcm     # An Encapsulated PDF in the CT's study
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
 ./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at

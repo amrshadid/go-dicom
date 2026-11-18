@@ -16,6 +16,8 @@
 //   - show: Display DICOM file contents
 //   - info: Get file information and statistics
 //   - convert: Convert DICOM files to different formats
+//   - create: Make a DICOM file from DICOM JSON, a PNG or JPEG picture (a
+//     Secondary Capture), or a PDF (an Encapsulated PDF)
 //   - help: Display help information
 //   - version: Display version information
 //   - tagdoc: Look up DICOM tag documentation
