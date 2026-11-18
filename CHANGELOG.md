@@ -44,6 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequences, each item indented under its sequence. There is no command
   for UPS, for MPPS or for serving a worklist.
 
+- **A rendered image goes through its lookup tables** (#334). `RenderFrame`,
+  and so `convert --format png|jpeg`, `share` and the burned-in text
+  detector, applied Rescale Slope and Intercept and a window and nothing
+  else. An image whose Modality LUT or VOI LUT is a table came out as a
+  straight ramp, or black, and one marked Presentation LUT Shape INVERSE the
+  wrong way round. It now applies the Modality LUT Sequence, the VOI LUT
+  Sequence (chosen over a window when a file has both, as pydicom does;
+  `--window` still wins), Presentation LUT Shape and the Presentation LUT
+  Sequence (PS3.3 C.11). No file in pydicom's corpus has any of these, so
+  `scripts/render-lut-fixture.py` writes seven that do, with pydicom's
+  picture of each: every pixel is equal. dcmtk's `dcm2pnm` agrees within 1
+  on the six it applies; it leaves a Presentation LUT Sequence in an image
+  alone. The 59 corpus files that rendered before render to the same bytes.
+  An ICC profile is still not applied.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every

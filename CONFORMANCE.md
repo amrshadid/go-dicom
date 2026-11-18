@@ -511,14 +511,24 @@ how decoded samples are shaped and coloured, and the one tolerance.
   with the attribute, not despite it.
 
 - **`RenderFrame` renders for display, within what it knows.** It applies the
-  sign of the samples, Rescale Slope and Intercept, a window (LINEAR,
-  LINEAR_EXACT or SIGMOID) or the range of the data, MONOCHROME1 inversion,
-  the YBR to RGB conversion and the Palette Color tables, at 8 bits. It does
-  not apply a VOI LUT Sequence, a Modality LUT Sequence, a Presentation LUT or
-  an ICC profile, and it refuses 64-bit samples and segmented palettes by
-  name. `go-dicom convert --format png|jpeg` is the same
-  rendering. Grayscale output is checked against pydicom, and color against
-  the lossless copy of the same picture.
+  sign of the samples, the Modality LUT Sequence or Rescale Slope and
+  Intercept, the VOI LUT Sequence or a window (LINEAR, LINEAR_EXACT or
+  SIGMOID) or the range of the data, the Presentation LUT Sequence or
+  Presentation LUT Shape, MONOCHROME1 inversion, the YBR to RGB conversion
+  and the Palette Color tables, at 8 bits (PS3.3 C.11). Where a data set has
+  both a VOI LUT Sequence and a window, which C.11.2 leaves to the viewer, the
+  table is used, as pydicom does; a caller's window wins over both.
+  Presentation LUT Shape decides the inversion when it is present, so
+  MONOCHROME1 with INVERSE is inverted once, as dcmtk does. A Presentation LUT
+  Sequence takes the VOI output range as its input range (C.11.4.1); pydicom
+  scales by the image's lowest and highest values instead, which agrees when
+  the image reaches both ends. It does not apply an ICC Profile (C.11.15):
+  color is not color managed. It refuses 64-bit samples, segmented palettes
+  and a Presentation LUT Shape other than IDENTITY or INVERSE by name.
+  `go-dicom convert --format png|jpeg` is the same rendering. Grayscale
+  output is checked against pydicom, the lookup tables on generated files
+  since no corpus file has one, and color against the lossless copy of the
+  same picture.
 
 ### 8.2 Network
 
