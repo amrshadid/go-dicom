@@ -491,8 +491,15 @@ how decoded samples are shaped and coloured, and the one tolerance.
 
 - **JPEG 2000 decodes in pure Go**, `.90` and `.91`, both wavelets, 1 to 16 bits,
   signed or unsigned, single or multi component, any number of tiles and quality
-  layers, with the reversible and irreversible component transforms. There is no
-  CGO and nothing to register.
+  layers, in all five progression orders, with the default precincts or the
+  coding style's own, and with the reversible and irreversible component
+  transforms. There is no CGO and nothing to register.
+
+  pydicom's corpus uses only the defaults, so what it does not exercise is
+  checked against OpenJPEG instead: `opj_compress` writes a codestream with the
+  feature, `opj_decompress` decodes it, and this decoder must return the same
+  samples, at 8, 12 and 16 bits, signed and unsigned, gray and color, tiled and
+  not, reversible and irreversible (`TestDecodeMatchesOpenJPEG`, run in CI).
 
   A reversible codestream is required to match pydicom sample for sample. An
   irreversible one is held to a tolerance of one up to 12 bits and two at 16:
@@ -510,9 +517,6 @@ how decoded samples are shaped and coloured, and the one tolerance.
   refused with an `ErrUnsupported` that names it, quoted here as the error
   reads (ITU-T T.800 clauses in brackets):
 
-  - the RPCL, PCRL and CPRL progression orders: `progression order 2`, `3`
-    and `4` [A.6.1, B.12.1.3–B.12.1.5]. LRCP and RLCP decode;
-  - user-defined precinct sizes: `user-defined precinct sizes` [A.6.1, B.6];
   - every code-block style option, alone or combined: `code-block style 0x..`
     with the style byte in hex [A.6.1 Table A.19, D.5–D.7]. They are selective
     arithmetic coding bypass (`0x01`), reset of context probabilities (`0x02`),

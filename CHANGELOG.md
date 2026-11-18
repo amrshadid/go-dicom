@@ -290,6 +290,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written in either syntax to the samples that went in, and the
   interoperability suite has dcmtk check it.
 
+- **JPEG 2000 in every progression order, with any precincts** (#346).
+  The decoder read only LRCP and RLCP with one precinct per resolution, and
+  refused the RPCL, PCRL and CPRL orders and a coding style with its own
+  precinct sizes. RPCL with precincts is a common encoder default, so a file
+  written for resolution or spatial access could not be displayed without
+  an external decoder. All five orders and user-defined precincts now
+  decode. OpenJPEG returns the same samples on 95 codestreams across depths,
+  signs, component counts, tiles, image offsets, layers and both wavelets,
+  and CI checks it on every push.
+  A codestream that declares a one-sample precinct above the lowest
+  resolution is refused, as T.800 A.6.1 requires and as OpenJPEG does.
+  `opj_compress -c` writes one when the precinct list runs out too soon.
+
 ### Changed
 
 - **`info` no longer holds the image to print a few lines.** It read every
@@ -357,12 +370,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its body being read. A body within its bound is allocated as its bytes
   arrive, so memory follows what a peer has sent: a P-DATA-TF stating
   128 MiB and sending 1 MiB costs 3 MiB.
+
 - **The conformance statement names every JPEG 2000 feature the decoder
   refuses** (#340). §8.1 listed five, and the decoder refuses more: three of
   the five progression orders (RPCL, PCRL, CPRL), a region of interest,
   predictable termination, components deeper than 16 bits and a JP2 box with
   a 64-bit length. A reader expecting an RPCL file to decode would have been
   told nothing. Each is now one line, with the error text a caller sees.
+
 - **The irreversible JPEG 2000 tolerance is stated as measured** (#360). The
   statement gave one sample against another decoder. Against OpenJPEG that
   holds up to 12 bits; at 16 bits OpenJPEG lands up to two away, and this
