@@ -248,6 +248,10 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 
 	assoc := NewAssociation(transport)
+	// A panic below, which is to say in a handler, ends this association and
+	// nothing else. Deferred after Close so that it runs first, while there
+	// is still a connection to send the A-ABORT on.
+	defer s.recoverAssociation(assoc)
 
 	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
 	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).

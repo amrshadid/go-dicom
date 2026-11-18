@@ -165,6 +165,11 @@
 // identity negotiation is in use. Set SCPConfig.MaxAssociations to bound
 // concurrency on an exposed server.
 //
+// A panic in a handler ends the association it happened on, with an A-ABORT
+// and its stack in the log, and nothing else: the server and its other
+// associations go on. A panic in an event handler is logged and passed over.
+// Goroutines a handler starts itself are its own to guard.
+//
 // Decoders reject input that would otherwise exhaust memory: PDU lengths are
 // capped at [MaxPDULengthLimit], deflated data sets at
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
