@@ -52,16 +52,9 @@ func (ds *Dataset) CompressJPEGBaselineInPlace(quality int) error {
 
 	// The decoded image, described as decoded, on a copy when decoding is
 	// needed so that a refusal below leaves the caller's data set alone.
-	source := ds
-	if stored, err := extractBytesValue(elem); err == nil {
-		if info, err := ds.GetPixelDataInfo(); err == nil {
-			if _, encapsulated := ds.pixelCompression(stored, info); encapsulated {
-				source = ds.Clone()
-				if err := source.DecompressInPlace(); err != nil {
-					return fmt.Errorf("compress: %w", err)
-				}
-			}
-		}
+	source, err := ds.decodedForCompression(elem)
+	if err != nil {
+		return err
 	}
 	info, err := source.GetPixelDataInfo()
 	if err != nil {

@@ -117,6 +117,41 @@ func TestValidateRegex(t *testing.T) {
 	}
 }
 
+// TestTimeAndDateTimeForms holds TM and DT to the forms of PS3.5 Table 6.2-1.
+// TM's fractional seconds were refused, so a correct "120000.5" failed; DT
+// had no check, so anything passed (#356).
+func TestTimeAndDateTimeForms(t *testing.T) {
+	for _, c := range []struct {
+		vr, value string
+		valid     bool
+	}{
+		{"TM", "12", true},
+		{"TM", "1230", true},
+		{"TM", "123000", true},
+		{"TM", "123000.5", true},
+		{"TM", "235959.123456", true},
+		{"TM", "235960", true}, // a leap second
+		{"TM", "120000.1234567", false},
+		{"TM", "1200.5", false}, // a fraction needs the seconds
+		{"TM", "120000.", false},
+		{"TM", "246000", false},
+		{"TM", "12:00:00", false},
+		{"DT", "2023", true},
+		{"DT", "20230115", true},
+		{"DT", "20230115123000.123456", true},
+		{"DT", "20230115123000+0100", true},
+		{"DT", "202301151230-0500", true},
+		{"DT", "garbage", false},
+		{"DT", "20231315", false},
+		{"DT", "20230115123000.1234567", false},
+		{"DT", "20230115+01", false},
+	} {
+		if valid, msg := valuerep.ValidateRegex(c.vr, c.value); valid != c.valid {
+			t.Errorf("%s %q: valid = %v, want %v (%s)", c.vr, c.value, valid, c.valid, msg)
+		}
+	}
+}
+
 func TestValidateValue(t *testing.T) {
 	tests := []struct {
 		vrCode      string

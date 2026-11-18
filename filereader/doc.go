@@ -232,6 +232,13 @@
 //		fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
 //	}
 //
+// GetDataset gives a skipped value as nothing. GetDatasetWithValuesInFile
+// gives it as a dataelem.ValueInFile, where its bytes are, and filewriter,
+// given the file with SetValueSource, copies them from there as it writes:
+// a data set can be changed and written back without its pixels in memory,
+// byte for byte as if it had been read whole. A deflated file is refused,
+// since its values are not in the file.
+//
 // ### DICOMFile.FrameRanges
 //
 //	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)

@@ -531,20 +531,28 @@ func (w *jpeglsBitWriter) emitFullBytes() {
 //
 // Zeros rather than ones: a trailing run of ones could form the first half of a
 // marker, and the decoder reads a set high bit after 0xFF as the end of the scan.
+//
+// For the same reason a segment may not end on 0xFF: the byte after it has to
+// be one with its high bit clear, and the marker that follows the scan is
+// 0xFF. A stream whose last byte was 0xFF ended, for CharLS and libjpeg, one
+// byte early, and the last samples of the frame decoded wrong; this library's
+// own decoder reads zeros past the end and did not notice. A zero byte after
+// it is the stuffed byte the decoder expects, and carries no data.
 func (w *jpeglsBitWriter) flush() {
-	if w.n == 0 {
-		return
+	if w.n > 0 {
+		width := uint(8)
+		if len(w.out) > 0 && w.out[len(w.out)-1] == 0xFF {
+			width = 7
+		}
+		for w.n < width {
+			w.bits <<= 1
+			w.n++
+		}
+		w.emitFullBytes()
 	}
-
-	width := uint(8)
 	if len(w.out) > 0 && w.out[len(w.out)-1] == 0xFF {
-		width = 7
+		w.out = append(w.out, 0x00)
 	}
-	for w.n < width {
-		w.bits <<= 1
-		w.n++
-	}
-	w.emitFullBytes()
 }
 
 func (w *jpeglsBitWriter) bytes() []byte { return w.out }

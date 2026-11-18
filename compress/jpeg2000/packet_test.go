@@ -82,3 +82,50 @@ func TestSegmentLengthFieldGrows(t *testing.T) {
 		t.Errorf("lblock = %d, want 5", b.lblock)
 	}
 }
+
+// TestProgressionVolumesCarryEachPacketOnce drives the packet walk with
+// progression order changes whose volumes overlap, and requires B.12.2's
+// rule: each packet appears once, in the first volume that covers it, in
+// that volume's order. OpenJPEG cannot check this. Its encoder writes
+// overlapping volumes so that skipping or not makes no difference to what is
+// read, so the walk is checked here, packet by packet.
+func TestProgressionVolumesCarryEachPacketOnce(t *testing.T) {
+	// Two components, two resolutions, one precinct each, three layers.
+	var precincts []tilePrecinct
+	for r := 0; r < 2; r++ {
+		for c := 0; c < 2; c++ {
+			precincts = append(precincts, tilePrecinct{component: c, resolution: r, index: len(precincts)})
+		}
+	}
+	style := CodingStyle{Progression: ProgressionLRCP, Layers: 3}
+	changes := []ProgressionChange{
+		// Component 0, layers 0 and 1, resolution first.
+		{ResolutionStart: 0, ResolutionEnd: 2, ComponentStart: 0, ComponentEnd: 1, LayerEnd: 2, Progression: ProgressionRLCP},
+		// Everything, layer first: component 0's first two layers are done.
+		{ResolutionStart: 0, ResolutionEnd: 33, ComponentStart: 0, ComponentEnd: 256, LayerEnd: 3, Progression: ProgressionLRCP},
+	}
+	var got []packetStep
+	if err := forEachPacket(style, changes, precincts, 1000, func(s packetStep) (bool, error) {
+		got = append(got, s)
+		return true, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// As (layer, resolution, component, precinct).
+	want := []packetStep{
+		// The first volume: RLCP over component 0.
+		{0, 0, 0, 0}, {1, 0, 0, 0}, {0, 1, 0, 0}, {1, 1, 0, 0},
+		// The second: LRCP over everything, less what the first carried.
+		{0, 0, 1, 0}, {0, 1, 1, 0},
+		{1, 0, 1, 0}, {1, 1, 1, 0},
+		{2, 0, 0, 0}, {2, 0, 1, 0}, {2, 1, 0, 0}, {2, 1, 1, 0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%d packets, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("packet %d is %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

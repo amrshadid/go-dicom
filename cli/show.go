@@ -97,7 +97,7 @@ func (sc *ShowCommand) Execute(args []string) error {
 	// One element asked for by name is asked for whole. The table is read in
 	// a terminal and prints the start of a long value unless told --full.
 	whole := sc.full || sc.element != ""
-	elements, err := readDICOMElements(sc.filespec, true, whole)
+	elements, err := readDICOMElements(sc.filespec, listing{skipBulk: true, metaGroupLength: true, whole: whole})
 	if err != nil {
 		return fmt.Errorf("show: failed to read DICOM file: %v", err)
 	}
