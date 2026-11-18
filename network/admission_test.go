@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -266,8 +267,18 @@ func TestRefusedCallerIsNotNegotiated(t *testing.T) {
 	if got := (AssociationRejection{rj.Result, rj.Source, rj.Reason}); got != *RejectCallingAE() {
 		t.Fatalf("refused with %s", got)
 	}
-	if next, err := transport.ReadPDU(ctx); err == nil {
+	// Closed by the SCP, and at once: the read ends because the connection
+	// did, not because this test stopped waiting. Its own deadline used to
+	// count as success, so an SCP that never closed passed.
+	closeCtx, cancelClose := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelClose()
+	next, err := transport.ReadPDU(closeCtx)
+	if err == nil {
 		t.Fatalf("after the A-ASSOCIATE-RJ the SCP sent %T; it should have closed the connection", next)
+	}
+	var timeout *TimeoutError
+	if errors.As(err, &timeout) || errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, io.EOF) {
+		t.Fatalf("2s after the A-ASSOCIATE-RJ the connection is still open: %v", err)
 	}
 	// The refusal is reported once it is written; by then an acceptance
 	// would have been reported too.
@@ -291,11 +302,11 @@ func TestNoAdmitChangesNothing(t *testing.T) {
 	}
 }
 
-// TestAdmitDecidesTheCalledAE: with a function set the SCP does not refuse a
-// called AE title by itself, so one SCP can answer to several; the function
+// TestAdmitDecidesTheCalledAE: with AcceptAnyCalledAE the SCP does not refuse
+// a called AE title by itself, so one SCP can answer to several; the function
 // refuses the titles it does not answer to.
 func TestAdmitDecidesTheCalledAE(t *testing.T) {
-	addr, _ := admitServer(t, SCPConfig{Admit: func(_ context.Context, req *AssociationRequest) *AssociationRejection {
+	addr, _ := admitServer(t, SCPConfig{AcceptAnyCalledAE: true, Admit: func(_ context.Context, req *AssociationRequest) *AssociationRejection {
 		switch req.CalledAE {
 		case "TENANT_A", "TENANT_B":
 			return nil

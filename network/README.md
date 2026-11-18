@@ -143,9 +143,6 @@ known := map[string]bool{"CT_SCANNER": true, "MR_SCANNER": true}
 scp := network.NewSCP(network.SCPConfig{
     AETitle: "ARCHIVE", Port: 11112,
     Admit: func(ctx context.Context, req *network.AssociationRequest) *network.AssociationRejection {
-        if req.CalledAE != "ARCHIVE" {
-            return network.RejectCalledAE()
-        }
         if !known[req.CallingAE] {
             return network.RejectCallingAE()
         }
@@ -154,12 +151,26 @@ scp := network.NewSCP(network.SCPConfig{
 })
 ```
 
-With `Admit` set, the SCP no longer refuses a called AE title other than its
-own by itself, so one SCP can answer to several; refuse the ones it should
-not answer to, as above. A calling AE title is whatever the caller sends: to
-admit by identity, use mutual TLS and check `req.VerifiedChains`. The function
-has `ARTIMTimeout` to answer, after which the caller is refused as busy, and a
-panic in it refuses the caller without stopping the server.
+The SCP still checks the called AE title itself: a caller the function admits
+is refused when it asked for a title other than `AETitle`, so a function added
+only to log or to filter by address does not open the SCP to every title. Set
+`AcceptAnyCalledAE` for one SCP to answer to several, and have the function
+refuse the titles it should not answer to with `RejectCalledAE`.
+
+The function is asked only about well-formed AE titles (PS3.5 6.2), and is given
+them without their leading and trailing spaces. A request whose calling or
+called title holds a control character, a backslash or a byte outside the
+default repertoire, or is nothing but spaces, is refused by the SCP before the
+function is asked. Case is kept as sent.
+
+A calling AE title is whatever the caller sends: to admit by identity, use
+mutual TLS and check `req.VerifiedChains`, which holds a certificate only when
+the handshake verified it, or check `req.UserIdentity`, the request's User
+Identity Negotiation item, which the SCP passes on unchecked. The function has
+`ARTIMTimeout` to answer, after which the caller is refused as busy; the caller
+also has `ARTIMTimeout` to send its request, so a connection can be held for up
+to twice that. A panic in the function refuses the caller without stopping the
+server.
 
 ## Handler Patterns
 

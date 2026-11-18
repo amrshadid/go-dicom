@@ -19,13 +19,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificate chains. It admits the caller, or refuses it with the result,
   source and reason it chose from PS3.8 Table 9-21, and a refused caller
   learns nothing of what the SCP supports. dcmtk's `echoscu` and `storescu`
-  and pynetdicom print the refusal as it was chosen. When set, it decides the
-  called AE title too, so one SCP can answer to several. It has the ARTIM
-  timer to answer, and a panic in it refuses that caller without taking the
-  server down. Unset, nothing changes.
+  and pynetdicom print the refusal as it was chosen. It is asked only about
+  well-formed AE titles (PS3.5 6.2), given without their padding: a request
+  whose calling or called title holds a control character, a backslash or a
+  byte outside the default repertoire, or is all spaces, is refused before
+  it is asked. It is also given the request's User Identity Negotiation
+  item, unchecked. The SCP goes on checking the called AE title
+  itself, so a function that only observes does not open the SCP to every
+  title; `SCPConfig.AcceptAnyCalledAE` leaves the title to the function, so
+  one SCP can answer to several. It has the ARTIM timer to answer, and a
+  panic in it refuses that caller without taking the server down. Unset,
+  nothing changes.
 - **`EVTAssocRejected` says why.** Its `Description` names the result, source
   and reason of the A-ASSOCIATE-RJ. It was empty, so `LoggingEventHandlers`
   logged "Association rejected: SCU -> SCP: " with nothing after the colon.
+
+### Fixed
+
+- **An AE title padded on the left is the same title.** Leading and
+  trailing spaces of the calling and called AE titles are both
+  non-significant (PS3.8 Table 9-11), and only the trailing ones were
+  removed: a caller asking for `"  ARCHIVE"` was refused as asking for
+  another title, and a handler was told the calling title with its spaces.
 
 ## [1.10.0] - 2026-11-17
 

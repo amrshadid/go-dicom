@@ -136,3 +136,38 @@ print("%s|%s|%s" % (rj.result_str, rj.source_str, rj.reason_str))
 }
 
 func itoa(b byte) string { return strconv.Itoa(int(b)) }
+
+// TestDcmtkIsRefusedAnotherCalledAE: an admission function that admits
+// everyone does not make the SCP answer to every title. echoscu asking for
+// the SCP's own title is admitted and its C-ECHO answered; asking for another
+// it is told the called AE title is not recognized, and with
+// AcceptAnyCalledAE it is admitted under that title too.
+func TestDcmtkIsRefusedAnotherCalledAE(t *testing.T) {
+	echoscu := dcmtkTool(t, "echoscu")
+	admitAll := func(context.Context, *network.AssociationRequest) *network.AssociationRejection { return nil }
+	for _, c := range []struct {
+		anyCalled bool
+		called    string
+		admitted  bool
+	}{
+		{false, "ARCHIVE", true},
+		{false, "OTHER", false},
+		{true, "OTHER", true},
+	} {
+		server, err := network.StartServer(context.Background(), network.SCPConfig{AETitle: "ARCHIVE", Port: 0,
+			BindAddress: "127.0.0.1", Admit: admitAll, AcceptAnyCalledAE: c.anyCalled}, &network.EchoHandler{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		host, port, _ := strings.Cut(server.Addr(), ":")
+		out, err := exec.Command(echoscu, "-v", "-aet", "SCANNER", "-aec", c.called, host, port).CombinedOutput()
+		server.Stop()
+		text := string(out)
+		if c.admitted && (err != nil || !strings.Contains(text, "Received Echo Response (Success)")) {
+			t.Errorf("AcceptAnyCalledAE %v, called %s: echoscu was not answered: %v\n%s", c.anyCalled, c.called, err, text)
+		}
+		if !c.admitted && (err == nil || !strings.Contains(text, "Reason: Called AE Title Not Recognized")) {
+			t.Errorf("AcceptAnyCalledAE %v, called %s: echoscu printed:\n%s", c.anyCalled, c.called, text)
+		}
+	}
+}

@@ -31,9 +31,11 @@ const (
 // connection comes from. Nothing has been negotiated yet.
 type AssociationRequest struct {
 	// CallingAE is the AE title the caller gave for itself, and CalledAE the
-	// one it asked for, both without their padding. Either can be anything
-	// the caller chose to send: over plain TCP neither is proof of who is
-	// calling.
+	// one it asked for, both without their leading and trailing spaces and
+	// both well formed (PS3.5 6.2); a request where either is not never
+	// reaches Admit. Case is as sent: "prisma1" is not "PRISMA1". Either can
+	// be anything the caller chose to send: over plain TCP neither is proof
+	// of who is calling.
 	CallingAE string
 	CalledAE  string
 
@@ -41,10 +43,21 @@ type AssociationRequest struct {
 	RemoteAddr net.Addr
 	LocalAddr  net.Addr
 
-	// VerifiedChains are the caller's certificate chains as TLS verified them
-	// against TLSConfig.CAFile, leaf first. They are nil over plain TCP, and
-	// over TLS when the server does not ask for a client certificate.
+	// VerifiedChains are the caller's certificate chains as the TLS handshake
+	// verified them, leaf first: against TLSConfig.CAFile, or against the
+	// ClientCAs of a TLSConfig.Config the server was given. They are nil over
+	// plain TCP, over TLS when the server does not ask for a client
+	// certificate, and when it asks for one without verifying it
+	// (tls.RequestClientCert, tls.RequireAnyClientCert): a certificate that
+	// was presented and not verified is never here.
 	VerifiedChains [][]*x509.Certificate
+
+	// UserIdentity is the User Identity Negotiation item of the request
+	// (PS3.7 D.3.3.7), nil when the caller sent none. The SCP does not check
+	// it: a user name, a password, a Kerberos ticket, a SAML assertion or a
+	// JSON Web Token is the function's to verify. SecondaryField holds the
+	// password in clear, so neither field belongs in a log.
+	UserIdentity *UserIdentityNegotiation
 }
 
 // AssociationRejection is the A-ASSOCIATE-RJ an SCP sends to refuse an
@@ -160,17 +173,61 @@ var (
 // A-ASSOCIATE-RQ has been read.
 func associationRequest(transport *Transport, rq *AssociateRQ) *AssociationRequest {
 	req := &AssociationRequest{
-		CallingAE:  rq.CallingAE,
-		CalledAE:   rq.CalledAE,
-		RemoteAddr: transport.RemoteAddr(),
-		LocalAddr:  transport.LocalAddr(),
+		CallingAE:    rq.CallingAE,
+		CalledAE:     rq.CalledAE,
+		RemoteAddr:   transport.RemoteAddr(),
+		LocalAddr:    transport.LocalAddr(),
+		UserIdentity: rq.UserInformation.UserIdentity,
 	}
 	// The handshake is over by now: it ran on the first read, which was the
-	// A-ASSOCIATE-RQ's.
+	// A-ASSOCIATE-RQ's. VerifiedChains, never PeerCertificates: those are
+	// whatever the caller presented, verified or not.
 	if conn, ok := transport.conn.(*tls.Conn); ok {
 		req.VerifiedChains = conn.ConnectionState().VerifiedChains
 	}
 	return req
+}
+
+// decideAdmission returns the refusal to answer an A-ASSOCIATE-RQ with, or nil
+// to go on to negotiate. It is everything that decides who may associate, and
+// runs before anything is negotiated.
+//
+// Without an admission function the called AE title must be this SCP's own,
+// as it always has. With one: a request whose AE titles are not well formed
+// is refused without the function being asked; then the function decides; and
+// a caller it admits must still have asked for this SCP's title unless
+// AcceptAnyCalledAE leaves that to the function. The function is asked before
+// the called title is compared, so that a caller it refuses is told the same
+// thing whichever title it asked for.
+func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *AssociateRQ) *AssociationRejection {
+	if s.config.Admit == nil {
+		if rq.CalledAE != s.config.AETitle {
+			return RejectCalledAE()
+		}
+		return nil
+	}
+
+	req := associationRequest(transport, rq)
+	var wellFormed bool
+	if req.CallingAE, wellFormed = cleanAETitle(rq.CallingAE); !wellFormed {
+		DefaultLogger.Info("refusing %s: its calling AE title %q is not an AE title (PS3.5 6.2)", req.RemoteAddr, rq.CallingAE)
+		return RejectCallingAE()
+	}
+	if req.CalledAE, wellFormed = cleanAETitle(rq.CalledAE); !wellFormed {
+		DefaultLogger.Info("refusing %q from %s: the called AE title %q is not an AE title (PS3.5 6.2)",
+			req.CallingAE, req.RemoteAddr, rq.CalledAE)
+		return RejectCalledAE()
+	}
+
+	if r := s.admit(ctx, req); r != nil {
+		return r
+	}
+	if !s.config.AcceptAnyCalledAE && req.CalledAE != s.config.AETitle {
+		DefaultLogger.Info("refusing %q from %s: it called %q, and this SCP answers to %q",
+			req.CallingAE, req.RemoteAddr, req.CalledAE, s.config.AETitle)
+		return RejectCalledAE()
+	}
+	return nil
 }
 
 // admit asks the configured function whether to admit a caller, and returns
@@ -183,17 +240,18 @@ func associationRequest(transport *Transport, rq *AssociateRQ) *AssociationReque
 // ignores that holds only its own goroutine, until it returns. A panic in it
 // is recovered there, so it refuses the association and does not take the
 // server down.
-func (s *SCP) admit(ctx context.Context, req *AssociationRequest) *AssociationRejection {
+func (s *SCP) admit(parent context.Context, req *AssociationRequest) *AssociationRejection {
 	decide := s.config.Admit
 	if decide == nil {
 		return nil
 	}
 
+	var ctx context.Context
 	var cancel context.CancelFunc
 	if timeout := s.config.Network.ARTIMTimeout; timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+		ctx, cancel = context.WithTimeout(parent, timeout)
 	} else {
-		ctx, cancel = context.WithCancel(ctx)
+		ctx, cancel = context.WithCancel(parent)
 	}
 	defer cancel()
 
@@ -233,9 +291,16 @@ func (s *SCP) admit(ctx context.Context, req *AssociationRequest) *AssociationRe
 		DefaultLogger.Info("refusing %q calling %q from %s: %s", req.CallingAE, req.CalledAE, req.RemoteAddr, r)
 		return &r
 	case <-ctx.Done():
+		r := rejectAfterTimeout
+		if parent.Err() != nil {
+			// The server is stopping, which is not the function being slow:
+			// it was logged as "did not answer within 30s" a moment after
+			// the request arrived.
+			DefaultLogger.Debug("refusing %q from %s: the server is stopping", req.CallingAE, req.RemoteAddr)
+			return &r
+		}
 		DefaultLogger.Warn("refusing %q from %s: the admission function did not answer within %v",
 			req.CallingAE, req.RemoteAddr, s.config.Network.ARTIMTimeout)
-		r := rejectAfterTimeout
 		return &r
 	}
 }

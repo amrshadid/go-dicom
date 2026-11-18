@@ -275,17 +275,10 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	}
 
 	// Who may associate is decided before anything is negotiated, so a caller
-	// that is refused learns nothing of what this SCP supports. A configured
-	// function decides the called AE title as well; without one the title
-	// must be this SCP's own.
-	if s.config.Admit != nil {
-		if r := s.admit(ctx, associationRequest(transport, rq)); r != nil {
-			_ = assoc.RejectAssociation(ctx, r.Result, r.Source, r.Reason)
-			return
-		}
-	} else if rq.CalledAE != s.config.AETitle {
-		_ = assoc.RejectAssociation(ctx, RJResultRejectedPermanent, RJSourceServiceUser,
-			RJReasonCalledAETitleNotRecognized)
+	// that is refused learns nothing of what this SCP supports, and the
+	// connection is closed behind the refusal.
+	if r := s.decideAdmission(ctx, transport, rq); r != nil {
+		_ = assoc.RejectAssociation(ctx, r.Result, r.Source, r.Reason)
 		return
 	}
 
