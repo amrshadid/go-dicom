@@ -11,7 +11,7 @@ import (
 func TestShowListsTheMetaGroupLength(t *testing.T) {
 	path := writeInstance(t, t.TempDir(), "a.dcm", "1.2.840.10008.5.1.4.1.1.2", "1.2.271.1", "1.2.840.10008.1.2.1", nil)
 
-	elements, err := readDICOMElements(path, true, false)
+	elements, err := readDICOMElements(path, listing{skipBulk: true, metaGroupLength: true})
 	if err != nil {
 		t.Fatal(err)
 	}

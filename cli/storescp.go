@@ -19,6 +19,7 @@ import (
 type StoreSCPCommand struct {
 	tls       tlsFlags
 	events    eventsFlag
+	allow     allowFlag
 	aeTitle   string
 	port      int
 	outputDir string
@@ -30,6 +31,7 @@ func (c *StoreSCPCommand) Description() string { return "DICOM Store SCP (receiv
 func (c *StoreSCPCommand) AddFlags(fs *flag.FlagSet) {
 	addServerTLSFlags(fs, &c.tls)
 	c.events.add(fs)
+	c.allow.add(fs)
 	fs.StringVar(&c.aeTitle, "aet", "STORESCP", "AE title")
 	fs.IntVar(&c.port, "port", 11112, "Listen port")
 	fs.StringVar(&c.outputDir, "output", ".", "Output directory for received files")
@@ -61,6 +63,7 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 		Events:  events,
 		AETitle: c.aeTitle,
 		Port:    c.port,
+		Admit:   c.allow.admission(printRefusal),
 	})
 
 	// Accept compressed pixel data as well as the four uncompressed syntaxes the
@@ -116,6 +119,9 @@ func (c *StoreSCPCommand) Execute(args []string) error {
 	fmt.Printf("  AE Title: %s\n", c.aeTitle)
 	fmt.Printf("  Port:     %d\n", c.port)
 	fmt.Printf("  Output:   %s\n", c.outputDir)
+	if allowed := c.allow.describe(); allowed != "" {
+		fmt.Printf("  Allow:    %s\n", allowed)
+	}
 	fmt.Println("Listening for associations... (Ctrl+C to stop)")
 
 	if err := scp.ListenAndServe(ctx); err != nil && ctx.Err() == nil {

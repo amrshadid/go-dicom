@@ -59,6 +59,11 @@ func ValueBytes(vr VR, value any) ([]byte, error) {
 		return attributeTags(vr, []tag.Tag{v})
 	case []tag.Tag:
 		return attributeTags(vr, v)
+	case ValueInFile:
+		// The bytes are in a file this function cannot see. Rendering the
+		// reference as nothing would send or write an empty image that
+		// looks complete.
+		return nil, fmt.Errorf("the value is not in memory: %s; only filewriter, given that file, can write it", v)
 	}
 
 	numbers, ok := numericValues(value)

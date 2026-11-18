@@ -9,6 +9,246 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`show --json` and the `-events` log have a written contract.** Two other
+  programs read them, and what `schemaVersion` 1 promised was written nowhere.
+  `docs/show-json.md` and `docs/events.md` say what each property means and
+  what a version number covers, and `docs/show-json.schema.json` and
+  `docs/events.schema.json` are JSON Schemas for them. The tests check the
+  output of every corpus file, and of real associations over TCP, against the
+  schemas, and fail on a property the schemas do not describe. Nothing the
+  commands print changed. The `-events` lines carry no `schemaVersion`; the
+  document says so and what a future one would mean.
+
+- **Media Creation Management and the two event logging classes are
+  verified against a peer** (#370). CONFORMANCE §8.5 said they "still have
+  no test against a peer": they had UID constants and presentation context
+  helpers, and no message of theirs had reached another implementation.
+  Each is now run against pynetdicom in both directions by
+  `scripts/interop-test.sh`. Media Creation goes through N-CREATE with a
+  Referenced SOP Sequence, N-ACTION to initiate and N-GET of the Execution
+  Status. Procedural Event Logging and Substance Administration Logging go
+  through N-ACTION to their well-known instances. Each side reports what it
+  read. Writing them found two defects in the N-DIMSE primitives, #379 and
+  #380, which are recorded separately.
+
+- **`findscu -worklist` queries a Modality Worklist** (#389). A worklist
+  could be reached only by naming its UID with `-sop-class`, and that query
+  was the patient hierarchy's: it sent a Query/Retrieve Level, which Basic
+  Worklist does not have and dcmtk's `wlmscpfs` reports as unsupported, sent
+  none of the worklist keys, and printed only top-level values, so the
+  scheduled step, which is held in a sequence, was not shown. `-worklist`
+  sends the keys a modality asks for (PS3.4 Table K.6-1), the Scheduled
+  Procedure Step Sequence among them, with `-modality`, `-date` (a date, a
+  range or `today`) and `-station-aet` matched inside it. Naming the model
+  by UID now sends the same query. Every `findscu` answer prints its
+  sequences, each item indented under its sequence. There is no command
+  for UPS, for MPPS or for serving a worklist.
+
+- **A rendered image goes through its lookup tables** (#334). `RenderFrame`,
+  and so `convert --format png|jpeg`, `share` and the burned-in text
+  detector, applied Rescale Slope and Intercept and a window and nothing
+  else. An image whose Modality LUT or VOI LUT is a table came out as a
+  straight ramp, or black, and one marked Presentation LUT Shape INVERSE the
+  wrong way round. It now applies the Modality LUT Sequence, the VOI LUT
+  Sequence (chosen over a window when a file has both, as pydicom does;
+  `--window` still wins), Presentation LUT Shape and the Presentation LUT
+  Sequence (PS3.3 C.11). No file in pydicom's corpus has any of these, so
+  `scripts/render-lut-fixture.py` writes seven that do, with pydicom's
+  picture of each: every pixel is equal. dcmtk's `dcm2pnm` agrees within 1
+  on the six it applies; it leaves a Presentation LUT Sequence in an image
+  alone. The 59 corpus files that rendered before render to the same bytes.
+  An ICC profile is still not applied.
+
+- **Pages for readers coming from pydicom and from dcmtk** (#391). The README
+  was the only manual, and nothing said what `dcmread`, `pixel_array`,
+  `dcmdump` or `dcm2pnm` are called here. `docs/coming-from-pydicom.md` and
+  `docs/coming-from-dcmtk.md` map each familiar call and command to its
+  equivalent, and say where there is none; `docs/examples.md` shows the
+  common jobs as command lines and as Go. Every Go sample is an `Example`
+  function in `examples/commonjobs`, run and checked by `go test`, and
+  every command line was run on a file from pydicom's corpus before it was
+  written down.
+
+- **`diff` compares two files** (#329). Every check of a file against its
+  anonymized or recompressed copy was a throwaway script, and `show` of each
+  followed by `diff(1)` is unreadable: the offsets move when the elements do
+  not. `go-dicom diff a.dcm b.dcm` compares the file meta group and the data
+  set element by element, into sequences and items, and prints the elements
+  only one file has and those whose VR or value differ (nothing when there is
+  none), or with `--json` a document with `schemaVersion` 1. The exit status
+  is the answer, as in `diff(1)`: 0 equal, 1 different, 2 the comparison could
+  not be made. Bulk values are read from the two files in chunks and never
+  held whole, and report the byte they first differ at; a value is compared
+  as what it means, so padding, a character set and the byte order of a number
+  or of pixel words do not make files differ. `--ignore` (a tag or keyword,
+  at every depth), `--ignore-meta` and `--ignore-private` leave elements out.
+  `cli.ExitError` lets a command choose its exit status; the others still end
+  with 1.
+
+- **An SCP can refuse a caller before anything is negotiated** (#316). An SCP
+  accepted every association that reached its port, whatever the calling AE
+  title and wherever it came from; a handler learned who was calling only
+  after the association was accepted, and could do no more than fail each
+  message. `SCPConfig.Admit` is called once per association, after the
+  A-ASSOCIATE-RQ is read and before it is answered, with the calling and
+  called AE titles, the remote address and, over TLS, the verified
+  certificate chains. It admits the caller, or refuses it with the result,
+  source and reason it chose from PS3.8 Table 9-21, and a refused caller
+  learns nothing of what the SCP supports. dcmtk's `echoscu` and `storescu`
+  and pynetdicom print the refusal as it was chosen. It is asked only about
+  well-formed AE titles (PS3.5 6.2), given without their padding: a request
+  whose calling or called title holds a control character, a backslash or a
+  byte outside the default repertoire, or is all spaces, is refused before
+  it is asked. It is also given the request's User Identity Negotiation
+  item, unchecked. The SCP goes on checking the called AE title
+  itself, so a function that only observes does not open the SCP to every
+  title; `SCPConfig.AcceptAnyCalledAE` leaves the title to the function, so
+  one SCP can answer to several. It has the ARTIM timer to answer, and a
+  panic in it refuses that caller without taking the server down. Unset,
+  nothing changes.
+
+- **`EVTAssocRejected` says why.** Its `Description` names the result, source
+  and reason of the A-ASSOCIATE-RJ. It was empty, so `LoggingEventHandlers`
+  logged "Association rejected: SCU -> SCP: " with nothing after the colon.
+
+- **`storescp` and `qrscp` admit only the callers they are given** (#351).
+  Both answered anyone who reached the port and named their AE title.
+  `-allow` takes calling AE titles, and IP addresses or CIDR ranges, comma
+  separated and repeatable, and hands them to `SCPConfig.Admit`. With both
+  kinds a caller needs a listed title and a listed address. Any other caller
+  is refused before anything is negotiated: an unlisted title as
+  calling-AE-title-not-recognized, which dcmtk's `echoscu` prints as `Reason:
+  Calling AE Title Not Recognized`, and an unlisted address with no reason
+  given, since PS3.8 Table 9-21 has none for an address. The server prints
+  its list when it starts and a line for each caller it refuses. A host name
+  is not resolved. `-allow` covers DIMSE only: `qrscp -web` has its own
+  token.
+
+- **A C-STORE SCP can take the data set as a stream** (#317). `HandleCStore`
+  is given a decoded data set, which the SCP built by holding every
+  fragment of the message in memory and then decoding it: memory grew with
+  the instance, once for the bytes and again for the values, and a handler
+  that wrote a file wrote this library's encoding of the data set rather
+  than what the peer sent. A handler that also implements `CStoreStreamer`
+  is given the command, the transfer syntax of its presentation context,
+  and an `io.Reader` over the data set's bytes exactly as received, read
+  from the association as the handler reads. A 1 GiB instance is received
+  with the heap under 15 MiB, where `HandleCStore` peaks at 278 MiB for an
+  eighth of that, and a slow handler slows the peer through TCP.
+  `WriteCStoreFile` writes the stream as a Part 10 file, File Meta
+  Information built from the command and then the bytes untouched; dcmtk's
+  `dcmdump` and pydicom read the files, and their data sets are what
+  `storescu` and pynetdicom sent, byte for byte, for implicit and explicit
+  little endian and RLE. `MaxDataSetSize` still applies, counted as the
+  bytes pass. A handler that does not implement it is served as before.
+  A data set that does not arrive whole ends the read with an error that is
+  `io.ErrUnexpectedEOF` and never `io.EOF`, by `==` or by `errors.Is`,
+  whatever cut it short: a connection the peer closes reports an error that
+  wraps `io.EOF`, and a handler testing for the end with `errors.Is` would
+  have kept a truncated file as the instance. `WriteCStoreFile` checks the
+  UIDs the peer put in the command (PS3.5 9.1) before it writes anything and
+  refuses with `ErrInvalidSOPInstanceUID` or `ErrInvalidStoreCommand`, and
+  leaves out an AE title that is not one. A C-STORE-RQ that says no data set
+  follows is refused with 0xC000 without the handler being called.
+  `CompositeHandler` passes the stream to a store handler that implements
+  `CStoreStreamer`.
+
+- `CStoreRequest` carries the command's Priority, Move Originator AE Title
+  and Move Originator Message ID to the handler, whichever way it takes the
+  store. `HandleCStore` was given none of them.
+
+- `filewriter.EncodeFileHeader` returns the preamble, `DICM` and File Meta
+  Information that come before a data set, for a writer that has the data
+  set encoded already.
+
+- **`dicomdir` writes and lists a DICOMDIR** (#348). `fileset.WriteDICOMDIR`
+  and `ReadDICOMDIR` existed, and indexing a directory still meant writing a
+  program. `go-dicom dicomdir <directory>` writes the DICOMDIR of the DICOM
+  files under it, and `dicomdir --list <DICOMDIR or directory>` prints one as
+  a tree, or as JSON with `schemaVersion` 1. A File ID is at most eight
+  components of at most eight characters from A-Z, 0-9 and `_` (PS3.10 8.5),
+  which `ct.dcm` is not: the command refuses by name, every such file at
+  once, and writes nothing. It never renames. `--copy-to <new directory>`
+  copies the files there as `DICOM/IM000001` onward and indexes the copies.
+  A data set without the file meta information of Part 10 is left out and
+  named, as is anything that is not DICOM; an existing DICOMDIR is replaced
+  only with `--force`. `fileset.ValidFileID` exports the File ID check.
+
+- **`sr` prints a structured report as a document** (#359). The `sr` package
+  reads a content tree and no command printed one; `show` gives the flat
+  element list, which does not read as a report. `go-dicom sr file.dcm` prints
+  a header and then the content items as an indented tree: relationship, value
+  type, concept name and value, with a number's unit, a code's scheme, dates
+  and times written as people read them, the SOP class and instance an
+  IMAGE, WAVEFORM or COMPOSITE item points at (frames, segments, channels and
+  presentation state too), spatial and temporal coordinates, and an item that
+  only refers to another as `-> 1.2.3`. `--json` gives the same tree with each
+  item's position and `schemaVersion` 1. Compared with dcmtk's `dsrdump` on
+  the three reports of the pydicom corpus and one more with what they lack:
+  the same nodes in the same order with the same values.
+
+- **A data set can be written back without its pixels in memory** (#331).
+  `filereader.DICOMFile.GetDatasetWithValuesInFile` gives a file read with
+  `ReadOptions.SkipBulkData` as a data set whose skipped values say where
+  they are (`dataelem.ValueInFile`), and `filewriter`'s `SetValueSource`
+  copies them from that file as each element is written, a megabyte at a
+  time, swapping byte order when the target's differs. The file is the one a
+  whole read writes, lengths, sequences and encapsulated fragments included:
+  across pydicom's corpus, 151 writes in 11 transfer syntaxes are identical
+  byte for byte. A deflated file is refused by name, since its values are
+  not in the file; an element whose value is in the file, written with no
+  source, is an error and never an empty value, and `dataelem.ValueBytes`,
+  and with it the network encoder, refuses one too.
+
+- **An instance is checked against what its SOP class requires** (#383).
+  Nothing in the library knew what a CT must hold: a CT with no Modality,
+  Patient ID or study and series UIDs, and Bits Stored 99, was read, shown
+  and sent without a word. Package `validate` and `go-dicom validate` check
+  an instance against its IOD: the modules PS3.3 Annex A gives it, and in
+  each one that is Mandatory or present, every attribute's Type, its value
+  multiplicity, its Enumerated Values (an error) and Defined Terms (a
+  warning), and the number of items of a sequence, into sequences at any
+  depth. Each finding names the tag, the path through the sequences, the
+  module, the rule and the section of PS3.3 it is in. The tables are
+  generated from the standard's own XML, PS3.3 and PS3.4 2026d, by
+  `scripts/iod-tables.py`: 153 IODs and 528 module and macro tables, for 164
+  Storage SOP classes, and none of it is typed by hand. Conditions are prose
+  in PS3.3, and none is evaluated: a Conditional module, an absent Type 1C
+  or 2C attribute, and a macro included under a condition are reported as
+  not checked, with the condition, never passed. That CT gets its eight
+  errors and nothing else; across pydicom's corpus 71 files are checked and
+  the rest are refused by name for having no SOP Class UID. `--json` gives
+  the findings to a program, and the exit status is 3 for errors and 2 for
+  warnings. No other validator was at hand to compare with, so five corpus
+  files were compared with the standard by hand.
+
+- **`modify` sets, inserts and deletes attributes of a file** (#332). The
+  library could change a data set and write it back in any syntax, and no
+  command reached it, so fixing a patient name meant writing Go or reaching
+  for `dcmodify`. `-set` changes what is there, `-insert` creates what is
+  not, with the sequences and items on its path, and `-delete` removes an
+  attribute or an item; paths are dcmodify's, by keyword or tag:
+  `ReferencedSeriesSequence[0].SeriesInstanceUID`, `[*]` for every item. A
+  private attribute is named with its creator, `(0029,xx10,"ACME 1.0")`,
+  and an insert reserves the block. Every value is checked against its VR
+  and multiplicity before anything is written. The transfer syntax is kept
+  and the pixel data copied as read; a new SOP Instance UID only with
+  `-new-uid`; the input is changed only with `-in-place`. Checked against
+  pydicom making the same edits over pydicom's corpus: identical, element by
+  element, in 73 of the 77 files either reads; the other four are files the
+  reader already treats differently (two truncated values it drops, two
+  private sequences in an implicit VR file, #354).
+
+- **A data set is compressed to RLE Lossless and JPEG-LS Lossless in place**
+  (#363). Both were written only when a network send needed them, by code in
+  the network package, so a file could be written in neither.
+  `Dataset.CompressRLELosslessInPlace` and
+  `Dataset.CompressJPEGLSLosslessInPlace` sit beside the JPEG 2000 and JPEG
+  Baseline methods, and the network now uses them: one coder for a file and
+  a send. dcmtk (`dcmdrle`, and `dcmdjpls`, which is CharLS) and pydicom's
+  decoders return the samples coded for every image of pydicom's corpus that
+  can be written in each: 56 as RLE, 48 as JPEG-LS.
+
 - **`compress` and `decompress` write a file in another transfer syntax**
   (#390). The library's four coders and its decoders had no command, so
   this meant writing Go or using dcmtk. `compress -syntax rle|jpeg-ls|
@@ -22,24 +262,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every lossless output to the source's samples (RLE 47, JPEG-LS 47, JPEG
   2000 44 by pydicom), and the 16 JPEG outputs to within 2 of each other.
 
-- **A data set is compressed to RLE Lossless and JPEG-LS Lossless in place**
-  (#363). Both were written only when a network send needed them, by code in
-  the network package, so a file could be written in neither.
-  `Dataset.CompressRLELosslessInPlace` and
-  `Dataset.CompressJPEGLSLosslessInPlace` sit beside the JPEG 2000 and JPEG
-  Baseline methods, and the network now uses them: one coder for a file and
-  a send. dcmtk (`dcmdrle`, and `dcmdjpls`, which is CharLS) and pydicom's
-  decoders return the samples coded for every image of pydicom's corpus that
-  can be written in each: 56 as RLE, 48 as JPEG-LS.
+### Changed
+
+- **`info` no longer holds the image to print a few lines.** It read every
+  value of the file, Pixel Data included, so a 200 MB image took 218 MB of
+  memory to print the patient, the modality and the dimensions. Bulk values
+  now stay in the file, as they have for `show` since 1.9.1: the same file
+  takes 17 MB. What `info` prints does not change, including the sizes of
+  `--stats` and `--verbose`, which count the bytes in the file (#328).
+
+- **`info` prints the frames, and the image's own size and patient.** It read
+  Number of Frames from (0020,1209), so a multi-frame file never got a
+  `Frames:` line. And it took the last match of every key element, items of
+  sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
+  for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
+  its own. Only the data set's own elements are read now (#335).
+
+- **`anonymize` no longer holds the image in memory** (#331). A file was read
+  whole, Pixel Data included, to change a few hundred bytes of text, so
+  memory followed the size of the image: 220 MB for a 200 MB CT, and a
+  whole-slide image of several gigabytes could not be de-identified on a
+  small machine. Unless `-redact` is given, the pixels now stay in the input
+  and are copied into the output as it is written: the same CT takes 20 MB,
+  as a 39 KB one does. The output is the same, byte for byte, as before:
+  checked over every file of pydicom's corpus under every profile, with the
+  pixels left in the file and with every binary value left there.
+
+- **`convert --format png` and `jpeg` hold one picture at a time** (#331).
+  Every frame asked for was rendered before the first was written, and each
+  was encoded into memory before its file was made: a hundred frames of a
+  megapixel took 418 MB, and a 200 MB image of noise took 482 MB to become
+  one PNG of 100 MB. Each frame is now rendered, encoded straight into its
+  file and let go before the next: 223 MB and 321 MB, with the same pictures,
+  byte for byte, over every file of pydicom's corpus. The files are written
+  under temporary names and take theirs together, so a failure still leaves
+  none of them. `Dataset.RenderEachFrame` is the new call that hands frames
+  over one at a time. What is left is the image itself: the whole Pixel Data
+  is read, and one frame of a multi-frame image still costs every frame,
+  since the renderer reads samples from one slice and finds the range of an
+  image with no window across all frames.
 
 ### Fixed
 
-- **A native 4:2:2 image sent as RLE or JPEG-LS was still called
-  YBR_FULL_422** (#363). Its chroma was expanded to every pixel before
-  coding, and a receiver believing the description expected half of it. It
-  is YBR_FULL now, with Planar Configuration 0 for any color image. A
-  JPEG-LS send of 8 bits stored in 16 allocated was refused, and so was one
-  whose samples used the bits above Bits Stored; both are coded exactly.
+- **A server at its association limit says it is full** (#318). A caller
+  over `SCPConfig.MaxAssociations` was refused from the service-user with
+  reason 2, which from that source is "application context name not
+  supported": dcmtk's `echoscu` printed `Reason: App Context Name Not
+  Supported`, a misconfiguration on the caller's side, when the server was
+  only busy. The refusal now comes from the service-provider (presentation
+  related function), and reason 2 from there is local-limit-exceeded
+  (PS3.8 Table 9-21). It is still transient, so a caller tries again.
 
 - **Six bytes no longer buy 128 MiB of a server's memory** (#323). A PDU's
   body was allocated from the length in its header before any of it had
@@ -57,6 +329,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its body being read. A body within its bound is allocated as its bytes
   arrive, so memory follows what a peer has sent: a P-DATA-TF stating
   128 MiB and sending 1 MiB costs 3 MiB.
+
+- **A panic in a handler ends its association, not the server** (#325).
+  Nothing in `network` recovered from a panic. A handler is the
+  application's code, called on a goroutine the SCP started, so a nil map
+  or an index out of range in one, reached by a single instance from a
+  single peer, ended the process: the listener and every other association
+  in progress. A panic in a DIMSE handler, including the streamed C-FIND,
+  C-GET and C-MOVE handlers that run on a goroutine of their own, is now
+  logged with its stack, the peer is sent an A-ABORT (service-provider,
+  reason-not-specified), and that association's slot is given back; the
+  associations beside it go on and the next caller is served. No status is
+  sent for the message in progress, since how far it got is not known. A
+  panic in an event handler is logged and the handlers registered after it
+  are still called.
+
+- **The JPEG 2000 decoder is checked against OpenJPEG in CI** (#322). The
+  interoperability check that decodes an OpenJPEG codestream built its
+  fixture with numpy, which the CI venv does not have, and reported that as
+  a skip, so it never ran. Where it did run, the fixture was wrong:
+  OpenJPEG's PGX reader takes the precision from the largest sample, so
+  `MR_small.dcm` was encoded signed 12-bit and every sample over 2047
+  clipped. The fixture is now built from the data set's own samples with
+  the depth stated, OpenJPEG must say 16 bits and return the original before
+  the decoder is asked, a fixture that cannot be built fails, and the job
+  fails if the check did not pass. The decoder itself was right.
+
+- **An N-service response's data set is read with it** (#379).
+  `SCU.NCreate`, `NSet`, `NAction` and `NEventReport` read the response's
+  command and stopped. When the peer sent a data set after it, as PS3.7
+  10.1 lets it for each of them, the data set stayed on the association
+  and the next operation read it as its own response. Against pynetdicom
+  as an MPPS SCP that returns the attribute list on N-CREATE, the N-SET
+  that reports the step complete panicked. Where the stray data set
+  decoded as a command, the status read from it was usually 0, so a
+  failure was reported as success. Each response is now read whole, by its
+  message ID, as the C-services read theirs. Its data set is in the
+  response's `DataSet`, which was always nil, and a response that does not
+  decode is an error. The SCP still drops the data set a handler returns
+  (#399).
+
+- **An HTJ2K or JPEG XL image is refused by name, not read as samples or
+  sent as them** (#404). Pixel data in a syntax with no decoder here was
+  taken for native. `storescu` sent pydicom-data's HTJ2K file to dcmtk's
+  `storescp` as Explicit VR Little Endian with its fragments as the pixels,
+  and both sides reported success; rendering and redacting refused with a
+  count of bytes, or, where the fragments were longer than the image,
+  rendered codestream bytes and wrote black into them. Encapsulated pixel
+  data in High-Throughput JPEG 2000 (`.201`, `.202`, `.203`) or JPEG XL
+  (`.110`, `.111`, `.112`), or any other syntax without a decoder, is now
+  refused by `RenderFrame`, `PixelArray*`, `DecompressInPlace`, redaction
+  and the network transcoder with the syntax's name, and the six UIDs are
+  in the `uid` dictionary. The file is still read, stored, de-identified
+  and sent as it is to a peer that accepts its syntax. What exists to
+  decode them against is in #403.
+
+- **A caption over saturated texture no longer takes a third of the scan
+  with it** (#367). The text detector found the caption, then grew its
+  region over every pixel of the caption's color, and over texture
+  stretched to full white every pixel is: the region for a caption 94
+  pixels wide ran across the scan and down it, and `-redact auto` would
+  have blacked out a third of the picture. Over texture a line is now grown
+  only where its ground is plain. The detector's other known misses are now
+  measured by a test rather than remembered: blurred labels of two or three
+  characters and a blurred clock are still not found (0 of 7), so `auto`
+  stays not the default. Across pydicom's corpus every region is unchanged.
+
+- **An AE title padded on the left is the same title.** Leading and
+  trailing spaces of the calling and called AE titles are both
+  non-significant (PS3.8 Table 9-11), and only the trailing ones were
+  removed: a caller asking for `"  ARCHIVE"` was refused as asking for
+  another title, and a handler was told the calling title with its spaces.
+
+- **A data set that shares a P-DATA-TF with its command is no longer lost**
+  (#320). A P-DATA-TF may carry several PDVs, and the last fragment of a
+  command may travel with the first of its data set. The PDVs after the
+  fragment a read stopped at were dropped with the PDU, so the SCP waited
+  for a data set it had already received and aborted the association when
+  its timeout ran out. What a read leaves of a P-DATA-TF now waits for the
+  next read. dcmtk and pynetdicom send one PDV to a PDU, which is why it
+  did not show against them.
+
+- **A value too long for a 16-bit length is refused, not written with a
+  wrong length.** UI, AE, SH and the other short VRs state their length in
+  16 bits in explicit VR. `filewriter` wrote a longer value with the low 16
+  bits of its length: a 70,002-byte Media Storage SOP Instance UID went out
+  as length 4466 while the group length (0002,0000) counted all of it, so
+  the File Meta Information pointed 65,536 bytes past where its elements
+  ended. `WriteDataElement` and `WriteFileMetaInfo` now return an error
+  before writing any of the element or the group.
+
+- **A time with fractional seconds is a valid TM, and a DT is checked**
+  (#356). `valuerep.ValidateValue` refused `120000.5`, which PS3.5 Table
+  6.2-1 allows (up to six digits after the dot), and passed any text as a
+  DT. Both now follow the table; `DataElement.ValidateVR` and
+  `SetValueWithValidation`, which use it, follow with them.
+
+- **A JPEG-LS frame that ends on 0xFF decodes everywhere** (#385). The
+  encoder stopped after the last byte of a scan, and when that byte was
+  0xFF the EOI marker followed it at once. The byte after a 0xFF in a
+  JPEG-LS scan has its high bit clear (T.87 A.1), so CharLS and libjpeg
+  ended the scan a byte early: dcmtk refused the frame, libjpeg decoded its
+  last samples wrong, and this library, which reads zeros past the end,
+  read it back without complaint. About one frame in 256 sent as JPEG-LS
+  Lossless ended so. A scan that ends on 0xFF now has the stuffed zero byte
+  after it.
+
+- **A native 4:2:2 image sent as RLE or JPEG-LS was still called
+  YBR_FULL_422** (#363). Its chroma was expanded to every pixel before
+  coding, and a receiver believing the description expected half of it. It
+  is YBR_FULL now, with Planar Configuration 0 for any color image. A
+  JPEG-LS send of 8 bits stored in 16 allocated was refused, and so was one
+  whose samples used the bits above Bits Stored; both are coded exactly.
 
 ## [1.10.0] - 2026-11-17
 
