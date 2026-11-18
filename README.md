@@ -305,6 +305,7 @@ go build -o go-dicom .
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
 ./go-dicom share -preview us.dcm check.png          # Outline the text a detector finds, to look at
 ./go-dicom anonymize -redact auto us.dcm clean.dcm  # Black out what it finds; it can miss, so look
+./go-dicom diff a.dcm b.dcm           # What differs, element by element; exit 0 equal, 1 different, 2 error
 ./go-dicom tag-doc 0010,0010          # What a tag means, from the dictionary
 
 # === Network Operations (like pynetdicom CLI) ===
