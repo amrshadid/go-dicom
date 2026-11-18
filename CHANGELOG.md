@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes 17 MB. What `info` prints does not change, including the sizes of
   `--stats` and `--verbose`, which count the bytes in the file (#328).
 
+- **`info` prints the frames, and the image's own size and patient.** It read
+  Number of Frames from (0020,1209), so a multi-frame file never got a
+  `Frames:` line. And it took the last match of every key element, items of
+  sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
+  for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
+  its own. Only the data set's own elements are read now (#335).
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
