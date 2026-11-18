@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/amrshadid/go-dicom/dataset"
 )
@@ -296,6 +297,32 @@ func (h *CompositeHandler) HandleCStore(ctx context.Context, req *CStoreRequest)
 		return h.storeHandler.HandleCStore(ctx, req)
 	}
 	return h.BaseHandler.HandleCStore(ctx, req)
+}
+
+// HandleCStoreStream delegates to the store handler when it takes C-STOREs
+// as a stream (CStoreStreamer). The SCP calls it only then: for any other
+// store handler it calls HandleCStore, with the data set decoded.
+//
+// Without it a streaming store handler set here was reached through
+// HandleCStore, which it need not implement: one embedding BaseHandler
+// answered Success for every instance, and stored none.
+func (h *CompositeHandler) HandleCStoreStream(ctx context.Context, req *CStoreRequest, transferSyntax string,
+	data io.Reader) (*CStoreResponse, error) {
+	streamer, ok := streamsCStore(h.storeHandler)
+	if !ok {
+		return nil, fmt.Errorf("network: the store handler does not take a C-STORE as a stream")
+	}
+	return streamer.HandleCStoreStream(ctx, req, transferSyntax, data)
+}
+
+// streamsCStore tells the SCP whether HandleCStoreStream applies, which
+// depends on the store handler set, not on CompositeHandler.
+func (h *CompositeHandler) streamsCStore() bool {
+	if h.storeHandler == nil {
+		return false
+	}
+	_, ok := streamsCStore(h.storeHandler)
+	return ok
 }
 
 // HandleCFind delegates to the find handler.
