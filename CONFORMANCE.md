@@ -460,14 +460,19 @@ how decoded samples are shaped and coloured, and the one tolerance.
 - **JPEG 2000 decodes in pure Go**, `.90` and `.91`, both wavelets, 1 to 16 bits,
   signed or unsigned, single or multi component, any number of tiles and quality
   layers, in all five progression orders, with the default precincts or the
-  coding style's own, and with the reversible and irreversible component
-  transforms. There is no CGO and nothing to register.
+  coding style's own, with any combination of the six code-block style options
+  (selective arithmetic coding bypass, reset of context probabilities,
+  termination on each coding pass, vertically causal context, predictable
+  termination, segmentation symbols), and with the reversible and irreversible
+  component transforms. There is no CGO and nothing to register.
 
   pydicom's corpus uses only the defaults, so what it does not exercise is
   checked against OpenJPEG instead: `opj_compress` writes a codestream with the
   feature, `opj_decompress` decodes it, and this decoder must return the same
   samples, at 8, 12 and 16 bits, signed and unsigned, gray and color, tiled and
   not, reversible and irreversible (`TestDecodeMatchesOpenJPEG`, run in CI).
+  All 63 combinations of the code-block style options are checked this way
+  (`TestDecodeEveryBlockStyleMatchesOpenJPEG`).
 
   A reversible codestream is required to match pydicom sample for sample. An
   irreversible one is held to a tolerance of one up to 12 bits and two at 16:
@@ -485,12 +490,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   refused with an `ErrUnsupported` that names it, quoted here as the error
   reads (ITU-T T.800 clauses in brackets):
 
-  - every code-block style option, alone or combined: `code-block style 0x..`
-    with the style byte in hex [A.6.1 Table A.19, D.5–D.7]. They are selective
-    arithmetic coding bypass (`0x01`), reset of context probabilities (`0x02`),
-    termination on each coding pass (`0x04`), vertically causal context
-    (`0x08`), predictable termination (`0x10`) and segmentation symbols
-    (`0x20`);
+  - the High-Throughput block coder of Part 15, and the reserved bit, in the
+    code-block style: `code-block style 0x40` or `0x80` and up [A.6.1 Table
+    A.19];
   - a region of interest: `region of interest (RGN)` [A.6.3, Annex H];
   - progression order changes: `progression order change (POC)` [A.6.6];
   - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];

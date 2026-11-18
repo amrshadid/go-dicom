@@ -151,10 +151,11 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 		}
 	}
 
-	var mine []CodeBlockData
-	for _, block := range blocks {
-		if block.Component == comp {
-			mine = append(mine, block)
+	// Pointers, not copies: a tile can hold thousands of small blocks.
+	var mine []*CodeBlockData
+	for i := range blocks {
+		if blocks[i].Component == comp {
+			mine = append(mine, &blocks[i])
 		}
 	}
 
@@ -190,7 +191,7 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 // decodeBlockInto decodes one code-block and writes its dequantized
 // coefficients into the band it belongs to.
 func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc TileComponent,
-	quant Quantization, style CodingStyle, comp int, block CodeBlockData) error {
+	quant Quantization, style CodingStyle, comp int, block *CodeBlockData) error {
 
 	if block.Resolution >= len(tc.Resolutions) {
 		return errorf("a code-block at resolution %d of %d", block.Resolution, len(tc.Resolutions))
@@ -207,10 +208,11 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 	if err != nil {
 		return err
 	}
-	coefficients, err := DecodeBlock(block, magnitudeBits)
+	decoded, err := decodeBlock(block, magnitudeBits)
 	if err != nil {
 		return err
 	}
+	coefficients := decoded.data
 	step, err := stepSize(quant, band, block.Resolution, style.Levels, c.Components[comp].Depth)
 	if err != nil {
 		return err

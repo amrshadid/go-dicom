@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A codestream that declares a one-sample precinct above the lowest
   resolution is refused, as T.800 A.6.1 requires and as OpenJPEG does.
   `opj_compress -c` writes one when the precinct list runs out too soon.
+- **JPEG 2000 with the code-block style options** (#372). Selective
+  arithmetic coding bypass, reset of context probabilities, termination on
+  each coding pass, vertically causal context, predictable termination and
+  segmentation symbols were each refused. Encoders use them for error
+  resilience, speed and hardware. All six decode, in any combination, with
+  a block split into several codeword segments across layers. OpenJPEG
+  returns the same samples for all 63 combinations, and with tiles,
+  precincts, a position-driven order and the 9/7 filter. A block coded
+  without them takes the loop it took before.
 
 ### Fixed
 

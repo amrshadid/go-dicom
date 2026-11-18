@@ -57,6 +57,19 @@ const (
 	Wavelet53Reversible   = 1
 )
 
+// Code-block style bits (Annex A.6.1, Table A.19). Each changes how tier-1
+// reads a code-block (D.5 to D.7), and bypass and termination also change how
+// a packet header gives the block's lengths (B.10.7.2). Any combination may
+// be set.
+const (
+	BlockStyleBypass       = 0x01 // selective arithmetic coding bypass
+	BlockStyleReset        = 0x02 // reset context probabilities after each pass
+	BlockStyleTermAll      = 0x04 // termination on each coding pass
+	BlockStyleVertical     = 0x08 // vertically causal context
+	BlockStylePredictable  = 0x10 // predictable termination
+	BlockStyleSegmentation = 0x20 // segmentation symbols
+)
+
 // Quantization styles (Annex A.6.4, Sqcd low five bits).
 const (
 	QuantNone      = 0 // no quantization: reversible, exponents only
@@ -83,7 +96,7 @@ type CodingStyle struct {
 	Levels         int  // decomposition levels
 	CodeBlockWidth int
 	CodeBlockHt    int
-	BlockStyle     byte // Annex A.6.1 SPcod code-block style; only 0 is decoded
+	BlockStyle     byte // Annex A.6.1 SPcod code-block style: the BlockStyle bits
 	Wavelet        int
 	// UsePrecincts says the style declares its own precinct sizes, one per
 	// resolution in Precincts. Without it every precinct is 2^15 on a side,
@@ -553,10 +566,9 @@ func parseCodingParameters(style *CodingStyle, s []byte) error {
 	case style.CodeBlockWidth*style.CodeBlockHt > 4096:
 		return fmt.Errorf("jpeg2000: code-block %dx%d exceeds 4096 samples",
 			style.CodeBlockWidth, style.CodeBlockHt)
-	case style.BlockStyle != 0:
-		// Selective arithmetic bypass, termination on each pass, vertically
-		// causal context, predictable termination, segmentation symbols. Each
-		// changes how tier-1 reads a block, and none appears in the corpus.
+	case style.BlockStyle&0xC0 != 0:
+		// The six low bits are Part 1's. Bit 6 is Part 15's High-Throughput
+		// block coder, a different coder altogether, and bit 7 is reserved.
 		return &ErrUnsupported{
 			Feature: fmt.Sprintf("code-block style 0x%02X", style.BlockStyle)}
 	case style.Wavelet != Wavelet53Reversible && style.Wavelet != Wavelet97Irreversible:
