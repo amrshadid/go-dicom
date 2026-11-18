@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   predictable termination, components deeper than 16 bits and a JP2 box with
   a 64-bit length. A reader expecting an RPCL file to decode would have been
   told nothing. Each is now one line, with the error text a caller sees.
+- **The irreversible JPEG 2000 tolerance is stated as measured** (#360). The
+  statement gave one sample against another decoder. Against OpenJPEG that
+  holds up to 12 bits; at 16 bits OpenJPEG lands up to two away, and this
+  decoder is the nearer of the two to what was encoded.
 
 ## [1.10.0] - 2026-11-17
 

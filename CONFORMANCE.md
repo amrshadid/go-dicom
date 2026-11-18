@@ -462,11 +462,15 @@ how decoded samples are shaped and coloured, and the one tolerance.
   CGO and nothing to register.
 
   A reversible codestream is required to match pydicom sample for sample. An
-  irreversible one is held to a tolerance of one: the 9/7 filter is defined in
+  irreversible one is held to a tolerance of one up to 12 bits and two at 16:
+  the 9/7 filter is defined in
   real arithmetic, so two conformant decoders can land either side of a half,
   and ISO 15444-4 grades a decoder on how close it comes rather than on
   equality. Against OpenJPEG the corpus's irreversible file is 22 samples of
-  262144 out by one.
+  262144 out by one. One is the difference from OpenJPEG up to 12 bits. At 16
+  bits OpenJPEG lands up to two away, and this decoder is the nearer of the two
+  to the samples that were encoded: on a generated 70×65 16-bit image written
+  by `opj_compress -I`, a mean squared error of 370 against OpenJPEG's 1281.
 
   Features outside that set are refused rather than guessed at. A decoder that
   quietly mis-decodes is worse than none — the image looks plausible and the
