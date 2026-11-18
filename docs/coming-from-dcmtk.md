@@ -19,7 +19,7 @@ The network commands keep dcmtk's names. Two habits change:
 |---|---|---|
 | `dcmdump file.dcm` | `go-dicom show file.dcm` | `--top` for the top level, `--exclude-private` |
 | `dcmdump +L file.dcm` | `go-dicom show file.dcm --full` | Whole values, bulk data still a count of bytes |
-| `dcmdump +P 0010,0010 file.dcm` | `go-dicom show file.dcm::0010,0010` | The tag; a keyword is not taken yet ([#384](https://github.com/amrshadid/go-dicom/issues/384)) |
+| `dcmdump +P 0010,0010 file.dcm` | `go-dicom show file.dcm::0010,0010` | The tag or a keyword: `dcmdump +P PatientName file.dcm` is `go-dicom show file.dcm::PatientName` |
 | (dcmdump prints no positions) | `go-dicom show file.dcm --json` | Every element with the offsets of its tag, VR, length and value in the file |
 | `dcm2json file.dcm` | `go-dicom convert file.dcm out.json` | |
 | `dcm2xml` | none | |

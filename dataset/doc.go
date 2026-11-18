@@ -329,7 +329,9 @@
 //
 //	func (ds *Dataset) GetValue(t tag.Tag) []byte
 //
-// Returns raw value bytes for tag (nil if not found).
+// Returns raw value bytes for tag (nil if not found). A value held as a Go
+// string, as the library records some it builds, is returned as its bytes, as
+// are the keyword and private-element forms.
 //
 // ### SetValue
 //
