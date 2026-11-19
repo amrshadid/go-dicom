@@ -856,7 +856,7 @@ func (ds *Dataset) pixelCompression(pixelBytes []byte, info *PixelDataInfo) (com
 	if uid := ds.TransferSyntaxUID(); uid != "" {
 		compression, err := compress.TransferSyntaxToCompressionType(uid)
 		if err != nil {
-			// A syntax with no decoder here, such as HTJ2K or JPEG XL, whose
+			// A syntax with no decoder here, such as JPEG XL, whose
 			// Pixel Data is fragments: encapsulated, of no known compression.
 			// Taken for native, its fragments were read as samples, and the
 			// refusal was a count of bytes ("holds 4330 bytes and the image

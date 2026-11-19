@@ -19,11 +19,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry over. pydicom-data's two HTJ2K files and openjpeg-data's HT
   codestreams decode to OpenJPEG 2.5.4's samples, exactly where reversible, and
   so do 390 codestreams transcoded to HT by the tests from `opj_compress`
-  output at 8 to 16 bits, signed and unsigned, gray and color. HTJ2K pixel
-  data in a data set is still refused by name until the transfer syntaxes are
-  wired to it. Placeholder passes, more than one HT set, a region of interest
-  on HT blocks, and HT and Part 1 blocks mixed in one tile-component are
-  refused by name; HTJ2K is not encoded.
+  output at 8 to 16 bits, signed and unsigned, gray and color. Placeholder
+  passes, more than one HT set, a region of interest on HT blocks, and HT and
+  Part 1 blocks mixed in one tile-component are refused by name; HTJ2K is not
+  encoded.
+
+- **High-Throughput JPEG 2000 images decode** (#403). Pixel data in
+  `1.2.840.10008.1.2.4.201`, `.202` and `.203` was refused by name since #406:
+  `the pixel data is in High-Throughput JPEG 2000 Image Compression ...,
+  which is read and carried and not decoded`. It now decodes through the JPEG
+  2000 decoder wherever pixel data is decoded: the samples, rendering,
+  `decompress`, `convert`, redaction, DICOMweb frames (as stored, typed
+  `image/jphc`), and a send to a peer that accepts only uncompressed syntaxes.
+  pydicom-data's `.201` file decodes to pydicom 3's samples; no third-party
+  `.202` file exists, so a generated RPCL one, wrapped by pydicom 3, is in the
+  tests with two others, and all three decode to pydicom's samples. Nothing is
+  encoded into HTJ2K. JPEG XL stays refused by name.
 
 - **An N-GET can ask for the attributes it wants** (#486). An SCP has read
   the Attribute Identifier List (0000,1005) since #380, but `SCU.NGet` could

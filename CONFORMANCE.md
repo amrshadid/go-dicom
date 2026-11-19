@@ -292,18 +292,28 @@ are using that package.
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
 | JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
-| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`), JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
+| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`) | read/write | **yes**, in pure Go; not encoded |
+| JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
 
-A file in High-Throughput JPEG 2000 or JPEG XL is read, stored, de-identified
-and sent as it is, to a peer that accepts its syntax. Its pixel data is not
-decoded: rendering, reading the samples, redacting, and sending it over a
-context that needs it decoded are refused with the syntax's name. pydicom 3
-decodes HTJ2K through OpenJPEG 2.5, and OpenJPEG 2.5.4's `opj_decompress`
-decodes pydicom-data's two HTJ2K files to the same samples; nothing in pydicom,
-dcmtk 3.7.0 or this library decodes JPEG XL.
+High-Throughput JPEG 2000 pixel data decodes like any other compressed
+syntax: rendering, the samples, `decompress`, `convert`, redaction, DICOMweb
+frames (as stored, typed `image/jphc`), and sending to a peer that accepts
+only uncompressed syntaxes, which decodes it on the way. It is not encoded:
+nothing is converted or sent into HTJ2K, and a DICOMweb request for a frame
+as `image/jphc` that is not held so is refused with 406. pydicom-data's
+`.201` file decodes to pydicom 3's samples (pydicom decodes HTJ2K through
+OpenJPEG), and its `.203` file within the tolerance of §8.1; no third-party
+file in `.202` exists, so the tests carry a generated one, an RPCL codestream
+wrapped by pydicom 3, and decode it to pydicom's samples too.
+
+A file in JPEG XL is read, stored, de-identified and sent as it is, to a peer
+that accepts its syntax. Its pixel data is not decoded: rendering, reading the
+samples, redacting, and sending it over a context that needs it decoded are
+refused with the syntax's name. Nothing in pydicom, dcmtk 3.7.0 or this library
+decodes JPEG XL, and no JPEG XL file in DICOM was found to check one against.
 
 ### 3.3 Extended negotiation
 
@@ -568,8 +578,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   OpenJPEG 2.5.4 cannot decode: its packet reader adds them to the cleanup
   segment, where T.814 B.2 makes them a segment of their own. That case is
   checked to decode exactly as the same blocks in one layer
-  (`TestHTRefinementInLaterLayers`). HTJ2K pixel data in a data set is still
-  refused by name; the decoder is reached through `compress/jpeg2000` alone.
+  (`TestHTRefinementInLaterLayers`). The three HTJ2K transfer syntaxes,
+  `.201`, `.202` and `.203`, decode through this decoder.
 
   Features outside that set are refused rather than guessed at. A decoder that
   quietly mis-decodes is worse than none — the image looks plausible and the

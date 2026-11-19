@@ -16,6 +16,10 @@ import (
 // Allocated, and reconciling the codestream's idea of signedness with the data
 // set's, which are allowed to disagree and sometimes do.
 //
+// The three High-Throughput JPEG 2000 syntaxes (.201, .202, .203) decode
+// through it too: their codestreams are JPEG 2000 ones whose code-blocks are
+// coded by the HT block coder, which compress/jpeg2000 decodes.
+//
 // Both transfer syntaxes decode through the same path. The difference between
 // them is which wavelet the encoder chose, and the codestream says so itself —
 // the transfer syntax is not consulted, so a file labeled lossy that holds a
