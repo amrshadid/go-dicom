@@ -298,3 +298,46 @@ func TestShutdownStartsNoRequestAfterAnOperation(t *testing.T) {
 	}
 	goroutinesSettle(t, base)
 }
+
+// TestShutdownAbortSaysTheServerIsStopping: the A-ABORT that Shutdown sends
+// is reported to the server's events with the cause AbortCauseStopping. It
+// was reported as AbortCauseRequested, the cause of any abort the application
+// asks for, so a listener could not tell a server being stopped from a
+// handler that gave up on an association.
+func TestShutdownAbortSaysTheServerIsStopping(t *testing.T) {
+	causes := make(chan *LocalAbort, 4)
+	events := NewEventManager()
+	events.On(EVTAssocAborted, func(e *Event) {
+		if e.Role == "SCP" {
+			causes <- e.LocalAbort
+		}
+	})
+	server, err := StartServer(context.Background(), SCPConfig{
+		AETitle: "ARCHIVE", Port: 0, BindAddress: "127.0.0.1", Events: events,
+	}, newGatedStore(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Stop)
+	scu := NewSCU(SCUConfig{CallingAE: "SCANNER", CalledAE: "ARCHIVE", Address: server.Addr()})
+	if err := scu.Associate(context.Background(), []PresentationContextItem{
+		{ID: 1, AbstractSyntax: CTImageStorageUID, TransferSyntaxes: []string{ExplicitVRLittleEndianUID}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer scu.Association().transport.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown returned %v, want nil", err)
+	}
+	select {
+	case local := <-causes:
+		if local == nil || local.Cause != AbortCauseStopping {
+			t.Fatalf("the abort was reported with %+v, want the cause %s", local, AbortCauseStopping)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no EVTAssocAborted reached the server's events")
+	}
+}
