@@ -928,34 +928,30 @@ func isEmpty(elem *dataelem.DataElement, isSeq bool, seq *sequence.Sequence) boo
 	if isSeq {
 		return seq.Length() == 0
 	}
-	switch v := elem.GetValue().(type) {
-	case nil:
-		return true
-	case dataelem.ValueInFile:
-		// Left in the file by a reader that skips bulk data: its length is
-		// all the Type needs.
+	// Left in the file by a reader that skips bulk data: its length is all
+	// the Type needs.
+	if v, inFile := elem.GetValue().(dataelem.ValueInFile); inFile {
 		return v.Length == 0
-	case []byte:
-		if dataelem.IsTextVR(elem.GetVR()) {
-			return strings.Trim(string(v), " \x00") == ""
-		}
-		return len(v) == 0
-	case string:
-		return strings.Trim(v, " \x00") == ""
 	}
-	return false
+	// Through Bytes, so a value held as a []string or a number is judged as the
+	// same value read from a file (#420); a value that holds no bytes is not
+	// empty, it is something this cannot see into.
+	raw, ok := elem.Bytes()
+	if !ok {
+		return false
+	}
+	if dataelem.IsTextVR(elem.GetVR()) {
+		return strings.Trim(string(raw), " \x00") == ""
+	}
+	return len(raw) == 0
 }
 
 // valuesOf splits a value into its values as text, numbers written in
 // decimal, or nil when the VR holds one value of bytes.
 func valuesOf(ds *dataset.Dataset, t tag.Tag, elem *dataelem.DataElement) []string {
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok {
-		if s, isString := elem.GetValue().(string); isString {
-			raw = []byte(s)
-		} else {
-			return nil
-		}
+		return nil
 	}
 	vr := ds.ResolveVR(t, elem)
 	switch vr {
@@ -1019,13 +1015,11 @@ func text(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	switch v := elem.GetValue().(type) {
-	case []byte:
-		return strings.Trim(string(v), " \x00")
-	case string:
-		return strings.Trim(v, " \x00")
+	raw, ok := elem.Bytes()
+	if !ok {
+		return ""
 	}
-	return ""
+	return strings.Trim(string(raw), " \x00")
 }
 
 // Sort orders the findings: errors first, then warnings, then what was not

@@ -410,7 +410,7 @@ func nonASCIIText(ds *dataset.Dataset) bool {
 			}
 			continue
 		}
-		raw, ok := elem.GetValue().([]byte)
+		raw, ok := elem.Bytes()
 		if !ok || !dataelem.IsCharacterSetVR(elem.GetVR()) {
 			continue
 		}
