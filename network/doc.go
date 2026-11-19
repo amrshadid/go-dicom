@@ -212,6 +212,15 @@
 // The default is [LogLevelWarn], matching config.Logger's own default: failures
 // and refusals are reported, PDU and DIMSE detail is not.
 //
+// A server or client can be given a logger of its own, SCPConfig.Logger or
+// SCUConfig.Logger, a *slog.Logger: everything it logs then goes there, at
+// every level, and nothing to DefaultLogger. Nil means DefaultLogger, as
+// before. Two servers in one process can so keep apart lines that name AE
+// titles, addresses and SOP Instance UIDs. Not covered: a panic in an event
+// handler when the application calls EventManager.Emit itself, and the
+// validation warnings of the dataset, dataelem and charset packages while a
+// data set is decoded or encoded, which go to config.Logger (#503).
+//
 // # Limitations
 //
 //   - As an SCP, dispatch is one message at a time per association, so

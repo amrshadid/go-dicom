@@ -58,6 +58,9 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 		Events: NewEventManager(),
 		Logger: NewLogger(LogLevelInfo, nil),
 	}
+	if l := loggerFor(config.Logger); l != nil {
+		s.Logger = l
+	}
 	if config.Events != nil {
 		s.Events = config.Events
 	}
@@ -76,7 +79,7 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 	scp.mu.Unlock()
 
 	s.Logger.Info("Server %s started on %s", config.AETitle, ln.Addr().String())
-	s.Events.Emit(&Event{Type: EVTConnOpen, Description: "server started", RemoteAddr: ln.Addr().String()})
+	s.Events.emit(&Event{Type: EVTConnOpen, Description: "server started", RemoteAddr: ln.Addr().String()}, scp.ownLog)
 
 	// Run accept loop in background
 	s.wg.Add(1)
@@ -110,6 +113,9 @@ func StartServerTLS(ctx context.Context, config SCPConfig, handler Handler, tlsC
 		cancel: cancel,
 		Events: NewEventManager(),
 		Logger: NewLogger(LogLevelInfo, nil),
+	}
+	if l := loggerFor(config.Logger); l != nil {
+		s.Logger = l
 	}
 	if config.Events != nil {
 		s.Events = config.Events

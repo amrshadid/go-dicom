@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A server or a client can have its own logger** (#472). Every line the
+  network package logged went through the global `DefaultLogger`, and the
+  lines name AE titles, addresses and SOP Instance UIDs, so two servers in one
+  process logged into one stream that did not say which was which.
+  `SCPConfig.Logger` and `SCUConfig.Logger`, a `*slog.Logger` as
+  `filereader.ReadOptions.Logger` is, take everything that server or client
+  logs, at every level: its associations and their negotiation, refusals, a
+  handler panic, a timeout, a failed TLS handshake, the associations a server
+  opens itself, a panic in a handler of its events, and a `Server`'s start-up
+  line (`Server.Logger` writes there). Nothing of it reaches the global logger.
+  Nil keeps the global one. Not covered: the validation warnings of the
+  `dataset`, `dataelem` and `charset` packages while a data set is decoded,
+  which still go to `config.Logger` (#503).
+
 - **`modify` takes a binary value from a file, and changes or removes an
   attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
   (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute

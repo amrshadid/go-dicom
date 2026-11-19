@@ -304,7 +304,7 @@ func NegotiatePresentationContexts(
 //
 // Refusing *every* context stays an error. That association is established and
 // useless, and nothing else will say so.
-func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultItem) {
+func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultItem, log *Logger) {
 	proposedByID := make(map[byte]PresentationContextItem, len(rq.PresentationContexts))
 	for _, pc := range rq.PresentationContexts {
 		proposedByID[pc.ID] = pc
@@ -320,18 +320,18 @@ func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultI
 		proposed := proposedByID[res.ID]
 		switch res.Result {
 		case PCResultTransferSyntaxNotSupported:
-			DefaultLogger.Debug("refused presentation context %d for %s from %s: "+
+			log.Debug("refused presentation context %d for %s from %s: "+
 				"none of the transfer syntaxes it proposed (%s) is supported; "+
 				"pass AllTransferSyntaxes() to SetSupportedTransferSyntaxes to accept "+
 				"compressed pixel data",
 				res.ID, proposed.AbstractSyntax, rq.CallingAE,
 				strings.Join(proposed.TransferSyntaxes, ", "))
 		case PCResultAbstractSyntaxNotSupported:
-			DefaultLogger.Debug("refused presentation context %d from %s: "+
+			log.Debug("refused presentation context %d from %s: "+
 				"SOP class %s is not supported; add it with SetSupportedAbstractSyntaxes",
 				res.ID, rq.CallingAE, proposed.AbstractSyntax)
 		default:
-			DefaultLogger.Debug("refused presentation context %d for %s from %s with result %d",
+			log.Debug("refused presentation context %d for %s from %s with result %d",
 				res.ID, proposed.AbstractSyntax, rq.CallingAE, res.Result)
 		}
 	}
@@ -340,7 +340,7 @@ func reportRefusedContexts(rq *AssociateRQ, results []PresentationContextResultI
 	// established and useless, and the requestor will not learn why until it tries
 	// something.
 	if accepted == 0 && len(results) > 0 {
-		DefaultLogger.Error("accepted the association from %s with no usable presentation "+
+		log.Error("accepted the association from %s with no usable presentation "+
 			"context: all %d were refused, so every operation on it will fail",
 			rq.CallingAE, len(results))
 	}

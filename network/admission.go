@@ -210,11 +210,11 @@ func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *Ass
 	req := associationRequest(transport, rq)
 	var wellFormed bool
 	if req.CallingAE, wellFormed = cleanAETitle(rq.CallingAE); !wellFormed {
-		DefaultLogger.Info("refusing %s: its calling AE title %q is not an AE title (PS3.5 6.2)", req.RemoteAddr, rq.CallingAE)
+		s.log().Info("refusing %s: its calling AE title %q is not an AE title (PS3.5 6.2)", req.RemoteAddr, rq.CallingAE)
 		return RejectCallingAE()
 	}
 	if req.CalledAE, wellFormed = cleanAETitle(rq.CalledAE); !wellFormed {
-		DefaultLogger.Info("refusing %q from %s: the called AE title %q is not an AE title (PS3.5 6.2)",
+		s.log().Info("refusing %q from %s: the called AE title %q is not an AE title (PS3.5 6.2)",
 			req.CallingAE, req.RemoteAddr, rq.CalledAE)
 		return RejectCalledAE()
 	}
@@ -223,7 +223,7 @@ func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *Ass
 		return r
 	}
 	if !s.config.AcceptAnyCalledAE && req.CalledAE != s.config.AETitle {
-		DefaultLogger.Info("refusing %q from %s: it called %q, and this SCP answers to %q",
+		s.log().Info("refusing %q from %s: it called %q, and this SCP answers to %q",
 			req.CallingAE, req.RemoteAddr, req.CalledAE, s.config.AETitle)
 		return RejectCalledAE()
 	}
@@ -272,7 +272,7 @@ func (s *SCP) admit(parent context.Context, req *AssociationRequest) *Associatio
 	select {
 	case a := <-answers:
 		if a.panicked != nil {
-			DefaultLogger.Error("refusing %q from %s: the admission function panicked: %v",
+			s.log().Error("refusing %q from %s: the admission function panicked: %v",
 				req.CallingAE, req.RemoteAddr, a.panicked)
 			r := rejectNoReason
 			return &r
@@ -284,11 +284,11 @@ func (s *SCP) admit(parent context.Context, req *AssociationRequest) *Associatio
 		if !r.valid() {
 			// Reserved values are not to be sent (PS3.8 9.3.4), and a peer
 			// may read one as a malformed PDU rather than as a refusal.
-			DefaultLogger.Warn("admission function chose result %d, source %d, reason %d, which PS3.8 "+
+			s.log().Warn("admission function chose result %d, source %d, reason %d, which PS3.8 "+
 				"Table 9-21 does not define; refusing with %s instead", r.Result, r.Source, r.Reason, rejectNoReason)
 			r = rejectNoReason
 		}
-		DefaultLogger.Info("refusing %q calling %q from %s: %s", req.CallingAE, req.CalledAE, req.RemoteAddr, r)
+		s.log().Info("refusing %q calling %q from %s: %s", req.CallingAE, req.CalledAE, req.RemoteAddr, r)
 		return &r
 	case <-ctx.Done():
 		r := rejectAfterTimeout
@@ -296,10 +296,10 @@ func (s *SCP) admit(parent context.Context, req *AssociationRequest) *Associatio
 			// The server is stopping, which is not the function being slow:
 			// it was logged as "did not answer within 30s" a moment after
 			// the request arrived.
-			DefaultLogger.Debug("refusing %q from %s: the server is stopping", req.CallingAE, req.RemoteAddr)
+			s.log().Debug("refusing %q from %s: the server is stopping", req.CallingAE, req.RemoteAddr)
 			return &r
 		}
-		DefaultLogger.Warn("refusing %q from %s: the admission function did not answer within %v",
+		s.log().Warn("refusing %q from %s: the admission function did not answer within %v",
 			req.CallingAE, req.RemoteAddr, s.config.Network.ARTIMTimeout)
 		return &r
 	}
