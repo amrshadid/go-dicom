@@ -313,7 +313,7 @@ func readReferencedSequence(ds *dataset.Dataset, t tag.Tag) ([]SOPInstanceRefere
 
 		var reason uint16
 		if elem, ok := item.Get(tagFailureReason); ok {
-			if b, ok := elem.GetValue().([]byte); ok && len(b) >= 2 {
+			if b, ok := elem.Bytes(); ok && len(b) >= 2 {
 				reason = binary.LittleEndian.Uint16(b)
 			}
 		}
@@ -328,7 +328,7 @@ func uidValue(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	b, ok := elem.GetValue().([]byte)
+	b, ok := elem.Bytes()
 	if !ok {
 		return ""
 	}

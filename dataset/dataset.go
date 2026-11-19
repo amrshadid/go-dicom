@@ -406,34 +406,13 @@ func (ds *Dataset) String() string {
 		t := tag.FromInt(tagVal)
 		vr := elem.GetVR()
 		var valueLen int
-		if b, ok := valueBytes(elem); ok {
+		if b, ok := elem.Bytes(); ok {
 			valueLen = len(b)
 		}
 		result += fmt.Sprintf("  [%d] %s (%s): %d bytes\n", i, t.Hex(), vr, valueLen)
 	}
 
 	return result
-}
-
-// valueBytes returns the bytes an element's value stands for, whatever Go type
-// it is held as, and false when it holds none (a sequence, a value still in a
-// file, or nothing).
-//
-// Elements read from a file hold []byte, but dataelem.NewDataElement takes any
-// value and the library builds some itself (de-identification records Patient
-// Identity Removed as the string "YES"). An accessor that asserted []byte read
-// those as absent, so every accessor that wants the bytes goes through here, and
-// through dataelem.ValueBytes, which is also what the writer uses: one answer to
-// "what does this element hold" for reading and for writing.
-func valueBytes(elem *dataelem.DataElement) ([]byte, bool) {
-	if elem == nil {
-		return nil, false
-	}
-	b, err := dataelem.ValueBytes(elem.GetVR(), elem.GetValue())
-	if err != nil {
-		return nil, false
-	}
-	return b, true
 }
 
 // Helper function to copy byte slice
@@ -516,7 +495,7 @@ func (ds *Dataset) GetValue(t tag.Tag) []byte {
 		return nil
 	}
 
-	if b, ok := valueBytes(elem); ok {
+	if b, ok := elem.Bytes(); ok {
 		return b
 	}
 	return nil
@@ -620,7 +599,7 @@ func (ds *Dataset) GetStatistics() Statistics {
 		elem := ds.elements[tagVal]
 		vr := elem.GetVR()
 
-		if b, ok := valueBytes(elem); ok {
+		if b, ok := elem.Bytes(); ok {
 			stats.TotalBytes += len(b)
 		}
 		stats.ByVR[string(vr)]++

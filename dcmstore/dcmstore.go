@@ -623,16 +623,12 @@ func elementString(elem *dataelem.DataElement) string {
 	if elem == nil {
 		return ""
 	}
-	switch v := elem.GetValue().(type) {
-	case nil:
-		return ""
-	case string:
-		return trimPadding(v)
-	case []byte:
-		return trimPadding(string(v))
-	case []string:
-		return trimPadding(strings.Join(v, `\`))
-	default:
-		return trimPadding(fmt.Sprintf("%v", v))
+	// Through Bytes, the conversion the writer uses: a PersonName printed with
+	// %v gave its alphabetic group alone, and was indexed as a different name
+	// from the one written to the file (#420). What Bytes cannot render, a
+	// value whose VR does not say how, is still printed rather than lost.
+	if raw, ok := elem.Bytes(); ok {
+		return trimPadding(string(raw))
 	}
+	return trimPadding(fmt.Sprintf("%v", elem.GetValue()))
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
@@ -563,7 +565,7 @@ func (d *differ) compareValues(a, b *filereader.DataElementValue, scopeA, scopeB
 
 	ra, na := d.valueReader(a, scopeA)
 	rb, nb := d.valueReader(b, scopeB)
-	at, err := streamsDiffer(ra, rb, wordSize(vrA, scopeA), wordSize(vrB, scopeB))
+	at, err := streamsDiffer(ra, rb, wordSize(a, vrA, scopeA), wordSize(b, vrB, scopeB))
 	if err != nil {
 		d.err = err
 		return false, nil, ""
@@ -610,19 +612,30 @@ func (d *differ) valueReader(e *filereader.DataElementValue, scope *displayScope
 }
 
 // wordSize is the width of the words of a bulk value, which a big endian
-// file writes the other way round: 2 for OW, 4 for OL and OF, 8 for OD and
-// OV. A little endian file's are left as they are.
-func wordSize(vr string, scope *displayScope) int {
+// file writes the other way round. A little endian file's are left as they
+// are.
+//
+// The width is the one the reader swaps at, from the same function: the VR's
+// for most values (2 for OW, 4 for OL and OF, 8 for OD and OV, none for OB and
+// UN), and for native Pixel Data the sample width, which Bits Allocated gives.
+// Taking OW's two bytes for Pixel Data of 32-bit samples transposed each
+// sample's halves on one side only, so a big endian RT Dose and its correct
+// little endian copy were reported as different from the first byte (#426).
+func wordSize(e *filereader.DataElementValue, vr string, scope *displayScope) int {
 	if !scope.bigEndian {
 		return 1
 	}
-	switch vr {
-	case "OW":
-		return 2
-	case "OL", "OF":
-		return 4
-	case "OD", "OV":
-		return 8
+	bitsAllocated := 0
+	if e.Tag == tag.New(0x7FE0, 0x0010) {
+		// Read little endian: the reader normalizes the values it keeps.
+		if elem, ok := scope.deciding.Get(tag.New(0x0028, 0x0100)); ok {
+			if raw, isBytes := elem.GetValue().([]byte); isBytes && len(raw) >= 2 {
+				bitsAllocated = int(binary.LittleEndian.Uint16(raw))
+			}
+		}
+	}
+	if width := dataelem.PixelDataSwapWidth(dataelem.VR(vr), bitsAllocated); width > 1 {
+		return width
 	}
 	return 1
 }

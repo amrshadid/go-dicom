@@ -254,7 +254,7 @@ func niftiString(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok {
 		return ""
 	}
@@ -267,7 +267,7 @@ func niftiUint16Value(ds *dataset.Dataset, t tag.Tag) uint16 {
 	if !ok {
 		return 0
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok || len(raw) < 2 {
 		return 0
 	}

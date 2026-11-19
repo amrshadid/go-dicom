@@ -127,3 +127,37 @@ func TestValueBytesIsTheInverseOfDecoding(t *testing.T) {
 		}
 	}
 }
+
+// TestBytesReadsAValueHoweverItIsHeld proves that Bytes gives the same bytes
+// for one value held as []byte (what a file read holds), as a string, a
+// []string and a []PersonName, gives a held number its binary form, and
+// refuses what holds no bytes. Code that asserted GetValue().([]byte) read
+// every form but the first as absent (#420).
+func TestBytesReadsAValueHoweverItIsHeld(t *testing.T) {
+	text := []byte(`DOE^JANE\ROE^JOHN`)
+	for _, value := range []any{text, string(text), []string{"DOE^JANE", "ROE^JOHN"},
+		[]PersonName{{Alphabetic: "DOE^JANE"}, {Alphabetic: "ROE^JOHN"}}} {
+		got, ok := NewDataElement(tag.New(0x0010, 0x1001), PN, value).Bytes()
+		if !ok || !bytes.Equal(got, text) {
+			t.Errorf("%T: Bytes = %q, %v; want %q, true", value, got, ok, text)
+		}
+	}
+
+	rows, ok := NewDataElement(tag.New(0x0028, 0x0010), US, uint16(512)).Bytes()
+	if !ok || !bytes.Equal(rows, []byte{0x00, 0x02}) {
+		t.Errorf("US held as uint16: Bytes = % x, %v; want 00 02, true", rows, ok)
+	}
+
+	if b, ok := NewDataElement(tag.New(0x0008, 0x0018), UI, nil).Bytes(); !ok || len(b) != 0 {
+		t.Errorf("a nil value: Bytes = %q, %v; want zero bytes, true", b, ok)
+	}
+	for name, elem := range map[string]*DataElement{
+		"a value still in the file": NewDataElement(tag.New(0x7FE0, 0x0010), OB, ValueInFile{Offset: 1024, Length: 8}),
+		"a type the VR cannot hold": NewDataElement(tag.New(0x0008, 0x0018), UI, struct{}{}),
+		"a nil element":             nil,
+	} {
+		if b, ok := elem.Bytes(); ok {
+			t.Errorf("%s: Bytes = %q, true; want false", name, b)
+		}
+	}
+}
