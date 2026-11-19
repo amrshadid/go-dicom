@@ -739,7 +739,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   the image reaches both ends. It does not apply an ICC Profile (C.11.15):
   color is not color managed. It refuses 64-bit samples, segmented palettes
   and a Presentation LUT Shape other than IDENTITY or INVERSE by name.
-  `go-dicom convert --format png|jpeg` is the same rendering. Grayscale
+  `go-dicom convert --format png|jpeg` is the same rendering, read from the
+  file a frame at a time, and a native frame a band of rows at a time
+  (`RenderFramesFrom`); a grayscale JPEG holds its whole picture. Grayscale
   output is checked against pydicom, the lookup tables on generated files
   since no corpus file has one, and color against the lossless copy of the
   same picture.

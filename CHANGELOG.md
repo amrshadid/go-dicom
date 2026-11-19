@@ -864,6 +864,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`convert --format png` and `jpeg` read the frame asked for, not the
+  image** (#533). The renderer read every sample from the whole Pixel Data in
+  memory, so one frame of a hundred cost all hundred, and a 200 MB frame took
+  340 MB to become a PNG: the samples and the 8-bit picture together. The
+  Pixel Data now stays in the file. A compressed frame is read and decoded
+  alone; a native frame is read a band of rows at a time, about a megabyte,
+  as the PNG encoder asks for its rows. On a Mac, frame 50 of a hundred
+  frames of 1024 x 1024 takes 28 MB where it took 237 MB, all hundred 29 MB
+  where they took 239 MB, and the 200 MB frame 28 MB as PNG and 132 MB as
+  JPEG, where both took 340 MB. A grayscale JPEG still holds the whole
+  picture: `image/jpeg` writes one component only from an `*image.Gray`. An
+  image with no window is still drawn over the range of all its frames, so
+  every frame is read once to find it before the first row is drawn, a band
+  at a time; that reads the file twice, and decodes a compressed image twice.
+  The pictures are the same, byte for byte: every PNG (133, every frame) and
+  JPEG (59) of pydicom's corpus, with the file's window and with one given,
+  and the DICOMweb rendered frames and thumbnails. `Dataset.RenderFramesFrom`
+  renders from a `dataset.FrameReader`, which `filereader.DICOMFile.FrameReader`
+  gives for a file; the DICOMweb server reads its frames through the same
+  reader. A deflated file, one without a transfer syntax, or one in a syntax
+  with no decoder is read whole as before.
+
 - **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk
   3.7.0 bundles a CharLS from before 2.1, which works out the default
   thresholds differently from T.87 below 8 bits: losslessly at 6 and 7 bits,
