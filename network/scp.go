@@ -310,6 +310,15 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	transport.SetReceiveLimit(s.config.Network.MaxPDUSize)
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
+		// On a TLS server the handshake ran inside that read. A client it
+		// turned away is reported as such, not only logged.
+		if failure := handshakeFailure(transport, err); failure != nil && ctx.Err() == nil {
+			if o := transport.observed(); o != nil {
+				e := o.event(EVTTLSHandshakeFailed)
+				e.Description, e.Error = failure.Error(), failure
+				o.events.Emit(e)
+			}
+		}
 		// A connection that opens and closes without sending a PDU is not a fault.
 		// Every TCP health check, load-balancer probe and port scan does exactly
 		// that, and each one was logging an error describing a working server: a

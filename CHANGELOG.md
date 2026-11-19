@@ -636,6 +636,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abort the peer sent has none. The PDU on the wire is unchanged, and the
   `-events` log does not write the cause.
 
+- **A failed TLS handshake is an event** (#471). A TLS server runs the
+  handshake inside its read of the A-ASSOCIATE-RQ, so a client it turned away
+  left only a log line, and events saw the connection open and close as for a
+  port scan. It now emits `EVTTLSHandshakeFailed`, before any association
+  exists, with the client's address and a `*TLSHandshakeError` whose `Check`
+  names what failed: `TLSCheckNotTLS`, `TLSCheckNoClientCertificate`,
+  `TLSCheckUnknownAuthority`, `TLSCheckCertificateInvalid`,
+  `TLSCheckPeerAlert`, `TLSCheckProtocol` or `TLSCheckConnection`. It carries
+  nothing of the client's certificate: crypto/tls's verification error holds
+  the certificates themselves, and is not passed on. `OnAny` includes it, so
+  the `-events` log of a TLS server writes an `EVT_TLS_HANDSHAKE_FAILED` line
+  where it wrote none.
+
 ### Changed
 
 - **Events no longer copy every received byte** (#469). A received PDU was

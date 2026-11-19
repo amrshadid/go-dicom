@@ -216,6 +216,11 @@
 // it. The PDU says only what PS3.8 Table 9-26 lets it, which several causes
 // share.
 //
+// A TLS server that turns a client away during the handshake reports
+// EVTTLSHandshakeFailed, before any association exists, with the client's
+// address and a [TLSHandshakeError] naming the check that failed; it carries
+// nothing of the client's certificate.
+//
 // # Logging
 //
 // Everything this package reports goes through [DefaultLogger], which writes to
