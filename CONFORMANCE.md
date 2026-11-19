@@ -668,6 +668,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   Any marker from Part 2 is refused too, but as `unexpected marker` with its
   code rather than by name.
 
+  What a codestream may cost is bounded. The image is at most 2^16 samples on
+  a side and 2^28 in all, counted over every component. A tile must hold at
+  least a byte for each of its precincts, since each has a packet of at least
+  a byte in every layer (T.800 B.9, B.10.3), and reading its packet headers is
+  work in proportion to their bits, not to the number of code-blocks they
+  name. Nothing sized by the image is allocated until every tile's packets
+  have been read. A codestream within those bounds decodes at the cost of the
+  image it describes, which can be large for a few bytes and honestly so:
+  `opj_compress` writes a black image of 16384 by 16384 in 938 bytes.
+
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an
   unsigned sample in a data set that calls it signed is read back as two's
@@ -740,7 +750,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   the image reaches both ends. It does not apply an ICC Profile (C.11.15):
   color is not color managed. It refuses 64-bit samples, segmented palettes
   and a Presentation LUT Shape other than IDENTITY or INVERSE by name.
-  `go-dicom convert --format png|jpeg` is the same rendering. Grayscale
+  `go-dicom convert --format png|jpeg` is the same rendering, read from the
+  file a frame at a time, and a native frame a band of rows at a time
+  (`RenderFramesFrom`); a grayscale JPEG holds its whole picture. Grayscale
   output is checked against pydicom, the lookup tables on generated files
   since no corpus file has one, and color against the lossless copy of the
   same picture.
@@ -921,11 +933,19 @@ how decoded samples are shaped and coloured, and the one tolerance.
   quantization with a step for each subband (E.1, expounded), at 1 to 16
   bits, signed or unsigned, so a CT keeps its negative values. The steps are
   one base step over each subband's synthesis norm, measured from this
-  library's own inverse filter, and the rate is met by searching for the
-  base step: the largest whose codestream fits the ratio, or whose decoded
-  image meets the PSNR. That is rate control by quantization, not the
-  pass-by-pass truncation of Annex J.14: one tile, one quality layer, every
-  bit plane of what is left coded. A ratio no codestream of the image can
+  library's own inverse filter. A ratio is met by the rate-distortion
+  optimal truncation of Annex J.14: every code-block is coded once, finely,
+  each coding pass is a truncation point with its bytes and the error it
+  removes, and the blocks are cut where their convex hulls reach one slope,
+  searched until the codestream fits, within half a percent of the ratio.
+  Near lossless, where the decoder's rounding to whole samples decides the
+  error more than the coding does, a search of the step with every pass
+  coded is tried as well and the codestream that decodes nearer the image
+  is kept. `LossyOptions.Layers` writes several quality layers, each half
+  the size of the next, and `LossyOptions.Reversible` the reversible 5/3
+  filter cut short (`.91` allows it, PS3.5 A.4.4); the data set path writes
+  one irreversible layer. A PSNR is met by searching the step until the
+  decoded image meets it. One tile. A ratio no codestream of the image can
   meet, as for a very small image, is refused rather than met with one that
   holds none of the picture, and so is PALETTE COLOR. The data set is marked
   Lossy Image Compression `01` with its ratio and method `ISO_15444_1`, and

@@ -161,6 +161,15 @@ func FuzzDecodeHTCodestream(f *testing.F) {
 	})
 }
 
+// decodeUpTo decodes c when its image holds at most limit samples, and
+// returns nothing otherwise.
+func decodeUpTo(c *jpeg2000.Codestream, samples, limit uint64) (*jpeg2000.Image, error) {
+	if samples > limit {
+		return nil, nil
+	}
+	return jpeg2000.Decode(c)
+}
+
 // FuzzParseCodestream runs the parser against arbitrary bytes. Every length in
 // a codestream comes from the file, and this file came from a peer: a segment
 // length, a component count, a tile index or a Psot can each point past the end
@@ -208,7 +217,16 @@ func FuzzParseCodestream(f *testing.F) {
 		// length, index and allocation from here to the pixels comes out of
 		// this file. Any error is fine; a panic is not, and neither is an image
 		// whose planes are not the size it claims.
-		if img, err := jpeg2000.Decode(c); err == nil {
+		//
+		// Only for an image of up to 4 million samples. A larger one within the
+		// decoder's limits decodes at the cost of its size, a gigabyte and more
+		// at the limit, which is the bound the package states and which
+		// TestDecodeCostsItsImage holds it to; a fuzzer running ten of these at
+		// once spends its memory on that and finds nothing else (#526). The
+		// packets below are read whatever the size, since what they cost must
+		// follow the bytes alone.
+		samples := uint64(c.Width-c.XOffset) * uint64(c.Height-c.YOffset) * uint64(len(c.Components))
+		if img, err := decodeUpTo(c, samples, 1<<22); err == nil && img != nil {
 			if img.Width <= 0 || img.Height <= 0 {
 				t.Fatalf("decoded an image of %dx%d", img.Width, img.Height)
 			}

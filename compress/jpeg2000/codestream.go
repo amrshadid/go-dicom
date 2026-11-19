@@ -15,6 +15,40 @@
 // decoder that quietly mis-decodes is worse than none: the image looks
 // plausible while the numbers are wrong, and in an RT Dose a wrong number is a
 // wrong dose.
+//
+// # What a codestream may cost
+//
+// A codestream comes from a file or a peer nobody vouches for, and every size
+// in it is the sender's word. The rule the decoder keeps is this: anything it
+// allocates is in proportion to bytes the codestream actually holds, or to the
+// image's dimensions, and those are first held to a stated limit and to the
+// data that follows them.
+//
+//   - Lengths, counts and lists read from a segment (components, quantization
+//     values, progression order changes, tile-parts) are checked against the
+//     bytes that remain before anything is made from them.
+//   - The image is at most 2^16 samples on a side and 2^28 samples in all,
+//     counted over every component: 1 GiB of decoded planes. Within that, a
+//     tile must hold at least as many bytes as it has precincts, since each
+//     precinct has a packet of at least one byte in every layer (B.9,
+//     B.10.3); a resolution without samples counts as one.
+//   - What the packet headers describe costs what they hold. Code-blocks are
+//     not listed but found by arithmetic; a block has state only once a
+//     packet includes it; and the blocks a tag tree answers for together are
+//     stepped over together, so the work of reading a header follows its bits
+//     and not the number of blocks in its precinct. A tile that takes more
+//     than 64 steps a byte (no real file takes 3) is refused.
+//   - Nothing sized by the image (the planes, the coefficients of a tile) is
+//     made until every tile's packets have been read.
+//
+// The second rule does not make a small codestream a small image. JPEG 2000
+// can describe a large image in very few bytes, and honestly: opj_compress
+// writes a black image of 16384 by 16384 samples in 938 bytes. Such a
+// codestream decodes, at the cost of the image it describes: under 16 bytes a
+// sample allocated in all, four of them the decoded planes and the rest the
+// coefficients of a tile while it is rebuilt. A caller that knows the size it
+// expects, as a DICOM reader knows Rows and Columns, can compare it with the
+// header ParseCodestream returns before calling Decode.
 package jpeg2000
 
 import (
@@ -545,7 +579,8 @@ func parseSIZ(c *Codestream, s []byte) error {
 		}
 		c.Components[i] = comp
 	}
-	return nil
+	// Again with the components, which the limit counts.
+	return checkImageSize(c)
 }
 
 func parseCOD(s []byte) (CodingStyle, error) {

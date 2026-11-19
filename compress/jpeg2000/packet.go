@@ -46,7 +46,11 @@ type CodewordSegment struct {
 
 // TileData is one tile's code-blocks, in the order the geometry lists them.
 type TileData struct {
-	Tile       int
+	Tile int
+	// Components is the tile's geometry. Its bands do not list their
+	// code-blocks, which for a large image with small blocks is millions of
+	// entries the packets may never name; Blocks has the ones they did, and
+	// TileComponentFor lists them all.
 	Components []TileComponent
 	Blocks     []CodeBlockData
 
@@ -60,8 +64,11 @@ type TileData struct {
 // blockState is what a packet header has said about one code-block so far. The
 // state persists across layers: a block included in layer 0 is signaled with a
 // single bit in layer 1, and its length field grows as its contributions do.
+//
+// Only a block that has been included has one: a precinct can hold millions of
+// blocks of which the file includes a few, and the cost of a block is then the
+// bits that included it.
 type blockState struct {
-	included      bool
 	zeroBitPlanes int
 	lblock        int // bits in the length field, 3 to start (B.10.7.1)
 	passes        int
@@ -72,15 +79,21 @@ type blockState struct {
 }
 
 // precinctState holds the two tag trees a precinct's packets share and the
-// per-block state, for one band of the precinct.
+// state of its included blocks, for one band of the precinct.
 type precinctState struct {
 	inclusion *tagTree
 	zeroBits  *tagTree
-	// indexes says which of the band's code-blocks each entry of blocks is:
-	// the precinct's own blocks, in the order its packets list them. Nil
-	// means the precinct holds the whole band, in the band's order.
+	// indexes says which of the band's code-blocks each of the precinct's
+	// blocks is, in the order its packets list them. Nil means the precinct
+	// holds the whole band, in the band's order.
 	indexes []int
-	blocks  []blockState
+	// w and h are the precinct's code-block grid, the shape of its tag trees.
+	w, h int
+	// blocks holds the blocks that have been included, by their place in the
+	// precinct, and included lists the same places in raster order: each
+	// takes a bit in every packet after its first (readBlocks).
+	blocks   map[int]*blockState
+	included []int
 }
 
 // bandBlock is which of the band's code-blocks entry i of the precinct is.
@@ -104,6 +117,25 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 			data = append(data, part.Data...)
 		}
 	}
+	return c.readTilePackets(tile, data)
+}
+
+// tileData concatenates every tile's parts in one pass over them. Decode
+// wants all the tiles, and looking each one's parts up among all of them
+// costs the number of tiles times the number of parts, which a file of a
+// megabyte can make 4 billion.
+func (c *Codestream) tileData() [][]byte {
+	data := make([][]byte, c.NumTiles())
+	for _, part := range c.TileParts {
+		if part.Tile < len(data) {
+			data[part.Tile] = append(data[part.Tile], part.Data...)
+		}
+	}
+	return data
+}
+
+// readTilePackets is ReadTilePackets given the tile's data.
+func (c *Codestream) readTilePackets(tile int, data []byte) (*TileData, error) {
 	if len(data) == 0 {
 		return nil, errorf("tile %d has no data", tile)
 	}
@@ -111,28 +143,48 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 	out := &TileData{Tile: tile}
 	states := map[[4]int]*precinctState{} // component, resolution, band, precinct
 
+	// Every precinct of every resolution has a packet in each layer, and a
+	// packet is at least one byte (B.9, B.10.3), so a tile holds at least as
+	// many bytes as it has precincts. This is where the header is first held
+	// to the data: 244 bytes declared 185 million samples in 33 resolutions
+	// over a tile of one byte (#526). A resolution with no samples has no
+	// precinct and is counted as one anyway, since it costs its geometry like
+	// any other. The count is kept as the components are laid out, so a header
+	// that declares thousands of components and decomposition levels over a
+	// few bytes is refused before their geometry is built, not after.
+	//
+	// It is a count and not a check that every packet is there: opj_compress
+	// writes, under some progression order changes, a tile that leaves
+	// packets out, and OpenJPEG decodes it from what is there.
+	units := 0
 	for comp := range c.Components {
-		tc, err := c.TileComponentFor(tile, comp)
+		tc, err := c.tileComponent(tile, comp, false)
 		if err != nil {
 			return nil, err
+		}
+		for _, res := range tc.Resolutions {
+			units += maxInt(1, res.Precincts())
+		}
+		if units > len(data) {
+			return nil, errorf("tile %d declares more precincts than its %d bytes can hold a packet for",
+				tile, len(data))
 		}
 		out.Components = append(out.Components, tc)
 	}
 
-	precincts, err := c.tilePrecincts(tile, out.Components, len(data))
-	if err != nil {
-		return nil, err
-	}
+	precincts := c.tilePrecincts(tile, out.Components)
+	changes := c.ProgressionChangesForTile(tile)
 	style := c.CodingForTile(tile, 0)
+	work := &packetWork{budget: packetWorkBudget(len(data))}
 	pos := 0
-	err = forEachPacket(style, c.ProgressionChangesForTile(tile), precincts, len(data), func(step packetStep) (bool, error) {
+	err := forEachPacket(style, changes, precincts, len(data), func(step packetStep) (bool, error) {
 		if pos >= len(data) {
 			// Layers may simply stop: an encoder writes as many as it wrote,
 			// and the rest of the progression is empty. This is also what
 			// bounds the walk: every packet read takes at least a byte.
 			return false, nil
 		}
-		next, err := c.readPacket(data, pos, tile, step, states, out)
+		next, err := c.readPacket(data, pos, tile, step, states, out, work)
 		if err != nil {
 			return false, err
 		}
@@ -152,14 +204,15 @@ func (c *Codestream) ReadTilePackets(tile int) (*TileData, error) {
 		comp, res, band, _ := key[0], key[1], key[2], key[3]
 		tc := out.Components[comp]
 		bandInfo := tc.Resolutions[res].Bands[band]
+		resInfo := tc.Resolutions[res]
 		blockStyle := c.CodingForTile(tile, comp).BlockStyle
-		for i := range state.blocks {
-			b := &state.blocks[i]
-			if !b.included || len(b.data) == 0 {
+		for _, i := range state.included {
+			b := state.blocks[i]
+			if len(b.data) == 0 {
 				continue
 			}
 			out.Blocks = append(out.Blocks, CodeBlockData{
-				Block:         bandInfo.Blocks[state.bandBlock(i)],
+				Block:         codeBlockAt(bandInfo, resInfo.CodeBlockW, resInfo.CodeBlockH, state.bandBlock(i)),
 				BandType:      bandInfo.Type,
 				Resolution:    res,
 				Component:     comp,
@@ -203,20 +256,15 @@ type tilePrecinct struct {
 // is what x and y hold; sorting by them is the standard's loop without
 // visiting every point of the grid to find the few that start a precinct.
 //
-// A complete codestream holds at least one packet of at least one byte for
-// every precinct, so a tile that declares far more precincts than it has bytes
-// is refused here, before a list of them is allocated. The slack is for a
-// codestream truncated after its first layers, which is legal.
-func (c *Codestream) tilePrecincts(tile int, comps []TileComponent, tileBytes int) ([]tilePrecinct, error) {
-	total, resolutions := int64(0), 0
+// ReadTilePackets has held the count of precincts to the tile's bytes before
+// this list is made.
+func (c *Codestream) tilePrecincts(tile int, comps []TileComponent) []tilePrecinct {
+	total, resolutions := 0, 0
 	for _, tc := range comps {
 		for _, res := range tc.Resolutions {
-			total += int64(res.PrecinctsWide) * int64(res.PrecinctsHigh)
+			total += res.Precincts()
 		}
 		resolutions = maxInt(resolutions, len(tc.Resolutions))
-	}
-	if limit := int64(tileBytes) + 1<<16; total > limit {
-		return nil, errorf("tile %d declares %d precincts in %d bytes", tile, total, tileBytes)
 	}
 
 	tx0, ty0, _, _ := c.TileBounds(tile)
@@ -244,7 +292,37 @@ func (c *Codestream) tilePrecincts(tile int, comps []TileComponent, tileBytes in
 			}
 		}
 	}
-	return precincts, nil
+	return precincts
+}
+
+// packetWork counts the steps readBlocks takes through a tile's packet
+// headers, against a budget the tile's size sets.
+//
+// Each step reads a bit, or steps over code-blocks a tag tree node has
+// answered for, and such a node is under one whose value cost a bit. So the
+// steps follow the bits, and the budget is a guard on that reasoning rather
+// than a limit a file meets: the most any file in the corpus or the OpenJPEG
+// matrix takes is under 3 steps a byte, and black images of 16384 by 16384
+// that opj_compress wrote with 16x16 blocks in ten layers, or 4096 by 4096
+// with 4x4 blocks, take one step a byte. Visiting every block of every
+// precinct in every packet, as the reader did before, took 14 million steps
+// for the first of those.
+type packetWork struct {
+	spent, budget int
+}
+
+// packetWorkBudget is the steps a tile of tileBytes may take.
+func packetWorkBudget(tileBytes int) int {
+	return 1<<10 + 64*tileBytes
+}
+
+// spend charges n steps, and refuses once the budget is gone.
+func (w *packetWork) spend(n, tile int) error {
+	if w.spent += n; w.spent > w.budget {
+		return errorf("tile %d takes more than %d steps to read its packet headers, too many for its size",
+			tile, w.budget)
+	}
+	return nil
 }
 
 // forEachPacket calls visit for each packet of a tile in the order the coding
@@ -372,7 +450,7 @@ func walkVolume(progression, layers int, precincts []tilePrecinct, emit func(til
 
 // readPacket reads one packet's header and body, returning the offset after it.
 func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
-	states map[[4]int]*precinctState, out *TileData) (int, error) {
+	states map[[4]int]*precinctState, out *TileData, work *packetWork) (int, error) {
 
 	style := c.CodingForTile(tile, step.component)
 	tc := out.Components[step.component]
@@ -410,56 +488,53 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 				indexes, w, h := precinctBlocks(res, band, step.precinct)
 				state = &precinctState{
 					inclusion: newTagTree(w, h),
-					zeroBits:  newTagTree(w, h),
 					indexes:   indexes,
-					blocks:    make([]blockState, w*h),
+					w:         w,
+					h:         h,
+					blocks:    map[int]*blockState{},
 				}
 				states[key] = state
 			}
 
-			// A band with no code-blocks in this precinct has nothing in its
-			// packets (B.10).
-			for i := range state.blocks {
-				b := &state.blocks[i]
-				included, err := readInclusion(r, state, b, i, step.layer)
-				if err != nil {
-					return 0, err
-				}
-				if !included {
-					continue
-				}
-
-				if b.zeroBitPlanes == 0 && !b.included {
+			// readBlock reads the rest of what the header says about block i,
+			// once it is known to contribute to this layer.
+			readBlock := func(i int) error {
+				b := state.blocks[i]
+				if b == nil {
 					zero, err := readZeroBitPlanes(r, state, i)
 					if err != nil {
-						return 0, err
+						return err
 					}
-					b.zeroBitPlanes = zero
-					b.lblock = 3
+					b = &blockState{zeroBitPlanes: zero, lblock: 3}
+					state.blocks[i] = b
 				}
-				b.included = true
-
 				passes, err := readPassCount(r)
 				if err != nil {
-					return 0, err
+					return err
 				}
 				if style.BlockStyle&(BlockStyleBypass|BlockStyleTermAll|BlockStyleHT) == 0 {
 					length, err := readSegmentLength(r, b, passes)
 					if err != nil {
-						return 0, err
+						return err
 					}
 					b.passes += passes
 					contributions = append(contributions, contribution{key, i, length})
-					continue
+					return nil
 				}
 				lengths, err := readSegmentLengths(r, b, passes, style.BlockStyle)
 				if err != nil {
-					return 0, err
+					return err
 				}
 				b.passes += passes
 				for _, length := range lengths {
 					contributions = append(contributions, contribution{key, i, length})
 				}
+				return nil
+			}
+			// A band with no code-blocks in this precinct has nothing in its
+			// packets (B.10).
+			if err := state.readBlocks(r, step.layer, tile, work, readBlock); err != nil {
+				return 0, err
 			}
 		}
 	}
@@ -477,34 +552,128 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 			return 0, errorf("packet body runs past the tile: %d bytes with %d left",
 				contribution.length, len(data)-pos)
 		}
-		state := states[contribution.key]
-		block := &state.blocks[contribution.block]
+		block := states[contribution.key].blocks[contribution.block]
 		block.data = append(block.data, data[pos:pos+contribution.length]...)
 		pos += contribution.length
 	}
 	return pos, nil
 }
 
-// readInclusion says whether a code-block contributes to this layer (B.10.4).
-// A block that has never appeared is signaled through the inclusion tag tree,
-// whose value is the first layer it appears in; one that has appeared before
-// takes a single bit.
-func readInclusion(r *bitReader, state *precinctState, b *blockState, index, layer int) (bool, error) {
-	if b.included {
-		bit, err := r.readBit()
-		return bit == 1, err
+// readBlocks reads, for each code-block of the precinct's band in raster
+// order, whether it contributes to this layer (B.10.4), and calls readBlock
+// for each one that does.
+//
+// A block that has appeared before takes a single bit. One that has not is
+// signaled through the inclusion tag tree, whose value is the first layer it
+// appears in, and when a node of the tree is at the layer's threshold every
+// block under it is answered "not yet" without a bit (decodeLeaf). Those are
+// stepped over rather than asked one by one: across the node's columns in
+// this row, and when a whole row was answered so, down to the first row the
+// nodes do not cover. The bits read are the same, in the same order, as
+// asking every block; what changes is that the work is the bits and the
+// blocks that have appeared, not the size of the precinct. A precinct of
+// default size over 4x4 code-blocks is millions of blocks, and before this a
+// header of a byte had each one visited, in every layer.
+func (p *precinctState) readBlocks(r *bitReader, layer, tile int, work *packetWork,
+	readBlock func(i int) error) error {
+
+	w, h := p.w, p.h
+	if w <= 0 || h <= 0 {
+		return nil
 	}
-	value, known, err := state.inclusion.decode(r, index, int32(layer)+1)
-	if err != nil {
-		return false, err
+	threshold := int32(layer) + 1
+	before := p.included // blocks that appeared in an earlier layer, in raster order
+	next := 0            // the first of them not yet passed
+	var newly []int
+
+	for y := 0; y < h; {
+		skipTo := h // the first row the nodes stepped over in this row do not cover
+		stepped := true
+		for x := 0; x < w; {
+			if err := work.spend(1, tile); err != nil {
+				return err
+			}
+			i := y*w + x
+			if next < len(before) && before[next] == i {
+				bit, err := r.readBit()
+				if err != nil {
+					return err
+				}
+				if bit == 1 {
+					if err := readBlock(i); err != nil {
+						return err
+					}
+				}
+				next++
+				x++
+				stepped = false
+				continue
+			}
+			value, known, stop, err := p.inclusion.decodeLeaf(r, i, threshold)
+			if err != nil {
+				return err
+			}
+			if known && value <= int32(layer) {
+				if err := readBlock(i); err != nil {
+					return err
+				}
+				newly = append(newly, i)
+				x++
+				stepped = false
+				continue
+			}
+			if stop <= 0 {
+				// Settled at the leaf itself: it says nothing about the next.
+				x++
+				stepped = false
+				continue
+			}
+			// Every block under the node at level stop is "not yet": step to
+			// the node's right edge. No block that appeared before is under
+			// it. Such a block's leaf and every node above it are known, at
+			// values no higher than the layer it appeared in, and a known node
+			// is never the one a read stops at.
+			x = min((x>>stop+1)<<stop, w)
+			skipTo = min(skipTo, (y>>stop+1)<<stop)
+		}
+		if !stepped {
+			y++
+			continue
+		}
+		// The whole row was stepped over, so the rows below it are too, as far
+		// as the nodes reach.
+		y = max(skipTo, y+1)
 	}
-	return known && value <= int32(layer), nil
+
+	if len(newly) > 0 {
+		p.included = mergeSorted(before, newly)
+	}
+	return nil
+}
+
+// mergeSorted merges two ascending lists into a new one.
+func mergeSorted(a, b []int) []int {
+	out := make([]int, 0, len(a)+len(b))
+	for len(a) > 0 && len(b) > 0 {
+		if a[0] < b[0] {
+			out, a = append(out, a[0]), a[1:]
+		} else {
+			out, b = append(out, b[0]), b[1:]
+		}
+	}
+	return append(append(out, a...), b...)
 }
 
 // readZeroBitPlanes reads how many leading bit planes of a newly included block
 // are all zero (B.10.5). The tag tree is read until the value is final, which
 // is what distinguishes it from the inclusion tree's threshold read.
+//
+// The tree is made when the precinct's first block is included, since a
+// precinct none of whose blocks appear never reads it.
 func readZeroBitPlanes(r *bitReader, state *precinctState, index int) (int, error) {
+	if state.zeroBits == nil {
+		state.zeroBits = newTagTree(state.w, state.h)
+	}
 	for threshold := int32(1); threshold < 74; threshold++ {
 		value, known, err := state.zeroBits.decode(r, index, threshold)
 		if err != nil {

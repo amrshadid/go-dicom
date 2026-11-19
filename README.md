@@ -808,7 +808,7 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 - **Clean Descriptors** - Remove text descriptions
 - **Clean Graphics** - Remove overlays and graphic annotations held as attributes
 
-Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. `share -preview` and `-detect` show what it finds before anything is changed.
+Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. When what it finds covers more than a quarter of the picture, which on the measured scans means it took anatomy for lettering, `-redact auto` refuses by name and writes nothing rather than black out the scan. `share -preview` and `-detect` show what it finds before anything is changed.
 - **Retain Long Full Dates** - Keep dates for longitudinal studies
 - **Retain Patient Characteristics** - Keep age, sex, size, weight
 - **Retain Device Identity** - Keep device information

@@ -284,7 +284,7 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 				// nothing here says the image is now clean.
 				regions, err := anonymizer.RedactDetectedText(ds, nil)
 				if err != nil {
-					return err
+					return implausibleHint(err)
 				}
 				fmt.Printf("  %s: %d region(s) detected and filled\n", filepath.Base(input), len(regions))
 			}
@@ -434,6 +434,9 @@ OPTIONS:
                      miss: Burned In Annotation is left as it was, and the
                      method records that the redaction was automatic and
                      unverified. Look at each image before it leaves you.
+                     When what is found covers more than a quarter of the
+                     picture, more than text does, nothing is filled and
+                     the file is not written.
   -detect            Print those regions for one file, as -redact takes
                      them, and write nothing: go-dicom anonymize -detect x.dcm
   -allow-burned-in   Write images that may hold burned-in text as they are.

@@ -90,7 +90,7 @@ func TestAnalyze97IsUndoneBySynthesis(t *testing.T) {
 }
 
 // TestEncodeLossyMeetsTheRatio proves the codestream is no larger than the
-// ratio allows and not far below it, at 8, 12 and 16 bits, signed and
+// ratio allows and no more than 2% below it, at 8, 12 and 16 bits, signed and
 // unsigned, gray and color, and that a higher ratio loses more.
 func TestEncodeLossyMeetsTheRatio(t *testing.T) {
 	cases := []struct {
@@ -112,7 +112,7 @@ func TestEncodeLossyMeetsTheRatio(t *testing.T) {
 				t.Fatalf("%s at %g:1: %v", c.name, ratio, err)
 			}
 			got := raw / float64(len(data))
-			if got < ratio || got > ratio*1.15 {
+			if got < ratio || got > ratio*1.02 {
 				t.Errorf("%s: asked for %g:1, got %.2f:1", c.name, ratio, got)
 			}
 			p := psnrImages(img, lossyDecode(t, data))
@@ -192,6 +192,7 @@ func TestOpenJPEGDecodesWhatEncodeLossyWrites(t *testing.T) {
 		{97, 61, 1, 16, true, LossyOptions{Ratio: 8}},
 		{80, 64, 3, 8, false, LossyOptions{PSNR: 40}},
 		{33, 17, 1, 8, false, LossyOptions{PSNR: 45}},
+		{160, 120, 3, 8, false, LossyOptions{Ratio: 12, Layers: 4}},
 	} {
 		img := smoothImage(c.w, c.h, c.comps, c.depth, c.signed)
 		data, err := EncodeLossy(img, c.options)

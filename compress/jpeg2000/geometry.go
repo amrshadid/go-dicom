@@ -92,8 +92,21 @@ func (c *Codestream) TileBounds(tile int) (x0, y0, x1, y1 int) {
 	return x0, y0, x1, y1
 }
 
-// TileComponentFor builds the full geometry of one component of one tile.
+// TileComponentFor builds the full geometry of one component of one tile,
+// with every band's code-blocks listed in Band.Blocks.
 func (c *Codestream) TileComponentFor(tile, component int) (TileComponent, error) {
+	return c.tileComponent(tile, component, true)
+}
+
+// tileComponent builds the geometry of one component of one tile, and lists
+// each band's code-blocks only when listBlocks is set.
+//
+// The decoder does not list them. A band's code-blocks are a regular grid, so
+// the one a packet names is found by arithmetic (codeBlockAt), and a list costs
+// a CodeBlock for every block of the image whether the file carries a byte for
+// it or not: 4x4 blocks over an image of 185 million samples are 11 million of
+// them, which a codestream of 244 bytes asked for (#526).
+func (c *Codestream) tileComponent(tile, component int, listBlocks bool) (TileComponent, error) {
 	if component < 0 || component >= len(c.Components) {
 		return TileComponent{}, errorf("component %d of %d", component, len(c.Components))
 	}
@@ -158,7 +171,9 @@ func (c *Codestream) TileComponentFor(tile, component int) (TileComponent, error
 				return TileComponent{}, errorf("tile %d component %d is divided into more than %d code-blocks",
 					tile, component, limit)
 			}
-			band.Blocks = codeBlocksOf(band, res.CodeBlockW, res.CodeBlockH)
+			if listBlocks {
+				band.Blocks = codeBlocksOf(band, res.CodeBlockW, res.CodeBlockH)
+			}
 			res.Bands = append(res.Bands, band)
 		}
 		tc.Resolutions = append(tc.Resolutions, res)
@@ -168,15 +183,35 @@ func (c *Codestream) TileComponentFor(tile, component int) (TileComponent, error
 
 // blockCount is how many code-blocks codeBlocksOf will cut a band into.
 func blockCount(band Band, xcb, ycb int) int {
+	columns, rows := blockGrid(band, xcb, ycb)
+	return columns * rows
+}
+
+// blockGrid is how many code-blocks a band is cut into across and down (B.7).
+func blockGrid(band Band, xcb, ycb int) (columns, rows int) {
 	if band.X1 <= band.X0 || band.Y1 <= band.Y0 {
-		return 0
+		return 0, 0
 	}
 	w, h := 1<<xcb, 1<<ycb
-	return (ceilDivInt(band.X1, w) - floorTo(band.X0, w)/w) * (ceilDivInt(band.Y1, h) - floorTo(band.Y0, h)/h)
+	return ceilDivInt(band.X1, w) - floorTo(band.X0, w)/w, ceilDivInt(band.Y1, h) - floorTo(band.Y0, h)/h
+}
+
+// codeBlockAt is code-block number index of a band, in the raster order
+// codeBlocksOf lists them in: the same rectangle, found without the list.
+func codeBlockAt(band Band, xcb, ycb, index int) CodeBlock {
+	columns, _ := blockGrid(band, xcb, ycb)
+	w, h := 1<<xcb, 1<<ycb
+	x := floorTo(band.X0, w) + index%columns*w
+	y := floorTo(band.Y0, h) + index/columns*h
+	return CodeBlock{
+		X0: maxInt(x, band.X0), Y0: maxInt(y, band.Y0),
+		X1: minInt(x+w, band.X1), Y1: minInt(y+h, band.Y1),
+		Index: index,
+	}
 }
 
 // precinctBlocks lists the code-blocks of a band that belong to precinct k of
-// its resolution (B.6), as indexes into band.Blocks in the raster order a
+// its resolution (B.6), as indexes into the band's blocks in the raster order a
 // packet header walks them in, with the width and height of the grid they
 // form, which is the shape of the precinct's tag trees (B.10.2). A nil list
 // with a grid of w*h blocks means the precinct holds the whole band, in the
@@ -190,7 +225,8 @@ func blockCount(band Band, xcb, ycb int) int {
 // falls in exactly one precinct and the blocks of a precinct are a rectangle
 // of the band's block grid, found by arithmetic rather than by a search.
 func precinctBlocks(res Resolution, band Band, k int) (blocks []int, w, h int) {
-	if len(band.Blocks) == 0 || res.PrecinctsWide <= 0 || k < 0 || k >= res.Precincts() {
+	columns, rows := blockGrid(band, res.CodeBlockW, res.CodeBlockH)
+	if columns*rows == 0 || res.PrecinctsWide <= 0 || k < 0 || k >= res.Precincts() {
 		return nil, 0, 0
 	}
 	ppx, ppy := res.PPx, res.PPy
@@ -209,12 +245,11 @@ func precinctBlocks(res Resolution, band Band, k int) (blocks []int, w, h int) {
 	// this precinct covers.
 	bw, bh := 1<<res.CodeBlockW, 1<<res.CodeBlockH
 	firstColumn, firstRow := floorTo(band.X0, bw)/bw, floorTo(band.Y0, bh)/bh
-	columns := ceilDivInt(band.X1, bw) - firstColumn
 	c0, c1 := floorTo(x0, bw)/bw, ceilDivInt(x1, bw)
 	r0, r1 := floorTo(y0, bh)/bh, ceilDivInt(y1, bh)
 
 	w, h = c1-c0, r1-r0
-	if w*h == len(band.Blocks) {
+	if w*h == columns*rows {
 		// The whole band, which with the default precincts is every band:
 		// the indexes would be 0 to n-1, and nil says so without a list.
 		return nil, w, h

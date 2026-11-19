@@ -142,6 +142,12 @@
 //     looked at it. A program with a better detector supplies it through
 //     the [TextDetector] interface.
 //
+//     It can also be wrong the other way: on a smoothed scan, anatomy taken
+//     at a reduced scale can line up like large lettering. When it is wrong
+//     so, it is wrong by a great deal, so an automatic redaction whose
+//     regions cover more than [MaxDetectedShare] of the picture is refused
+//     with [ErrImplausibleRedaction] and nothing is filled.
+//
 //   - Private tags that were deliberately retained. The basic profile removes
 //     private attributes outside the safe list, but one kept on purpose may
 //     carry identity.
