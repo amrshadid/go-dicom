@@ -703,6 +703,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Packages other than `dataset` still assert `[]byte` in places; #420 lists
   them.
 
+- **De-identification reads a value held as a list of strings** (#420).
+  The UID action knew a value held as `[]byte` or a string, so a UID list
+  built in memory as a `[]string`, such as Failed SOP Instance UID List, was
+  taken for no UID and kept its original values, which link the result back
+  to the source instances; the same list read from a file was replaced.
+  Retain Safe Private read a private creator held as a string as no creator
+  and dropped the safe attributes it owned, and a De-identification Method
+  held as a list lost the automatic redaction note on a second pass. Every
+  read now goes through the new `DataElement.Bytes`, the conversion the file
+  writer uses, and `dataset` uses it in place of its own helper. A test runs
+  every profile over pydicom's corpus twice, once as read and once rebuilt
+  with string values, and requires the same result.
+
 - **`GetPixelDataInfo` holds the rescale** (#378). `PixelDataInfo` has
   `RescaleSlope` and `RescaleIntercept`, and nothing ever set them, so both
   were 0 for every image: a CT with intercept -1024 read `0 0`, and
