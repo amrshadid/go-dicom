@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -109,8 +110,10 @@ func TestAbortCauses(t *testing.T) {
 	t.Run("timeout", func(t *testing.T) {
 		log := &abortLog{}
 		server := causeServer(t, SCPConfig{Network: NetworkConfig{DIMSETimeout: 200 * time.Millisecond}}, &EchoHandler{}, log)
-		associated(t, server, nil)
+		idle := associated(t, server, nil)
 		events := log.wait(t, 2)
+		// Unreachable, its connection would be closed by its finalizer first.
+		runtime.KeepAlive(idle)
 		local := sentAbort(t, events)
 		var timeout *TimeoutError
 		if local.Cause != AbortCauseTimeout || !errors.As(local.Err, &timeout) {
@@ -216,6 +219,7 @@ func TestAbortCauses(t *testing.T) {
 		_ = sendPDUs(context.Background(), scu, [][]PDVItem{{{PresentationContextID: ctxExplicit, Data: make([]byte, 64)}}})
 		<-started
 		server.Stop()
+		defer runtime.KeepAlive(scu) // open until the server has aborted it
 		events := log.wait(t, 2)
 		local := sentAbort(t, events)
 		if local.Cause != AbortCauseStopping || !errors.Is(local.Err, context.Canceled) {
