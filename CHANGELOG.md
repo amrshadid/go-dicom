@@ -896,6 +896,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A C-GET goes on past an instance it cannot encode** (#518). A C-GET
+  sub-operation sent its C-STORE-RQ, which says a data set follows, and
+  encoded the instance only then. When the instance could not be put in the
+  syntax the requestor had negotiated, a lossy one that is not sent unasked
+  for instance, nothing followed: the requestor read the next sub-operation's
+  C-STORE-RQ where it was owed a data set, and the whole retrieve ended with
+  "expected a data set for the C-STORE sub-operation, got a command". The
+  instance is now encoded before anything is sent, so one that cannot be is
+  one failed sub-operation and the rest are delivered. C-MOVE was not
+  affected.
+
 - **An A-ABORT is read by the peer before the connection is closed** (#513).
   This side wrote its A-ABORT and closed the connection behind it. A peer
   still sending had bytes on their way that were never read, and a connection

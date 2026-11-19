@@ -1050,13 +1050,17 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 	if err != nil {
 		return fmt.Errorf("encode C-STORE-RQ: %w", err)
 	}
-	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
-		return fmt.Errorf("send C-STORE-RQ: %w", err)
-	}
-
+	// The instance is encoded before anything is sent. The C-STORE-RQ says a
+	// data set follows, and an instance that cannot be put in the negotiated
+	// syntax was found out only after it had gone: the requestor, owed a data
+	// set, read the next sub-operation's C-STORE-RQ in its place and the
+	// whole retrieve ended there (#518). SCU.Store has always encoded first.
 	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(ctxID), s.config.Network)
 	if err != nil {
 		return fmt.Errorf("encode instance: %w", err)
+	}
+	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
+		return fmt.Errorf("send C-STORE-RQ: %w", err)
 	}
 	if err := assoc.SendPData(ctx, ctxID, dataBytes, false); err != nil {
 		return fmt.Errorf("send instance: %w", err)
