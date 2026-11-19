@@ -73,9 +73,8 @@ func convertSingleEncoding(ctx context.Context, dicomName string, validationMode
 
 	correctedName, encoding := attemptMisspellingCorrection(dicomName)
 	if encoding != "" {
-		msg := fmt.Sprintf("Incorrect value for Specific Character Set '%s' - assuming '%s'",
-			dicomName, correctedName)
-		logWarning(msg)
+		msg := fmt.Sprintf("Incorrect value for Specific Character Set - assuming '%s'", correctedName)
+		logWarning(ctx, msg)
 		return encoding, nil
 	}
 
@@ -121,8 +120,8 @@ func handleUnknownEncoding(ctx context.Context, dicomName string, validationMode
 		)
 
 	case config.WARN:
-		msg := fmt.Sprintf("Unknown encoding '%s' - using default encoding instead", dicomName)
-		logWarning(msg)
+		msg := fmt.Sprintf("Unknown encoding (a defined term of %d bytes) - using default encoding instead", len(dicomName))
+		logWarning(ctx, msg)
 		return DefaultEncoding, nil
 
 	case config.IGNORE:
@@ -141,7 +140,7 @@ func validateStandAloneEncodings(ctx context.Context, origValues []string, encod
 
 	if IsStandAloneEncoding(origValues[0]) {
 		msg := fmt.Sprintf("Stand-alone encoding '%s' cannot be used with code extensions - "+
-			"removing additional encodings %v", origValues[0], origValues[1:])
+			"removing the %d terms after it", origValues[0], len(origValues)-1)
 
 		switch validationMode {
 		case config.RAISE:
@@ -151,7 +150,7 @@ func validateStandAloneEncodings(ctx context.Context, origValues []string, encod
 				"Stand-alone encoding cannot be used with code extensions",
 			)
 		case config.WARN:
-			logWarning(msg)
+			logWarning(ctx, msg)
 			return encodings[:1], nil
 		case config.IGNORE:
 			return encodings[:1], nil
@@ -171,7 +170,7 @@ func validateStandAloneEncodings(ctx context.Context, origValues []string, encod
 					"Stand-alone encoding cannot be used in code extensions",
 				)
 			case config.WARN:
-				logWarning(msg)
+				logWarning(ctx, msg)
 				result := make([]string, 0, len(encodings)-1)
 				result = append(result, encodings[:i]...)
 				result = append(result, encodings[i+1:]...)
@@ -208,7 +207,12 @@ func isValidGoEncoding(name string) bool {
 	return encoder != nil
 }
 
-// logWarning logs a warning message using the global logger.
-func logWarning(msg string) {
-	config.Logger.Warn(msg, "module", "charset")
+// logWarning logs a warning to the logger ctx carries, config.Logger when
+// it carries none (config.WithLogger).
+//
+// A message says what was decided and never repeats the text it was
+// decided about: a Specific Character Set value is the file's own text, and
+// a file read from an untrusted source puts whatever it likes there.
+func logWarning(ctx context.Context, msg string) {
+	config.LoggerFromContext(ctx).Warn(msg, "module", "charset")
 }

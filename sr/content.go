@@ -506,7 +506,7 @@ func readOrdinals(ds *dataset.Dataset, t tag.Tag) []int {
 	if !ok {
 		return nil
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok || len(raw) < 4 {
 		return nil
 	}
@@ -538,7 +538,7 @@ func srString(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok {
 		return ""
 	}

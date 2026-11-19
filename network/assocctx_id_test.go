@@ -96,7 +96,7 @@ func TestConnectionHasNoIDWithoutEvents(t *testing.T) {
 		t.Errorf("a connection with nowhere to report has the id %d", id)
 	}
 	_, events := newEventLog()
-	transport.observe(events)
+	transport.observe(events, nil)
 	if transport.associationID() == 0 {
 		t.Error("a connection that reports events has no id")
 	}

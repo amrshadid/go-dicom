@@ -41,6 +41,9 @@ func (s AssociationState) String() string {
 type Association struct {
 	mu sync.RWMutex
 
+	// logger is the SCU's or SCP's own, nil for DefaultLogger.
+	logger *Logger
+
 	state     AssociationState
 	transport *Transport
 
@@ -120,8 +123,9 @@ func (a *Association) setMaxDataSetSize(n int64) {
 // abortReceive aborts an association whose peer broke a bound or the framing
 // of a message, and returns the error to report.
 func (a *Association) abortReceive(ctx context.Context, reason byte, why string) error {
-	_ = a.Abort(ctx, AbortSourceServiceProvider, reason)
-	return NewAssociationError("PROTOCOL_VIOLATION", "aborted the association: "+why)
+	err := NewAssociationError("PROTOCOL_VIOLATION", "aborted the association: "+why)
+	_ = a.abortWhy(ctx, AbortSourceServiceProvider, reason, abortedBy(AbortCauseProtocolViolation, err))
+	return err
 }
 
 // pendingMessage is a message read before its recipient asked for it.
@@ -330,7 +334,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 		ImplementationVersion:  DefaultImplementationVersionName,
 	}
 	if ext != nil {
-		userInfo.AsyncOperations = truthfulAsyncWindow(ext.AsyncOperations)
+		userInfo.AsyncOperations = truthfulAsyncWindow(ext.AsyncOperations, a.logger.orDefault())
 		userInfo.RoleSelections = ext.RoleSelections
 		userInfo.UserIdentity = ext.UserIdentity
 	}
@@ -415,7 +419,7 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 
 	// Negotiate presentation contexts
 	results := NegotiatePresentationContexts(rq.PresentationContexts, supportedAbstractSyntaxes, supportedTransferSyntaxes)
-	reportRefusedContexts(rq, results)
+	reportRefusedContexts(rq, results, a.logger.orDefault())
 
 	// Determine negotiated PDU size
 	peerMaxPDU := rq.UserInformation.MaxPDULength
@@ -547,8 +551,9 @@ func (a *Association) Release(ctx context.Context) error {
 			a.transport.Close()
 			return NewAssociationError("ABORTED", "association aborted during release")
 		default:
-			_ = a.Abort(ctx, AbortSourceServiceProvider, abortUnexpectedPDU)
-			return NewAssociationError("UNEXPECTED_PDU", fmt.Sprintf("unexpected PDU during release: %T", pdu))
+			err := NewAssociationError("UNEXPECTED_PDU", fmt.Sprintf("unexpected PDU during release: %T", pdu))
+			_ = a.abortWhy(ctx, AbortSourceServiceProvider, abortUnexpectedPDU, abortedBy(AbortCauseProtocolViolation, err))
+			return err
 		}
 	}
 }
@@ -572,9 +577,16 @@ func (a *Association) awaitReleaseRP(ctx context.Context) error {
 	}
 }
 
-// Abort sends an A-ABORT PDU.
+// Abort sends an A-ABORT PDU. Its events report the cause as
+// AbortCauseRequested: the application asked for it.
 func (a *Association) Abort(ctx context.Context, source, reason byte) error {
-	if err := a.transport.WritePDU(ctx, &AbortPDU{Source: source, Reason: reason}); err != nil {
+	return a.abortWhy(ctx, source, reason, abortedBy(AbortCauseRequested, nil))
+}
+
+// abortWhy sends an A-ABORT PDU, reported to events with why this side
+// sent it. Every abort this side sends goes through here.
+func (a *Association) abortWhy(ctx context.Context, source, reason byte, local *LocalAbort) error {
+	if err := a.transport.writeAbort(ctx, &AbortPDU{Source: source, Reason: reason}, local); err != nil {
 		a.transport.Close()
 		return err
 	}

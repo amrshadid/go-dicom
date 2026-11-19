@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -11,6 +12,11 @@ import (
 // AddSequence adds a sequence element to the dataset.
 // The sequence value should contain Dataset items for proper DICOM compliance.
 func (ds *Dataset) AddSequence(t tag.Tag, seq *sequence.Sequence) error {
+	return ds.AddSequenceWithContext(context.Background(), t, seq)
+}
+
+// AddSequenceWithContext is AddSequence, logging as AddWithContext does.
+func (ds *Dataset) AddSequenceWithContext(ctx context.Context, t tag.Tag, seq *sequence.Sequence) error {
 	if seq == nil {
 		return fmt.Errorf("sequence is nil")
 	}
@@ -28,7 +34,7 @@ func (ds *Dataset) AddSequence(t tag.Tag, seq *sequence.Sequence) error {
 		}
 	}
 
-	return ds.Add(elem)
+	return ds.AddWithContext(ctx, elem)
 }
 
 // GetSequence retrieves a sequence element from the dataset.

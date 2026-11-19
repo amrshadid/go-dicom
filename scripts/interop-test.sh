@@ -3339,7 +3339,10 @@ fi
 # window, which has to agree within one level of 255. Color: pydicom's pixels
 # in RGB, within two levels, JPEG with chroma subsampled included: its chroma
 # is filtered as libjpeg filters it (#398), where it was repeated and differed
-# from pydicom's by up to 75 at a color edge.
+# from pydicom's by up to 75 at a color edge. A JPEG whose Photometric
+# Interpretation is RGB is decoded as stored, as pydicom 3 and dcmtk decode it
+# (#443); pydicom 2 guesses YCbCr for one with no marker saying otherwise, so
+# under pydicom 2 those frames are named and not compared.
 # ---------------------------------------------------------------------------
 if python3 -c "import pydicom, numpy, PIL" >/dev/null 2>&1; then
   note "DICOMweb: rendered frames held against pydicom's windowing"
@@ -3360,6 +3363,7 @@ try:  # pydicom 3, whose pixel_array is already RGB
     ALREADY_RGB = True
 except ImportError:
     from pydicom.pixel_data_handlers.util import apply_modality_lut, apply_voi_lut, convert_color_space
+    from pydicom.encaps import generate_pixel_data_frame as generate_frames
     ALREADY_RGB = False
 
 ours, corpus = sys.argv[1], sys.argv[2]
@@ -3373,11 +3377,33 @@ def request(url, accept=None, data=None, content_type=None):
     except urllib.error.HTTPError as e:
         return e.code, e.headers.get("Content-Type", ""), e.read()
 
+def guessed_ycbcr(ds):
+    """Whether a decoder guessing from the stream, as libjpeg does, takes this
+    JPEG's components for YCbCr: no Adobe marker saying transform 0 and no
+    component identifiers R, G, B."""
+    if ds.file_meta.TransferSyntaxUID not in ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51"):
+        return False
+    stream = next(generate_frames(ds.PixelData, int(ds.get("NumberOfFrames", 1) or 1)))  # pydicom 2's signature
+    i = 2
+    while i + 4 <= len(stream) and stream[i] == 0xFF:
+        marker, length = stream[i + 1], int.from_bytes(stream[i + 2:i + 4], "big")
+        body = stream[i + 4:i + 2 + length]
+        if marker == 0xE0 and body.startswith(b"JFIF"):
+            return True
+        if marker == 0xEE and body.startswith(b"Adobe") and len(body) > 11:
+            return body[11] != 0
+        if marker in (0xC0, 0xC1):
+            return list(stream[i + 10:i + 19:3]) != [82, 71, 66]
+        i += 2 + length
+    return True
+
 gray = color = 0
+guessed = []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
         ds = pydicom.dcmread(os.path.join(corpus, name))
         n = int(ds.get("NumberOfFrames", 1) or 1)
+        declared = ds.get("PhotometricInterpretation", "")  # pydicom 2 rewrites it on decoding
         array = ds.pixel_array
     except Exception:
         continue  # not read, or no decoder for it here: nothing to hold the picture to
@@ -3423,6 +3449,12 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         if status != 200:
             sys.exit("%s: rendered answered %d: %s" % (name, status, body[:100]))
         mine = numpy.asarray(Image.open(io.BytesIO(body)).convert("RGB"), dtype=numpy.int16)
+        if not ALREADY_RGB and declared == "RGB" and guessed_ycbcr(ds):
+            # pydicom 2 lets libjpeg guess the color space and converts these
+            # as YCbCr; pydicom 3 and dcmtk follow the Photometric
+            # Interpretation, as this library does (#443). Not a reference here.
+            guessed.append(name)
+            continue
         rgb = frame
         if photometric in ("YBR_FULL", "YBR_FULL_422") and not ALREADY_RGB:
             rgb = convert_color_space(frame, "YBR_FULL", "RGB")
@@ -3432,8 +3464,8 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         color += 1
 if gray < 10 or color < 10:
     sys.exit("only %d grayscale and %d color frames compared" % (gray, color))
-print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels"
-      % (gray, color))
+print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels%s"
+      % (gray, color, "; not compared, as pydicom 2 guesses YCbCr for an RGB JPEG: " + ", ".join(guessed) if guessed else ""))
 PY
     ); then
       pass "qrscp -web rendered — $rendered"
