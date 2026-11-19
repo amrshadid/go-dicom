@@ -929,6 +929,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **JPEG-LS and lossless JPEG decode faster** (#563). The JPEG-LS decoder
+  placed each of a sample's three gradients into its bucket by eight
+  comparisons, and both decoders took the bits of a code from the stream one
+  at a time. The buckets are now read from a table built for the scan, a run
+  of zero bits is counted a buffer at a time, and the bits of a value are
+  taken at once. On a Mac, a 2048 x 2048, 8-bit frame decodes in 135 ms
+  where it took 217 ms as JPEG-LS, and in 87 ms where it took 114 ms as
+  lossless JPEG. What is decoded is the same: pydicom's corpus as before,
+  and 2,400 damaged streams made from it, which the old and the new decoder
+  refuse or decode alike, sample for sample. dcmtk's decoders are still
+  faster, by about two times.
+
 - **`convert --format png` and `jpeg` read the frame asked for, not the
   image** (#533). The renderer read every sample from the whole Pixel Data in
   memory, so one frame of a hundred cost all hundred, and a 200 MB frame took

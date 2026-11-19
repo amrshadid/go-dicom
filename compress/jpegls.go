@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math/bits"
 )
 
 // JPEG-LS (ITU-T T.87 / ISO-IEC 14495-1) decoding.
@@ -305,6 +306,33 @@ func (p *jpeglsParams) quantize(d int32) int32 {
 	return 4
 }
 
+// gradientBuckets holds quantize for every gradient two samples of a scan can
+// have, -MAXVAL to MAXVAL. The decoder quantizes three gradients for every
+// sample it decodes in regular mode, and the eight comparisons of quantize
+// were a sixth of its time; a table read is not.
+type gradientBuckets struct {
+	q      []int8
+	maxVal int32
+}
+
+// buckets builds the table for the parameters as they stand; a scan builds its
+// own, since an LSE segment may change the thresholds between scans.
+func (p *jpeglsParams) buckets() gradientBuckets {
+	g := gradientBuckets{q: make([]int8, 2*p.maxVal+1), maxVal: int32(p.maxVal)}
+	for i := range g.q {
+		g.q[i] = int8(p.quantize(int32(i) - g.maxVal))
+	}
+	return g
+}
+
+// of is quantize(d), read from the table where it holds d.
+func (g *gradientBuckets) of(p *jpeglsParams, d int32) int32 {
+	if i := d + g.maxVal; uint32(i) < uint32(len(g.q)) {
+		return int32(g.q[i])
+	}
+	return p.quantize(d)
+}
+
 // jpeglsContext is the per-context adaptive state, T.87 A.3.
 //
 // a accumulates the magnitude of the prediction errors and n counts them, and
@@ -431,22 +459,46 @@ func (r *jpeglsBitReader) readBit() int32 {
 	return bit
 }
 
+// readBits reads count bits, at most 32, as one number. fill leaves more than
+// 56 bits buffered, so one refill is always enough.
 func (r *jpeglsBitReader) readBits(count int) int32 {
-	var v int32
-	for i := 0; i < count; i++ {
-		v = v<<1 | r.readBit()
+	if count <= 0 {
+		return 0
 	}
+	if r.n < uint(count) {
+		r.fill()
+	}
+	v := int32(r.bits >> (64 - uint(count)))
+	r.bits <<= uint(count)
+	r.n -= uint(count)
 	return v
 }
 
 // readUnary reads zeros until a one, bounded so a corrupt stream cannot spin.
+// The zeros are counted a buffer at a time: the bits past the n buffered are
+// zero, so a count of leading zeros that reaches n means no one was met yet.
 func (r *jpeglsBitReader) readUnary(limit int) (int, error) {
 	count := 0
-	for r.readBit() == 0 {
-		count++
+	for {
+		if r.n == 0 {
+			r.fill()
+		}
+		zeros := uint(bits.LeadingZeros64(r.bits))
+		if zeros < r.n {
+			r.bits <<= zeros + 1
+			r.n -= zeros + 1
+			count += int(zeros)
+			if count > limit {
+				break
+			}
+			return count, nil
+		}
+		count += int(r.n)
+		r.bits = 0
+		r.n = 0
 		if count > limit {
-			return 0, fmt.Errorf("jpegls: unary code exceeds %d bits, the stream is corrupt", limit)
+			break
 		}
 	}
-	return count, nil
+	return 0, fmt.Errorf("jpegls: unary code exceeds %d bits, the stream is corrupt", limit)
 }
