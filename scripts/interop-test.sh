@@ -3111,7 +3111,7 @@ def native_frames(ds, n, little):
         data = numpy.frombuffer(data[: len(data) // width * width], ">u%d" % width).astype("<u%d" % width).tobytes()
     return [data[i * length:(i + 1) * length] for i in range(n)], length
 
-checked = decoded = bulk = 0
+checked = decoded = bulk = whole = 0
 agreed, disagreed, multi = [], [], []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
@@ -3171,6 +3171,7 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
             for i, item in enumerate(element.get("Value", []) if element.get("vr") == "SQ" else []):
                 uris(item, here + [i], found)
         return found
+    expected = {}  # the parts the instance's bulk data resource must hold, by Content-Location
     for where, uri in uris(json.loads(described)[0], [], []):
         element, holder = None, ds
         for level in range(0, len(where), 2):
@@ -3182,6 +3183,11 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
             sent = [d for _, d in parts(ctype, body)]
             if sent != (want if syntax.is_compressed else [b"".join(want)]):
                 sys.exit("%s: the Pixel Data at its BulkDataURI is not its frames" % name)
+            if syntax.is_compressed:
+                base = uri[: -len("/bulkdata/7FE00010")]
+                expected.update(("%s/frames/%d" % (base, i + 1), frame) for i, frame in enumerate(want))
+            else:
+                expected[uri] = b"".join(want)
         else:
             status, ctype, body = request(uri, "")
             (_, sent), = parts(ctype, body)
@@ -3191,7 +3197,20 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
                 value = numpy.frombuffer(value, ">u%d" % width).astype("<u%d" % width).tobytes()
             if sent != value:
                 sys.exit("%s: %s at its BulkDataURI is %d bytes, pydicom reads %d" % (name, uri, len(sent), len(value)))
+            expected[uri] = value
         bulk += 1
+
+    # The instance's bulk data as one resource (#454): a part for each value
+    # above, as stored, at the URI that names it (Content-Location), and
+    # nothing else.
+    status, ctype, body = request(ours, path[: -len("/frames/")] + "/bulkdata", STORED)
+    if status != 200:
+        sys.exit("%s: the instance's bulk data answered %d: %s" % (name, status, body[:200]))
+    located = {re.search(r"Content-Location: (\S+)", header).group(1): data for header, data in parts(ctype, body)}
+    if located != expected:
+        sys.exit("%s: the instance's bulk data has parts at %s; metadata names %s, or their bytes differ"
+                 % (name, sorted(located), sorted(expected)))
+    whole += 1
 
     if orthanc:
         # Several corpus files share a SOP Instance UID and Orthanc keeps the
@@ -3313,8 +3332,8 @@ for frames, accept, want_status in (("0", None, 400), ("1,x", None, 400), ("16",
 
 if checked < 40 or not multi:
     sys.exit("only %d files checked, %d of them multi-frame" % (checked, len(multi)))
-print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads; %d decoded frames equal to pydicom's; %d float and 1-bit images' frames equal to pydicom's%s"
-      % (checked, len(multi), ", ".join(multi), bulk, decoded, odd,
+print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads, and each instance's bulk data resource (%d) holds them; %d decoded frames equal to pydicom's; %d float and 1-bit images' frames equal to pydicom's%s"
+      % (checked, len(multi), ", ".join(multi), bulk, whole, decoded, odd,
          "; %d byte-equal to Orthanc's, %d where Orthanc swaps 32-bit big endian in words (%s)"
          % (len(agreed), len(disagreed), ", ".join(disagreed)) if orthanc else ""))
 PY

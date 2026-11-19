@@ -100,6 +100,8 @@
 // …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level
 // of sequence, serves it from where it lies in the file, little endian.
 // Pixel Data there is its frames, joined in one part when uncompressed.
+// …/bulkdata of a study, a series or an instance sends every such value, a
+// part each whose Content-Location is the BulkDataURI metadata gives it.
 //
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves
