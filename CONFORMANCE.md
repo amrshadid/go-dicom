@@ -585,6 +585,18 @@ how decoded samples are shaped and coloured, and the one tolerance.
   would leave a reader to convert a second time. This matches pydicom. Convert
   with the attribute, not despite it.
 
+  For a three-component JPEG the attribute is also what says whether the
+  components were transformed at all, since the JPEG Interchange Format does
+  not carry a color space (PS3.5 8.2.1). RGB means they were not, YBR_FULL and
+  YBR_FULL_422 that they were, and a JFIF or Adobe marker or component
+  identifiers spelling R, G, B do not overrule it. This is dcmtk's default
+  (`dcmdjpeg +cp`). pydicom 3 lets a marker overrule the attribute where the
+  two disagree: an RGB frame with a JFIF marker or an Adobe marker saying
+  YCbCr is converted there and not here, and a YBR frame with an Adobe marker
+  saying RGB or identifiers R, G, B is left as stored there and converted
+  here. No file in pydicom's corpus is in one of those cells. Without a data
+  set, `compress.NewJPEGDecompressor` guesses from the stream as libjpeg does.
+
 - **Subsampled JPEG chroma is filtered as libjpeg filters it.** T.81 leaves
   the filter to the decoder. A 4:2:2 or 4:2:0 frame is brought to full
   resolution with libjpeg's default "fancy upsampling", the triangle filter
