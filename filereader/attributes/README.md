@@ -20,15 +20,20 @@ types are `filereader`'s under aliases. For every file of pydicom's corpus its
 elements agree with the data set `GetDataset` builds, value for value.
 
 ```go
+logger := slog.New(slog.NewTextHandler(os.Stderr, nil)) // this read's own
 f, _ := os.Open(path)
 file, err := attributes.Read(filebase.NewFileReader(f), attributes.ReadOptions{
     SkipBulkData:   true,    // leave Pixel Data in the file
     MaxValueLength: 1 << 20, // refuse a longer value: errors.Is(err, attributes.ErrValueTooLong)
-    Logger:         slog.New(slog.DiscardHandler),
+    Logger:         logger,
 })
-encodings := attributes.TextEncodings(file.DataElements, nil)
+// Decoding logs a misspelled or unknown Specific Character Set; the
+// ...WithContext forms log it to the logger ctx carries, the read's here,
+// where TextEncodings and DecodeText log to config.Logger.
+ctx := config.WithLogger(context.Background(), logger)
+encodings := attributes.TextEncodingsWithContext(ctx, file.DataElements, nil)
 for _, e := range file.DataElements {
-    fmt.Println(e.Tag, e.VR, attributes.DecodeText(e.VR, e.Value, encodings))
+    fmt.Println(e.Tag, e.VR, attributes.DecodeTextWithContext(ctx, e.VR, e.Value, encodings))
 }
 ```
 
@@ -38,6 +43,8 @@ for _, e := range file.DataElements {
 func Read(reader filebase.Reader, options ReadOptions) (*File, error)
 func TextEncodings(elements []*DataElementValue, inherited []string) []string
 func DecodeText(vr string, value []byte, encodings []string) string
+func TextEncodingsWithContext(ctx context.Context, elements []*DataElementValue, inherited []string) []string
+func DecodeTextWithContext(ctx context.Context, vr string, value []byte, encodings []string) string
 
 type File              // FileMetaInfo, DataElements, MetaElements, Warnings, ...
 type ReadOptions       // = filereader.ReadOptions
