@@ -122,8 +122,8 @@ func TestFramesNative(t *testing.T) {
 // TestFramesCompressed checks an instance held as JPEG Baseline: as stored,
 // each frame's codestream, labeled image/jpeg; uncompressed, the frame
 // decoded, the samples DecompressInPlace gives for the same frame; and a
-// compressed type it is not held in refused, since nothing is encoded on
-// request.
+// compressed type it is not held in refused, since a frame held lossy is
+// not coded again.
 func TestFramesCompressed(t *testing.T) {
 	ds := multiFrame(t, "1.2.3.8", 3, 16, 16)
 	if err := ds.CompressJPEGBaselineInPlace(90); err != nil {

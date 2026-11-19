@@ -323,7 +323,7 @@ func recordString(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok {
 		return ""
 	}
@@ -343,7 +343,7 @@ func recordUint(ds *dataset.Dataset, t tag.Tag) uint32 {
 	if !ok {
 		return 0
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok {
 		return 0
 	}

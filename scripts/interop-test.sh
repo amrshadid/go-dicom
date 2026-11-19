@@ -3111,7 +3111,7 @@ def native_frames(ds, n, little):
         data = numpy.frombuffer(data[: len(data) // width * width], ">u%d" % width).astype("<u%d" % width).tobytes()
     return [data[i * length:(i + 1) * length] for i in range(n)], length
 
-checked = decoded = bulk = 0
+checked = decoded = bulk = whole = 0
 agreed, disagreed, multi = [], [], []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
@@ -3171,6 +3171,7 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
             for i, item in enumerate(element.get("Value", []) if element.get("vr") == "SQ" else []):
                 uris(item, here + [i], found)
         return found
+    expected = {}  # the parts the instance's bulk data resource must hold, by Content-Location
     for where, uri in uris(json.loads(described)[0], [], []):
         element, holder = None, ds
         for level in range(0, len(where), 2):
@@ -3182,6 +3183,11 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
             sent = [d for _, d in parts(ctype, body)]
             if sent != (want if syntax.is_compressed else [b"".join(want)]):
                 sys.exit("%s: the Pixel Data at its BulkDataURI is not its frames" % name)
+            if syntax.is_compressed:
+                base = uri[: -len("/bulkdata/7FE00010")]
+                expected.update(("%s/frames/%d" % (base, i + 1), frame) for i, frame in enumerate(want))
+            else:
+                expected[uri] = b"".join(want)
         else:
             status, ctype, body = request(uri, "")
             (_, sent), = parts(ctype, body)
@@ -3191,7 +3197,20 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
                 value = numpy.frombuffer(value, ">u%d" % width).astype("<u%d" % width).tobytes()
             if sent != value:
                 sys.exit("%s: %s at its BulkDataURI is %d bytes, pydicom reads %d" % (name, uri, len(sent), len(value)))
+            expected[uri] = value
         bulk += 1
+
+    # The instance's bulk data as one resource (#454): a part for each value
+    # above, as stored, at the URI that names it (Content-Location), and
+    # nothing else.
+    status, ctype, body = request(ours, path[: -len("/frames/")] + "/bulkdata", STORED)
+    if status != 200:
+        sys.exit("%s: the instance's bulk data answered %d: %s" % (name, status, body[:200]))
+    located = {re.search(r"Content-Location: (\S+)", header).group(1): data for header, data in parts(ctype, body)}
+    if located != expected:
+        sys.exit("%s: the instance's bulk data has parts at %s; metadata names %s, or their bytes differ"
+                 % (name, sorted(located), sorted(expected)))
+    whole += 1
 
     if orthanc:
         # Several corpus files share a SOP Instance UID and Orthanc keeps the
@@ -3239,9 +3258,69 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
             sys.exit("%s: decoded frame 1 differs from pydicom's" % name)
         decoded += 1
 
+# Pixels that are not whole bytes of integers (#441), in files pydicom
+# writes: Float and Double Float Pixel Data, little and big endian, whose
+# frames are their floats little endian; and a 1-bit image of 5 x 5 frames,
+# packed with no padding between them, so frames 2 and 3 start inside a
+# byte. Each frame is sent starting at the lowest bit of its first byte, and
+# has to be pydicom's pixel_array for that frame.
+import io
+from pydicom.dataset import Dataset, FileMetaDataset
+from pydicom.uid import generate_uid
+odd = 0
+for kind, ts in (("FloatPixelData", "1.2.840.10008.1.2.1"), ("DoubleFloatPixelData", "1.2.840.10008.1.2.1"),
+                 ("FloatPixelData", "1.2.840.10008.1.2.2"), ("DoubleFloatPixelData", "1.2.840.10008.1.2.2"),
+                 ("PixelData", "1.2.840.10008.1.2.1")):
+    ds = Dataset()
+    ds.file_meta = FileMetaDataset()
+    ds.file_meta.TransferSyntaxUID = ts
+    ds.SOPClassUID = ds.file_meta.MediaStorageSOPClassUID = (
+        "1.2.840.10008.5.1.4.1.1.30" if kind != "PixelData" else "1.2.840.10008.5.1.4.1.1.7")
+    ds.SOPInstanceUID = ds.file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    ds.StudyInstanceUID, ds.SeriesInstanceUID = generate_uid(), generate_uid()
+    ds.is_little_endian, ds.is_implicit_VR = ts != "1.2.840.10008.1.2.2", False
+    ds.SamplesPerPixel, ds.PhotometricInterpretation = 1, "MONOCHROME2"
+    if kind == "PixelData":
+        try:
+            from pydicom.pixels import pack_bits  # pydicom 3
+        except ImportError:
+            from pydicom.pixel_data_handlers.numpy_handler import pack_bits
+        ds.Rows, ds.Columns, ds.NumberOfFrames = 5, 5, 3
+        ds.BitsAllocated = ds.BitsStored = 1
+        ds.HighBit = ds.PixelRepresentation = 0
+        ds.PixelData = pack_bits(numpy.random.default_rng(7).integers(0, 2, 75).astype(numpy.uint8))
+        ds["PixelData"].VR = "OB"
+    else:
+        ds.Rows, ds.Columns, ds.NumberOfFrames = 3, 5, 4
+        dtype = numpy.float32 if kind == "FloatPixelData" else numpy.float64
+        ds.BitsAllocated = 32 if dtype == numpy.float32 else 64
+        values = ((numpy.arange(60) - 7.25) * 1.5).astype(dtype)
+        setattr(ds, kind, values.astype(dtype().dtype.newbyteorder(">" if ts.endswith(".2") else "<")).tobytes())
+    out = io.BytesIO()
+    ds.save_as(out, write_like_original=False)
+    ds = pydicom.dcmread(io.BytesIO(out.getvalue()))
+    if stow(ours, out.getvalue()) != 200:
+        sys.exit("%s in %s: not stored" % (kind, ts))
+    path = "/studies/%s/series/%s/instances/%s/frames/" % (ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID)
+    array, n = ds.pixel_array, int(ds.NumberOfFrames)
+    order = list(range(n, 0, -1))
+    status, ctype, body = request(ours, path + ",".join(map(str, order)))
+    if status != 200:
+        sys.exit("%s in %s: frames answered %d: %s" % (kind, ts, status, body[:200]))
+    for (header, data), number in zip(parts(ctype, body), order):
+        frame = array[number - 1]
+        if kind == "PixelData":
+            got = numpy.unpackbits(numpy.frombuffer(data, numpy.uint8), bitorder="little")
+            if len(data) != 4 or got[25:].any() or not numpy.array_equal(got[:25].reshape(5, 5), frame):
+                sys.exit("1-bit frame %d is %s, pydicom reads %s" % (number, data.hex(), frame.ravel()))
+        elif data != frame.astype(frame.dtype.newbyteorder("<")).tobytes():
+            sys.exit("%s in %s frame %d differs from pydicom's" % (kind, ts, number))
+    odd += 1
+
 # What is not served, as PS3.18 10.4.3 answers it, asked of a native image
 # held at the end: not frame numbers, a frame past the last, and a
-# compressed type, which nothing is encoded into on request.
+# compressed type its 32-bit samples cannot be encoded into (JPEG-LS codes
+# up to 16 bits).
 ds = pydicom.dcmread(os.path.join(corpus, "rtdose.dcm"))
 with open(os.path.join(corpus, "rtdose.dcm"), "rb") as f:
     stow(ours, f.read())
@@ -3254,8 +3333,8 @@ for frames, accept, want_status in (("0", None, 400), ("1,x", None, 400), ("16",
 
 if checked < 40 or not multi:
     sys.exit("only %d files checked, %d of them multi-frame" % (checked, len(multi)))
-print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads; %d decoded frames equal to pydicom's%s"
-      % (checked, len(multi), ", ".join(multi), bulk, decoded,
+print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads, and each instance's bulk data resource (%d) holds them; %d decoded frames equal to pydicom's; %d float and 1-bit images' frames equal to pydicom's%s"
+      % (checked, len(multi), ", ".join(multi), bulk, whole, decoded, odd,
          "; %d byte-equal to Orthanc's, %d where Orthanc swaps 32-bit big endian in words (%s)"
          % (len(agreed), len(disagreed), ", ".join(disagreed)) if orthanc else ""))
 PY
@@ -3273,6 +3352,206 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Frames encoded on request over DICOMweb (#474)
+#
+# Seven corpus images (signed and unsigned grayscale, 8-bit RGB, an RLE
+# image of two frames, JPEG-LS and JPEG 2000 ones) are each asked for in
+# every syntax the server encodes into. Each returned frame is decoded by
+# another implementation, pylibjpeg's libjpeg and OpenJPEG or pydicom's
+# RLE decoder: a lossless one has to be the stored pixels, JPEG-LS
+# near-lossless within the server's NEAR of 2, and JPEG and lossy JPEG 2000
+# at 30 dB or better. A media type alone is its lossless default, and a
+# frame held lossy is not coded again.
+# ---------------------------------------------------------------------------
+if python3 -c "import pydicom, numpy, libjpeg, openjpeg" >/dev/null 2>&1; then
+  note "DICOMweb: frames encoded on request, decoded by pylibjpeg"
+  RAN_ANY=1
+  mkdir -p "$WORKDIR/webencode"
+  start_server "$WORKDIR" "$WORKDIR/webencode.log" \
+    "$GODICOM" qrscp -port 11745 -web 18745 -output "$WORKDIR/webencode"
+  WEBENCODE_PID=$SERVER_PID
+  if wait_for_port 18745; then
+    corpus=$(python3 -c "import os, pydicom.data; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
+    if encoded=$(python3 -W ignore - "http://127.0.0.1:18745/dicom-web" "$corpus" <<'PY'
+import math, os, re, sys, urllib.error, urllib.request
+import numpy
+import pydicom
+from pydicom.dataset import Dataset, FileMetaDataset
+from pydicom.encaps import encapsulate
+try:
+    from pydicom.pixels import convert_color_space
+except ImportError:  # pydicom 2
+    from pydicom.pixel_data_handlers.util import convert_color_space
+
+ours, corpus = sys.argv[1], sys.argv[2]
+LOSSLESS = {"1.2.840.10008.1.2.5": "image/dicom-rle", "1.2.840.10008.1.2.4.80": "image/jls",
+            "1.2.840.10008.1.2.4.90": "image/jp2", "1.2.840.10008.1.2.4.57": "image/jpeg",
+            "1.2.840.10008.1.2.4.70": "image/jpeg"}
+LOSSY = {"1.2.840.10008.1.2.4.81": "image/jls", "1.2.840.10008.1.2.4.91": "image/jp2",
+         "1.2.840.10008.1.2.4.50": "image/jpeg", "1.2.840.10008.1.2.4.51": "image/jpeg"}
+
+def request(path, accept=None, data=None, content_type=None):
+    headers = {k: v for k, v in (("Accept", accept), ("Content-Type", content_type)) if v}
+    req = urllib.request.Request(ours + path, data=data, headers=headers, method="POST" if data else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.status, r.headers.get("Content-Type", ""), r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get("Content-Type", ""), e.read()
+
+def parts(content_type, body):
+    boundary = re.search(r'boundary="?([^";]+)"?', content_type).group(1).encode()
+    out = []
+    for chunk in body.split(b"--" + boundary)[1:]:
+        if chunk.startswith(b"--"):
+            break
+        header, _, data = chunk.partition(b"\r\n\r\n")
+        out.append((header.decode(), data[:-2] if data.endswith(b"\r\n") else data))
+    return out
+
+def decode(ds, syntax, codestream, photometric):
+    # A JPEG, JPEG-LS or JPEG 2000 frame is decoded by pylibjpeg's own
+    # decoders, libjpeg and OpenJPEG, from the codestream alone, which says
+    # how it is coded and undoes its own color transform. pydicom 2.4's
+    # handler is not used for them: it rearranges a color JPEG-LS frame
+    # coded a component a scan, which libjpeg and dcmtk decode alike. An RLE
+    # frame has no header, so it is put back in a data set of one frame for
+    # pydicom's RLE decoder.
+    if syntax != "1.2.840.10008.1.2.5":
+        if syntax in ("1.2.840.10008.1.2.4.90", "1.2.840.10008.1.2.4.91"):
+            from openjpeg import decode as decoder
+        else:
+            from libjpeg import decode as decoder
+        array = decoder(codestream)
+        if ds.SamplesPerPixel == 1:
+            array = array.reshape(ds.Rows, ds.Columns)
+        if ds.PixelRepresentation == 1 and array.dtype.kind == "u":
+            array = array.astype(array.dtype.str.replace("u", "i"))
+        if photometric == "YBR_FULL":
+            # libjpeg leaves the components as coded; YBR_FULL is what the
+            # library's coder says it wrote, so pydicom converts it.
+            array = convert_color_space(array, "YBR_FULL", "RGB")
+        return array
+    out = Dataset()
+    out.file_meta = FileMetaDataset()
+    out.file_meta.TransferSyntaxUID = syntax
+    out.is_little_endian, out.is_implicit_VR = True, False
+    for keyword in ("Rows", "Columns", "SamplesPerPixel", "BitsAllocated", "BitsStored", "HighBit",
+                    "PixelRepresentation"):
+        setattr(out, keyword, ds[keyword].value)
+    out.PhotometricInterpretation = photometric
+    if out.SamplesPerPixel > 1:
+        out.PlanarConfiguration = 0
+    out.PixelData = encapsulate([codestream])
+    array = out.pixel_array
+    return array
+
+def psnr(a, b, bits):
+    error = numpy.mean((a.astype(numpy.float64) - b.astype(numpy.float64)) ** 2)
+    return math.inf if error == 0 else 10 * math.log10(((1 << bits) - 1) ** 2 / error)
+
+exact = near = lossy = 0
+lowest = math.inf
+refused = []
+for name in ("CT_small.dcm", "examples_overlay.dcm", "examples_rgb_color.dcm", "SC_rgb_small_odd.dcm",
+             "SC_rgb_rle_2frame.dcm", "MR_small_jpeg_ls_lossless.dcm", "examples_jpeg2k.dcm"):
+    path_ = os.path.join(corpus, name)
+    ds = pydicom.dcmread(path_)
+    with open(path_, "rb") as f:
+        blob = f.read()
+    status = request("/studies", "application/dicom+json",
+                     b"--b\r\nContent-Type: application/dicom\r\n\r\n" + blob + b"\r\n--b--\r\n",
+                     'multipart/related; type="application/dicom"; boundary=b')[0]
+    if status != 200:
+        sys.exit("%s: not stored (%d)" % (name, status))
+    want = ds.pixel_array
+    n = int(ds.get("NumberOfFrames", 1) or 1)
+    frames = want if n > 1 else want[numpy.newaxis]
+    color = ds.SamplesPerPixel == 3
+    base = "/studies/%s/series/%s/instances/%s/frames/" % (ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID)
+    for syntax, media in list(LOSSLESS.items()) + list(LOSSY.items()):
+        if syntax == ds.file_meta.TransferSyntaxUID:
+            continue
+        accept = 'multipart/related; type="%s"; transfer-syntax=%s' % (media, syntax)
+        status, ctype, body = request(base + ",".join(str(i) for i in range(n, 0, -1)), accept)
+        if status == 406 and syntax in LOSSY:
+            # A lossy coder refuses what it does not take: a signed image,
+            # or more than 8 bits for JPEG Baseline. Every lossless one takes
+            # all of these images.
+            refused.append("%s as %s" % (name, syntax))
+            continue
+        if status != 200:
+            sys.exit("%s as %s: %d %s" % (name, syntax, status, body[:200]))
+        got = parts(ctype, body)
+        if len(got) != n:
+            sys.exit("%s as %s: %d parts for %d frames" % (name, syntax, len(got), n))
+        # The photometric the library's coders give the data set they code.
+        photometric = ds.PhotometricInterpretation if not color else {
+            "1.2.840.10008.1.2.4.90": "YBR_RCT", "1.2.840.10008.1.2.4.91": "YBR_ICT",
+            "1.2.840.10008.1.2.4.50": "YBR_FULL", "1.2.840.10008.1.2.4.51": "YBR_FULL"}.get(syntax, "RGB")
+        worst = math.inf
+        for (header, data), number in zip(got, range(n, 0, -1)):
+            if "transfer-syntax=" + syntax not in header or media not in header:
+                sys.exit("%s as %s: part labeled %r" % (name, syntax, header))
+            array = decode(ds, syntax, data, photometric)
+            reference = frames[number - 1]
+            if syntax in LOSSLESS:
+                if not numpy.array_equal(array, reference):
+                    sys.exit("%s as %s frame %d: decoded by pydicom it differs from the stored pixels, at most %d"
+                             % (name, syntax, number, numpy.abs(array.astype(int) - reference.astype(int)).max()))
+            elif syntax == "1.2.840.10008.1.2.4.81":
+                if numpy.abs(array.astype(int) - reference.astype(int)).max() > 2:
+                    sys.exit("%s as JPEG-LS near-lossless frame %d: an error over 2" % (name, number))
+            else:
+                worst = min(worst, psnr(array, reference, int(ds.BitsStored)))
+        if syntax in ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51", "1.2.840.10008.1.2.4.91"):
+            if worst < 30:
+                sys.exit("%s as %s: PSNR %.1f dB" % (name, syntax, worst))
+            lowest = min(lowest, worst)
+            lossy += 1
+        elif syntax in LOSSLESS:
+            exact += 1
+        else:
+            near += 1
+
+    # A media type alone is its default syntax, lossless (PS3.18 Table
+    # 8.7.3-5): JPEG-LS Lossless for image/jls.
+    if ds.file_meta.TransferSyntaxUID != "1.2.840.10008.1.2.4.80":
+        status, ctype, body = request(base + "1", 'multipart/related; type="image/jls"')
+        if status != 200 or "transfer-syntax=1.2.840.10008.1.2.4.80" not in parts(ctype, body)[0][0]:
+            sys.exit("%s: image/jls alone answered %d %s" % (name, status, body[:200]))
+
+# A frame held lossy is not coded again: JPEG Baseline to JPEG-LS is 406.
+lossy_file = os.path.join(corpus, "JPEG-lossy.dcm")
+ds = pydicom.dcmread(lossy_file)
+with open(lossy_file, "rb") as f:
+    request("/studies", "application/dicom+json",
+            b"--b\r\nContent-Type: application/dicom\r\n\r\n" + f.read() + b"\r\n--b--\r\n",
+            'multipart/related; type="application/dicom"; boundary=b')
+status = request("/studies/%s/series/%s/instances/%s/frames/1" % (ds.StudyInstanceUID, ds.SeriesInstanceUID,
+                 ds.SOPInstanceUID), 'multipart/related; type="image/jls"')[0]
+if status != 406:
+    sys.exit("a JPEG Baseline frame asked for as image/jls answered %d, want 406" % status)
+if exact < 30 or lossy < 10 or near < 4:
+    sys.exit("only %d lossless, %d near-lossless and %d lossy encodings checked" % (exact, near, lossy))
+print("%d lossless encodings, every frame decoded by pylibjpeg and pydicom to the stored pixels; %d JPEG-LS near-lossless within 2; "
+      "%d JPEG Baseline, Extended and lossy JPEG 2000 at %.1f dB or better; %d lossy encodings refused by the coder; "
+      "a JPEG frame is not coded again (406)" % (exact, near, lossy, lowest, len(refused)))
+PY
+    ); then
+      pass "qrscp -web frames encoded on request — $encoded"
+    else
+      fail "frames encoded over DICOMweb: $encoded"
+    fi
+  else
+    fail "qrscp -web did not start: $(tail -3 "$WORKDIR/webencode.log")"
+  fi
+  stop_server "$WEBENCODE_PID"
+else
+  skip "frames encoded over DICOMweb need pydicom, numpy and pylibjpeg (libjpeg, openjpeg)"
+fi
+
+# ---------------------------------------------------------------------------
 # Rendered frames over DICOMweb (#382)
 #
 # Frame 1 of each corpus image pydicom can decode is rendered as PNG and held
@@ -3280,7 +3559,10 @@ fi
 # window, which has to agree within one level of 255. Color: pydicom's pixels
 # in RGB, within two levels, JPEG with chroma subsampled included: its chroma
 # is filtered as libjpeg filters it (#398), where it was repeated and differed
-# from pydicom's by up to 75 at a color edge.
+# from pydicom's by up to 75 at a color edge. A JPEG whose Photometric
+# Interpretation is RGB is decoded as stored, as pydicom 3 and dcmtk decode it
+# (#443); pydicom 2 guesses YCbCr for one with no marker saying otherwise, so
+# under pydicom 2 those frames are named and not compared.
 # ---------------------------------------------------------------------------
 if python3 -c "import pydicom, numpy, PIL" >/dev/null 2>&1; then
   note "DICOMweb: rendered frames held against pydicom's windowing"
@@ -3301,6 +3583,7 @@ try:  # pydicom 3, whose pixel_array is already RGB
     ALREADY_RGB = True
 except ImportError:
     from pydicom.pixel_data_handlers.util import apply_modality_lut, apply_voi_lut, convert_color_space
+    from pydicom.encaps import generate_pixel_data_frame as generate_frames
     ALREADY_RGB = False
 
 ours, corpus = sys.argv[1], sys.argv[2]
@@ -3314,11 +3597,33 @@ def request(url, accept=None, data=None, content_type=None):
     except urllib.error.HTTPError as e:
         return e.code, e.headers.get("Content-Type", ""), e.read()
 
+def guessed_ycbcr(ds):
+    """Whether a decoder guessing from the stream, as libjpeg does, takes this
+    JPEG's components for YCbCr: no Adobe marker saying transform 0 and no
+    component identifiers R, G, B."""
+    if ds.file_meta.TransferSyntaxUID not in ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51"):
+        return False
+    stream = next(generate_frames(ds.PixelData, int(ds.get("NumberOfFrames", 1) or 1)))  # pydicom 2's signature
+    i = 2
+    while i + 4 <= len(stream) and stream[i] == 0xFF:
+        marker, length = stream[i + 1], int.from_bytes(stream[i + 2:i + 4], "big")
+        body = stream[i + 4:i + 2 + length]
+        if marker == 0xE0 and body.startswith(b"JFIF"):
+            return True
+        if marker == 0xEE and body.startswith(b"Adobe") and len(body) > 11:
+            return body[11] != 0
+        if marker in (0xC0, 0xC1):
+            return list(stream[i + 10:i + 19:3]) != [82, 71, 66]
+        i += 2 + length
+    return True
+
 gray = color = 0
+guessed = []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
         ds = pydicom.dcmread(os.path.join(corpus, name))
         n = int(ds.get("NumberOfFrames", 1) or 1)
+        declared = ds.get("PhotometricInterpretation", "")  # pydicom 2 rewrites it on decoding
         array = ds.pixel_array
     except Exception:
         continue  # not read, or no decoder for it here: nothing to hold the picture to
@@ -3364,6 +3669,12 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         if status != 200:
             sys.exit("%s: rendered answered %d: %s" % (name, status, body[:100]))
         mine = numpy.asarray(Image.open(io.BytesIO(body)).convert("RGB"), dtype=numpy.int16)
+        if not ALREADY_RGB and declared == "RGB" and guessed_ycbcr(ds):
+            # pydicom 2 lets libjpeg guess the color space and converts these
+            # as YCbCr; pydicom 3 and dcmtk follow the Photometric
+            # Interpretation, as this library does (#443). Not a reference here.
+            guessed.append(name)
+            continue
         rgb = frame
         if photometric in ("YBR_FULL", "YBR_FULL_422") and not ALREADY_RGB:
             rgb = convert_color_space(frame, "YBR_FULL", "RGB")
@@ -3414,7 +3725,8 @@ for number in (1, 2, 3):
         sys.exit("the windowless image's frame %d is not drawn over its stored range: it reaches %d, want %d"
                  % (number, mine.max(), want.max()))
 print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels; "
-      "three frames with no window drawn over their stored range, one gray one value" % (gray, color))
+      "three frames with no window drawn over their stored range, one gray one value%s"
+      % (gray, color, "; not compared, as pydicom 2 guesses YCbCr for an RGB JPEG: " + ", ".join(guessed) if guessed else ""))
 PY
     ); then
       pass "qrscp -web rendered — $rendered"

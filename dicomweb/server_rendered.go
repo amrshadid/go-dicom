@@ -328,9 +328,17 @@ func (s *Server) rendered(w http.ResponseWriter, r *http.Request, target retriev
 	}
 }
 
+// errFloatNotRendered is an image of Float or Double Float Pixel Data, whose
+// values the renderer does not draw: RenderFrame reads integer samples. Its
+// frames are served; a picture of it is a function this server lacks (PS3.18
+// 8.5).
+var errFloatNotRendered = refuse(http.StatusNotImplemented,
+	"the instance holds Float or Double Float Pixel Data, which this server does not render")
+
 // representative opens the instance a rendered or thumbnail resource is
 // drawn from: the one named, or, for the thumbnail of a study or a series,
-// the first of its instances, in the archive's order, that has frames.
+// the first of its instances, in the archive's order, that has frames it
+// can draw.
 func (s *Server) representative(r *http.Request, target retrieveTarget) (io.ReadSeekCloser, *frameSource, error) {
 	if target.instance != "" {
 		file, err := s.openInstance(r, target)
@@ -348,6 +356,10 @@ func (s *Server) representative(r *http.Request, target retrieveTarget) (io.Read
 			}
 			return nil, nil, err
 		}
+		if source.float {
+			_ = file.Close()
+			return nil, nil, errFloatNotRendered
+		}
 		return file, source, nil
 	}
 	uids, err := s.backend.Locate(r.Context(), target.study, target.series, "")
@@ -360,18 +372,18 @@ func (s *Server) representative(r *http.Request, target retrieveTarget) (io.Read
 			return nil, nil, err
 		}
 		source, err := openFrames(file)
-		if err == nil {
+		if err == nil && !source.float {
 			return file, source, nil
 		}
 		_ = file.Close()
-		if !errors.Is(err, errNoFrames) {
+		if err != nil && !errors.Is(err, errNoFrames) {
 			return nil, nil, err
 		}
 	}
 	if len(uids) == 0 {
 		return nil, nil, refuse(http.StatusNotFound, "the archive holds no such instances")
 	}
-	return nil, nil, refuse(http.StatusNotImplemented, "none of the instances has Pixel Data, so there is nothing to draw")
+	return nil, nil, refuse(http.StatusNotImplemented, "none of the instances has Pixel Data this server draws, so there is nothing to draw")
 }
 
 // picture renders one frame, counted from 1, and writes it as the request

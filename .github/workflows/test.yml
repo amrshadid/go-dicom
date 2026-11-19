@@ -262,7 +262,10 @@ jobs:
           # numpy is named because pydicom 3 no longer brings it, and the
           # DICOMweb steps compare pixels with it; without it they skip (#414).
           # Pillow reads the pictures the DICOMweb server renders.
-          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom numpy pillow
+          # pylibjpeg's libjpeg and OpenJPEG decode the frames it encodes on
+          # request; without them that step skips (#474).
+          "$HOME/dicomvenv/bin/pip" install --quiet pynetdicom pydicom numpy pillow \
+            pylibjpeg pylibjpeg-libjpeg pylibjpeg-openjpeg
           "$HOME/dicomvenv/bin/python" -c "import pynetdicom, pydicom, numpy, PIL; print('pynetdicom', pynetdicom.__version__, '/ pydicom', pydicom.__version__, '/ numpy', numpy.__version__, '/ Pillow', PIL.__version__)"
 
       - name: Install dcmtk
@@ -374,7 +377,7 @@ jobs:
           GODICOM_PYDICOM_DATA=$("$HOME/dicomvenv/bin/python" -c \
             "import pydicom.data, os; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
           export GODICOM_PYDICOM_DATA
-          go test ./network/ -race -v -run 'TestDcmtkStoresAStreamedFile|TestPynetdicomStoresAStreamedFile'
+          go test ./network/ -race -v -run 'TestDcmtkStoresAStreamedFile|TestPynetdicomStoresAStreamedFile|TestDcmtkStoreFinishesWhileTheServerShutsDown'
 
       # Decoding is checked against pydicom's own reading of the same files,
       # not against this library's writer. Unit tests build their fixtures with

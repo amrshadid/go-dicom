@@ -66,6 +66,82 @@
 // evaluated, as which data set it means is not said. Nor is one testing "a
 // Value" of an attribute that holds several.
 //
+// # Functional groups
+//
+// An enhanced multi-frame IOD lists in its Functional Group Macros table
+// (PS3.3 A.38-2 for Enhanced CT; 29 IODs) the macros its Shared and
+// Per-Frame Functional Groups Sequences hold, each Mandatory, Conditional or
+// a User Option, and some only shared or only per-frame. Each macro the IOD
+// requires is in the shared item or in the item of every frame; none is in
+// both (Table C.7.6.16-1); none is where the IOD's table says it may not be;
+// the Per-Frame Functional Groups Sequence holds one item for each frame; and
+// each macro that is there is checked attribute by attribute, as a module
+// is. What is wrong in many frames is one Finding saying in how many.
+//
+// # Conditions
+//
+// PS3.3 states a share of its conditions in a few fixed sentence forms that
+// name one attribute by its tag, and the generator reads those as a
+// Condition: "Required if Pixel Data Provider URL (0028,7FE0) is not
+// present", "... is present", "... has a Value of YES", "Image Type
+// (0008,0008) Value 1 is ORIGINAL or MIXED", "... is present and has a Value
+// of X", each optionally followed by "May be present otherwise". Of the 1867
+// Type 1C and 2C attributes in the tables of PS3.3 2026d, 645 have one; of
+// the 316 Conditional modules of the IODs, 25 do; of the 171 Conditional
+// Functional Group Macros, 45 do. Such a condition is
+// evaluated:
+//
+//   - a Type 1C or 2C attribute, or a Conditional module, whose condition
+//     holds and that is absent is an Error;
+//   - one whose condition does not hold and that is present is an Error,
+//     unless PS3.3 says it may be present otherwise (PS3.5 7.4.2 and 7.4.4,
+//     PS3.3 A.1.3.2);
+//   - a Conditional module whose condition holds is checked as a Mandatory
+//     one is.
+//
+// A condition in a sequence item is evaluated in that item, and only when it
+// names an attribute of the item's own table; one naming any other is not
+// evaluated, as which data set it means is not said. Nor is one testing "a
+// Value" of an attribute that holds several.
+//
+// # Functional groups
+//
+// An enhanced multi-frame IOD lists in its Functional Group Macros table
+// (PS3.3 A.38-2 for Enhanced CT; 29 IODs) the macros its Shared and
+// Per-Frame Functional Groups Sequences hold, each Mandatory, Conditional or
+// a User Option, and some only shared or only per-frame. Each macro the IOD
+// requires is in the shared item or in the item of every frame; none is in
+// both (Table C.7.6.16-1); none is where the IOD's table says it may not be;
+// the Per-Frame Functional Groups Sequence holds one item for each frame; and
+// each macro that is there is checked attribute by attribute, as a module
+// is. What is wrong in many frames is one Finding saying in how many.
+//
+// # Conditions
+//
+// PS3.3 states a share of its conditions in a few fixed sentence forms that
+// name one attribute by its tag, and the generator reads those as a
+// Condition: "Required if Pixel Data Provider URL (0028,7FE0) is not
+// present", "... is present", "... has a Value of YES", "Image Type
+// (0008,0008) Value 1 is ORIGINAL or MIXED", "... is present and has a Value
+// of X", each optionally followed by "May be present otherwise". Of the 1867
+// Type 1C and 2C attributes in the tables of PS3.3 2026d, 645 have one; of
+// the 316 Conditional modules of the IODs, 25 do; of the 171 Conditional
+// Functional Group Macros, 45 do. Such a condition is
+// evaluated:
+//
+//   - a Type 1C or 2C attribute, or a Conditional module, whose condition
+//     holds and that is absent is an Error;
+//   - one whose condition does not hold and that is present is an Error,
+//     unless PS3.3 says it may be present otherwise (PS3.5 7.4.2 and 7.4.4,
+//     PS3.3 A.1.3.2);
+//   - a Conditional module whose condition holds is checked as a Mandatory
+//     one is.
+//
+// A condition in a sequence item is evaluated in that item, and only when it
+// names an attribute of the item's own table; one naming any other is not
+// evaluated, as which data set it means is not said. Nor is one testing "a
+// Value" of an attribute that holds several.
+//
 // # What is not checked
 //
 // A condition of any other form is prose, and is not evaluated. A
@@ -75,8 +151,9 @@
 // its attributes present, are each reported as NotChecked, with the
 // condition as PS3.3 states it: never passed in silence. Also reported as
 // not checked: attributes of repeating groups such as (60xx,eeee), the
-// Functional Group Macros of the enhanced multi-frame IODs, and items of an
-// SR content tree nested deeper than twelve levels of one table. Not
+// functional groups of an enhanced IOD whose Functional Group Macros table
+// is not its own (Enhanced MR Color Image), and items of an SR content tree
+// nested deeper than twelve levels of one table. Not
 // checked, and not reported per instance: context groups (PS3.16), rules
 // that tie one attribute to another (High Bit is Bits Stored minus one),
 // value representation and the form of values, which the valuerep package
