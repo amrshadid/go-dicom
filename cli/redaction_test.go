@@ -99,6 +99,11 @@ func writeCaptionedInstance(t *testing.T, path string) {
 }
 
 // captured runs fn and returns what it printed.
+//
+// The pipe is read while fn writes to it. Reading only after fn returned
+// held a command that printed more than the pipe does: 64 KiB on Linux and
+// macOS, where nothing printed that much, and 4 KiB on Windows, where a JSON
+// listing did and the test ran until it was killed.
 func captured(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 	old := os.Stdout
@@ -106,11 +111,17 @@ func captured(t *testing.T, fn func() error) (string, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	read := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		read <- out
+	}()
 	os.Stdout = w
 	runErr := fn()
-	_ = w.Close()
 	os.Stdout = old
-	out, _ := io.ReadAll(r)
+	_ = w.Close()
+	out := <-read
+	_ = r.Close()
 	return string(out), runErr
 }
 
