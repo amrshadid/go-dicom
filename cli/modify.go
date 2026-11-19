@@ -8,7 +8,8 @@ import (
 	"os"
 )
 
-// ModifyCommand sets, inserts and deletes attributes of a DICOM file.
+// ModifyCommand sets, inserts and deletes attributes of a DICOM file, one at
+// a path or everywhere they occur, with a binary value taken from a file.
 type ModifyCommand struct {
 	edits         editList
 	newUID        bool
@@ -24,16 +25,25 @@ type editList struct {
 	edits []edit
 }
 
-// editFlag is one of the three flags, appending to the shared list.
+// editFlag is one of the edit flags, appending to the shared list.
 type editFlag struct {
 	list *editList
 	kind editKind
+	// name is the flag as given, for the messages; fromFile and everywhere
+	// are the two ways the edit differs from its plain form.
+	name       string
+	fromFile   bool
+	everywhere bool
 }
 
 func (f editFlag) String() string { return "" }
 
 func (f editFlag) Set(value string) error {
 	e, err := parseEdit(f.kind, value)
+	if err == nil {
+		e.flagName, e.fromFile, e.everywhere = f.name, f.fromFile, f.everywhere
+		err = e.checkMode()
+	}
 	if err != nil {
 		return err
 	}
@@ -55,9 +65,13 @@ func (mc *ModifyCommand) Description() string {
 func (mc *ModifyCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&mc.help, "h", false, "Show help for this command")
 	fs.BoolVar(&mc.help, "help", false, "Show help for this command")
-	fs.Var(editFlag{&mc.edits, editSet}, "set", "Change an attribute that is there: path=value (repeatable)")
-	fs.Var(editFlag{&mc.edits, editInsert}, "insert", "Set an attribute, creating it and the items on its path: path=value (repeatable)")
-	fs.Var(editFlag{&mc.edits, editDelete}, "delete", "Remove an attribute, or an item when the path ends in one (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editSet, name: "-set"}, "set", "Change an attribute that is there: path=value (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editInsert, name: "-insert"}, "insert", "Set an attribute, creating it and the items on its path: path=value (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editDelete, name: "-delete"}, "delete", "Remove an attribute, or an item when the path ends in one (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editSet, name: "-set-file", fromFile: true}, "set-file", "Change a binary attribute that is there to the bytes of a file: path=file (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editInsert, name: "-insert-file", fromFile: true}, "insert-file", "Set a binary attribute to the bytes of a file: path=file (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editSet, name: "-set-all", everywhere: true}, "set-all", "Change an attribute wherever it is, in every item of every sequence: tag=value (repeatable)")
+	fs.Var(editFlag{list: &mc.edits, kind: editDelete, name: "-delete-all", everywhere: true}, "delete-all", "Remove an attribute wherever it is, in every item of every sequence (repeatable)")
 	fs.BoolVar(&mc.newUID, "new-uid", false, "Give the instance a new SOP Instance UID")
 	fs.BoolVar(&mc.inPlace, "in-place", false, "Write over the input instead of to a new file")
 	fs.BoolVar(&mc.ignoreMissing, "ignore-missing", false, "Skip a -set or -delete whose attribute is not in the file")
@@ -84,7 +98,7 @@ func (mc *ModifyCommand) Execute(args []string) error {
 		return err
 	}
 	if len(mc.edits.edits) == 0 && !mc.newUID {
-		return fmt.Errorf("modify: nothing to do; give -set, -insert, -delete or -new-uid")
+		return fmt.Errorf("modify: nothing to do; give -set, -insert, -delete, -set-file, -insert-file, -set-all, -delete-all or -new-uid")
 	}
 	df, ds, err := readForRewrite("modify", input)
 	if err != nil {
@@ -97,11 +111,11 @@ func (mc *ModifyCommand) Execute(args []string) error {
 	for _, e := range mc.edits.edits {
 		n, err := e.apply(ds)
 		if errors.Is(err, errMissing) && mc.ignoreMissing {
-			fmt.Fprintf(os.Stderr, "skipped %s %s: %v\n", e.kind.flag(), e.given, err)
+			fmt.Fprintf(os.Stderr, "skipped %s %s: %v\n", e.flagName, e.given, err)
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("modify: %s %s: %w", e.kind.flag(), e.given, err)
+			return fmt.Errorf("modify: %s %s: %w", e.flagName, e.given, err)
 		}
 		changed += n
 	}
@@ -140,6 +154,16 @@ OPTIONS:
                           (dcmodify -i).
   -delete <path>          Remove an attribute, or an item when the path ends
                           in [n], or every item with [*] (dcmodify -e).
+  -set-file <path>=<file>
+                          Change a binary attribute that is in the file to
+                          the bytes of <file> (dcmodify -mf).
+  -insert-file <path>=<file>
+                          Set a binary attribute to the bytes of <file>, as
+                          -insert does (dcmodify -if).
+  -set-all <tag>=<value>  Change the attribute wherever it is: in the data
+                          set and in every item of every sequence, to any
+                          depth (dcmodify -ma). An error if it is nowhere.
+  -delete-all <tag>       Remove the attribute wherever it is (dcmodify -ea).
   -new-uid                Give the instance a new SOP Instance UID. Without
                           it the instance keeps its UID, whatever changed.
   -in-place               Write over the input.
@@ -147,7 +171,9 @@ OPTIONS:
                           the file, saying so, instead of failing.
   -h, -help               Show this help message
 
-  -set, -insert and -delete may each be given many times.
+  Each edit flag may be given many times. -set-all and -delete-all take one
+  attribute, a keyword, a tag or a private attribute by its creator, and no
+  item: it is looked for in every item. They count each occurrence as a change.
 
 PATHS:
   An attribute is a keyword or a tag:
@@ -173,8 +199,13 @@ VALUES:
   UL and SL, the number of values the dictionary allows, and the lengths
   PS3.5 6.2 gives. Text outside ASCII needs a Specific Character Set: in a
   file that declares none, insert SpecificCharacterSet='ISO_IR 192' first.
-  Binary values (OB, OW, OF, OD, OL, OV, UN) and Pixel Data are not set
-  here. The file meta group (0002) is written from the data set and the
+  Binary values (OB, OW, OF, OD, OL, OV, UN) are not given as text but with
+  -set-file or -insert-file: the bytes of the file are the value, held
+  little endian whatever the file's transfer syntax (the writer swaps a big
+  endian one). A file of an odd length is padded with a NUL (PS3.5 7.1.1);
+  for OW, OF, OD, OL and OV its length must be a whole number of 2, 4, 8, 4
+  and 8-byte words. A private attribute not in the dictionary takes its VR
+  from the path. Pixel Data is not set here. The file meta group (0002) is written from the data set and the
   transfer syntax, so it is not edited directly: change SOPInstanceUID, or
   give -new-uid, and the meta follows.
 
@@ -191,6 +222,8 @@ EXAMPLES:
   go-dicom modify -insert 'RequestAttributesSequence[0].RequestedProcedureID=RP1' in.dcm out.dcm
   go-dicom modify -delete 'ReferencedImageSequence[1]' in.dcm out.dcm
   go-dicom modify -insert '(0029,xx10,"ACME 1.0",LO)=v2' in.dcm out.dcm
+  go-dicom modify -insert-file '(0009,xx10,"ACME 1.0",OB)=blob.bin' in.dcm out.dcm
+  go-dicom modify -delete-all InstanceCreationDate -set-all StationName=X in.dcm out.dcm
   go-dicom modify -new-uid -set SeriesDescription=Corrected -in-place scan.dcm
 `)
 }

@@ -33,10 +33,13 @@ go-dicom validate ct.dcm                     # Check it against its IOD; --json,
 go-dicom convert patient.dcm output.json     # Convert to JSON
 go-dicom modify -set PatientName=Doe^Jane in.dcm out.dcm  # Set, insert or delete attributes
 go-dicom modify -insert 'ReferencedImageSequence[0].ReferencedSOPInstanceUID=1.2.3' -in-place f.dcm
+go-dicom modify -insert-file '(0009,xx10,"ACME",OB)=blob.bin' in.dcm out.dcm   # A binary value from a file
+go-dicom modify -delete-all InstanceCreationDate in.dcm out.dcm   # Every occurrence, in every item
 go-dicom compress -syntax rle ct.dcm ct-rle.dcm   # Also jpeg-ls, jpeg2000; jpeg -quality 90 is lossy
 go-dicom decompress ct-rle.dcm ct.dcm        # Native pixel data
 go-dicom convert patient.dcm dicom.json --format dicom-json   # DICOM JSON, which create reads back
 go-dicom create dicom.json patient-copy.dcm  # A file from DICOM JSON
+go-dicom create study.json instances/        # An array of objects: one file each, named by SOP Instance UID
 go-dicom create -template ct.dcm screen.png sc.dcm   # A Secondary Capture in the CT's study
 go-dicom create -patient-id 123 report.pdf report.dcm  # An Encapsulated PDF
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
@@ -49,7 +52,7 @@ go-dicom diff a.dcm b.dcm --json --ignore-meta --ignore SOPInstanceUID
 go-dicom dicomdir study/                     # Write study/DICOMDIR; refuses file names that are not File IDs
 go-dicom dicomdir --copy-to media/ export/   # ...or copy the files as DICOM/IM000001... and index those
 go-dicom dicomdir --list study/DICOMDIR      # The records as a tree
-go-dicom sr report.dcm                       # A structured report's content tree, indented
+go-dicom sr report.dcm                       # A structured report's content tree, indented, with its verifiers and predecessors
 go-dicom sr report.dcm --json                # ...with each item's position
 go-dicom convert ct.dcm ct.png --format png  # Render as PNG (or jpeg), windowed
 go-dicom convert cine.dcm f.png --format png --frame all   # f-0001.png, f-0002.png, ...
