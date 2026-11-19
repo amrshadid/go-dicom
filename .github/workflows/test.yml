@@ -531,7 +531,9 @@ jobs:
       # version reports a different set of vulnerabilities from one week to the
       # next for reasons unconnected to this code. This job scanned under
       # go1.25.12 and reported GO-2026-6090 and GO-2026-5972, both fixed in
-      # go1.25.13.
+      # go1.25.13. Under go1.25.13 it then reported eleven more (net/http,
+      # crypto/tls, crypto/x509, mime/multipart), fixed only in Go 1.26, as Go
+      # 1.25 had left the support window; hence go1.26.11.
       #
       # Keep this in step with the toolchain directive in go.mod. Whichever of
       # the two decides the version — it depends on whether GOTOOLCHAIN is local
@@ -540,7 +542,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.25.13'
+          go-version: '1.26.11'
 
       - name: Verify module
         run: go mod verify

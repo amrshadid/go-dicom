@@ -50,6 +50,13 @@ there are additions only.
   restart markers per T.87, the PS3.8 close after a rejection or an abort,
   and C-GET order among others; see Fixed.
 
+- **Built with a patched Go.** The release binaries are built with Go
+  1.26.11, which fixes eleven vulnerabilities in the standard library's
+  `net/http`, `crypto/tls`, `crypto/x509` and `mime/multipart` that the
+  DICOMweb server and client, `qrscp -web` and TLS associations reach. Go
+  1.25, which built 1.10.0, no longer receives these fixes.
+  `golang.org/x/text` is v0.41.0. The module still builds with Go 1.25.
+
 Nothing in the format of `show --json` changes: `schemaVersion` is still 1.
 Every `-events` line now carries `"schemaVersion":1`, which a reader of
 1.10.0's lines may ignore.
@@ -1111,6 +1118,15 @@ Every `-events` line now carries `"schemaVersion":1`, which a reader of
   rather than read without its log.
 
 ### Fixed
+
+- **The release binaries carry no known vulnerability of the standard
+  library** (#568). govulncheck, run in CI under the toolchain `go.mod`
+  names, reported eleven (GO-2026-6603, 6605, 6607, 6608, 6610, 6611, 6612,
+  6613, 6617, 6809, 6859) reachable from `cli.serveWeb`, the `dicomweb`
+  client and server, and TLS, all fixed only in Go 1.26. The toolchain, the
+  scan and the release build are now Go 1.26.11, and `golang.org/x/text`
+  v0.41.0 (GO-2026-6629, not reachable from this code). `go.mod` still says
+  `go 1.25.0`, so a program on Go 1.25 builds the module as before.
 
 - **A validation finding names an attribute without invisible characters**
   (#564). The standard's XML puts zero-width spaces into 27 names of the
