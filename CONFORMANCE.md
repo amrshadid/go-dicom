@@ -115,7 +115,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level; `wlmscp` answers them |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
@@ -147,7 +147,24 @@ Negotiated by default:
 Modality Worklist (`1.2.840.10008.5.1.4.31`) is served by `WorklistHandler` but
 is **not** in the default set, since an SCP that accepts worklist queries without
 a worklist to answer them from is worse than one that declines. Add it with
-`SetSupportedAbstractSyntaxes`.
+`SetSupportedAbstractSyntaxes`. `WorklistHandler` does no matching of its
+own; package `matching` matches a query against an entry and builds the
+answer (section 2.7).
+
+`go-dicom wlmscp` is a worklist SCP over a directory of worklist files, one
+entry per file, as dcmtk's `wlmscpfs` is. It accepts Verification and
+Modality Worklist FIND and refuses every other SOP class. The directory is
+read again at every query; a file that is not DICOM, or holds no Scheduled
+Procedure Step Sequence, is not served and is reported once. A query's
+Query/Retrieve Level, which Basic Worklist does not have, is neither matched
+nor returned; every other key is matched by section 2.7 and returned, so
+the answers carry status FF00, never FF01. Over dcmtk's sample worklist
+database, dcmtk's `findscu -W` and pynetdicom get the same entries,
+attribute for attribute, from `wlmscp` as from `wlmscpfs` for queries by
+modality, date and date range, time range, station AE title, patient name
+with wildcards, universal matching and one that matches nothing. They
+differ on a person's name in another case: `wlmscp` matches `vivaldi*` to
+VIVALDI^ANTONIO and `wlmscpfs` does not.
 
 Any other SOP class may be added with `SetSupportedAbstractSyntaxes`. The
 dictionary holds UID constants for far more classes than this list; a constant is
@@ -214,8 +231,11 @@ missing), the Failure Reasons of PS3.3 C.14.1.1.
 ### 2.7 Matching in the archive
 
 `dcmstore`, and so `qrscp`, matches by the rules of PS3.4 C.2.2: universal,
-single value, list of UID, wildcard, range and sequence matching. Where the
-standard leaves the choice to the SCP:
+single value, list of UID, wildcard, range, sequence, empty value (`""`) and
+multiple value matching. The rules are package `matching`'s, which matches a
+query against any data set, and the store runs them against its index, so
+the two answer a query alike. Where the standard leaves the choice to the
+SCP:
 
 | Choice | What the archive does |
 |---|---|
@@ -225,7 +245,8 @@ standard leaves the choice to the SCP:
 | Character set of a query | The query is read in the Specific Character Set it declares, and the index is UTF-8, so a name matches however the query and the instance were each written. |
 | Character set of an answer | `ISO_IR 192` when the answer holds anything outside ASCII; none when it does not (C.4.1.1.3.2). |
 | A date or time in its ACR-NEMA form | `1997.04.24` and `09:30:00` are read as `19970424` and `093000`, in a stored value and in a query. The stored value is returned as it is. |
-| An attribute with no value in an instance | Matches universal matching only. A range does not match a study with no date. |
+| An attribute with no value in an instance | Matches universal matching, `*` and `""` only. A range does not match a study with no date. |
+| A key of more than one value (C.2.2.2.8) | Matches an instance that matches any one of its values. A key of LT, ST, UT or UR is one value: a backslash in it is text. |
 | A key the index does not hold | Not matched on, and returned with no value (C.2.2.1.2). |
 
 ---
@@ -271,6 +292,7 @@ distribution accept everything:
 | `go-dicom storescp` | all 37 |
 | `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
 | `go-dicom echoscp` | the default four; verification carries no data set |
+| `go-dicom wlmscp` | the default four; a worklist query and its answers carry no pixel data |
 
 Before this, a modality that stores JPEG-LS or JPEG 2000 natively — most modern
 equipment — could not store to either server: every compressed context was
@@ -389,6 +411,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
+| After an abort | An A-ABORT this side sends is followed by up to one second in which the peer may close the connection, what arrives being read and dropped (PS3.8 9.2, AA-1, AA-6, AA-8); the standard's timer for this is ARTIM, and one second is kept so that a peer that does not close holds only the connection |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
@@ -400,7 +423,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Supported transfer syntaxes | `SCPConfig.TransferSyntaxes`, the same way, or `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
-| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, apart from the data set validation warnings of #503 |
+| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, the validation warnings of the data sets it decodes included |
 | Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
 
 Everything the library reports goes through `config.Logger`, so one call
@@ -735,9 +758,14 @@ how decoded samples are shaped and coloured, and the one tolerance.
   frame decodes the same everywhere.
 
   *Verified:* a 41 by 37 image at every precision from 2 to 8, coded at NEAR 0,
-  1, 2 and the largest NEAR allowed: this library's lossless frames are byte
-  for byte CharLS 2.2's, and every frame either of them codes decodes to the
-  same samples in this library, CharLS 2.2 and libjpeg (pylibjpeg-libjpeg).
+  1, 2 and the largest NEAR allowed: this library's frames, lossless and
+  near-lossless, are byte for byte CharLS 2.2's, and every frame either of
+  them codes decodes to the same samples in this library, CharLS 2.2 and
+  libjpeg (pylibjpeg-libjpeg). The same holds from 9 to 16 bits, and for the
+  corpus's JPEG-LS images coded again with their own NEAR, except that above
+  12 bits CharLS writes an LSE segment that repeats the default parameters.
+  A run that reaches the end of a line is a single 1 bit (T.87 A.7.1.2); the
+  0 and a length that 1.10.0 wrote there still decode.
   dcmtk 3.7.0 agrees with them at 8 bits and at the largest NEAR, where the
   clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
   refuses to code below 6 bits. With the thresholds given explicitly all four

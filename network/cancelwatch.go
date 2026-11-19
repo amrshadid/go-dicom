@@ -144,7 +144,7 @@ func watchForCancel(ctx context.Context, assoc *Association, messageID uint16) (
 		}
 
 		if isCmd {
-			if cmdDS, decErr := DecodeCommandDataset(data); decErr == nil {
+			if cmdDS, decErr := decodeCommandDataset(assoc.logContext(ctx), data); decErr == nil {
 				commandField, msgID, _, _ := ParseCommandDataset(cmdDS)
 				if commandField == CommandCCancelRQ && msgID == messageID {
 					close(w.canceled)
