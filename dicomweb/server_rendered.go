@@ -13,12 +13,16 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/filereader"
+	"github.com/amrshadid/go-dicom/internal/iccembed"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -64,6 +68,17 @@ type renderTarget struct {
 	// warnings are for a Warning header: parameters understood and not
 	// applied (PS3.18 8.3.5.1.1).
 	warnings []string
+	// iccProfile is iccprofile=yes, and profile the instance's profile
+	// that each picture carries then, nil when there is none to carry.
+	iccProfile bool
+	profile    []byte
+}
+
+// warn adds a warning once.
+func (t *renderTarget) warn(text string) {
+	if !slices.Contains(t.warnings, text) {
+		t.warnings = append(t.warnings, text)
+	}
 }
 
 // viewport is the viewport query parameter (PS3.18 8.3.5.1.3): the box to
@@ -152,9 +167,23 @@ func renderTargetOf(r *http.Request, thumbnail bool) (*renderTarget, *requestErr
 		// and go on (PS3.18 8.3.5.1.1).
 		target.warnings = append(target.warnings, "annotation is not applied by this server")
 	}
-	if values, ok := query["iccprofile"]; ok && values[0] != "no" {
-		return nil, refuse(http.StatusBadRequest,
-			"iccprofile=%q; this server embeds no ICC profile, so only iccprofile=no is served", values[0])
+	if values, ok := query["iccprofile"]; ok {
+		// PS3.18 8.3.5.1.5. yes is the instance's own profile with the
+		// pixels as they are, which PNG (iCCP) and JPEG (APP2) both carry.
+		// A named color space means the pixels converted into it, which
+		// needs a color management engine this server does not have.
+		switch values[0] {
+		case "no":
+		case "yes":
+			target.iccProfile = true
+		case "srgb", "adobergb", "rommrgb", "displayp3":
+			return nil, refuse(http.StatusBadRequest,
+				"iccprofile=%q asks for the picture converted into that color space, which this server does not do; "+
+					"iccprofile=yes embeds the instance's own profile, the pixels unchanged", values[0])
+		default:
+			return nil, refuse(http.StatusBadRequest,
+				"iccprofile=%q; it is no, yes, srgb, adobergb, rommrgb or displayp3", values[0])
+		}
 	}
 	return target, nil
 }
@@ -262,6 +291,16 @@ func (s *Server) rendered(w http.ResponseWriter, r *http.Request, target retriev
 		return
 	}
 	defer func() { _ = file.Close() }()
+	if want.iccProfile {
+		profile, err := iccProfileOf(file)
+		switch {
+		case err != nil:
+			want.warn("iccprofile=yes: " + err.Error() + ", so no profile is embedded")
+		case profile == nil:
+			want.warn("iccprofile=yes: the instance has no ICC Profile, so no profile is embedded")
+		}
+		want.profile = profile
+	}
 	for _, n := range numbers {
 		if n > len(source.ranges) {
 			s.fail(w, refuse(http.StatusNotFound, "frame %d does not exist; the instance has %d", n, len(source.ranges)))
@@ -427,15 +466,41 @@ func (s *Server) picture(source *frameSource, n int, want *renderTarget) ([]byte
 	}
 
 	var out bytes.Buffer
+	var encoder io.Writer = &out
+	if want.profile != nil {
+		if err := iccembed.Fits(want.profile, img); err != nil {
+			want.warn("iccprofile=yes: " + err.Error() + ", so no profile is embedded")
+		} else if want.media == mediaPNG {
+			encoder = iccembed.PNG(&out, want.profile)
+		} else if encoder, err = iccembed.JPEG(&out, want.profile); err != nil {
+			want.warn("iccprofile=yes: " + err.Error() + ", so no profile is embedded")
+			encoder = &out
+		}
+	}
 	if want.media == mediaPNG {
-		err = png.Encode(&out, img)
+		err = png.Encode(encoder, img)
 	} else {
-		err = jpeg.Encode(&out, img, &jpeg.Options{Quality: want.quality})
+		err = jpeg.Encode(encoder, img, &jpeg.Options{Quality: want.quality})
 	}
 	if err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// iccProfileOf reads an instance's ICC profile (Dataset.ICCProfile): its
+// attributes again, this time with every binary value but Pixel Data,
+// since the read that found the frames left them in the file.
+func iccProfileOf(file io.ReadSeeker) ([]byte, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	parsed, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),
+		filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: math.MaxUint32})
+	if err != nil {
+		return nil, err
+	}
+	return parsed.GetDataset().ICCProfile()
 }
 
 // The attributes that say how many frames an image has, and which belong

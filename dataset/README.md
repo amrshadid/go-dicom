@@ -45,6 +45,10 @@ func (ds *Dataset) Remove(tag Tag) bool
 func (ds *Dataset) UpdateElement(tag Tag, newValue []byte) error
 func (ds *Dataset) GetAll() []*DataElement
 
+// The image's ICC profile (PS3.3 C.11.15), for a rendered PNG or JPEG to
+// carry; nothing converts color
+func (ds *Dataset) ICCProfile() ([]byte, error)
+
 // Search
 func (ds *Dataset) Find(predicate func(*DataElement) bool) []*DataElement
 func (ds *Dataset) GetByVR(vr string) []*DataElement
