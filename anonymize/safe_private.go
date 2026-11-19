@@ -45,7 +45,9 @@ func removeUnsafePrivate(ds *dataset.Dataset) {
 	for _, t := range ds.Tags() {
 		if t.IsPrivate() && t.Element() >= 0x0010 && t.Element() <= 0x00FF {
 			if elem, ok := ds.Get(t); ok {
-				if raw, ok := elem.GetValue().([]byte); ok {
+				// Bytes, not a []byte assertion: a creator held as a string
+				// read as none, and the safe attributes it owns were dropped.
+				if raw, ok := elem.Bytes(); ok {
 					creators[block{t.Group(), t.Element()}] = strings.TrimRight(string(raw), " \x00")
 				}
 			}

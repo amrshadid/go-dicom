@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -329,13 +330,13 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	if !ok {
 		return fmt.Errorf("dataset missing SOP Class UID (0008,0016)")
 	}
-	sopClassUID := extractStringValue(sopClassElem.GetValue())
+	sopClassUID := extractStringValue(sopClassElem)
 
 	sopInstanceElem, ok := ds.Get(tag.New(0x0008, 0x0018)) // SOPInstanceUID
 	if !ok {
 		return fmt.Errorf("dataset missing SOP Instance UID (0008,0018)")
 	}
-	sopInstanceUID := extractStringValue(sopInstanceElem.GetValue())
+	sopInstanceUID := extractStringValue(sopInstanceElem)
 
 	pcID, ok := storeContextFor(assoc.AcceptedContexts(), sopClassUID, ds.TransferSyntaxUID())
 	if !ok {
@@ -1195,15 +1196,16 @@ func (s *SCU) IsAssociated() bool {
 // PS3.5 Section 6.2 makes trailing spaces non-significant for AE. Trimming only
 // NUL left every odd-length AE title with a trailing space, so a C-MOVE to a
 // destination whose title had an odd number of characters never matched.
-func extractStringValue(val interface{}) string {
-	switch v := val.(type) {
-	case string:
-		return strings.TrimRight(v, "\x00 ")
-	case []byte:
-		return strings.TrimRight(string(v), "\x00 ")
-	default:
-		return fmt.Sprintf("%v", v)
+//
+// The value is read through Bytes. A switch here knew []byte and string and
+// printed anything else with %v, so a SOP Instance UID held as a []string
+// went out as "[1.2.3]" (#420). A value that holds no bytes is no string.
+func extractStringValue(elem *dataelem.DataElement) string {
+	raw, ok := elem.Bytes()
+	if !ok {
+		return ""
 	}
+	return strings.TrimRight(string(raw), "\x00 ")
 }
 
 // receiveNResponse reads the response to an N-service request: its command,

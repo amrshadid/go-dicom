@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`modify` takes a binary value from a file, and changes or removes an
+  attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
+  (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute
+  the bytes of a file, padded to an even length and checked to be a whole
+  number of words; until now every binary value was refused, so a palette or
+  a private blob could not be set without writing Go. `-set-all` and
+  `-delete-all` (`-ma` and `-ea`) act on an attribute in the data set and in
+  every item of every sequence, to any depth, where a path needed one edit
+  per item and the item counts. Over pydicom's corpus the results match
+  pydicom's element by element, and dcmodify's. No invocation that worked
+  before changes; the refusal of a binary value given as text now names the
+  new flags.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and
@@ -18,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schemas, and fail on a property the schemas do not describe. Nothing the
   commands print changed. The `-events` lines carry no `schemaVersion`; the
   document says so and what a future one would mean.
+
+- **Every `-events` line says `"schemaVersion":1`** (#480). A reader could not
+  tell a version 1 line from a later one by anything in the line. The
+  property is on every line, so a reader that starts following the file
+  midway, or reads a file two processes append to, can check each line, and
+  it is the last property: a line is the line 1.10.0 wrote with
+  `,"schemaVersion":1` before the closing brace, every other property in its
+  place, byte for byte. A line without one, as 1.10.0 wrote, is version 1;
+  the schema does not require it.
 
 - **Media Creation Management and the two event logging classes are
   verified against a peer** (#370). CONFORMANCE §8.5 said they "still have
@@ -80,7 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be made. Bulk values are read from the two files in chunks and never
   held whole, and report the byte they first differ at; a value is compared
   as what it means, so padding, a character set and the byte order of a number
-  or of pixel words do not make files differ. `--ignore` (a tag or keyword,
+  or of pixel samples do not make files differ. Big endian Pixel Data is
+  reversed at the sample width Bits Allocated gives, as the reader does: in
+  OW's two-byte words, a 32-bit RT Dose and its correct little endian copy
+  differed from the first byte (#426). `--ignore` (a tag or keyword,
   at every depth), `--ignore-meta` and `--ignore-private` leave elements out.
   `cli.ExitError` lets a command choose its exit status; the others still end
   with 1.
@@ -435,7 +460,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to a syntax that does not take it is refused. dcmtk, libjpeg and OpenJPEG
   decode what it writes in each new syntax.
 
+- **`create` makes a file for each object of a DICOM JSON array, and reads a
+  BulkDataURI that names a local file** (#448). An array of more than one
+  object, which is what a DICOMweb metadata response is, was refused ("one
+  file is made from one"), and any value held at a BulkDataURI was refused
+  because the reader would have written it empty. Now an array makes one file
+  for each object in the output directory, named by SOP Instance UID as `wado`
+  names them, with nothing written when any object is refused or two share a
+  UID. A BulkDataURI that is a `file:` URI or a path is read into the value
+  from inside `-bulk-dir` (by default the JSON file's directory), links
+  followed, so JSON from a server cannot pull another file of the machine into
+  the one made; a `http:` or `https:` one is refused by name and not fetched,
+  since a command that makes a file does not reach the network unasked. Checked
+  against the JSON pydicom writes for a list of instances, with its values
+  inline and with them in files, and against the metadata and bulk data
+  `qrscp -web` serves: each comes back as the original data sets. An array of
+  one object, and every object that worked, are as they were.
+
+- **`sr` prints what it left out: verifying observers, predecessor documents,
+  nested template identifiers and Real World Value Mapping references**
+  (#455). The help said the document's verifier and the reports it replaces
+  were not printed, and a reader had to fall back on `show`. The header now
+  lists each verifying observer (name, organization, time and code) and each
+  predecessor document with its series and study; an item built from a
+  template other than the root's ends with `# TID 1411 (DCMR)`, as dsrdump's
+  `+Pt` prints it; an image reference ends with `mapped by` and the mapping
+  instances it names. `--json` has them as `verifyingObservers` and
+  `predecessorDocuments` in the document, `template` on an item and
+  `realWorldValueMappings` in a reference, each present only where the report
+  has it, so `schemaVersion` stays 1 under the rule it already had: it changes
+  when a field is renamed, removed or changes its meaning, not when one is
+  added. A report with none of them prints as it did. Compared with dcmtk's
+  `dsr2xml +Wt` and `dsrdump +Pt` on four reports written with pydicom (all
+  four features, none, several predecessor studies and series, an image with a
+  presentation state and a mapping deep in the tree) and on `test-SR.dcm`: the
+  same observers, predecessor instances, templates and mappings. The identical
+  documents of a report are still not printed.
+
+- **`-allow` pairs a title with an address, and its list can be read from a
+  file** (#462). `-allow` kept titles and addresses as two lists a caller had
+  to match both of, so "PRISMA1 only from 10.0.0.5" could not be said:
+  `PRISMA1@10.0.0.5` was read as an AE title that nobody has, and the server
+  refused its own scanner. `TITLE@ADDRESS` (an address or a CIDR range) now
+  admits that title from there and from nowhere else; each pair is a way in of
+  its own beside the titles and addresses given together, whose rule is as it
+  was. An @ in a title that is not followed by an address stays a title, and
+  one followed by something that reads as an address and is not (`CT@10.0.0`)
+  is an error. `-allow-file` reads entries from a file, one to a line, with `#`
+  comments on a line of their own or after a space, and is joined with `-allow`;
+  a file with no entry, or none that is there, stops the server, since an empty
+  list admits every caller. A listed title calling from an address it is not
+  admitted from is refused with no reason given, as an unlisted address is,
+  since "not recognized" would be untrue of it, and the server prints which.
+  Checked with dcmtk's `echoscu` and pynetdicom against `storescp` and
+  `qrscp`: admitted and refused callers, and the reason each is shown, match.
+  Admission by TLS client certificate is not part of `-allow`: it names a
+  certificate by subject, SAN or fingerprint, a third kind of entry, and would
+  be a flag of its own.
+
+- **`validate` evaluates the conditions PS3.3 states in a fixed form**
+  (#449). Every Type 1C and 2C attribute and every Conditional module was
+  reported "not checked", so a CT image with no Pixel Data and no Pixel Data
+  Provider URL passed with exit status 0. The generator now reads a
+  condition as data when the whole of what PS3.3 says about presence is one
+  sentence of a few forms naming one attribute by its tag ("Required if
+  Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES", "Image Type (0008,0008) Value 1 is ORIGINAL or
+  MIXED", "... is present and has a Value of X"), with "May be present
+  otherwise" when it is said. Of 1681 Type 1C and 2C attributes in the tables
+  of PS3.3 2026d, 580 are read so, and 25 of 316 Conditional modules; the
+  rest, and any sentence matching a form only in part, stay prose and are
+  still reported as not checked with their text. An attribute or module
+  absent where its condition holds is an error, and so is one present where
+  it does not hold unless PS3.3 allows it otherwise (PS3.5 7.4.2, 7.4.4;
+  PS3.3 A.1.3.2). Over pydicom's corpus, seven findings are new, each
+  checked against the file with pydicom, and 524 fewer are not checked.
+  Exit statuses and `--json` are as they were.
+
+- **`validate` checks the functional groups of an enhanced multi-frame
+  image** (#463). The IOD's Functional Group Macros table was not read, so
+  an Enhanced CT with Pixel Measures removed, with Frame Content moved into
+  the shared item, or with a frame missing its Plane Position, passed with
+  no error. The generator now reads the 29 Functional Group Macros tables of
+  the enhanced Storage IODs (437 rows), with each macro's usage, condition
+  and where it may be ("May not be used as a Shared Functional Group"), and
+  the 105 macro tables they name. A macro the IOD requires must be in the
+  shared item or in every frame's, none may be in both or where the table
+  forbids it, the per-frame sequence holds one item for each frame, and
+  each macro present is checked attribute by attribute, a fault found in
+  many frames being one finding that says in how many. Reading those tables
+  also reads 65 more Type 1C and 2C conditions as data, among them the
+  "..., may be present otherwise." form many of them use.
+
+- **`validate`'s findings are compared with the standard on ten more IODs**
+  (#482). No other IOD validator can be run where it is built (`dciodvfy`
+  and the Python `dicom-validator` are not installed), and CONFORMANCE said
+  so without saying what had been compared instead. Ten corpus files of ten
+  IODs (RT Structure Set, RT Plan, RT Ion Plan, Segmentation, both
+  Ultrasound IODs, Basic Text and Comprehensive SR, 12-Lead ECG, Secondary
+  Capture) were compared with PS3.3 by hand: each of their ten errors is a
+  real defect of the file, and a second reading of the tables found no
+  missing Type 1 or Type 2 attribute of a Mandatory module that it had not
+  reported. CONFORMANCE §8.6 says what was compared, and what was not.
+
 ### Changed
+
+- **`validate` no longer holds the image to check the attributes** (#440).
+  It read every value of the file, Pixel Data included, though the checker
+  needs only a value's presence and length: a 200 MB CT took 240 MB of
+  memory. Pixel Data and binary values longer than 1 KB now stay in the file,
+  and the same file takes 28 MB. The findings are the same, text, `--json`
+  and exit status, for every file of pydicom's corpus. A deflated file is
+  still read whole, as its values are not in the file as written.
 
 - **A subsampled color JPEG decodes to the picture libjpeg gives** (#398).
   The decoder repeated each chroma sample of a 4:2:2 or 4:2:0 frame, where
@@ -703,6 +839,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Packages other than `dataset` still assert `[]byte` in places; #420 lists
   them.
 
+- **De-identification reads a value held as a list of strings** (#420).
+  The UID action knew a value held as `[]byte` or a string, so a UID list
+  built in memory as a `[]string`, such as Failed SOP Instance UID List, was
+  taken for no UID and kept its original values, which link the result back
+  to the source instances; the same list read from a file was replaced.
+  Retain Safe Private read a private creator held as a string as no creator
+  and dropped the safe attributes it owned, and a De-identification Method
+  held as a list lost the automatic redaction note on a second pass. Every
+  read now goes through the new `DataElement.Bytes`, the conversion the file
+  writer uses, and `dataset` uses it in place of its own helper. A test runs
+  every profile over pydicom's corpus twice, once as read and once rebuilt
+  with string values, and requires the same result.
+
 - **`GetPixelDataInfo` holds the rescale** (#378). `PixelDataInfo` has
   `RescaleSlope` and `RescaleIntercept`, and nothing ever set them, so both
   were 0 for every image: a CT with intercept -1024 read `0 0`, and
@@ -829,6 +978,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it two bytes a sample or, for JPEG 2000, keeping its low bits. A decoded
   frame shorter than the image is now an error from `DecodedPixelData` too,
   as it already was from `DecompressInPlace`.
+
+- **A value held as a Go string or number is read in every package**
+  (#420). `validate`, `fileset`, `network`, `sr`, `dcmstore` and the
+  commands read a value only when it was held as `[]byte`, so a data set
+  built in memory read differently from the same data set read from a file:
+  a file-set of such data sets could not be indexed (its UIDs read as
+  absent), a storage commitment report read as no instances, a UPS state
+  as none, a command set built with numbers could not be encoded, a SOP
+  Instance UID held as a `[]string` was sent as `[1.2.3]`, an SR lost its
+  text and its by-reference items, and the store indexed a person name with
+  its other groups as the alphabetic group alone. Each now reads through
+  `DataElement.Bytes`. Files read from disk hold `[]byte` and read as
+  before; `show --json` is unchanged.
 
 ## [1.10.0] - 2026-11-17
 

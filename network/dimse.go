@@ -518,8 +518,7 @@ func getUSValue(ds *dataset.Dataset, t tag.Tag) (uint16, error) {
 	if !ok {
 		return 0, fmt.Errorf("element %s not found", t)
 	}
-	val := elem.GetValue()
-	data, ok := val.([]byte)
+	data, ok := elem.Bytes()
 	if !ok || len(data) < 2 {
 		return 0, fmt.Errorf("invalid US value for %s", t)
 	}
@@ -531,8 +530,7 @@ func getUIValue(ds *dataset.Dataset, t tag.Tag) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("element %s not found", t)
 	}
-	val := elem.GetValue()
-	data, ok := val.([]byte)
+	data, ok := elem.Bytes()
 	if !ok {
 		return "", fmt.Errorf("invalid UI value for %s", t)
 	}
@@ -546,10 +544,11 @@ func getUIValue(ds *dataset.Dataset, t tag.Tag) (string, error) {
 
 // encodeCommandElement encodes a single command element in Implicit VR Little Endian.
 func encodeCommandElement(buf *bytes.Buffer, t tag.Tag, elem *dataelem.DataElement) error {
-	val := elem.GetValue()
-	data, ok := val.([]byte)
+	// Bytes, not a []byte assertion, so a command element built as a number or
+	// a string encodes as the writer would encode it (#420).
+	data, ok := elem.Bytes()
 	if !ok {
-		return fmt.Errorf("element %s value is not []byte", t)
+		return fmt.Errorf("element %s holds %T, which has no bytes to encode", t, elem.GetValue())
 	}
 
 	// Tag: group (2 bytes LE) + element (2 bytes LE)
