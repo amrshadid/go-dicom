@@ -606,6 +606,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Events no longer copy every received byte** (#469). A received PDU was
+  copied whenever its connection reported events, and a `Server` always has
+  an `EventManager`, so every instance received was copied once more with no
+  handler registered: 64 MiB more for a 64 MiB C-STORE. Whether to keep a
+  PDU's bytes is now decided from its type before its body is read: a
+  P-DATA-TF is copied only while a handler of EVTPDURecv, the one event that
+  is given its bytes, is registered; every other PDU, small and bounded, is
+  copied as before, so the association events keep their `PDUBytes`. A
+  server with only association-level handlers allocates 0.5 MiB over one with
+  no `EventManager` for a 64 MiB store, where it allocated 67 MiB. The
+  `-events` log registers every event type and is unchanged, byte for byte.
+
 - **`validate` no longer holds the image to check the attributes** (#440).
   It read every value of the file, Pixel Data included, though the checker
   needs only a value's presence and length: a 200 MB CT took 240 MB of
