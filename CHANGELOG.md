@@ -77,6 +77,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequences, each item indented under its sequence. There is no command
   for UPS, for MPPS or for serving a worklist.
 
+- **`mppsscu` reports a Modality Performed Procedure Step** (#495). The
+  library's SCU sends N-CREATE and N-SET, and no command used them, so a
+  modality's report that an exam had started and was done could not be
+  made from the shell. `mppsscu` sends an N-CREATE that makes a step IN
+  PROGRESS. It carries every attribute PS3.4 Table F.7.2-1 requires at
+  creation: the patient, the Scheduled Step Attributes Sequence (study,
+  accession, requested procedure, scheduled step), the performed step's ID,
+  station, start date and time, and modality. Type 2 attributes are present
+  and empty when no flag gives them. The step's UID is printed.
+  `-complete UID` or `-discontinue UID` sends the N-SET that ends it, with
+  its end date and time and, from `-series`, `-protocol` and `-instance`, a
+  Performed Series Sequence. `-json` adds a DICOM JSON object's attributes
+  over what the flags give. A refusal is printed with its status and exits
+  nonzero. Run against pynetdicom's MPPS SCP in `scripts/interop-test.sh`:
+  two steps created and ended, their attributes read back by pydicom where
+  the flags put them, and a final step and an unknown one refused (0110H,
+  0112H). dcmtk has no MPPS tool to compare with.
+
 - **A rendered image goes through its lookup tables** (#334). `RenderFrame`,
   and so `convert --format png|jpeg`, `share` and the burned-in text
   detector, applied Rescale Slope and Intercept and a window and nothing
