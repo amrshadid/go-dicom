@@ -417,3 +417,193 @@ func TestSRFormatsDatesAndTimesOnlyWhereTheyAreWellFormed(t *testing.T) {
 		}
 	}
 }
+
+// writeDocumentedReport writes a report with what a reader of a verified
+// document needs beyond its content: two verifying observers (one without a
+// code), two predecessor studies, a template on the root and on two items
+// below it, and an image that names two Real World Value Mapping instances
+// beside one that names none.
+func writeDocumentedReport(t *testing.T, path string) {
+	t.Helper()
+	h := srHelper{t}
+	root := h.item("", "CONTAINER", "Report")
+	h.add(root, tag.New(0x0040, 0xA050), dataelem.CS, "SEPARATE")
+	h.add(root, tag.New(0x0008, 0x0016), dataelem.UI, "1.2.840.10008.5.1.4.1.1.88.33")
+	h.add(root, tag.New(0x0008, 0x0018), dataelem.UI, "1.2.3.4")
+	h.add(root, tag.New(0x0040, 0xA493), dataelem.CS, "VERIFIED")
+	template := func(ds *dataset.Dataset, id, resource string) {
+		item := dataset.NewDataset()
+		h.add(item, tag.New(0x0008, 0x0105), dataelem.CS, resource)
+		h.add(item, tag.New(0x0040, 0xDB00), dataelem.CS, id)
+		h.seq(ds, tag.New(0x0040, 0xA504), item)
+	}
+	template(root, "1500", "DCMR")
+
+	first := dataset.NewDataset()
+	h.add(first, tag.New(0x0040, 0xA075), dataelem.PN, "Verifier^First")
+	h.add(first, tag.New(0x0040, 0xA027), dataelem.LO, "General Hospital")
+	h.add(first, tag.New(0x0040, 0xA030), dataelem.DT, "20200301101500")
+	h.code(first, tag.New(0x0040, 0xA088), "V1", "99LOCAL", "Dr. First")
+	second := dataset.NewDataset()
+	h.add(second, tag.New(0x0040, 0xA075), dataelem.PN, "Verifier^Second")
+	h.add(second, tag.New(0x0040, 0xA030), dataelem.DT, "20200302111500")
+	h.seq(root, tag.New(0x0040, 0xA073), first, second)
+
+	predecessor := func(study, series string, instances ...string) *dataset.Dataset {
+		p := dataset.NewDataset()
+		h.add(p, tag.New(0x0020, 0x000D), dataelem.UI, study)
+		s := dataset.NewDataset()
+		h.add(s, tag.New(0x0020, 0x000E), dataelem.UI, series)
+		var refs []*dataset.Dataset
+		for _, instance := range instances {
+			r := dataset.NewDataset()
+			h.add(r, tag.New(0x0008, 0x1150), dataelem.UI, "1.2.840.10008.5.1.4.1.1.88.33")
+			h.add(r, tag.New(0x0008, 0x1155), dataelem.UI, instance)
+			refs = append(refs, r)
+		}
+		h.seq(s, tag.New(0x0008, 0x1199), refs...)
+		h.seq(p, tag.New(0x0008, 0x1115), s)
+		return p
+	}
+	h.seq(root, tag.New(0x0040, 0xA360),
+		predecessor("1.2.3.1", "1.2.3.1.2", "1.2.3.1.2.1", "1.2.3.1.2.2"),
+		predecessor("1.2.3.7", "1.2.3.1.3", "1.2.3.7.3.1"))
+
+	group := h.item("CONTAINS", "CONTAINER", "Measurements")
+	h.add(group, tag.New(0x0040, 0xA050), dataelem.CS, "SEPARATE")
+	template(group, "1411", "DCMR")
+	inner := h.item("CONTAINS", "CONTAINER", "Group")
+	h.add(inner, tag.New(0x0040, 0xA050), dataelem.CS, "SEPARATE")
+	template(inner, "1501", "99LOCAL")
+	h.seq(group, tag.New(0x0040, 0xA730), inner)
+
+	mapped := h.item("CONTAINS", "IMAGE", "Mapped")
+	ref := dataset.NewDataset()
+	h.add(ref, tag.New(0x0008, 0x1150), dataelem.UI, "1.2.840.10008.5.1.4.1.1.4")
+	h.add(ref, tag.New(0x0008, 0x1155), dataelem.UI, "1.2.3.9")
+	var mappings []*dataset.Dataset
+	for _, uid := range []string{"1.2.3.70", "1.2.3.71"} {
+		m := dataset.NewDataset()
+		h.add(m, tag.New(0x0008, 0x1150), dataelem.UI, "1.2.840.10008.5.1.4.1.1.67")
+		h.add(m, tag.New(0x0008, 0x1155), dataelem.UI, uid)
+		mappings = append(mappings, m)
+	}
+	h.seq(ref, tag.New(0x0008, 0x114B), mappings...)
+	h.seq(mapped, tag.New(0x0008, 0x1199), ref)
+	plain := h.item("CONTAINS", "IMAGE", "Plain")
+	plainRef := dataset.NewDataset()
+	h.add(plainRef, tag.New(0x0008, 0x1150), dataelem.UI, "1.2.840.10008.5.1.4.1.1.2")
+	h.add(plainRef, tag.New(0x0008, 0x1155), dataelem.UI, "1.2.3.10")
+	h.seq(plain, tag.New(0x0008, 0x1199), plainRef)
+
+	h.seq(root, tag.New(0x0040, 0xA730), group, mapped, plain)
+	if err := writeDICOMFile(path, "1.2.840.10008.5.1.4.1.1.88.33", "1.2.3.4", root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSRPrintsObserversPredecessorsTemplatesAndMappings: what a verified
+// report says about itself beyond its content, in text and in JSON: who
+// verified it and when, which documents it replaces, the template of each
+// item that names one (the root's stays in the header), and the Real World
+// Value Mapping instances of an image. A report with none of them prints no
+// field for them.
+func TestSRPrintsObserversPredecessorsTemplatesAndMappings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.dcm")
+	writeDocumentedReport(t, path)
+	out, err := runSR(t, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Verifying observer: Verifier^First, General Hospital, 2020-03-01 10:15:00 \"Dr. First\" [V1, 99LOCAL]\n",
+		"Verifying observer: Verifier^Second, 2020-03-02 11:15:00\n",
+		"Predecessor document: Comprehensive SR [1.2.840.10008.5.1.4.1.1.88.33] 1.2.3.1.2.1 (series 1.2.3.1.2, study 1.2.3.1)\n",
+		"Predecessor document: Comprehensive SR [1.2.840.10008.5.1.4.1.1.88.33] 1.2.3.1.2.2 (series 1.2.3.1.2, study 1.2.3.1)\n",
+		"Predecessor document: Comprehensive SR [1.2.840.10008.5.1.4.1.1.88.33] 1.2.3.7.3.1 (series 1.2.3.1.3, study 1.2.3.7)\n",
+		"Template: TID 1500 (DCMR)\n",
+		`  contains CONTAINER  "Measurements" [C1, 99TEST] = SEPARATE  # TID 1411 (DCMR)`,
+		`    contains CONTAINER  "Group" [C1, 99TEST] = SEPARATE  # TID 1501 (99LOCAL)`,
+		`  contains IMAGE  "Mapped" [C1, 99TEST] = MR Image [1.2.840.10008.5.1.4.1.1.4] 1.2.3.9 mapped by ` +
+			`Real World Value Mapping [1.2.840.10008.5.1.4.1.1.67] 1.2.3.70, Real World Value Mapping [1.2.840.10008.5.1.4.1.1.67] 1.2.3.71`,
+		`  contains IMAGE  "Plain" [C1, 99TEST] = CT Image [1.2.840.10008.5.1.4.1.1.2] 1.2.3.10` + "\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Count(out, "# TID") != 2 {
+		t.Errorf("the root's template is also printed on its line, or one is missing:\n%s", out)
+	}
+
+	doc := decodeSR(t, path)
+	h := doc.Document
+	if doc.SchemaVersion != 1 {
+		t.Errorf("schemaVersion %d: the fields were added, nothing was renamed or removed", doc.SchemaVersion)
+	}
+	if len(h.VerifyingObservers) != 2 || h.VerifyingObservers[0].Name != "Verifier^First" ||
+		h.VerifyingObservers[0].Organization != "General Hospital" || h.VerifyingObservers[0].DateTime != "20200301101500" ||
+		h.VerifyingObservers[0].Identification == nil || h.VerifyingObservers[0].Identification.Value != "V1" ||
+		h.VerifyingObservers[1].Identification != nil {
+		t.Errorf("verifying observers: %+v", h.VerifyingObservers)
+	}
+	if len(h.PredecessorDocuments) != 2 || h.PredecessorDocuments[0].StudyInstanceUID != "1.2.3.1" ||
+		len(h.PredecessorDocuments[0].Series) != 1 || len(h.PredecessorDocuments[0].Series[0].Instances) != 2 ||
+		h.PredecessorDocuments[1].Series[0].Instances[0].SOPInstanceUID != "1.2.3.7.3.1" {
+		t.Errorf("predecessor documents: %+v", h.PredecessorDocuments)
+	}
+	byConcept := map[string]*srNode{}
+	for _, n := range doc.Content.flatten() {
+		if n.ConceptName != nil {
+			byConcept[n.ConceptName.Meaning] = n
+		}
+	}
+	if tmpl := byConcept["Group"].Template; tmpl == nil || tmpl.ID != "1501" || tmpl.Resource != "99LOCAL" {
+		t.Errorf("the template of the inner container: %+v", tmpl)
+	}
+	if byConcept["Plain"].Template != nil || byConcept["Plain"].Reference.ValueMappings != nil {
+		t.Error("an item with neither has a template or a mapping")
+	}
+	if m := byConcept["Mapped"].Reference.ValueMappings; len(m) != 2 || m[1].SOPInstanceUID != "1.2.3.71" || m[0].SOPClassName != "Real World Value Mapping" {
+		t.Errorf("value mappings: %+v", m)
+	}
+
+	// A report that has none of them prints no field for any.
+	bare := filepath.Join(t.TempDir(), "bare.dcm")
+	writeGeneratedReport(t, bare)
+	raw, err := runSR(t, "--json", bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"verifyingObservers", "predecessorDocuments", `"template"`, "realWorldValueMappings"} {
+		if strings.Contains(raw, field) {
+			t.Errorf("a report without them prints %s", field)
+		}
+	}
+}
+
+// pydicom's test-SR.dcm has two verifying observers and one predecessor
+// document, which dsrdump prints in its header as "Verifying Observers" and
+// "Predecessor Docs : 1"; they are printed here too, with the same names,
+// organizations, times and code.
+func TestSRPrintsTheCorpusReportsVerifiersAndPredecessor(t *testing.T) {
+	out, err := runSR(t, srCorpus(t, "test-SR.dcm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	header := out[:strings.Index(out, "\n\n")]
+	for _, want := range []string{
+		"Verifying observer: Riesmeier^Jörg, OFFIS e.V., 2001-02-13 18:47:46 \"JR\" [1705, 99_OFFIS_DCMTK]\n",
+		// The organization's name is the file's own, in British spelling.
+		"Verifying observer: Observer^Verifying, Organi" + "sation, 2001-02-13 18:47:46\n",
+		"Predecessor document: Comprehensive SR [1.2.840.10008.5.1.4.1.1.88.33] 1.2.276.0.7230010.3.1.4.2139363186.7819.982086466.1 " +
+			"(series 1.2.276.0.7230010.3.1.4.2139363186.7819.982086466.3, study 1.2.276.0.7230010.3.1.4.2139363186.7819.982086466.2)\n",
+	} {
+		if !strings.Contains(header+"\n", want) {
+			t.Errorf("the header lacks %q:\n%s", want, header)
+		}
+	}
+	if strings.Count(header, "Predecessor document") != 1 {
+		t.Errorf("one predecessor, as dsrdump counts:\n%s", header)
+	}
+}

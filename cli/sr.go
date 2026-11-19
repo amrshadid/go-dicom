@@ -22,7 +22,10 @@ import (
 
 // srSchemaVersion is the version of the document `sr --json` prints. It goes
 // up when a field is renamed, removed or changes meaning; a field added does
-// not change it.
+// not change it. The verifying observers, predecessor documents, template
+// identifiers and value mappings below were added under that rule: each is
+// a field that is absent unless the document has it, so a reader that does
+// not know it reads what it always did.
 const srSchemaVersion = 1
 
 // SRCommand prints the content tree of a structured report.
@@ -114,6 +117,56 @@ type srHeader struct {
 	TemplateID       string `json:"templateID,omitempty"`
 	MappingResource  string `json:"mappingResource,omitempty"`
 	ContentItemCount int    `json:"contentItems"`
+	// VerifyingObservers are the Verifying Observer Sequence (0040,A073), in
+	// the order the document gives them.
+	VerifyingObservers []srVerifier `json:"verifyingObservers,omitempty"`
+	// PredecessorDocuments are the documents this one replaces, the
+	// Predecessor Documents Sequence (0040,A360): the studies and series they
+	// are in, and the instances.
+	PredecessorDocuments []srPredecessor `json:"predecessorDocuments,omitempty"`
+}
+
+// srVerifier is one verifying observer (PS3.3 C.17.2).
+type srVerifier struct {
+	// Name is the Verifying Observer Name (0040,A075), Organization the
+	// Verifying Organization (0040,A027), and DateTime the Verification
+	// DateTime (0040,A030) as written.
+	Name         string `json:"name,omitempty"`
+	Organization string `json:"organization,omitempty"`
+	DateTime     string `json:"dateTime,omitempty"`
+	// Identification is the Verifying Observer Identification Code Sequence
+	// (0040,A088), where it has an item.
+	Identification *srCode `json:"identification,omitempty"`
+}
+
+// srPredecessor is one study of the Predecessor Documents Sequence, with
+// the series of it a predecessor is in.
+type srPredecessor struct {
+	StudyInstanceUID string                `json:"studyInstanceUID"`
+	Series           []srPredecessorSeries `json:"series,omitempty"`
+}
+
+// srPredecessorSeries is a series of a predecessor study and the instances
+// of it that are predecessors.
+type srPredecessorSeries struct {
+	SeriesInstanceUID string       `json:"seriesInstanceUID"`
+	Instances         []srInstance `json:"instances,omitempty"`
+}
+
+// srInstance is an instance named by its SOP class and its UID.
+type srInstance struct {
+	SOPClassUID    string `json:"sopClassUID"`
+	SOPClassName   string `json:"sopClassName,omitempty"`
+	SOPInstanceUID string `json:"sopInstanceUID"`
+}
+
+// srTemplate is the Content Template Sequence (0040,A504) of an item: the
+// template its content was built from (PS3.3 C.17.3.2).
+type srTemplate struct {
+	// ID is the Template Identifier (0040,DB00) and Resource the Mapping
+	// Resource (0008,0105) it belongs to.
+	ID       string `json:"id"`
+	Resource string `json:"resource,omitempty"`
 }
 
 // srCode is a coded concept.
@@ -149,6 +202,10 @@ type srReference struct {
 	Channels [][2]int `json:"channels,omitempty"`
 	// PresentationState is the instance the image is to be shown with.
 	PresentationState *srReference `json:"presentationState,omitempty"`
+	// ValueMappings are the Real World Value Mapping instances that give
+	// the image's stored values their meaning, the Referenced Real World
+	// Value Mapping Instance Sequence (0008,114B) of an image reference.
+	ValueMappings []srInstance `json:"realWorldValueMappings,omitempty"`
 }
 
 // srSCoord is the SCOORD or SCOORD3D value: a shape and its points.
@@ -193,6 +250,10 @@ type srNode struct {
 	ReferencedPosition string `json:"referencedPosition,omitempty"`
 	// ObservationDateTime is (0040,A032) of the item, as written.
 	ObservationDateTime string `json:"observationDateTime,omitempty"`
+	// Template is the template the item's content was built from, where it
+	// says so: the Content Template Sequence of the item, which a report
+	// gives to the root and to the containers it takes from another template.
+	Template *srTemplate `json:"template,omitempty"`
 
 	Text       *string      `json:"text,omitempty"`
 	Code       *srCode      `json:"code,omitempty"`
@@ -247,7 +308,77 @@ func readSRDocument(path string) (*srDocument, error) {
 		doc.Document.TemplateID = dsString(template, tag.New(0x0040, 0xDB00))
 		doc.Document.MappingResource = dsString(template, tag.New(0x0008, 0x0105))
 	}
+	doc.Document.VerifyingObservers = readSRVerifiers(ds)
+	doc.Document.PredecessorDocuments = readSRPredecessors(ds)
 	return doc, nil
+}
+
+// dsItems is every item of a sequence, none when it is absent.
+func dsItems(ds *dataset.Dataset, t tag.Tag) []*dataset.Dataset {
+	if ds == nil {
+		return nil
+	}
+	elem, ok := ds.Get(t)
+	if !ok {
+		return nil
+	}
+	seq, ok := elem.GetValue().(*sequence.Sequence)
+	if !ok {
+		return nil
+	}
+	var items []*dataset.Dataset
+	for i := 0; i < seq.Length(); i++ {
+		if raw, err := seq.Get(i); err == nil {
+			if item, ok := raw.(*dataset.Dataset); ok {
+				items = append(items, item)
+			}
+		}
+	}
+	return items
+}
+
+// readSRVerifiers reads the Verifying Observer Sequence of the document.
+func readSRVerifiers(ds *dataset.Dataset) []srVerifier {
+	var out []srVerifier
+	for _, item := range dsItems(ds, tag.New(0x0040, 0xA073)) {
+		out = append(out, srVerifier{
+			Name:           dsString(item, tag.New(0x0040, 0xA075)),
+			Organization:   dsString(item, tag.New(0x0040, 0xA027)),
+			DateTime:       dsString(item, tag.New(0x0040, 0xA030)),
+			Identification: convertSRCode(srCodeOf(item, tag.New(0x0040, 0xA088))),
+		})
+	}
+	return out
+}
+
+// readSRPredecessors reads the Predecessor Documents Sequence: each item is
+// a Hierarchical SOP Instance Reference, a study with the series in it and the
+// instances in those (PS3.3 C.17.2, Table C.17-2).
+func readSRPredecessors(ds *dataset.Dataset) []srPredecessor {
+	var out []srPredecessor
+	for _, study := range dsItems(ds, tag.New(0x0040, 0xA360)) {
+		p := srPredecessor{StudyInstanceUID: dsString(study, tag.New(0x0020, 0x000D))}
+		for _, series := range dsItems(study, tag.New(0x0008, 0x1115)) {
+			s := srPredecessorSeries{SeriesInstanceUID: dsString(series, tag.New(0x0020, 0x000E))}
+			for _, instance := range dsItems(series, tag.New(0x0008, 0x1199)) {
+				s.Instances = append(s.Instances, readSRInstance(instance))
+			}
+			p.Series = append(p.Series, s)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// readSRInstance reads a Referenced SOP Class UID and Referenced SOP Instance
+// UID from an item.
+func readSRInstance(item *dataset.Dataset) srInstance {
+	i := srInstance{
+		SOPClassUID:    dsString(item, tag.New(0x0008, 0x1150)),
+		SOPInstanceUID: dsString(item, tag.New(0x0008, 0x1155)),
+	}
+	i.SOPClassName = srClassName(i.SOPClassUID)
+	return i
 }
 
 // buildSRNode converts an item, and those below it.
@@ -260,6 +391,12 @@ func buildSRNode(item *sr.ContentItem, position string) srNode {
 	}
 	ds := item.Dataset
 	n.ObservationDateTime = dsString(ds, tag.New(0x0040, 0xA032))
+	if template := dsFirst(ds, tag.New(0x0040, 0xA504)); template != nil {
+		n.Template = &srTemplate{
+			ID:       dsString(template, tag.New(0x0040, 0xDB00)),
+			Resource: dsString(template, tag.New(0x0008, 0x0105)),
+		}
+	}
 
 	// An item that points at another has a relationship and nothing else
 	// (PS3.3 C.17.3.5): the target is named by its position.
@@ -363,6 +500,9 @@ func readSRReferenceItem(ref *dataset.Dataset, valueType string, nested bool) *s
 		if nested {
 			if ps := dsFirst(ref, tag.New(0x0008, 0x1199)); ps != nil {
 				out.PresentationState = readSRReferenceItem(ps, "", false)
+			}
+			for _, mapping := range dsItems(ref, tag.New(0x0008, 0x114B)) {
+				out.ValueMappings = append(out.ValueMappings, readSRInstance(mapping))
 			}
 		}
 	}
@@ -511,6 +651,7 @@ var srClassNames = map[string]string{
 	"1.2.840.10008.5.1.4.1.1.11.1":  "Grayscale Softcopy Presentation State",
 	"1.2.840.10008.5.1.4.1.1.12.1":  "X-Ray Angiographic Image",
 	"1.2.840.10008.5.1.4.1.1.20":    "Nuclear Medicine Image",
+	"1.2.840.10008.5.1.4.1.1.67":    "Real World Value Mapping",
 	"1.2.840.10008.5.1.4.1.1.128":   "Positron Emission Tomography Image",
 	"1.2.840.10008.5.1.4.1.1.481.2": "RT Dose",
 	"1.2.840.10008.5.1.4.1.1.481.3": "RT Structure Set",
@@ -546,6 +687,12 @@ func (d *srDocument) writeText(out io.Writer) {
 	if len(flags) > 0 {
 		fmt.Fprintf(out, "%s\n", strings.Join(flags, "  "))
 	}
+	for _, v := range h.VerifyingObservers {
+		fmt.Fprintf(out, "Verifying observer: %s\n", v.text())
+	}
+	for _, p := range h.PredecessorDocuments {
+		p.writeText(out)
+	}
 	if h.ContentDate != "" || h.ContentTime != "" {
 		fmt.Fprintf(out, "Content date/time: %s\n", strings.TrimSpace(formatSRDate(h.ContentDate)+" "+formatSRTime(h.ContentTime)))
 	}
@@ -557,6 +704,51 @@ func (d *srDocument) writeText(out io.Writer) {
 	for _, w := range d.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s: %s\n", d.File, w)
 	}
+}
+
+// text is a verifying observer as the name, the organization and the time of
+// the verification, and the observer's code.
+func (v srVerifier) text() string {
+	var parts []string
+	if v.Name != "" {
+		parts = append(parts, v.Name)
+	}
+	if v.Organization != "" {
+		parts = append(parts, v.Organization)
+	}
+	if v.DateTime != "" {
+		parts = append(parts, formatSRDateTime(v.DateTime))
+	}
+	out := strings.Join(parts, ", ")
+	if v.Identification != nil {
+		out += " " + srCodeText(v.Identification)
+	}
+	return strings.TrimSpace(out)
+}
+
+// writeText prints a predecessor study: a line for each instance, with the
+// series and the study it is in.
+func (p srPredecessor) writeText(out io.Writer) {
+	if len(p.Series) == 0 {
+		fmt.Fprintf(out, "Predecessor documents: study %s\n", p.StudyInstanceUID)
+	}
+	for _, series := range p.Series {
+		if len(series.Instances) == 0 {
+			fmt.Fprintf(out, "Predecessor documents: study %s series %s\n", p.StudyInstanceUID, series.SeriesInstanceUID)
+		}
+		for _, instance := range series.Instances {
+			fmt.Fprintf(out, "Predecessor document: %s (series %s, study %s)\n", instance.text(), series.SeriesInstanceUID, p.StudyInstanceUID)
+		}
+	}
+}
+
+// text is an instance as its SOP class, in brackets, and its UID.
+func (i srInstance) text() string {
+	name := ""
+	if i.SOPClassName != "" {
+		name = i.SOPClassName + " "
+	}
+	return fmt.Sprintf("%s[%s] %s", name, i.SOPClassUID, i.SOPInstanceUID)
 }
 
 // writeSRNode prints an item and those below it: its relationship, value
@@ -582,6 +774,14 @@ func writeSRNode(out io.Writer, n *srNode, depth int) {
 	}
 	if n.ObservationDateTime != "" {
 		b.WriteString("  @ " + formatSRDateTime(n.ObservationDateTime))
+	}
+	// The root's template is in the header; the others are said where they
+	// are, as dsrdump does with +Pt.
+	if n.Template != nil && n.Position != "1" {
+		b.WriteString("  # TID " + n.Template.ID)
+		if n.Template.Resource != "" {
+			b.WriteString(" (" + n.Template.Resource + ")")
+		}
 	}
 	fmt.Fprintln(out, b.String())
 	for i := range n.Children {
@@ -666,6 +866,13 @@ func (r *srReference) text() string {
 	}
 	if r.PresentationState != nil {
 		b.WriteString(" shown with " + r.PresentationState.text())
+	}
+	if len(r.ValueMappings) > 0 {
+		mappings := make([]string, len(r.ValueMappings))
+		for i, m := range r.ValueMappings {
+			mappings[i] = m.text()
+		}
+		b.WriteString(" mapped by " + strings.Join(mappings, ", "))
 	}
 	return b.String()
 }
@@ -828,19 +1035,26 @@ DESCRIPTION:
   An item that only points at another prints -> and the position of its
   target, which is the item's place as dotted ordinals from the root: 1.2.3 is
   the third child of the root's second child. Positions are given in --json.
-  An item observed at another time ends with @ and the time.
+  An item observed at another time ends with @ and the time. An item built
+  from a template other than the root's ends with # TID and its number and
+  mapping resource. An image that has Real World Value Mapping instances ends
+  with "mapped by" and them.
 
-  What the document does not print: Real World Value Mapping references,
-  template identification of items other than the root's, and the verifying
-  observers and predecessor documents of the header. A reader that needs them
-  has "show".
+  The header lists the verifying observers (name, organization, time and
+  code) and the predecessor documents, an instance to a line with its series
+  and study. The identical documents of a report are not printed.
 
 OPTIONS:
   -h, --help    Show help for this command
   --json        Print the report as JSON, with "schemaVersion" 1: the header,
                 and the tree as nested "content" items with their position,
                 relationship, value type, concept name and the value in a
-                field of its own kind.
+                field of its own kind. A field is present only where the
+                document has it: "verifyingObservers" and
+                "predecessorDocuments" in the header, "template" on an item,
+                "realWorldValueMappings" in an image reference. They were
+                added without a new schemaVersion, which changes only when a
+                field is renamed, removed or changes meaning.
 
 EXAMPLES:
   go-dicom sr report.dcm

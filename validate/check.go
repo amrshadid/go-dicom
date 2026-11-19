@@ -21,8 +21,9 @@ type Severity int
 const (
 	// NotChecked is a rule the checker could not apply: a condition PS3.3
 	// states in prose, an attribute of a repeating group, the functional
-	// groups of an enhanced IOD. It is reported so that nothing is passed
-	// silently; it says nothing about the instance.
+	// groups of an IOD whose Functional Group Macros table is not its own. It
+	// is reported so that nothing is passed silently; it says nothing about
+	// the instance.
 	NotChecked Severity = iota
 	// Warning is a value PS3.3 does not define where it allows others: a
 	// Defined Term not in the list.
@@ -98,7 +99,7 @@ func (r *Report) Worst() Severity {
 var (
 	tagSOPClassUID = tag.New(0x0008, 0x0016)
 	// The module that makes an IOD enhanced: what each frame holds is in
-	// the IOD's Functional Group Macro table, which is not read.
+	// the IOD's Functional Group Macros table.
 	multiFrameFunctionalGroups = "Multi-frame Functional Groups"
 )
 
@@ -327,21 +328,235 @@ func (c *checker) module(ds *dataset.Dataset, iod *IOD, use ModuleUsage, roots [
 			return
 		}
 	case Conditional:
-		message := "absent; whether it is required was not checked: " + use.Condition
-		if present {
-			message = "present, and checked; whether it is required was not checked: " + use.Condition
-		}
-		c.add(Finding{Severity: NotChecked, Module: use.Module, Reference: ref, Rule: "Usage C", Message: message})
-		if !present {
+		holds, known, why := evaluate(ds, use.When, nil)
+		f := Finding{Severity: Error, Module: use.Module, Reference: ref, Rule: "Usage C"}
+		switch {
+		case known && holds && !anyPresent:
+			// One finding for the module, not one for each of its
+			// attributes: none of them is there.
+			f.Message = "absent; the condition holds, so the module is required: " + use.Condition
+			c.add(f)
 			return
+		case known && holds:
+			// Required, and checked as a Mandatory module is. Only
+			// attributes another module names as well may be here, as in
+			// a palette color image whose Palette Color Lookup Table
+			// module has the descriptors and data the Image Pixel module
+			// also names, and none of its own.
+		case known && !holds && !present:
+			return
+		case known && !holds && !use.When.Otherwise:
+			f.Message = "present; the condition does not hold, and PS3.3 does not say the module may be present " +
+				"otherwise (A.1.3.2): " + use.Condition
+			c.add(f)
+		case known:
+			// Present, and allowed to be: checked like any other.
+		default:
+			f.Severity = NotChecked
+			f.Message = "absent; whether it is required was not checked" + why + ": " + use.Condition
+			if present {
+				f.Message = "present, and checked; whether it is required was not checked" + why + ": " + use.Condition
+			}
+			c.add(f)
+			if !present {
+				return
+			}
 		}
-	}
-	if use.Module == multiFrameFunctionalGroups {
-		c.add(Finding{Severity: NotChecked, Module: use.Module, Reference: ref, Rule: "Functional Group Macros",
-			Message: "what the shared and per-frame functional groups must hold is in the IOD's Functional Group " +
-				"Macros table, which is not read; only the module's own attributes were checked"})
 	}
 	c.attributes(ds, roots, "", use.Module, table)
+	if use.Module == multiFrameFunctionalGroups {
+		if len(iod.FunctionalGroups) == 0 {
+			c.add(Finding{Severity: NotChecked, Module: use.Module, Reference: ref, Rule: "Functional Group Macros",
+				Message: "the IOD has no Functional Group Macros table that was generated; only the module's own " +
+					"attributes were checked"})
+			return
+		}
+		c.functionalGroups(ds, iod)
+	}
+}
+
+var (
+	tagSharedGroups   = tag.New(0x5200, 0x9229)
+	tagPerFrameGroups = tag.New(0x5200, 0x9230)
+	tagNumberOfFrames = tag.New(0x0028, 0x0008)
+)
+
+// functionalGroups checks the Shared and Per-Frame Functional Groups
+// Sequences against the IOD's Functional Group Macros table: each macro the
+// IOD requires is in the shared item or in the item of every frame, none is
+// in both (PS3.3 Table C.7.6.16-1: "The selected Functional Group Macros
+// shall not be present in the Per-Frame Functional Groups Sequence"), none is
+// where the table says it may not be, and each that is there is checked
+// attribute by attribute, as a module is.
+func (c *checker) functionalGroups(ds *dataset.Dataset, iod *IOD) {
+	ref := "PS3.3 " + iod.Section + " Table " + iod.FunctionalGroupsTable
+	moduleRef := "PS3.3 C.7.6.16 (Multi-frame Functional Groups Module Attributes)"
+	var shared *dataset.Dataset
+	if seq := sequenceOf(ds, tagSharedGroups); seq != nil && seq.Length() > 0 {
+		shared, _ = seq.Items()[0].(*dataset.Dataset)
+	}
+	var frames []*dataset.Dataset
+	if seq := sequenceOf(ds, tagPerFrameGroups); seq != nil {
+		for _, raw := range seq.Items() {
+			item, _ := raw.(*dataset.Dataset)
+			frames = append(frames, item)
+		}
+	}
+
+	// "The number of Items shall be the same as the number of Frames in the
+	// Multi-frame Image" (Table C.7.6.16-1).
+	if n, err := strconv.Atoi(text(ds, tagNumberOfFrames)); err == nil && frames != nil && len(frames) != n {
+		c.add(Finding{Severity: Error, Tag: tagPerFrameGroups.String(), Path: tagPerFrameGroups.String(),
+			Name: "Per-Frame Functional Groups Sequence", Module: multiFrameFunctionalGroups, Reference: moduleRef,
+			Rule: "Items", Message: fmt.Sprintf("%d item(s); the sequence holds one for each frame, and Number of "+
+				"Frames (0028,0008) is %d", len(frames), n)})
+	}
+
+	for _, fg := range iod.FunctionalGroups {
+		table, ok := tables[fg.Table]
+		module := fg.Macro + " (functional group)"
+		f := Finding{Severity: Error, Module: module, Reference: ref, Rule: "Usage " + fg.Usage.String()}
+		if !ok {
+			f.Severity, f.Message = NotChecked, "the macro's attribute table was not generated, so it was not checked"
+			c.add(f)
+			continue
+		}
+		roots := tree(fg.Table)
+		own := topLevelTags(roots)
+		holds := func(item *dataset.Dataset) bool {
+			if item == nil {
+				return false
+			}
+			for t := range own {
+				if _, ok := item.Get(tag.Tag(t)); ok {
+					return true
+				}
+			}
+			return false
+		}
+		inShared := holds(shared)
+		var with, without []int // frames, counted from 1
+		for i, item := range frames {
+			if holds(item) {
+				with = append(with, i+1)
+			} else {
+				without = append(without, i+1)
+			}
+		}
+		present := inShared || len(with) > 0
+
+		switch {
+		case inShared && len(with) > 0:
+			f.Rule = "Functional Groups"
+			f.Message = fmt.Sprintf("in the shared item and in %d per-frame item(s); a macro is in one or the "+
+				"other (Table C.7.6.16-1)", len(with))
+			c.add(f)
+		case inShared && fg.Placement == PerFrameOnly:
+			f.Rule = "Functional Groups"
+			f.Message = "in the shared item; the IOD's table says it may not be used as a Shared Functional Group"
+			c.add(f)
+		case len(with) > 0 && fg.Placement == SharedOnly:
+			f.Rule = "Functional Groups"
+			f.Message = "in the per-frame items; the IOD's table says it may not be used as a Per-Frame Functional Group"
+			c.add(f)
+		}
+
+		required := fg.Usage == Mandatory
+		if fg.Usage == Conditional {
+			h, known, why := evaluate(ds, fg.When, nil)
+			switch {
+			case known && h:
+				required = true
+			case known && present && !fg.When.Otherwise:
+				f.Message = "present; the condition does not hold, and PS3.3 does not say the macro may be present " +
+					"otherwise: " + fg.Condition
+				c.add(f)
+			case !known:
+				g := f
+				g.Severity = NotChecked
+				g.Message = "absent; whether it is required was not checked" + why + ": " + fg.Condition
+				if present {
+					g.Message = "present, and checked; whether it is required was not checked" + why + ": " + fg.Condition
+				}
+				c.add(g)
+			}
+		}
+		if required {
+			reason := "the macro is required"
+			if fg.Usage == Conditional {
+				reason = "the condition holds, so the macro is required: " + fg.Condition
+			}
+			switch {
+			case !present:
+				f.Message = "absent from the shared item and from every per-frame item; " + reason
+				c.add(f)
+			case !inShared && len(without) > 0:
+				f.Message = fmt.Sprintf("absent from %d of the %d per-frame items (frame %d first) and from the "+
+					"shared item; %s", len(without), len(frames), without[0], reason)
+				c.add(f)
+			}
+		}
+
+		if inShared {
+			c.attributes(shared, roots, tagSharedGroups.String()+"[1] ", module, table)
+		}
+		if len(with) > 0 {
+			c.perFrame(frames, with, roots, module, table)
+		}
+	}
+}
+
+// perFrame checks a macro in the per-frame items that hold it. What is wrong
+// in many frames is said once, with how many: an image of a thousand frames
+// missing one attribute in each is one finding, not a thousand.
+func (c *checker) perFrame(frames []*dataset.Dataset, with []int, roots []*node, module string, table *Table) {
+	sub := &checker{report: &Report{}, findings: map[string]bool{}}
+	for _, i := range with {
+		sub.attributes(frames[i-1], roots, fmt.Sprintf("%s[%d] ", tagPerFrameGroups, i), module, table)
+	}
+	type seen struct {
+		f      Finding
+		frames []int
+	}
+	var order []string
+	byKey := map[string]*seen{}
+	for _, f := range sub.report.Findings {
+		frame := 0
+		if m := leadingItem.FindStringSubmatch(f.Path); m != nil {
+			frame, _ = strconv.Atoi(m[1])
+		}
+		f.Path = leadingItem.ReplaceAllString(f.Path, tagPerFrameGroups.String()+"[*]")
+		key := fmt.Sprint(f.Severity, "|", f.Path, "|", f.Rule, "|", f.Message)
+		if byKey[key] == nil {
+			byKey[key] = &seen{f: f}
+			order = append(order, key)
+		}
+		byKey[key].frames = append(byKey[key].frames, frame)
+	}
+	for _, key := range order {
+		s := byKey[key]
+		f := s.f
+		if f.Severity != NotChecked {
+			if len(s.frames) == 1 {
+				f.Path = strings.Replace(f.Path, "[*]", fmt.Sprintf("[%d]", s.frames[0]), 1)
+			} else {
+				f.Message += fmt.Sprintf(" (in %d of %d frames, frame %d first)", len(s.frames), len(frames), s.frames[0])
+			}
+		}
+		c.add(f)
+	}
+}
+
+var leadingItem = regexp.MustCompile(`^\(5200,9230\)\[(\d+|\*)\]`)
+
+// sequenceOf is the sequence a data set holds at a tag, or nil.
+func sequenceOf(ds *dataset.Dataset, t tag.Tag) *sequence.Sequence {
+	elem, ok := ds.Get(t)
+	if !ok {
+		return nil
+	}
+	seq, _ := elem.GetValue().(*sequence.Sequence)
+	return seq
 }
 
 // attributes checks attributes of one data set, the top level or an item.
@@ -386,6 +601,21 @@ func (c *checker) attributes(ds *dataset.Dataset, nodes []*node, path, module st
 		}
 	}
 
+	// The attributes a condition in an item may name: those of the item's
+	// own table. An item's condition naming any other is about some other
+	// data set (the top level, an enclosing item), and which one is not
+	// said; it is not evaluated. At the top level the whole data set is in
+	// reach.
+	var siblings map[uint32]bool
+	if path != "" {
+		siblings = map[uint32]bool{}
+		for _, n := range nodes {
+			if !n.deeper && n.row.Mask == 0 {
+				siblings[n.row.Tag] = true
+			}
+		}
+	}
+
 	repeating := false
 	for _, n := range nodes {
 		r := n.row
@@ -420,14 +650,38 @@ func (c *checker) attributes(ds *dataset.Dataset, nodes []*node, path, module st
 				f.Severity, f.Message = Error, "absent; a Type "+r.Type.String()+" attribute is required"
 				c.add(f)
 			case Type1C, Type2C:
-				f.Severity = NotChecked
-				f.Message = "absent; whether it is required was not checked"
-				if r.Condition != "" {
-					f.Message += ": " + r.Condition
+				holds, known, why := evaluate(ds, r.When, siblings)
+				switch {
+				case known && holds:
+					f.Severity = Error
+					f.Message = "absent; the condition holds, so a Type " + r.Type.String() +
+						" attribute is required: " + r.Condition
+					c.add(f)
+				case known:
+					// Not required, and not there: nothing to say.
+				default:
+					f.Severity = NotChecked
+					f.Message = "absent; whether it is required was not checked" + why
+					if r.Condition != "" {
+						f.Message += ": " + r.Condition
+					}
+					c.add(f)
 				}
-				c.add(f)
 			}
 			continue
+		}
+
+		// Present where its condition does not hold, and PS3.3 does not say
+		// it may be present otherwise: PS3.5 7.4.2 and 7.4.4 say it shall
+		// not be included.
+		if (r.Type == Type1C || r.Type == Type2C) && r.When != nil && !r.When.Otherwise {
+			if holds, known, _ := evaluate(ds, r.When, siblings); known && !holds {
+				g := f
+				g.Severity = Error
+				g.Message = "present; the condition does not hold, and PS3.3 does not say it may be present " +
+					"otherwise (PS3.5 7.4): " + r.Condition
+				c.add(g)
+			}
 		}
 
 		seq, isSeq := elem.GetValue().(*sequence.Sequence)
@@ -455,6 +709,55 @@ func (c *checker) attributes(ds *dataset.Dataset, nodes []*node, path, module st
 		c.add(Finding{Severity: NotChecked, Module: module, Reference: "PS3.3 " + moduleTable.Section,
 			Rule: "Repeating group", Message: "the module's attributes in repeating groups, such as (60xx,eeee), were not checked"})
 	}
+}
+
+// evaluate decides a condition on a data set. known is false when it cannot
+// be decided, and why then says why, as a clause to follow "not checked": the
+// condition is prose (no Condition), it names an attribute outside the item
+// (siblings, when not nil, are the attributes in reach), or the value it
+// tests is not one value of text or numbers.
+func evaluate(ds *dataset.Dataset, cond *Condition, siblings map[uint32]bool) (holds, known bool, why string) {
+	if cond == nil {
+		return false, false, ""
+	}
+	t := tag.Tag(cond.Tag)
+	if siblings != nil && !siblings[cond.Tag] {
+		return false, false, " (the condition names " + t.String() + ", which is not in this item)"
+	}
+	elem, present := ds.Get(t)
+	switch cond.Test {
+	case IsPresent:
+		return present, true, ""
+	case IsAbsent:
+		return !present, true, ""
+	case HasValue, IsPresentWithValue:
+	default:
+		return false, false, ""
+	}
+	if !present {
+		return false, true, ""
+	}
+	if _, isSeq := elem.GetValue().(*sequence.Sequence); isSeq {
+		return false, false, " (the condition tests the value of " + t.String() + ", a sequence)"
+	}
+	values := valuesOf(ds, t, elem)
+	if values == nil {
+		return false, false, " (the value of " + t.String() + " is not text or numbers)"
+	}
+	var v string
+	switch {
+	case cond.Value > 0 && cond.Value > len(values):
+		return false, true, ""
+	case cond.Value > 0:
+		v = values[cond.Value-1]
+	case len(values) > 1:
+		// "has a Value of X" said of an attribute holding several: whether
+		// one of them, or all, is meant is not said.
+		return false, false, fmt.Sprintf(" (the condition tests one value of %s, which has %d)", t, len(values))
+	default:
+		v = values[0]
+	}
+	return v != "" && matchesTerm(v, cond.Values), true, ""
 }
 
 // firstAbsent is the outermost conditional inclusion of groups none of whose
@@ -624,6 +927,11 @@ func find(ds *dataset.Dataset, r Row) (*dataelem.DataElement, bool) {
 func isEmpty(elem *dataelem.DataElement, isSeq bool, seq *sequence.Sequence) bool {
 	if isSeq {
 		return seq.Length() == 0
+	}
+	// Left in the file by a reader that skips bulk data: its length is all
+	// the Type needs.
+	if v, inFile := elem.GetValue().(dataelem.ValueInFile); inFile {
+		return v.Length == 0
 	}
 	// Through Bytes, so a value held as a []string or a number is judged as the
 	// same value read from a file (#420); a value that holds no bytes is not
