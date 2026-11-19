@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/amrshadid/go-dicom/charset"
+	fileparse "github.com/amrshadid/go-dicom/internal/filereader"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -26,7 +27,7 @@ func (df *DICOMFile) GetCharacterSetWithContext(ctx context.Context) *charset.Ch
 				return nil
 			}
 
-			values := parseSpecificCharacterSetValue(valueStr)
+			values := fileparse.ParseSpecificCharacterSet(valueStr)
 
 			cs, err := charset.NewCharacterSetWithContext(ctx, values)
 			if err != nil {
@@ -201,22 +202,4 @@ func isTextVR(vr string) bool {
 	default:
 		return false
 	}
-}
-
-// parseSpecificCharacterSetValue parses the SpecificCharacterSet tag value.
-// The value may contain multiple character set names separated by backslash (e.g., "ISO_IR 192" for UTF-8).
-func parseSpecificCharacterSetValue(value string) []string {
-	if value == "" {
-		return []string{}
-	}
-
-	parts := strings.Split(value, "\\")
-
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		result = append(result, trimmed)
-	}
-
-	return result
 }

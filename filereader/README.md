@@ -2,6 +2,8 @@
 
 DICOM file reading with preamble/DICM validation, file meta information parsing, transfer syntax detection, and data element decoding. Supports both high-level and sequential low-level access.
 
+To read attributes without linking the codecs, use [`filereader/attributes`](attributes/README.md): the same parser and element types, without `compress`, `encaps`, `pixels`, `waveforms` or `dataset`.
+
 ## Quick Start
 
 ```go
