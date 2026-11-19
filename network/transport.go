@@ -171,11 +171,13 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	obs := t.obs
 	t.mu.Unlock()
 	// The bytes are kept as they are read only when something will be told
-	// of them.
+	// of them, and for a P-DATA-TF only when a handler is registered that is
+	// given them (observer.wantsBytes).
 	var source io.Reader = t.conn
-	var raw bytes.Buffer
+	var raw *pduCopy
 	if obs != nil {
-		source = io.TeeReader(t.conn, &raw)
+		raw = &pduCopy{keep: obs.wantsBytes}
+		source = io.TeeReader(t.conn, raw)
 	}
 	pdu, err := decodePDU(source, limit)
 	if err != nil {
@@ -201,9 +203,41 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	}
 
 	if obs != nil {
-		obs.pdu(false, pdu, raw.Bytes())
+		obs.pdu(false, pdu, raw.bytes())
 	}
 	return pdu, nil
+}
+
+// pduCopy keeps the bytes of one PDU as they are read, or none of them.
+//
+// Whether to keep them is decided on the first byte written, the PDU's type
+// (PS3.8 9.3.1), before its body is read, so a P-DATA-TF nobody will be
+// shown is never copied. Copying every PDU made a second copy of every
+// instance received, for a Server always has an EventManager: 64 MiB more for
+// a 64 MiB store, with no handler registered (#469).
+type pduCopy struct {
+	keep    func(pduType byte) bool
+	decided bool
+	on      bool
+	buf     bytes.Buffer
+}
+
+func (c *pduCopy) Write(p []byte) (int, error) {
+	if !c.decided && len(p) > 0 {
+		c.on, c.decided = c.keep(p[0]), true
+	}
+	if c.on {
+		c.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+// bytes returns the PDU as it was read, or nil when it was not kept.
+func (c *pduCopy) bytes() []byte {
+	if !c.on {
+		return nil
+	}
+	return c.buf.Bytes()
 }
 
 // SetReceiveLimit sets the Maximum Length this side advertised. A P-DATA-TF

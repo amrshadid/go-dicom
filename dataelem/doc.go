@@ -32,6 +32,13 @@
 //	spacing := dataelem.NewDataElement(0x00280030, dataelem.DS, []float64{0.5, 0.5})
 //	pixels := dataelem.NewDataElement(0x7FE00010, dataelem.OW, []int16{-1, 0, 1})
 //
+// Read a value as bytes with Bytes, whatever it is held as: a file read
+// holds []byte, a data set built in code may hold any of the above, and
+// Bytes gives the bytes the writer would write. Asserting GetValue().([]byte)
+// reads every other form as absent:
+//
+//	raw, ok := rows.Bytes() // []byte{0x00, 0x02}, true
+//
 // DataElements are thread-safe for concurrent reads via RWMutex. For write
 // operations, use explicit locking.
 //

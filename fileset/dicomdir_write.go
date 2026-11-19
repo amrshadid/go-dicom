@@ -255,7 +255,7 @@ func newRecord(recordType string, source *dataset.Dataset) *Record {
 	// use an extended set. GetDataset gives text as UTF-8 and the set to
 	// match, so the source's is the one the copied keys are in (#215).
 	if elem, ok := source.Get(tagSpecificCharacterSet); ok {
-		if raw, ok := elem.GetValue().([]byte); ok && len(raw) > 0 {
+		if raw, ok := elem.Bytes(); ok && len(raw) > 0 {
 			_ = ds.Add(dataelem.NewDataElement(tagSpecificCharacterSet, dataelem.CS, raw))
 		}
 	}
@@ -281,7 +281,7 @@ func newRecord(recordType string, source *dataset.Dataset) *Record {
 			continue
 		}
 		if elem, ok := source.Get(t); ok {
-			if raw, ok := elem.GetValue().([]byte); ok {
+			if raw, ok := elem.Bytes(); ok {
 				value = strings.TrimRight(string(raw), " \x00")
 			}
 		}
@@ -501,7 +501,7 @@ func recordToWriterItem(ds *dataset.Dataset) (*filewriter.SequenceItem, error) {
 			converted = append(converted, filewriter.ElementsFromDataset(one)...)
 			continue
 		}
-		raw, _ := elem.GetValue().([]byte)
+		raw, _ := elem.Bytes()
 		converted = append(converted, &filewriter.DataElement{
 			Tag: t, VR: string(elem.GetVR()), Value: raw, Length: uint32(len(raw)),
 		})

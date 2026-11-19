@@ -468,7 +468,7 @@ func describeRecord(r *fileset.Record, reached *int) dicomdirRecord {
 				continue
 			}
 			// The keys are text; what is not is not a key of the record.
-			raw, ok := e.GetValue().([]byte)
+			raw, ok := e.Bytes()
 			if !ok {
 				continue
 			}

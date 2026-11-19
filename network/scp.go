@@ -60,6 +60,15 @@ func NewSCP(config SCPConfig) *SCP {
 	if config.MaxAssociations > 0 {
 		scp.assocSlots = make(chan struct{}, config.MaxAssociations)
 	}
+	// Taken here, before any listener exists, so the first association is
+	// negotiated with them. Nil keeps the defaults; an empty list is a
+	// choice, and is kept.
+	if config.AbstractSyntaxes != nil {
+		scp.supportedAbstractSyntaxes = syntaxSet(config.AbstractSyntaxes)
+	}
+	if config.TransferSyntaxes != nil {
+		scp.supportedTransferSyntaxes = syntaxSet(config.TransferSyntaxes)
+	}
 	return scp
 }
 
@@ -70,24 +79,32 @@ func (s *SCP) SetHandler(handler Handler) {
 	s.handler = handler
 }
 
-// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports.
+// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.AbstractSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedAbstractSyntaxes = make(map[string]bool, len(syntaxes))
-	for _, syn := range syntaxes {
-		s.supportedAbstractSyntaxes[syn] = true
-	}
+	s.supportedAbstractSyntaxes = syntaxSet(syntaxes)
 }
 
-// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports.
+// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.TransferSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedTransferSyntaxes = make(map[string]bool, len(syntaxes))
+	s.supportedTransferSyntaxes = syntaxSet(syntaxes)
+}
+
+// syntaxSet is a list of UIDs as the set negotiation looks them up in. It is
+// a copy, so a caller changing its slice later changes nothing.
+func syntaxSet(syntaxes []string) map[string]bool {
+	set := make(map[string]bool, len(syntaxes))
 	for _, syn := range syntaxes {
-		s.supportedTransferSyntaxes[syn] = true
+		set[syn] = true
 	}
+	return set
 }
 
 // ListenAndServe starts the SCP server, listening for incoming associations.
@@ -513,34 +530,45 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Handler,
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
-	// A handler that reads the data set as it arrives is given the bytes
-	// before they are assembled, and is never handed a decoded copy.
-	if streamer, ok := streamsCStore(handler); ok {
-		s.handleCStoreStream(ctx, assoc, streamer, ctxID, messageID, cmdDS)
-		return
-	}
-
 	req := cstoreRequest(messageID, cmdDS)
 	sopClassUID, sopInstanceUID := req.AffectedSOPClass, req.AffectedSOPInstance
 
-	// Read the data set if present
-	var ds *dataset.Dataset
-	if HasDataSet(cmdDS) {
-		_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
-		if err != nil {
-			DefaultLogger.Error("failed to receive C-STORE data: %v", err)
-			return
-		}
-		if isCmd {
-			DefaultLogger.Warn("expected data, got command during C-STORE")
-			return
-		}
-		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
-		if err != nil {
-			s.refuse(ctx, assoc, ctxID, "C-STORE", err,
-				BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
-			return
-		}
+	// A C-STORE-RQ carries the instance to store (PS3.7 9.3.1.1). One whose
+	// Command Data Set Type says none follows has nothing to store, and
+	// whatever a handler answered would describe an instance it never had.
+	// It is refused here, before either kind of handler: the streamed path
+	// refused it since #321, while a handler given the decoded data set was
+	// called with a nil one, and a StorageHandler answered for it. A data set
+	// the peer sends anyway is not this message's: the next read takes it as
+	// stray data.
+	if !HasDataSet(cmdDS) {
+		DefaultLogger.Warn("refusing a C-STORE of %s that says no data set follows (PS3.7 9.3.1.1)",
+			sopInstanceUID)
+		s.sendCStoreRSP(ctx, assoc, ctxID, req, StatusUnableToProcess)
+		return
+	}
+
+	// A handler that reads the data set as it arrives is given the bytes
+	// before they are assembled, and is never handed a decoded copy.
+	if streamer, ok := streamsCStore(handler); ok {
+		s.handleCStoreStream(ctx, assoc, streamer, ctxID, req)
+		return
+	}
+
+	_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		DefaultLogger.Error("failed to receive C-STORE data: %v", err)
+		return
+	}
+	if isCmd {
+		DefaultLogger.Warn("expected data, got command during C-STORE")
+		return
+	}
+	ds, err := DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+	if err != nil {
+		s.refuse(ctx, assoc, ctxID, "C-STORE", err,
+			BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
+		return
 	}
 
 	req.DataSet = ds
@@ -686,7 +714,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 
 	moveDest := ""
 	if elem, ok := cmdDS.Get(tagMoveDestination); ok {
-		moveDest = extractStringValue(elem.GetValue())
+		moveDest = extractStringValue(elem)
 	}
 
 	req := &CMoveRequest{
@@ -1058,8 +1086,8 @@ func instanceUIDs(ds *dataset.Dataset) (sopClassUID, sopInstanceUID string, ok b
 		return "", "", false
 	}
 
-	sopClassUID = extractStringValue(classElem.GetValue())
-	sopInstanceUID = extractStringValue(instElem.GetValue())
+	sopClassUID = extractStringValue(classElem)
+	sopInstanceUID = extractStringValue(instElem)
 	if sopClassUID == "" || sopInstanceUID == "" {
 		return "", "", false
 	}

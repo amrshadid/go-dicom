@@ -40,8 +40,12 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      # The limit is for one package. The command line's tests build the
+      # binary and run it for each network command, and under the race
+      # detector on Windows they took 4m47s and 5m30s in two runs against the
+      # five minutes they had: a package that slow failed as if it had hung.
       - name: Run tests with coverage
-        run: go test -v -race -timeout 5m -coverprofile coverage.out -covermode atomic ./...
+        run: go test -v -race -timeout 15m -coverprofile coverage.out -covermode atomic ./...
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.25'
