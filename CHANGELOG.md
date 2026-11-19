@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Lossy JPEG 2000 meets a ratio by rate-distortion optimal truncation, in
+  quality layers, and reversibly when asked** (#552). `EncodeLossy`
+  met a ratio by searching the quantization step, with every pass of every
+  block coded in one layer. It now codes every block once, finely, keeps
+  each coding pass as a truncation point with its bytes and the error it
+  removes, and cuts the blocks where their convex hulls reach one slope
+  (T.800 J.14), within half a percent of the target where the step search
+  stopped within one. Over 21 corpus and generated images at 5, 10, 20 and
+  40:1, 74 codestreams that are not lossless, the PSNR is 0.10 dB higher on
+  average than the step search's (median 0.00, from 0.82 dB lower to 4.4
+  higher) and 0.18 dB higher than `opj_compress -I -r`'s (better in 63 of
+  66). Near lossless, where the decoder's rounding decides more than the
+  coding, the step search is tried as well and the nearer codestream kept.
+  `LossyOptions.Layers` writes up to 32 quality layers, each half the size
+  of the next, and `LossyOptions.Reversible` the 5/3 filter cut short,
+  0.19 dB above `opj_compress -r` on average and never below it on the same
+  images. Every codestream decodes in `opj_decompress` and
+  pylibjpeg-openjpeg. Encoding takes about 1.4 times as long.
+
 - **Which transfer syntax each coder writes is one table** (#534). A send,
   the `compress` command and a frame encoded over DICOMweb each kept their
   own map from a syntax to a `Dataset.Compress…InPlace` method, with which

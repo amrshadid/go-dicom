@@ -910,11 +910,19 @@ how decoded samples are shaped and coloured, and the one tolerance.
   quantization with a step for each subband (E.1, expounded), at 1 to 16
   bits, signed or unsigned, so a CT keeps its negative values. The steps are
   one base step over each subband's synthesis norm, measured from this
-  library's own inverse filter, and the rate is met by searching for the
-  base step: the largest whose codestream fits the ratio, or whose decoded
-  image meets the PSNR. That is rate control by quantization, not the
-  pass-by-pass truncation of Annex J.14: one tile, one quality layer, every
-  bit plane of what is left coded. A ratio no codestream of the image can
+  library's own inverse filter. A ratio is met by the rate-distortion
+  optimal truncation of Annex J.14: every code-block is coded once, finely,
+  each coding pass is a truncation point with its bytes and the error it
+  removes, and the blocks are cut where their convex hulls reach one slope,
+  searched until the codestream fits, within half a percent of the ratio.
+  Near lossless, where the decoder's rounding to whole samples decides the
+  error more than the coding does, a search of the step with every pass
+  coded is tried as well and the codestream that decodes nearer the image
+  is kept. `LossyOptions.Layers` writes several quality layers, each half
+  the size of the next, and `LossyOptions.Reversible` the reversible 5/3
+  filter cut short (`.91` allows it, PS3.5 A.4.4); the data set path writes
+  one irreversible layer. A PSNR is met by searching the step until the
+  decoded image meets it. One tile. A ratio no codestream of the image can
   meet, as for a very small image, is refused rather than met with one that
   holds none of the picture, and so is PALETTE COLOR. The data set is marked
   Lossy Image Compression `01` with its ratio and method `ISO_15444_1`, and
