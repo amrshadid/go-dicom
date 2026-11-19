@@ -954,6 +954,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refusal is logged once where a server has its own logger** (#537).
+  `LoggingEventHandlers` leaves out a refusal the SCP has already logged to
+  the same log, and asked `DefaultLogger` whether it had; since a server can
+  have its own logger (`SCPConfig.Logger`), the SCP's line goes there. A
+  server with its own logger, logging its events to `server.Logger`, had
+  each refusal in its log twice, and one logging its events to the global
+  log with `DefaultLogger` at the info level had the refusal in neither.
+  The event now carries where the SCP logged its line and at what level,
+  and the handler gives way only where that line reached its own log. A
+  stopping server's refusal of an association on a connection it had
+  already accepted was logged by nothing at all; the SCP logs it, at the
+  info level, as it logs every refusal it decides.
+
 - **A C-GET goes on past an instance it cannot encode** (#518). A C-GET
   sub-operation sent its C-STORE-RQ, which says a data set follows, and
   encoded the instance only then. When the instance could not be put in the

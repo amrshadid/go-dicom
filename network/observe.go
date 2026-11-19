@@ -38,6 +38,21 @@ type observer struct {
 	// The command set being assembled from PDVs, each way: [0] sent, [1]
 	// received.
 	command [2]bytes.Buffer
+	// refusal is the line the SCP logged for the refusal it is about to
+	// send, carried to that refusal's EVTAssocRejected.
+	refusal *refusalLine
+}
+
+// loggedRefusal records that the SCP logged the refusal it is about to send
+// on this transport with log, at level.
+func (t *Transport) loggedRefusal(log *Logger, level LogLevel) {
+	o := t.observed()
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.refusal = &refusalLine{log: log, level: level}
+	o.mu.Unlock()
 }
 
 // observe makes the transport report to events. Nil stops nothing and costs
@@ -171,6 +186,11 @@ func (o *observer) pduWhy(sent bool, pdu PDU, raw []byte, local *LocalAbort) {
 		// The refusal in words, so a log of events says why without the
 		// reader decoding Table 9-21 from the PDU.
 		e.Description = AssociationRejection{p.Result, p.Source, p.Reason}.String()
+		if sent {
+			o.mu.Lock()
+			e.refusal = o.refusal
+			o.mu.Unlock()
+		}
 		o.emit(e)
 
 	case *ReleaseRP:
