@@ -12,6 +12,8 @@ import (
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/amrshadid/go-dicom/internal/inflate"
 )
 
 // Parsing Encapsulated Data
@@ -1456,7 +1458,7 @@ func encodeRLESegment(data []byte) []byte {
 // 1000:1 is deliberately generous. Deflate reaches it on genuinely repetitive
 // medical data — an all-black CT frame is mostly zeros — so a tighter ratio
 // would reject legitimate files.
-const MaxInflateRatio int64 = 1000
+const MaxInflateRatio int64 = inflate.MaxRatio
 
 // MinInflateAllowance is the smallest output any deflated stream may produce
 // regardless of how small its compressed form is.
@@ -1464,7 +1466,7 @@ const MaxInflateRatio int64 = 1000
 // Without a floor the ratio bound would reject a 500-byte stream holding a
 // legitimately blank 512 KiB frame. The floor is what keeps the ratio safe to
 // apply to genuinely tiny inputs.
-const MinInflateAllowance int64 = 8 << 20
+const MinInflateAllowance int64 = inflate.MinAllowance
 
 // InflateLimitFor returns how many bytes a deflated stream of compressedSize
 // bytes may be allowed to produce, given an absolute ceiling.
@@ -1472,18 +1474,5 @@ const MinInflateAllowance int64 = 8 << 20
 // Pass a non-positive compressedSize when the compressed length is unknown; the
 // absolute ceiling is then the only bound available.
 func InflateLimitFor(compressedSize, absoluteMax int64) int64 {
-	// Short-circuit before multiplying, so a large compressedSize cannot
-	// overflow into a small or negative limit.
-	if compressedSize <= 0 || compressedSize > absoluteMax/MaxInflateRatio {
-		return absoluteMax
-	}
-
-	limit := compressedSize * MaxInflateRatio
-	if limit < MinInflateAllowance {
-		limit = MinInflateAllowance
-	}
-	if limit > absoluteMax {
-		limit = absoluteMax
-	}
-	return limit
+	return inflate.LimitFor(compressedSize, absoluteMax)
 }

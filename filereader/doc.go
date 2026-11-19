@@ -6,6 +6,14 @@
 // character set decoding, and waveform data handling. Includes validation against DICOM dictionary
 // and support for both compressed and uncompressed transfer syntaxes.
 //
+// A program that reads only attributes can use filereader/attributes instead:
+// the same parser and the same element types, without the packages
+// GetDataset, FrameRanges and GetWaveforms bring in (compress, encaps,
+// pixels, waveforms, dataset). The parser lives in an internal package both
+// share; FileMetaInfo, ReadOptions, DataElementValue and the other element
+// types here are its types under aliases, so a value from one package is a
+// value of the other.
+//
 // # Core Concepts
 //
 // ## FileMetaInfo

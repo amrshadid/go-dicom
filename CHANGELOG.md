@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Attributes are read without linking the codecs** (#498). `filereader`
+  was the only way to read a file, and it depends on `dataset`, `encaps`,
+  `compress`, `compress/jpeg2000`, `pixels` and `waveforms` through
+  `GetDataset`, `FrameRanges` and `GetWaveforms`, so a program that only
+  reads attributes linked them all. The new `filereader/attributes` package is
+  the parser alone: `Read`, `TextEncodings` and `DecodeText`, returning the
+  same element types as `filereader`. A test runs `go list -deps` on it and
+  fails if any of those packages, or `dataelem`, joins its dependencies, and
+  another holds its elements to `GetDataset`'s for every corpus file. The
+  parser moved to an internal package that `filereader` is now built on;
+  every `filereader` identifier is where it was, the element types by alias
+  and printing with `%T` as they did (`*filereader.DataElementValue`).
+  A program that prints a file's attributes is 235 KB smaller built this
+  way (5.67 MB against 5.91 MB). What it saves depends on what else a
+  program calls, since the linker drops unreachable code.
+
 - **A read logs to a logger of its own** (#481). A file read logged only to
   the global `config.Logger`, stderr by default, so a server could not give
   one read its own logger, or keep one read quiet, without changing it for
