@@ -206,6 +206,16 @@
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
 // actually available. The parsers have fuzz targets that run in CI.
 //
+// # Events
+//
+// An SCU reports what happens on its associations to SCUConfig.Events, and an
+// SCP to SCPConfig.Events: see [EventType]. The EVTPDUSent and EVTAssocAborted
+// of an A-ABORT this side sent carry a [LocalAbort] saying why: a timeout, a
+// protocol violation by the peer, a handler that panicked, the server
+// stopping, or the application asking ([AbortCause]), with the error behind
+// it. The PDU says only what PS3.8 Table 9-26 lets it, which several causes
+// share.
+//
 // # Logging
 //
 // Everything this package reports goes through [DefaultLogger], which writes to

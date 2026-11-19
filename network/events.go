@@ -117,6 +117,71 @@ type Event struct {
 	// Command is the command set of a DIMSE event, and of the service event
 	// a request gives rise to.
 	Command *CommandInfo
+
+	// LocalAbort says why this side aborted, on the EVTPDUSent and
+	// EVTAssocAborted of an A-ABORT this side sent. It is nil on an abort
+	// the peer sent, and on every other event. The PDU itself says only what
+	// PS3.8 Table 9-26 lets it say, which several causes share.
+	LocalAbort *LocalAbort
+}
+
+// LocalAbort is why this side sent an A-ABORT.
+type LocalAbort struct {
+	// Cause is which kind of reason it was.
+	Cause AbortCause
+	// Err is what went wrong, in words: the timeout, the bound that was
+	// broken, the handler's panic. Nil when the application asked for the
+	// abort.
+	Err error
+}
+
+// AbortCause is the kind of reason this side aborted an association for.
+type AbortCause int
+
+// The causes of an A-ABORT this side sends.
+const (
+	// AbortCauseUnknown is not set by this package; it is the zero value.
+	AbortCauseUnknown AbortCause = iota
+	// AbortCauseTimeout: the peer sent nothing for longer than DIMSETimeout,
+	// or stopped partway through a message (PS3.8 9.1.5).
+	AbortCauseTimeout
+	// AbortCauseProtocolViolation: the peer broke the protocol or a bound: a
+	// PDU unexpected in its state, one unrecognized or over the advertised
+	// maximum, a message that changed context partway, a command set or data
+	// set over its bound, a command this side does not know.
+	AbortCauseProtocolViolation
+	// AbortCauseHandlerPanic: a handler, the application's code, panicked
+	// while serving the association.
+	AbortCauseHandlerPanic
+	// AbortCauseStopping: the server is stopping, and the association was
+	// in the middle of something its context's end cut short.
+	AbortCauseStopping
+	// AbortCauseRequested: the application asked for the abort, by
+	// SCU.Abort or Association.Abort.
+	AbortCauseRequested
+)
+
+// String names the cause, such as "timeout" or "handler-panic".
+func (c AbortCause) String() string {
+	switch c {
+	case AbortCauseTimeout:
+		return "timeout"
+	case AbortCauseProtocolViolation:
+		return "protocol-violation"
+	case AbortCauseHandlerPanic:
+		return "handler-panic"
+	case AbortCauseStopping:
+		return "stopping"
+	case AbortCauseRequested:
+		return "requested"
+	default:
+		return "unknown"
+	}
+}
+
+// abortedBy is the LocalAbort of a cause and the error behind it.
+func abortedBy(cause AbortCause, err error) *LocalAbort {
+	return &LocalAbort{Cause: cause, Err: err}
 }
 
 // EventDetail is the part of an Event that holds lists.

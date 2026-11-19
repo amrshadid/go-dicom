@@ -626,6 +626,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*ShutdownError` counts the associations cut short. The same storescu send
   is now answered Success and released. `Stop` is unchanged.
 
+- **An abort says why** (#470). A timeout, a protocol violation by the peer,
+  a handler that panicked and an unknown command all sent an A-ABORT that was
+  reported to events with nothing but the PDU, and a timeout and a panic were
+  byte for byte the same. The EVTPDUSent and EVTAssocAborted of an A-ABORT this
+  side sends now carry `Event.LocalAbort`, with its `Cause`
+  (`AbortCauseTimeout`, `AbortCauseProtocolViolation`, `AbortCauseHandlerPanic`,
+  `AbortCauseStopping`, `AbortCauseRequested`) and the error behind it. An
+  abort the peer sent has none. The PDU on the wire is unchanged, and the
+  `-events` log does not write the cause.
+
 ### Changed
 
 - **Events no longer copy every received byte** (#469). A received PDU was

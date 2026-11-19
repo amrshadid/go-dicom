@@ -326,7 +326,8 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	rq, ok := pdu.(*AssociateRQ)
 	if !ok {
 		DefaultLogger.Warn("expected A-ASSOCIATE-RQ, got %T", pdu)
-		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 2)
+		_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, abortUnexpectedPDU,
+			abortedBy(AbortCauseProtocolViolation, fmt.Errorf("expected A-ASSOCIATE-RQ, got %T", pdu)))
 		return
 	}
 
@@ -416,7 +417,7 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			var timeout *TimeoutError
 			if errors.As(err, &timeout) {
 				DefaultLogger.Warn("aborting the association with %s: %v", assoc.CallingAE(), err)
-				_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+				_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0, abortedBy(AbortCauseTimeout, err))
 				return
 			}
 			if endedNormally(err) {
@@ -487,7 +488,8 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			DefaultLogger.Warn("C-CANCEL received for message %d; no operation in progress", messageID)
 		default:
 			DefaultLogger.Warn("unsupported command: 0x%04X", commandField)
-			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+			_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0,
+				abortedBy(AbortCauseProtocolViolation, fmt.Errorf("unsupported command 0x%04X", commandField)))
 			return
 		}
 		if s.draining() {
