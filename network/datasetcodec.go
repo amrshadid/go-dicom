@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -108,7 +109,19 @@ func encodeDataset(ds *dataset.Dataset, transferSyntax string, config NetworkCon
 }
 
 // DecodeDataset parses a data set encoded with the given transfer syntax.
+//
+// The validation warnings building it raises go to config.Logger. A server
+// or client given its own logger decodes what it receives with that logger
+// instead.
 func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error) {
+	return decodeDataset(context.Background(), data, transferSyntax)
+}
+
+// decodeDataset is DecodeDataset building the data set under ctx: the
+// validation warnings of each element go to the logger ctx carries
+// (config.WithLogger), which is the receiving server's or client's own when
+// it was given one (Association.logContext).
+func decodeDataset(ctx context.Context, data []byte, transferSyntax string) (*dataset.Dataset, error) {
 	enc := encodingForTransferSyntax(transferSyntax)
 
 	if enc.Deflated {
@@ -139,7 +152,7 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 			return nil, err
 		}
 
-		if err := readElementValue(ds, r, enc, order, t, vr, length, 0); err != nil {
+		if err := readElementValue(ctx, ds, r, enc, order, t, vr, length, 0); err != nil {
 			return nil, err
 		}
 	}
@@ -153,7 +166,7 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 // undefined-length element inside an item silently ended the item.
 //
 // depth is the nesting of the sequence a sequence value would open.
-func readElementValue(ds *dataset.Dataset, r *bytes.Reader, enc transferSyntaxEncoding,
+func readElementValue(ctx context.Context, ds *dataset.Dataset, r *bytes.Reader, enc transferSyntaxEncoding,
 	order binary.ByteOrder, t tag.Tag, vr dataelem.VR, length uint32, depth int) error {
 
 	// Sequences hold nested data sets and are parsed recursively, so the
@@ -174,11 +187,11 @@ func readElementValue(ds *dataset.Dataset, r *bytes.Reader, enc transferSyntaxEn
 		if vr == dataelem.UN && enc.ExplicitVR {
 			itemEnc = transferSyntaxEncoding{}
 		}
-		seq, err := readSequence(r, itemEnc, itemEnc.byteOrder(), length, depth)
+		seq, err := readSequence(ctx, r, itemEnc, itemEnc.byteOrder(), length, depth)
 		if err != nil {
 			return err
 		}
-		_ = ds.AddSequence(t, seq)
+		_ = ds.AddSequenceWithContext(ctx, t, seq)
 		return nil
 	}
 
@@ -195,7 +208,7 @@ func readElementValue(ds *dataset.Dataset, r *bytes.Reader, enc transferSyntaxEn
 		if err != nil {
 			return err
 		}
-		_ = ds.Add(dataelem.NewDataElement(t, vr, value))
+		_ = ds.AddWithContext(ctx, dataelem.NewDataElement(t, vr, value))
 		return nil
 	}
 
@@ -212,7 +225,7 @@ func readElementValue(ds *dataset.Dataset, r *bytes.Reader, enc transferSyntaxEn
 	if _, err := io.ReadFull(r, value); err != nil {
 		return NewPDUErrorf("DECODE_DS", "failed to read value for %s: %v", t.String(), err)
 	}
-	_ = ds.Add(dataelem.NewDataElement(t, vr, value))
+	_ = ds.AddWithContext(ctx, dataelem.NewDataElement(t, vr, value))
 	return nil
 }
 
@@ -537,7 +550,7 @@ func encodeDatasetBody(ds *dataset.Dataset, enc transferSyntaxEncoding, enclosin
 
 // readSequence parses the items of a Sequence (SQ) element. A declaredLength of
 // 0xFFFFFFFF means the sequence is delimited rather than sized.
-func readSequence(r *bytes.Reader, enc transferSyntaxEncoding, order binary.ByteOrder,
+func readSequence(ctx context.Context, r *bytes.Reader, enc transferSyntaxEncoding, order binary.ByteOrder,
 	declaredLength uint32, depth int) (*sequence.Sequence, error) {
 
 	if depth > maxSequenceDepth {
@@ -577,7 +590,7 @@ func readSequence(r *bytes.Reader, enc transferSyntaxEncoding, order binary.Byte
 				"unexpected tag %s inside sequence (expected item or delimiter)", itemTag)
 		}
 
-		child, err := readSequenceItem(r, enc, order, itemLen, depth)
+		child, err := readSequenceItem(ctx, r, enc, order, itemLen, depth)
 		if err != nil {
 			return nil, err
 		}
@@ -586,7 +599,7 @@ func readSequence(r *bytes.Reader, enc transferSyntaxEncoding, order binary.Byte
 }
 
 // readSequenceItem parses the elements of one sequence item into a Dataset.
-func readSequenceItem(r *bytes.Reader, enc transferSyntaxEncoding, order binary.ByteOrder,
+func readSequenceItem(ctx context.Context, r *bytes.Reader, enc transferSyntaxEncoding, order binary.ByteOrder,
 	declaredLength uint32, depth int) (*dataset.Dataset, error) {
 
 	child := dataset.NewDataset()
@@ -619,7 +632,7 @@ func readSequenceItem(r *bytes.Reader, enc transferSyntaxEncoding, order binary.
 			return child, nil
 		}
 
-		if err := readElementValue(child, r, enc, order, t, vr, length, depth+1); err != nil {
+		if err := readElementValue(ctx, child, r, enc, order, t, vr, length, depth+1); err != nil {
 			return nil, err
 		}
 	}

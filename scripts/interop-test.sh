@@ -3888,8 +3888,8 @@ if python3 -c "import pydicom, numpy, PIL" >/dev/null 2>&1; then
   WEBRENDER_PID=$SERVER_PID
   if wait_for_port 18744; then
     corpus=$(python3 -c "import os, pydicom.data; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
-    if rendered=$(python3 -W ignore - "http://127.0.0.1:18744/dicom-web" "$corpus" <<'PY'
-import io, os, sys, urllib.error, urllib.request
+    if rendered=$(python3 -W ignore - "http://127.0.0.1:18744/dicom-web" "$corpus" "$DCMTK_BIN" <<'PY'
+import io, os, subprocess, sys, tempfile, urllib.error, urllib.request
 import numpy
 import pydicom
 from PIL import Image
@@ -3902,6 +3902,26 @@ except ImportError:
     ALREADY_RGB = False
 
 ours, corpus = sys.argv[1], sys.argv[2]
+dcmdjpeg = os.path.join(sys.argv[3], "dcmdjpeg")
+JPEG = ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51")
+
+def dcmtk_rgb(path):
+    """The frame as dcmtk decodes it, as RGB, or None when dcmtk is not here
+    or does not read the file."""
+    if not os.access(dcmdjpeg, os.X_OK):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "decoded.dcm")
+        if subprocess.run([dcmdjpeg, path, out], capture_output=True).returncode != 0:
+            return None
+        decoded = pydicom.dcmread(out)
+        frame = decoded.pixel_array
+        if int(decoded.get("NumberOfFrames", 1) or 1) > 1:
+            frame = frame[0]
+        # pydicom 3 hands native YBR_FULL back as stored; pydicom 2 too.
+        if decoded.PhotometricInterpretation in ("YBR_FULL", "YBR_FULL_422"):
+            frame = convert_color_space(frame, "YBR_FULL", "RGB")
+        return frame.astype(numpy.int16)
 
 def request(url, accept=None, data=None, content_type=None):
     headers = {k: v for k, v in (("Accept", accept), ("Content-Type", content_type)) if v}
@@ -3932,7 +3952,7 @@ def guessed_ycbcr(ds):
         i += 2 + length
     return True
 
-gray = color = 0
+gray = color = dcmtk_held = 0
 guessed = []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
@@ -3993,8 +4013,27 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         rgb = frame
         if photometric in ("YBR_FULL", "YBR_FULL_422") and not ALREADY_RGB:
             rgb = convert_color_space(frame, "YBR_FULL", "RGB")
+        # A lossy JPEG is held to dcmtk, within two levels. The two convert
+        # color with libjpeg's arithmetic and differ only by the inverse DCT,
+        # one level in a Y, Cb or Cr plane; that is one level in RGB for
+        # twelve of the corpus's thirteen color JPEGs and two for
+        # examples_ybr_color.dcm, where Cb, off by one, is multiplied by 1.772.
+        # It is held to pydicom within three and not two, because pydicom 3
+        # is itself two levels from dcmtk on the frames coded without
+        # subsampling (SC_rgb_dcmtk_+eb+cy+n1 and +np) while this library is
+        # one, and held to two those frames failed with nothing wrong in what
+        # was rendered (#514).
+        limit = 2
+        if ds.file_meta.TransferSyntaxUID in JPEG:
+            limit = 3
+            reference = dcmtk_rgb(os.path.join(corpus, name))
+            if reference is not None and reference.shape == mine.shape:
+                against = numpy.abs(mine - reference).max()
+                if against > 2:
+                    sys.exit("%s: the rendered frame differs from dcmtk's pixels by up to %d" % (name, against))
+                dcmtk_held += 1
         diff = numpy.abs(mine - rgb.astype(numpy.int16))
-        if mine.shape != rgb.shape or diff.max() > 2:
+        if mine.shape != rgb.shape or diff.max() > limit:
             sys.exit("%s: the rendered frame differs from pydicom's pixels by up to %d" % (name, diff.max()))
         color += 1
 if gray < 10 or color < 10:
@@ -4039,9 +4078,10 @@ for number in (1, 2, 3):
     if numpy.abs(mine - want).max() > 1:
         sys.exit("the windowless image's frame %d is not drawn over its stored range: it reaches %d, want %d"
                  % (number, mine.max(), want.max()))
-print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels; "
+print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels "
+      "(three for a lossy JPEG), %d lossy JPEGs within two levels of dcmtk's; "
       "three frames with no window drawn over their stored range, one gray one value%s"
-      % (gray, color, "; not compared, as pydicom 2 guesses YCbCr for an RGB JPEG: " + ", ".join(guessed) if guessed else ""))
+      % (gray, color, dcmtk_held, "; not compared, as pydicom 2 guesses YCbCr for an RGB JPEG: " + ", ".join(guessed) if guessed else ""))
 PY
     ); then
       pass "qrscp -web rendered — $rendered"

@@ -127,8 +127,10 @@ type SCUConfig struct {
 	Events *EventManager
 
 	// Logger, when set, is where everything this SCU logs goes: its
-	// associations, their negotiation, and a panic in a handler of its
-	// Events. Nil means the package's DefaultLogger, as before. A logger
+	// associations, their negotiation, a panic in a handler of its Events,
+	// and the validation warnings of the command sets and data sets it
+	// receives, which go to config.Logger otherwise. OnCStore is given it in
+	// its context (config.LoggerFromContext). Nil means the package's DefaultLogger, as before. A logger
 	// given here receives every line at every level; filter with its
 	// handler's level.
 	Logger *slog.Logger
@@ -245,9 +247,11 @@ type SCPConfig struct {
 	// Logger, when set, is where everything this SCP logs goes: the
 	// associations it accepts, those it opens itself (C-MOVE sub-operations,
 	// storage commitment results, UPS event reports), its admission
-	// decisions, a panic in a handler or in a handler of its Events, and, for
-	// a Server, the start-up line and accept errors (Server.Logger writes
-	// here). Nil means the package's DefaultLogger, as before, and
+	// decisions, a panic in a handler or in a handler of its Events, the
+	// validation warnings of the command sets and data sets it receives, and,
+	// for a Server, the start-up line and accept errors (Server.Logger writes
+	// here). Each handler is given it in its context
+	// (config.LoggerFromContext). Nil means the package's DefaultLogger, as before, and
 	// Server.Logger keeps its own default. A logger given here receives every
 	// line at every level; filter with its handler's level. The lines name AE
 	// titles, addresses and SOP Instance UIDs, which is why a server may want

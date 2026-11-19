@@ -9,26 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`wlmscp` serves a Modality Worklist from a directory of files** (#506).
-  The command line could ask a worklist (`findscu -worklist`) and not answer
-  one, so a modality, or `findscu -worklist` itself, could not be tested
-  against this tool alone. `wlmscp -dir` serves the worklist files of a
-  directory, one entry per file, with File Meta Information or without, as
-  dcmtk's `wlmscpfs` does. It reads the directory again at every query, so
-  a file added, changed or removed while it runs is served as it is; a file
-  that is not a worklist entry, not DICOM or with no Scheduled Procedure Step
-  Sequence, is not served and is reported once. It answers Modality Worklist
-  C-FIND by package `matching`, the step matched item by item and each
-  answer holding the keys asked for, answers C-ECHO, refuses every other SOP
-  class, and takes `-tls`, `-events` and `-allow`. Over dcmtk's sample
-  worklist database, dcmtk's `findscu -W` and pynetdicom get the same
-  entries, attribute for attribute, from `wlmscp` as from `wlmscpfs`, for 14
-  queries by modality, date, date range, time range, station, patient name
-  with wildcards, universal matching and one that matches nothing; so does
-  `go-dicom findscu -worklist`. They differ on a name in another case:
-  `wlmscp` finds VIVALDI^ANTONIO for `vivaldi*`, as the archive does, and
-  `wlmscpfs` does not.
-
 - **A query can be matched against a data set** (#515). C-FIND matching
   lived only inside `dcmstore`, unexported and written against its index, so
   a program with entries of its own, a worklist for one, had nothing to call:
@@ -793,6 +773,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class, and a completion under another Transaction UID (C301H) and a
   cancellation of a final step (C311H) refused.
 
+- **`wlmscp` serves a Modality Worklist from a directory of files** (#506).
+  The command line could ask a worklist (`findscu -worklist`) and not answer
+  one, so a modality, or `findscu -worklist` itself, could not be tested
+  against this tool alone. `wlmscp -dir` serves the worklist files of a
+  directory, one entry per file, with File Meta Information or without, as
+  dcmtk's `wlmscpfs` does. It reads the directory again at every query, so
+  a file added, changed or removed while it runs is served as it is; a file
+  that is not a worklist entry, not DICOM or with no Scheduled Procedure Step
+  Sequence, is not served and is reported once. It answers Modality Worklist
+  C-FIND by package `matching`, the step matched item by item and each
+  answer holding the keys asked for, answers C-ECHO, refuses every other SOP
+  class, and takes `-tls`, `-events` and `-allow`. Over dcmtk's sample
+  worklist database, dcmtk's `findscu -W` and pynetdicom get the same
+  entries, attribute for attribute, from `wlmscp` as from `wlmscpfs`, for 14
+  queries by modality, date, date range, time range, station, patient name
+  with wildcards, universal matching and one that matches nothing; so does
+  `go-dicom findscu -worklist`. They differ on a name in another case:
+  `wlmscp` finds VIVALDI^ANTONIO for `vivaldi*`, as the archive does, and
+  `wlmscpfs` does not.
+
 ### Changed
 
 - **Events no longer copy every received byte** (#469). A received PDU was
@@ -883,6 +883,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than read without its log.
 
 ### Fixed
+
+- **An A-ABORT is read by the peer before the connection is closed** (#513).
+  This side wrote its A-ABORT and closed the connection behind it. A peer
+  still sending had bytes on their way that were never read, and a connection
+  closed with bytes unread is reset, which discards what the peer had not yet
+  read: the A-ABORT. On Windows a client that sent a request and then read
+  got "connection forcibly closed" and never learned it had been aborted, or
+  why. This side now stops sending, reads and drops what arrives until the
+  peer closes or a second has passed, and closes then, on a goroutine of its
+  own: the association gives back its slot and its handler at once. PS3.8
+  gives the wait ARTIM; a second is kept so that a peer that will not close
+  holds a connection and nothing else.
 
 - **An Implicit VR image is no longer warned about for its own VR** (#483).
   Where the dictionary offers a choice of VRs, an element read from an
@@ -1334,6 +1346,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given. `RenderOptions.StoredRange` asks `RenderFrame` for this; without it
   `RenderFrame` and `convert` keep spanning the values across all frames.
   Orthanc 1.13 stretches each frame to its own values, as this server did.
+
+- **A server or client given its own logger gets the warnings of what it
+  receives** (#503). The data sets and command sets the network decoded were
+  built with `dataset.Add`, whose validation warnings (a retired attribute, a
+  VR the dictionary does not give) went to `config.Logger` whatever logger
+  the server or client had: the corpus sent as C-STOREs wrote 14 lines to the
+  global logger and none to the server's. They are now built with
+  `dataset.AddWithContext` under a context carrying that logger, as a file
+  read with its own logger builds its data set (#481): C-STORE, the C-FIND,
+  C-MOVE and C-GET identifiers and results, the C-GET sub-operations a client
+  receives, the N-service data sets both ways, storage commitment, and the
+  command sets. A server's handlers, and a client's `OnCStore`, are given the
+  same context, so the built-in UPS handler's warnings, as it applies an
+  N-SET, go to the server's logger too. With no logger given, nothing
+  changes. Never in a release.
 
 ## [1.10.0] - 2026-11-17
 
