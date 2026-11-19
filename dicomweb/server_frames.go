@@ -184,10 +184,20 @@ type frameSource struct {
 	// when nothing is to be reversed.
 	swap  int
 	value encaps.Range
+	// float is set when the pixels are Float or Double Float Pixel Data,
+	// which are sent as frames and not drawn.
+	float bool
+	// packed is the length in bits of a frame of a 1-bit image whose frames
+	// start inside a byte, and firstBit the bit each begins at in its first
+	// byte; packed is 0 for every other image.
+	packed   int64
+	firstBit []int
 }
 
-// tagPixelData is Pixel Data (7FE0,0010), the element frames are of. Float
-// and Double Float Pixel Data are not served as frames.
+// tagPixelData is Pixel Data (7FE0,0010). Float Pixel Data (7FE0,0008) and
+// Double Float Pixel Data (7FE0,0009), which an image holds instead of it
+// when its values are not integers, have frames as well, found by
+// filereader.DICOMFile.PixelDataElement.
 var tagPixelData = tag.New(0x7FE0, 0x0010)
 
 // errNoFrames is an instance with no Pixel Data, which has no frames.
@@ -200,14 +210,11 @@ func openFrames(file io.ReadSeeker) (*frameSource, error) {
 	if err != nil {
 		return nil, err
 	}
-	hasPixels := false
-	for _, element := range parsed.DataElements {
-		hasPixels = hasPixels || element.Tag == tagPixelData
-	}
-	if !hasPixels {
+	pixels := parsed.PixelDataElement()
+	if pixels == nil {
 		return nil, errNoFrames
 	}
-	source := &frameSource{attributes: parsed.GetDataset()}
+	source := &frameSource{attributes: parsed.GetDataset(), float: pixels.Tag != tagPixelData}
 	source.syntax = source.attributes.TransferSyntaxUID()
 	if at, ok := file.(io.ReaderAt); ok {
 		source.src = at
@@ -225,37 +232,48 @@ func openFrames(file io.ReadSeeker) (*frameSource, error) {
 		if parsed, err = filereader.ReadDICOMFile(filebase.NewFileReader(file)); err != nil {
 			return nil, err
 		}
-		for _, element := range parsed.DataElements {
-			if element.Tag == tagPixelData {
-				source.src = shiftedReaderAt{value: element.Value, base: element.Position.ValueOffset}
-			}
+		if pixels = parsed.PixelDataElement(); pixels == nil {
+			return nil, errNoFrames
 		}
+		source.src = shiftedReaderAt{value: pixels.Value, base: pixels.Position.ValueOffset}
 	}
 
+	info, err := source.attributes.GetPixelDataInfo()
+	if err != nil {
+		return nil, err
+	}
 	if !compress.IsEncapsulated(source.syntax) && !parsed.IsLittleEndian && !parsed.Deflated {
 		// At the width the reader reverses a whole value at (#124), and from
 		// the value's first byte: an 8-bit image in OW is reversed in pairs,
 		// and a frame of odd length shares its last pair with the next.
-		for _, element := range parsed.DataElements {
-			if element.Tag == tagPixelData {
-				info, err := source.attributes.GetPixelDataInfo()
-				if err != nil {
-					return nil, err
-				}
-				source.swap = dataelem.PixelDataSwapWidth(dataelem.VR(element.VR), info.BitsAllocated)
-				source.value = encaps.Range{Offset: element.Position.ValueOffset, Length: int64(element.Length)}
-			}
-		}
+		// Float and Double Float Pixel Data are OF and OD, reversed in fours
+		// and eights.
+		source.swap = dataelem.PixelDataSwapWidth(dataelem.VR(pixels.VR), info.BitsAllocated)
+		source.value = encaps.Range{Offset: pixels.Position.ValueOffset, Length: int64(pixels.Length)}
 	}
 	source.ranges, err = parsed.FrameRanges(source.src)
 	if err != nil {
 		return nil, err
 	}
+	if bits := int64(info.Rows) * int64(info.Columns) * int64(info.SamplesPerPixel); info.BitsAllocated == 1 &&
+		!pixels.UndefinedLength && bits%8 != 0 && len(source.ranges) > 1 {
+		source.packed = bits
+		source.firstBit = make([]int, len(source.ranges))
+		for i := range source.firstBit {
+			if source.firstBit[i], err = parsed.FrameFirstBit(i); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return source, nil
 }
 
 // read returns a frame, counted from 0, as the file holds it, and native
-// samples little endian.
+// samples little endian. A frame of a 1-bit image that starts inside a byte
+// is moved to start at the first bit of its first byte, the bits after it
+// cleared: sent on its own it has no position to start from, and that is
+// how the Pixel Data of a 1-bit image of one frame is laid out (PS3.5
+// 8.1.1, D.1), so it is read the same way.
 func (f *frameSource) read(frame int) ([]byte, error) {
 	var out []byte
 	for _, r := range f.ranges[frame] {
@@ -277,7 +295,39 @@ func (f *frameSource) read(frame int) ([]byte, error) {
 		}
 		out = append(out, chunk[r.Offset-start:r.Offset-start+r.Length]...)
 	}
+	if f.packed > 0 {
+		out = shiftBits(out, f.firstBit[frame], f.packed)
+	}
 	return out, nil
+}
+
+// shiftBits returns the bits bits of data that start at bit first of its
+// first byte, counted from the least significant bit, starting at bit 0
+// and followed by zero bits to the end of the last byte.
+func shiftBits(data []byte, first int, bits int64) []byte {
+	out := make([]byte, (bits+7)/8)
+	for i := range out {
+		at := i*8 + first
+		value := int(data[at/8]) >> (at % 8)
+		if at%8 != 0 && at/8+1 < len(data) {
+			value |= int(data[at/8+1]) << (8 - at%8)
+		}
+		out[i] = byte(value)
+	}
+	if rest := bits % 8; rest != 0 {
+		out[len(out)-1] &= byte(1<<rest - 1)
+	}
+	return out
+}
+
+// frame returns frame n, counted from 1, as read, or decoded when decode
+// is set.
+func (f *frameSource) frame(n int, decode bool) ([]byte, error) {
+	data, err := f.read(n - 1)
+	if err != nil || !decode {
+		return data, err
+	}
+	return f.attributes.DecodeFrame(data)
 }
 
 // choose picks the first form the request accepts that this instance can
@@ -392,11 +442,7 @@ func (s *Server) sendFrames(w http.ResponseWriter, r *http.Request, source *fram
 		if encode != "" {
 			return source.encode(n, encode, s.encoding)
 		}
-		data, err := source.read(n - 1)
-		if err != nil || !decode {
-			return data, err
-		}
-		return source.attributes.DecodeFrame(data)
+		return source.frame(n, decode)
 	}
 	first, err := frame(numbers[0])
 	if err != nil {

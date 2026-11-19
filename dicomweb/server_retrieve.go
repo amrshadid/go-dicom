@@ -52,6 +52,10 @@ type retrieveTarget struct {
 	// bulkdata is the path to an element of a bulk data resource, a
 	// segment a level, or nil.
 	bulkdata []string
+	// allBulk is the bulk data resource of the study, the series or the
+	// instance itself: every bulk value of its instances (PS3.18
+	// 10.4.1.1.5, Table 10.4.1.5-1).
+	allBulk bool
 	// render is "rendered" or "thumbnail" for those resources, of a study,
 	// a series, an instance or frames; otherwise empty.
 	render string
@@ -75,6 +79,9 @@ func retrieveTargetOf(path string) (retrieveTarget, bool, *requestError) {
 	} else if n >= 8 && s[6] == "bulkdata" && target.render == "" {
 		target.bulkdata = s[7:]
 		s = s[:6]
+	} else if n := len(s); target.render == "" && (n == 3 || n == 5 || n == 7) && s[n-1] == "bulkdata" {
+		target.allBulk = true
+		s = s[:n-1]
 	}
 	switch {
 	case len(s) == 2 && s[0] == "studies":

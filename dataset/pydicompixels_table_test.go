@@ -26,7 +26,8 @@ var pydicomPixelExpectations = []pydicomPixels{
 	{"MR_small_jp2klossless.dcm", "1.2.840.10008.1.2.4.90", 4096, "88617aaa46138fb1", 518.881348},
 	{"MR_small_jpeg_ls_lossless.dcm", "1.2.840.10008.1.2.4.80", 4096, "88617aaa46138fb1", 518.881348},
 	{"MR_small_padded.dcm", "1.2.840.10008.1.2.1", 4096, "88617aaa46138fb1", 518.881348},
-	{"SC_jpeg_no_color_transform.dcm", "1.2.840.10008.1.2.4.50", 196608, "", 210.352346},
+	// pydicom 3 and dcmtk; pydicom 2.4 converted the RGB samples as YCbCr (210.352346, #443).
+	{"SC_jpeg_no_color_transform.dcm", "1.2.840.10008.1.2.4.50", 196608, "", 243.971593},
 	{"SC_jpeg_no_color_transform_2.dcm", "1.2.840.10008.1.2.4.50", 196608, "", 245.635997},
 	{"SC_rgb_dcmtk_+eb+cr.dcm", "1.2.840.10008.1.2.4.50", 30000, "", 127.740000},
 	{"SC_rgb_dcmtk_+eb+cy+n1.dcm", "1.2.840.10008.1.2.4.50", 30000, "", 127.803333},
@@ -35,7 +36,10 @@ var pydicomPixelExpectations = []pydicomPixels{
 	{"SC_rgb_dcmtk_+eb+cy+s2.dcm", "1.2.840.10008.1.2.4.50", 30000, "", 127.880000},
 	{"SC_rgb_dcmtk_+eb+cy+s4.dcm", "1.2.840.10008.1.2.4.50", 30000, "", 127.880000},
 	{"SC_rgb_gdcm_KY.dcm", "1.2.840.10008.1.2.4.91", 30000, "", 127.700000},
-	{"SC_rgb_jpeg.dcm", "1.2.840.10008.1.2.4.50", 196608, "", 210.352346},
+	// The frame of SC_jpeg_no_color_transform.dcm behind an Adobe marker too short
+	// to carry a transform, so the same picture. pydicom 3 fails on the marker and
+	// dcmtk on the file; pydicom 2.4 read 210.352346 (#443).
+	{"SC_rgb_jpeg.dcm", "1.2.840.10008.1.2.4.50", 196608, "", 243.971593},
 	{"SC_rgb_jpeg_app14_dcmd.dcm", "1.2.840.10008.1.2.4.50", 196608, "", 245.635997},
 	{"SC_rgb_jpeg_dcmd.dcm", "1.2.840.10008.1.2", 196608, "be7aa556b206ac44", 243.971593},
 	{"SC_rgb_jpeg_dcmtk.dcm", "1.2.840.10008.1.2.4.50", 30000, "", 127.880000},

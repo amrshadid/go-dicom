@@ -197,7 +197,7 @@ func handleEncodingError(ctx context.Context, value string, encodings []string, 
 		return nil, errors.NewDicomUnicodeDecodeError(encodings[0], []byte(value), "Failed to encode value")
 	case config.WARN:
 		msg := fmt.Sprintf("Failed to encode value with encodings: %v", encodings)
-		logWarning(msg)
+		logWarning(ctx, msg)
 		return encodeWithReplacement(value, encodings[0]), nil
 	default:
 		return encodeWithReplacement(value, encodings[0]), nil

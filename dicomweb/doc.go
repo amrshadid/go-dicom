@@ -91,6 +91,10 @@
 // (image/jpeg, image/jls, image/jp2, image/dicom-rle), each frame is the bytes
 // the file holds. A frame is read from the file by where it lies, not by
 // loading the instance. A frame number the image does not have is 404.
+// Float and Double Float Pixel Data have frames too, their floats little
+// endian. A frame of a 1-bit image that starts inside a byte is sent from
+// the lowest bit of its first byte, as a 1-bit image of one frame is laid
+// out.
 // A compressed type or syntax the frame is not held in is encoded on
 // request with the library's coders, a type named alone into its lossless
 // default; a lossy syntax only when named, losing what [WithFrameEncoding]
@@ -100,6 +104,8 @@
 // …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level
 // of sequence, serves it from where it lies in the file, little endian.
 // Pixel Data there is its frames, joined in one part when uncompressed.
+// …/bulkdata of a study, a series or an instance sends every such value, a
+// part each whose Content-Location is the BulkDataURI metadata gives it.
 //
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves

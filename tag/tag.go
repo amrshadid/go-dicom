@@ -64,6 +64,41 @@ func (t Tag) IsDictionarySequence() bool {
 	return t.GetVR() == "SQ"
 }
 
+// SequenceNeedsUndefinedLength reports whether a sequence under this tag must
+// be encoded with undefined length and closed by a Sequence Delimitation Item
+// (PS3.5 7.5.1) for the next reader to see it is a sequence at all.
+//
+// In Explicit VR the VR field says SQ, and any length will do. In Implicit VR
+// a reader looks the tag up, and for a tag the dictionary does not call a
+// sequence, a private one above all, only an undefined length says the
+// element holds items (PS3.5 6.2.2 Note 5, CP-246). With its byte count,
+// dcmtk, pydicom and this library's readers take it as one opaque value.
+//
+// The file writer and the network encoder both ask this, so a data set
+// written to a file and one sent on an association agree.
+func (t Tag) SequenceNeedsUndefinedLength(explicitVR bool) bool {
+	return !explicitVR && !t.IsDictionarySequence()
+}
+
+// IsPixelData reports whether this is one of the three pixel data elements:
+// Pixel Data (7FE0,0010), Float Pixel Data (7FE0,0008) and Double Float Pixel
+// Data (7FE0,0009).
+//
+// They are the only elements whose undefined length means encapsulated
+// fragments (PS3.5 A.4). Any other element with undefined length holds the
+// items of a sequence, whatever its VR says or the dictionary lacks (PS3.5
+// 6.2.2 Note 5), and a reader that takes it for fragments fails at the first
+// item that has undefined length itself. The file reader and the network
+// decoder both ask this to decide which an undefined length is.
+func (t Tag) IsPixelData() bool {
+	switch t {
+	case New(0x7FE0, 0x0010), New(0x7FE0, 0x0008), New(0x7FE0, 0x0009):
+		return true
+	default:
+		return false
+	}
+}
+
 // Exists checks if this tag is in the DICOM dictionary.
 func (t Tag) Exists() bool {
 	return GlobalDictionary().Get(t) != nil

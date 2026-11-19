@@ -36,6 +36,8 @@ func NewDatasetWithCapacity(capacity int) *Dataset
 
 // Element operations
 func (ds *Dataset) Add(elem *DataElement) error
+// Add, logging its validation warnings to the logger ctx carries (config.WithLogger)
+func (ds *Dataset) AddWithContext(ctx context.Context, elem *DataElement) error
 func (ds *Dataset) Get(tag Tag) (*DataElement, bool)
 func (ds *Dataset) GetByKeyword(keyword string) (*DataElement, bool)
 func (ds *Dataset) GetString(tag Tag) (string, error)
@@ -51,6 +53,7 @@ func (ds *Dataset) Count() int
 
 // Sequences
 func (ds *Dataset) AddSequence(tag Tag, items []*Dataset) error
+func (ds *Dataset) AddSequenceWithContext(ctx context.Context, tag Tag, seq *sequence.Sequence) error
 func (ds *Dataset) GetSequenceItems(tag Tag) ([]*Dataset, error)
 func (ds *Dataset) GetNested(tags ...Tag) (*Dataset, error)
 ```
