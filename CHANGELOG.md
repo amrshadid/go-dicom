@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`sr` prints what it left out: verifying observers, predecessor documents,
+  nested template identifiers and Real World Value Mapping references**
+  (#455). The help said the document's verifier and the reports it replaces
+  were not printed, and a reader had to fall back on `show`. The header now
+  lists each verifying observer (name, organization, time and code) and each
+  predecessor document with its series and study; an item built from a
+  template other than the root's ends with `# TID 1411 (DCMR)`, as dsrdump's
+  `+Pt` prints it; an image reference ends with `mapped by` and the mapping
+  instances it names. `--json` has them as `verifyingObservers` and
+  `predecessorDocuments` in the document, `template` on an item and
+  `realWorldValueMappings` in a reference, each present only where the report
+  has it, so `schemaVersion` stays 1 under the rule it already had: it changes
+  when a field is renamed, removed or changes its meaning, not when one is
+  added. A report with none of them prints as it did. Compared with dcmtk's
+  `dsr2xml +Wt` and `dsrdump +Pt` on four reports written with pydicom (all
+  four features, none, several predecessor studies and series, an image with a
+  presentation state and a mapping deep in the tree) and on `test-SR.dcm`: the
+  same observers, predecessor instances, templates and mappings. The identical
+  documents of a report are still not printed.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and
