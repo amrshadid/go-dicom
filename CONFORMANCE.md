@@ -266,9 +266,14 @@ These four are the same default pynetdicom uses, and all four are fully
 supported: the data set codec encodes and decodes each, including the byte swap
 for big endian and the deflate stream.
 
-**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns all 37 the
-standard defines; pass it to `SetSupportedTransferSyntaxes` on an SCP, or use it
-when building presentation contexts on an SCU. It is not the default for the
+**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns 37: the
+four above and 33 that carry compressed pixel data. Pass it to
+`SetSupportedTransferSyntaxes` on an SCP, or use it when building presentation
+contexts on an SCU. The three JPEG XL transfer syntaxes (`.110`, `.111`,
+`.112`) are not among the 37, so no server here accepts them unasked. A list
+is used exactly as given, so naming their UIDs in `SCPConfig.TransferSyntaxes`
+or `SetSupportedTransferSyntaxes` beside the others has an SCP accept a JPEG
+XL context, and the instance is then carried as it is, not decoded (§3.2). It is not the default for the
 same reason it is not pynetdicom's: a context list grows with the product of SOP
 classes and transfer syntaxes, and proposing every combination makes an
 association request large enough to matter.
@@ -289,8 +294,8 @@ distribution accept everything:
 
 | Server | Transfer syntaxes |
 |---|---|
-| `go-dicom storescp` | all 37 |
-| `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
+| `go-dicom storescp` | the 37 of `AllTransferSyntaxes()` |
+| `go-dicom qrscp` | the same 37, via `dcmstore.SupportedTransferSyntaxes()` |
 | `go-dicom echoscp` | the default four; verification carries no data set |
 | `go-dicom wlmscp` | the default four; a worklist query and its answers carry no pixel data |
 
