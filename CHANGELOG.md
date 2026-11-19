@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`create` makes a file for each object of a DICOM JSON array, and reads a
+  BulkDataURI that names a local file** (#448). An array of more than one
+  object, which is what a DICOMweb metadata response is, was refused ("one
+  file is made from one"), and any value held at a BulkDataURI was refused
+  because the reader would have written it empty. Now an array makes one file
+  for each object in the output directory, named by SOP Instance UID as `wado`
+  names them, with nothing written when any object is refused or two share a
+  UID. A BulkDataURI that is a `file:` URI or a path is read into the value
+  from inside `-bulk-dir` (by default the JSON file's directory), links
+  followed, so JSON from a server cannot pull another file of the machine into
+  the one made; a `http:` or `https:` one is refused by name and not fetched,
+  since a command that makes a file does not reach the network unasked. Checked
+  against the JSON pydicom writes for a list of instances, with its values
+  inline and with them in files, and against the metadata and bulk data
+  `qrscp -web` serves: each comes back as the original data sets. An array of
+  one object, and every object that worked, are as they were.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and
