@@ -327,13 +327,39 @@ func (c *checker) module(ds *dataset.Dataset, iod *IOD, use ModuleUsage, roots [
 			return
 		}
 	case Conditional:
-		message := "absent; whether it is required was not checked: " + use.Condition
-		if present {
-			message = "present, and checked; whether it is required was not checked: " + use.Condition
-		}
-		c.add(Finding{Severity: NotChecked, Module: use.Module, Reference: ref, Rule: "Usage C", Message: message})
-		if !present {
+		holds, known, why := evaluate(ds, use.When, nil)
+		f := Finding{Severity: Error, Module: use.Module, Reference: ref, Rule: "Usage C"}
+		switch {
+		case known && holds && !anyPresent:
+			// One finding for the module, not one for each of its
+			// attributes: none of them is there.
+			f.Message = "absent; the condition holds, so the module is required: " + use.Condition
+			c.add(f)
 			return
+		case known && holds:
+			// Required, and checked as a Mandatory module is. Only
+			// attributes another module names as well may be here, as in
+			// a palette color image whose Palette Color Lookup Table
+			// module has the descriptors and data the Image Pixel module
+			// also names, and none of its own.
+		case known && !holds && !present:
+			return
+		case known && !holds && !use.When.Otherwise:
+			f.Message = "present; the condition does not hold, and PS3.3 does not say the module may be present " +
+				"otherwise (A.1.3.2): " + use.Condition
+			c.add(f)
+		case known:
+			// Present, and allowed to be: checked like any other.
+		default:
+			f.Severity = NotChecked
+			f.Message = "absent; whether it is required was not checked" + why + ": " + use.Condition
+			if present {
+				f.Message = "present, and checked; whether it is required was not checked" + why + ": " + use.Condition
+			}
+			c.add(f)
+			if !present {
+				return
+			}
 		}
 	}
 	if use.Module == multiFrameFunctionalGroups {
@@ -386,6 +412,21 @@ func (c *checker) attributes(ds *dataset.Dataset, nodes []*node, path, module st
 		}
 	}
 
+	// The attributes a condition in an item may name: those of the item's
+	// own table. An item's condition naming any other is about some other
+	// data set (the top level, an enclosing item), and which one is not
+	// said; it is not evaluated. At the top level the whole data set is in
+	// reach.
+	var siblings map[uint32]bool
+	if path != "" {
+		siblings = map[uint32]bool{}
+		for _, n := range nodes {
+			if !n.deeper && n.row.Mask == 0 {
+				siblings[n.row.Tag] = true
+			}
+		}
+	}
+
 	repeating := false
 	for _, n := range nodes {
 		r := n.row
@@ -420,14 +461,38 @@ func (c *checker) attributes(ds *dataset.Dataset, nodes []*node, path, module st
 				f.Severity, f.Message = Error, "absent; a Type "+r.Type.String()+" attribute is required"
 				c.add(f)
 			case Type1C, Type2C:
-				f.Severity = NotChecked
-				f.Message = "absent; whether it is required was not checked"
-				if r.Condition != "" {
-					f.Message += ": " + r.Condition
+				holds, known, why := evaluate(ds, r.When, siblings)
+				switch {
+				case known && holds:
+					f.Severity = Error
+					f.Message = "absent; the condition holds, so a Type " + r.Type.String() +
+						" attribute is required: " + r.Condition
+					c.add(f)
+				case known:
+					// Not required, and not there: nothing to say.
+				default:
+					f.Severity = NotChecked
+					f.Message = "absent; whether it is required was not checked" + why
+					if r.Condition != "" {
+						f.Message += ": " + r.Condition
+					}
+					c.add(f)
 				}
-				c.add(f)
 			}
 			continue
+		}
+
+		// Present where its condition does not hold, and PS3.3 does not say
+		// it may be present otherwise: PS3.5 7.4.2 and 7.4.4 say it shall
+		// not be included.
+		if (r.Type == Type1C || r.Type == Type2C) && r.When != nil && !r.When.Otherwise {
+			if holds, known, _ := evaluate(ds, r.When, siblings); known && !holds {
+				g := f
+				g.Severity = Error
+				g.Message = "present; the condition does not hold, and PS3.3 does not say it may be present " +
+					"otherwise (PS3.5 7.4): " + r.Condition
+				c.add(g)
+			}
 		}
 
 		seq, isSeq := elem.GetValue().(*sequence.Sequence)
@@ -455,6 +520,55 @@ func (c *checker) attributes(ds *dataset.Dataset, nodes []*node, path, module st
 		c.add(Finding{Severity: NotChecked, Module: module, Reference: "PS3.3 " + moduleTable.Section,
 			Rule: "Repeating group", Message: "the module's attributes in repeating groups, such as (60xx,eeee), were not checked"})
 	}
+}
+
+// evaluate decides a condition on a data set. known is false when it cannot
+// be decided, and why then says why, as a clause to follow "not checked": the
+// condition is prose (no Condition), it names an attribute outside the item
+// (siblings, when not nil, are the attributes in reach), or the value it
+// tests is not one value of text or numbers.
+func evaluate(ds *dataset.Dataset, cond *Condition, siblings map[uint32]bool) (holds, known bool, why string) {
+	if cond == nil {
+		return false, false, ""
+	}
+	t := tag.Tag(cond.Tag)
+	if siblings != nil && !siblings[cond.Tag] {
+		return false, false, " (the condition names " + t.String() + ", which is not in this item)"
+	}
+	elem, present := ds.Get(t)
+	switch cond.Test {
+	case IsPresent:
+		return present, true, ""
+	case IsAbsent:
+		return !present, true, ""
+	case HasValue, IsPresentWithValue:
+	default:
+		return false, false, ""
+	}
+	if !present {
+		return false, true, ""
+	}
+	if _, isSeq := elem.GetValue().(*sequence.Sequence); isSeq {
+		return false, false, " (the condition tests the value of " + t.String() + ", a sequence)"
+	}
+	values := valuesOf(ds, t, elem)
+	if values == nil {
+		return false, false, " (the value of " + t.String() + " is not text or numbers)"
+	}
+	var v string
+	switch {
+	case cond.Value > 0 && cond.Value > len(values):
+		return false, true, ""
+	case cond.Value > 0:
+		v = values[cond.Value-1]
+	case len(values) > 1:
+		// "has a Value of X" said of an attribute holding several: whether
+		// one of them, or all, is meant is not said.
+		return false, false, fmt.Sprintf(" (the condition tests one value of %s, which has %d)", t, len(values))
+	default:
+		v = values[0]
+	}
+	return v != "" && matchesTerm(v, cond.Values), true, ""
 }
 
 // firstAbsent is the outermost conditional inclusion of groups none of whose

@@ -35,12 +35,38 @@
 // above it, the module, the section and table of PS3.3 the rule is in, the
 // rule, and a Severity.
 //
+// # Conditions
+//
+// PS3.3 states a share of its conditions in a few fixed sentence forms that
+// name one attribute by its tag, and the generator reads those as a
+// Condition: "Required if Pixel Data Provider URL (0028,7FE0) is not
+// present", "... is present", "... has a Value of YES", "Image Type
+// (0008,0008) Value 1 is ORIGINAL or MIXED", "... is present and has a Value
+// of X", each optionally followed by "May be present otherwise". Of the 1681
+// Type 1C and 2C attributes in the tables of PS3.3 2026d, 580 have one; of
+// the 316 Conditional modules of the IODs, 25 do. Such a condition is
+// evaluated:
+//
+//   - a Type 1C or 2C attribute, or a Conditional module, whose condition
+//     holds and that is absent is an Error;
+//   - one whose condition does not hold and that is present is an Error,
+//     unless PS3.3 says it may be present otherwise (PS3.5 7.4.2 and 7.4.4,
+//     PS3.3 A.1.3.2);
+//   - a Conditional module whose condition holds is checked as a Mandatory
+//     one is.
+//
+// A condition in a sequence item is evaluated in that item, and only when it
+// names an attribute of the item's own table; one naming any other is not
+// evaluated, as which data set it means is not said. Nor is one testing "a
+// Value" of an attribute that holds several.
+//
 // # What is not checked
 //
-// Conditions are prose in PS3.3, and none is evaluated. A Conditional module,
-// present or not, an absent Type 1C or 2C attribute, and a macro included
-// under a condition ("if and only if Value Type (0040,A040) is NUM") with
-// none of its attributes present, are each reported as NotChecked, with the
+// A condition of any other form is prose, and is not evaluated. A
+// Conditional module, present or not, and an absent Type 1C or 2C
+// attribute, whose condition is prose, and a macro included under a
+// condition ("if and only if Value Type (0040,A040) is NUM") with none of
+// its attributes present, are each reported as NotChecked, with the
 // condition as PS3.3 states it: never passed in silence. Also reported as
 // not checked: attributes of repeating groups such as (60xx,eeee), the
 // Functional Group Macros of the enhanced multi-frame IODs, and items of an
