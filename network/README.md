@@ -118,6 +118,25 @@ server, err := network.StartServer(ctx, network.SCPConfig{
 for associations negotiated after they are called; on a `Server` that is after
 `StartServer` has begun accepting.
 
+A `Server` (from `StartServer`) can also stop without cutting the work in
+progress. `Shutdown` closes the listener, refuses an association asked for on a
+connection already open (rejected-transient, so the caller tries again), aborts
+an association waiting for its next request (everything it sent was
+answered), and lets one in the middle of an operation finish it and release.
+When the context ends first, what is left is aborted, and the error says how
+many associations were cut short:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+var cut *network.ShutdownError
+if err := server.Shutdown(ctx); errors.As(err, &cut) {
+    log.Printf("%d associations aborted at the bound", cut.Aborted)
+}
+```
+
+`Stop` still cancels everything at once.
+
 ### TLS Encrypted Communication
 
 Set `TLS` on the configuration and every association goes over TLS: `Associate`

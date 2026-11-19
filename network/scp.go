@@ -33,6 +33,11 @@ type SCP struct {
 	// carrying a storage commitment result, for instance. Incremented
 	// atomically because associations are handled concurrently.
 	messageID atomic.Uint32
+
+	// drainer is what Server.Shutdown keeps: whether a stop has begun, and
+	// the connections being served. Made on first use (drain).
+	drainInit sync.Once
+	drainer   *drainState
 }
 
 // nextMessageID returns the next message ID for a request this SCP originates.
@@ -289,6 +294,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 
 	assoc := NewAssociation(transport)
+	defer s.track(transport, assoc)()
 	// A panic below, which is to say in a handler, ends this association and
 	// nothing else. Deferred after Close so that it runs first, while there
 	// is still a connection to send the A-ABORT on.
@@ -321,6 +327,15 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	if !ok {
 		DefaultLogger.Warn("expected A-ASSOCIATE-RQ, got %T", pdu)
 		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 2)
+		return
+	}
+
+	// A server that is stopping takes no new association, even on a
+	// connection it accepted before the stop: rejected-transient, so the
+	// caller tries again later (PS3.8 Table 9-21, temporary-congestion).
+	if s.draining() {
+		r := RejectBusy()
+		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return
 	}
 
@@ -369,14 +384,35 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 	}
 	ctx = ContextWithAssociationInfo(ctx, info)
 
+	// servedWhileStopping is set once an operation has finished after a
+	// Shutdown began: the peer's next PDU is then waited for, to answer a
+	// release, but no new operation is started (see shutdown.go).
+	servedWhileStopping := false
 	for {
 		if assoc.State() != StateAssociated {
 			return
 		}
+		// Waiting for a request while the server stops: everything the peer
+		// sent has been answered, so the association is aborted at once.
+		if !servedWhileStopping && s.draining() {
+			s.abortStopping(assoc)
+			return
+		}
 
-		// Receive a PDU (could be command data or release/abort)
-		ctxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		// Receive a PDU (could be command data or release/abort). A Shutdown
+		// beginning ends the wait, unless an operation has already finished
+		// since it began.
+		readCtx, endRead := ctx, context.CancelFunc(func() {})
+		if !servedWhileStopping {
+			readCtx, endRead = s.idleReadContext(ctx)
+		}
+		ctxID, cmdData, isCmd, err := assoc.ReceivePData(readCtx)
+		endRead()
 		if err != nil {
+			if ctx.Err() == nil && s.draining() && errors.Is(err, context.Canceled) {
+				s.abortStopping(assoc)
+				return
+			}
 			var timeout *TimeoutError
 			if errors.As(err, &timeout) {
 				DefaultLogger.Warn("aborting the association with %s: %v", assoc.CallingAE(), err)
@@ -405,6 +441,13 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 		commandField, messageID, _, err := ParseCommandDataset(cmdDS)
 		if err != nil {
 			DefaultLogger.Error("failed to parse command: %v", err)
+			return
+		}
+
+		// A request read after an operation finished during a Shutdown is
+		// not started: the peer is aborted and knows it was not answered.
+		if servedWhileStopping {
+			s.abortStopping(assoc)
 			return
 		}
 
@@ -446,6 +489,9 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			DefaultLogger.Warn("unsupported command: 0x%04X", commandField)
 			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
 			return
+		}
+		if s.draining() {
+			servedWhileStopping = true
 		}
 	}
 }
