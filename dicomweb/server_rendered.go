@@ -302,8 +302,8 @@ func (s *Server) rendered(w http.ResponseWriter, r *http.Request, target retriev
 		want.profile = profile
 	}
 	for _, n := range numbers {
-		if n > len(source.ranges) {
-			s.fail(w, refuse(http.StatusNotFound, "frame %d does not exist; the instance has %d", n, len(source.ranges)))
+		if n > source.count() {
+			s.fail(w, refuse(http.StatusNotFound, "frame %d does not exist; the instance has %d", n, source.count()))
 			return
 		}
 	}
@@ -314,7 +314,7 @@ func (s *Server) rendered(w http.ResponseWriter, r *http.Request, target retriev
 	case thumbnail:
 		numbers = []int{1}
 	case len(numbers) == 0:
-		for n := 1; n <= len(source.ranges); n++ {
+		for n := 1; n <= source.count(); n++ {
 			numbers = append(numbers, n)
 		}
 	}

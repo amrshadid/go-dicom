@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -60,6 +61,26 @@ func (r *redaction) asked() bool { return r.auto || len(r.regions) > 0 }
 
 // detectorCaution is said wherever a detector's regions are reported.
 const detectorCaution = "A detector can miss text. Look at the image before it leaves your hands."
+
+// checkDetectedShare refuses a detector's regions that cover more of the
+// picture than text does (anonymize.CheckDetectedShare), saying what to do
+// instead.
+func checkDetectedShare(ds *dataset.Dataset, regions []dataset.PixelRegion) error {
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return err
+	}
+	return implausibleHint(anonymize.CheckDetectedShare(regions, info.Columns, info.Rows))
+}
+
+// implausibleHint adds to a refused automatic redaction what to do instead.
+func implausibleHint(err error) error {
+	if errors.Is(err, anonymize.ErrImplausibleRedaction) {
+		return fmt.Errorf("%w. Nothing was redacted: see what was found with -detect "+
+			"(or share -preview), and give the regions that hold text with -redact x,y,width,height", err)
+	}
+	return err
+}
 
 // regionsText writes regions as -redact takes them, one to a line.
 func regionsText(regions []dataset.PixelRegion) string {

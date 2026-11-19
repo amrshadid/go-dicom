@@ -313,6 +313,18 @@
 //	frames, err := dicom.FrameRanges(file)
 //	// frames[i] are the byte ranges of frame i+1, to be read and joined.
 //
+// ### DICOMFile.FrameReader
+//
+//	func (df *DICOMFile) FrameReader(src io.ReaderAt) (*FrameReader, error)
+//	func (r *FrameReader) ReadFrame(i int) ([]byte, error)
+//	func (r *FrameReader) ReadFrameBytes(i int, offset int64, p []byte) error
+//
+// Reads those ranges: a frame, native samples little endian whatever the
+// file's byte order, a 1-bit frame moved to start at bit 0, a compressed
+// frame as its fragments joined; or part of a native frame, a band of its
+// rows. It is a dataset.FrameReader, so Dataset.RenderFramesFrom draws an
+// image from the file a frame or a band at a time.
+//
 // ### TextEncodings and DecodeText
 //
 //	func TextEncodings(elements []*DataElementValue, inherited []string) []string

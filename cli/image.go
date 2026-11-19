@@ -4,19 +4,23 @@ import (
 	"bufio"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/internal/iccembed"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // imageOptions are what convert takes for --format png and jpeg.
@@ -35,6 +39,11 @@ type imageOptions struct {
 // beside it as name-0001.ext, name-0002.ext and so on, since one file cannot
 // hold several.
 //
+// The Pixel Data is left in the file and read a frame, or a band of rows,
+// at a time (#533): one frame of a hundred costs one frame, and a 200 MB
+// frame written as PNG costs a band. A file that cannot be read that way
+// is read whole, as before.
+//
 // The files hold pixels and, when the image has one, its ICC profile, which
 // describes a device and not a patient: neither encoder is given any other
 // attribute, so no name, date or identifier can ride along.
@@ -42,11 +51,52 @@ func convertToImages(input, output string, opts imageOptions) ([]string, error) 
 	if err := opts.check(); err != nil {
 		return nil, err
 	}
-	ds, err := readImageDataset(input)
+	f, err := os.Open(input)
 	if err != nil {
 		return nil, err
 	}
-	return writeImages(ds, output, opts)
+	defer func() { _ = f.Close() }()
+	ds, frames := openFramesInFile(f)
+	if frames == nil {
+		if ds, err = readImageDataset(input); err != nil {
+			return nil, err
+		}
+		return writeImages(ds, output, opts)
+	}
+	return writeRendered(ds, output, opts, func(list []int, render *dataset.RenderOptions,
+		use func(int, image.Image) error) error {
+		return ds.RenderFramesFrom(frames, list, render, use)
+	})
+}
+
+// openFramesInFile reads a file's attributes, every value but Pixel Data,
+// and a reader of its frames by position. It returns a nil reader for a
+// file whose frames are not read that way, which is then read whole: a
+// deflated file, whose positions count in the inflated data set; one that
+// names no transfer syntax, or one with no decoder here, whose refusal is
+// the whole read's; Float or Double Float Pixel Data, which is not
+// rendered; and one whose structure does not read, so that the error is
+// the one the whole read gives.
+func openFramesInFile(f *os.File) (*dataset.Dataset, *filereader.FrameReader) {
+	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f),
+		filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: math.MaxUint32})
+	if err != nil || df.Deflated {
+		return nil, nil
+	}
+	if pixels := df.PixelDataElement(); pixels == nil || pixels.Tag != tag.New(0x7FE0, 0x0010) {
+		return nil, nil
+	}
+	ds := df.GetDataset()
+	syntax := ds.TransferSyntaxUID()
+	if _, err := compress.TransferSyntaxToCompressionType(syntax); syntax == "" ||
+		(compress.IsEncapsulated(syntax) && err != nil) {
+		return nil, nil
+	}
+	frames, err := df.FrameReader(f)
+	if err != nil {
+		return nil, nil
+	}
+	return ds, frames
 }
 
 // check refuses options that cannot be used, before anything is read.
@@ -74,7 +124,28 @@ func readImageDataset(input string) (*dataset.Dataset, error) {
 	return df.GetDataset(), nil
 }
 
-// writeImages renders the frames of ds that opts asks for and writes them.
+// writeImages renders the frames of ds, which holds its Pixel Data, that
+// opts asks for and writes them.
+func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]string, error) {
+	return writeRendered(ds, output, opts, func(list []int, render *dataset.RenderOptions,
+		use func(int, image.Image) error) error {
+		if len(list) == 1 {
+			img, err := ds.RenderFrame(list[0], render)
+			if err != nil {
+				return err
+			}
+			return use(list[0], img)
+		}
+		return ds.RenderEachFrame(render, use)
+	})
+}
+
+// renderFrames renders the frames listed, counted from 0, and hands each to
+// use as it is made.
+type renderFrames func(list []int, render *dataset.RenderOptions, use func(frame int, img image.Image) error) error
+
+// writeRendered renders the frames of ds that opts asks for through render
+// and writes them.
 //
 // Each frame is rendered, encoded straight into a file and let go before the
 // next is made, so memory holds one picture and none of the encoded bytes
@@ -83,8 +154,8 @@ func readImageDataset(input string) (*dataset.Dataset, error) {
 // 200 MB image of noise took 482 MB to become one PNG of 100 MB. The files
 // are written under temporary names and take theirs only when every one is
 // written, so a failure still leaves nothing.
-func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]string, error) {
-	render, err := parseWindow(opts.window)
+func writeRendered(ds *dataset.Dataset, output string, opts imageOptions, render renderFrames) ([]string, error) {
+	options, err := parseWindow(opts.window)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +177,11 @@ func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]strin
 	case "all":
 		ext := filepath.Ext(output)
 		stem := strings.TrimSuffix(output, ext)
-		err = ds.RenderEachFrame(render, func(f int, img image.Image) error {
+		list := make([]int, info.NumberOfFrames)
+		for f := range list {
+			list[f] = f
+		}
+		err = render(list, options, func(f int, img image.Image) error {
 			if err := pending.write(fmt.Sprintf("%s-%04d%s", stem, f+1, ext), img, f+1, opts); err != nil {
 				return err
 			}
@@ -131,11 +206,10 @@ func writeImages(ds *dataset.Dataset, output string, opts imageOptions) ([]strin
 		if n < 1 || n > info.NumberOfFrames {
 			return nil, fmt.Errorf("--frame is %d; the image has frames 1 to %d", n, info.NumberOfFrames)
 		}
-		img, err := ds.RenderFrame(n-1, render)
+		err = render([]int{n - 1}, options, func(_ int, img image.Image) error {
+			return pending.write(output, img, 1, opts)
+		})
 		if err != nil {
-			return nil, err
-		}
-		if err := pending.write(output, img, 1, opts); err != nil {
 			return nil, err
 		}
 	}
@@ -186,6 +260,9 @@ func (p *imageFiles) carrying(out io.Writer, img image.Image, format string) io.
 func (p *imageFiles) write(name string, img image.Image, frame int, opts imageOptions) error {
 	if len(opts.outline) > 0 {
 		img = outlined(img, opts.outline)
+	}
+	if opts.format == "jpeg" {
+		img = asGray(img)
 	}
 	f, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+".*.partial")
 	if err != nil {
@@ -241,6 +318,25 @@ func (p *imageFiles) discard() {
 			_ = os.Remove(name)
 		}
 	}
+}
+
+// asGray returns a grayscale picture that is not an *image.Gray, a frame
+// RenderFramesFrom draws a band at a time, as an *image.Gray, and any other
+// picture as it is. image/jpeg writes one component only for an
+// *image.Gray, and three for any other grayscale picture: a larger file
+// than the one this command has always written.
+func asGray(img image.Image) image.Image {
+	if _, ok := img.(*image.Gray); ok || img.ColorModel() != color.GrayModel {
+		return img
+	}
+	bounds := img.Bounds()
+	gray := image.NewGray(bounds)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			gray.Pix[gray.PixOffset(x, y)] = img.At(x, y).(color.Gray).Y
+		}
+	}
+	return gray
 }
 
 // parseWindow reads --window center,width.

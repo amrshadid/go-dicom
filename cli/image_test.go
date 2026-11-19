@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -239,6 +240,59 @@ func TestConvertToJPEG(t *testing.T) {
 	}
 	if err := runConvert(in, out, "--format", "jpeg", "--quality", "0"); err == nil {
 		t.Error("--quality 0 was accepted")
+	}
+}
+
+// TestConvertWritesWhatTheWholeFileRenders: convert reads the pixels from
+// the file a frame or a band at a time, and the PNG and JPEG it writes are
+// byte for byte what the frames rendered from the whole file encode to:
+// grayscale signed and big endian, a palette, YBR color, and every frame
+// of a compressed and of a native multi-frame image. A grayscale JPEG has
+// one component, as it always had: image/jpeg writes three for a picture
+// that is not an *image.Gray.
+func TestConvertWritesWhatTheWholeFileRenders(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"CT_small.dcm", "MR_small_bigendian.dcm", "examples_palette.dcm",
+		"examples_ybr_color.dcm", "SC_rgb_rle_2frame.dcm", "rtdose.dcm"} {
+		in := filepath.Join(corpus, name)
+		ds, err := readImageDataset(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frames, err := ds.RenderFrames(nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, format := range []string{"png", "jpeg"} {
+			out := filepath.Join(dir, strings.TrimSuffix(name, ".dcm")+"."+format)
+			if err := runConvert(in, out, "--format", format, "--frame", "all"); err != nil {
+				t.Fatalf("convert %s to %s: %v", name, format, err)
+			}
+			for f, img := range frames {
+				var want bytes.Buffer
+				if format == "png" {
+					err = png.Encode(&want, img)
+				} else {
+					err = jpeg.Encode(&want, img, &jpeg.Options{Quality: 90})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				written := fmt.Sprintf("%s-%04d.%s", strings.TrimSuffix(out, "."+format), f+1, format)
+				got, err := os.ReadFile(written)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got, want.Bytes()) {
+					t.Errorf("%s frame %d as %s: %d bytes, and the whole file's frame encodes to %d",
+						name, f+1, format, len(got), want.Len())
+				}
+			}
+		}
 	}
 }
 

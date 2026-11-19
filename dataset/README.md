@@ -60,6 +60,15 @@ func (ds *Dataset) AddSequence(tag Tag, items []*Dataset) error
 func (ds *Dataset) AddSequenceWithContext(ctx context.Context, tag Tag, seq *sequence.Sequence) error
 func (ds *Dataset) GetSequenceItems(tag Tag) ([]*Dataset, error)
 func (ds *Dataset) GetNested(tags ...Tag) (*Dataset, error)
+
+// Rendering for display (PS3.3 C.11): an *image.Gray or *image.NRGBA
+func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, error)
+func (ds *Dataset) RenderEachFrame(opts *RenderOptions, use func(frame int, img image.Image) error) error
+// The same from a data set without its Pixel Data, reading the frames from
+// a FrameReader (filereader.DICOMFile.FrameReader): a compressed frame
+// decoded alone, a native one a band of rows at a time
+func (ds *Dataset) RenderFramesFrom(frames FrameReader, list []int, opts *RenderOptions,
+    use func(frame int, img image.Image) error) error
 ```
 
 ## References
