@@ -1646,6 +1646,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
   its own. Only the data set's own elements are read now (#335).
 
+- **A lone 9/7 sample at an odd coordinate is no longer halved twice**
+  (#549). Where a tile is too narrow for its decomposition levels, a
+  resolution can be one sample at an odd coordinate. The JPEG 2000 decoder
+  halved it, which the 5/3 filter must do, also for the 9/7, whose
+  coefficients here (as in OpenJPEG) carry that factor of two already: a
+  flat tile of 200 written by `opj_compress -I -t 48,40 -n 6` came back as
+  146 where OpenJPEG and Apple's ImageIO, an independent decoder, both give
+  164, and the narrow edge tiles of a color image came back tens of levels
+  away from OpenJPEG's (115 for 145 at the first such sample). It is now
+  left as it is, and the encoder no longer doubles it, which it never had
+  occasion to. Those codestreams now decode to OpenJPEG's samples within
+  the 9/7 tolerance, and every other one as before. (164 and not 200 is
+  `opj_compress`, which writes that sample at half; every decoder agrees.)
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
