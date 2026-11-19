@@ -303,8 +303,16 @@ func (em *EventManager) Off(eventType EventType) {
 	delete(em.handlers, eventType)
 }
 
-// Emit fires an event, calling all registered handlers.
+// Emit fires an event, calling all registered handlers. A panic in one is
+// logged to DefaultLogger; the events of an SCU or SCP given its own Logger
+// are emitted with that one instead.
 func (em *EventManager) Emit(event *Event) {
+	em.emit(event, nil)
+}
+
+// emit fires an event, reporting a panic in a handler to log, or to
+// DefaultLogger when log is nil.
+func (em *EventManager) emit(event *Event, log *Logger) {
 	em.mu.RLock()
 	handlers := em.handlers[event.Type]
 	em.mu.RUnlock()
@@ -314,7 +322,7 @@ func (em *EventManager) Emit(event *Event) {
 	}
 
 	for _, handler := range handlers {
-		callEventHandler(handler, event)
+		callEventHandler(handler, event, log)
 	}
 }
 
@@ -322,10 +330,10 @@ func (em *EventManager) Emit(event *Event) {
 // than passing it on. Events are emitted from the accept loop and from every
 // association, so a handler that panicked ended the process it was only
 // observing; the handlers registered after it are still called.
-func callEventHandler(handler EventHandler, event *Event) {
+func callEventHandler(handler EventHandler, event *Event, log *Logger) {
 	defer func() {
 		if p := recover(); p != nil {
-			DefaultLogger.Error("panic in a handler of %s: %v\n%s", EventTypeString(event.Type), p, debug.Stack())
+			log.orDefault().Error("panic in a handler of %s: %v\n%s", EventTypeString(event.Type), p, debug.Stack())
 		}
 	}()
 	handler(event)

@@ -37,7 +37,9 @@ import (
 // [SCU.Abort] must not wait behind a [SCU.Find] whose results have not been
 // drained.
 type SCU struct {
-	config      SCUConfig
+	config SCUConfig
+	// ownLog is SCUConfig.Logger as a Logger, nil for DefaultLogger.
+	ownLog      *Logger
 	association *Association
 	messageID   atomic.Uint32
 	mu          sync.Mutex
@@ -128,7 +130,7 @@ func (s *SCU) beginExclusiveOperation(ctx context.Context) (func(), error) {
 // NewSCU creates a new SCU with the given configuration.
 func NewSCU(config SCUConfig) *SCU {
 	config.applyDefaults()
-	return &SCU{config: config}
+	return &SCU{config: config, ownLog: loggerFor(config.Logger)}
 }
 
 // nextMessageID returns the next message ID.
@@ -177,8 +179,9 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 	// long as it ran, forever with context.Background (#206): the response to
 	// the request has ARTIM, and each PDU after it DIMSETimeout.
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
-	transport.observe(s.config.Events)
+	transport.observe(s.config.Events, s.ownLog)
 	s.association = NewAssociation(transport)
+	s.association.logger = s.ownLog
 
 	if contexts == nil {
 		contexts = s.defaultContexts()

@@ -41,6 +41,9 @@ func (s AssociationState) String() string {
 type Association struct {
 	mu sync.RWMutex
 
+	// logger is the SCU's or SCP's own, nil for DefaultLogger.
+	logger *Logger
+
 	state     AssociationState
 	transport *Transport
 
@@ -331,7 +334,7 @@ func (a *Association) RequestAssociationWithNegotiation(ctx context.Context, cal
 		ImplementationVersion:  DefaultImplementationVersionName,
 	}
 	if ext != nil {
-		userInfo.AsyncOperations = truthfulAsyncWindow(ext.AsyncOperations)
+		userInfo.AsyncOperations = truthfulAsyncWindow(ext.AsyncOperations, a.logger.orDefault())
 		userInfo.RoleSelections = ext.RoleSelections
 		userInfo.UserIdentity = ext.UserIdentity
 	}
@@ -416,7 +419,7 @@ func (a *Association) AcceptAssociation(ctx context.Context, rq *AssociateRQ,
 
 	// Negotiate presentation contexts
 	results := NegotiatePresentationContexts(rq.PresentationContexts, supportedAbstractSyntaxes, supportedTransferSyntaxes)
-	reportRefusedContexts(rq, results)
+	reportRefusedContexts(rq, results, a.logger.orDefault())
 
 	// Determine negotiated PDU size
 	peerMaxPDU := rq.UserInformation.MaxPDULength

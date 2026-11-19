@@ -20,6 +20,9 @@ var associationIDs atomic.Uint64
 // can happen without being seen, and neither has to remember to say so.
 type observer struct {
 	events *EventManager
+	// log is where a panic in an event handler is reported: the SCU's or
+	// SCP's own logger, nil for DefaultLogger.
+	log    *Logger
 	id     uint64
 	local  string
 	remote string
@@ -38,11 +41,11 @@ type observer struct {
 
 // observe makes the transport report to events. Nil stops nothing and costs
 // nothing.
-func (t *Transport) observe(events *EventManager) {
+func (t *Transport) observe(events *EventManager, log *Logger) {
 	if events == nil {
 		return
 	}
-	o := &observer{events: events, id: associationIDs.Add(1)}
+	o := &observer{events: events, log: log, id: associationIDs.Add(1)}
 	if addr := t.LocalAddr(); addr != nil {
 		o.local = addr.String()
 	}
@@ -52,7 +55,7 @@ func (t *Transport) observe(events *EventManager) {
 	t.mu.Lock()
 	t.obs = o
 	t.mu.Unlock()
-	o.events.Emit(o.event(EVTConnOpen))
+	o.emit(o.event(EVTConnOpen))
 }
 
 // observed returns the transport's observer, nil when it has none.
@@ -61,6 +64,10 @@ func (t *Transport) observed() *observer {
 	defer t.mu.Unlock()
 	return t.obs
 }
+
+// emit reports an event of this connection, a panic in a handler going to
+// the connection's own logger.
+func (o *observer) emit(e *Event) { o.events.emit(e, o.log) }
 
 // associationID is the number this connection's events carry, 0 when it
 // reports none.
@@ -75,7 +82,7 @@ func (t *Transport) associationID() uint64 {
 // closing.
 func (t *Transport) emit(eventType EventType) {
 	if o := t.observed(); o != nil {
-		o.events.Emit(o.event(eventType))
+		o.emit(o.event(eventType))
 	}
 }
 
@@ -145,42 +152,42 @@ func (o *observer) pduWhy(sent bool, pdu PDU, raw []byte, local *LocalAbort) {
 			o.role, o.localAE, o.remoteAE = "SCP", p.CalledAE, p.CallingAE
 		}
 		o.mu.Unlock()
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocRequested))
+		o.emit(with(eventType))
+		o.emit(with(EVTAssocRequested))
 
 	case *AssociateAC:
-		o.events.Emit(with(eventType))
+		o.emit(with(eventType))
 		contexts := o.negotiated(p)
 		for _, t := range []EventType{EVTAssocAccepted, EVTAssocEstablished} {
 			e := with(t)
 			e.Detail.PresentationContexts = contexts
-			o.events.Emit(e)
+			o.emit(e)
 		}
 
 	case *AssociateRJ:
-		o.events.Emit(with(eventType))
+		o.emit(with(eventType))
 		e := with(EVTAssocRejected)
 		// The refusal in words, so a log of events says why without the
 		// reader decoding Table 9-21 from the PDU.
 		e.Description = AssociationRejection{p.Result, p.Source, p.Reason}.String()
-		o.events.Emit(e)
+		o.emit(e)
 
 	case *ReleaseRP:
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocReleased))
+		o.emit(with(eventType))
+		o.emit(with(EVTAssocReleased))
 
 	case *AbortPDU:
 		for _, t := range []EventType{eventType, EVTAssocAborted} {
 			e := with(t)
 			e.LocalAbort = local
-			o.events.Emit(e)
+			o.emit(e)
 		}
 
 	case *PDataTF:
 		// Not built for nobody: there is one of these for every few
 		// kilobytes of every instance.
 		if o.events.HasHandlers(eventType) {
-			o.events.Emit(with(eventType))
+			o.emit(with(eventType))
 		}
 		for _, pdv := range p.PDVItems {
 			if !pdv.IsCommand {
@@ -205,7 +212,7 @@ func (o *observer) pduWhy(sent bool, pdu PDU, raw []byte, local *LocalAbort) {
 		}
 
 	default:
-		o.events.Emit(with(eventType))
+		o.emit(with(eventType))
 	}
 }
 
@@ -277,13 +284,13 @@ func (o *observer) dimse(sent bool, contextID byte, commandSet []byte) {
 	}
 	e := o.event(eventType)
 	e.Command, e.CommandType = command, field
-	o.events.Emit(e)
+	o.emit(e)
 
 	// The service events are of a request arriving, as pynetdicom's are.
 	if service, ok := serviceEvents[field]; ok && !sent {
 		e := o.event(service)
 		e.Command, e.CommandType = command, field
-		o.events.Emit(e)
+		o.emit(e)
 	}
 }
 

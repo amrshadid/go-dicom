@@ -487,6 +487,7 @@ func (s *SCP) ReportStorageCommitment(ctx context.Context, requestorAE string,
 	// The roles invert for this exchange: the archive is the one initiating,
 	// so it associates as an SCU on the Storage Commitment SOP Class.
 	requestor := NewSCU(SCUConfig{
+		Logger:    s.config.Logger,
 		CallingAE: s.config.AETitle,
 		CalledAE:  requestorAE,
 		Address:   address,

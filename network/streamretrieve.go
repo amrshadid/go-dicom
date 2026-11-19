@@ -26,7 +26,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 
 	total, err := streamer.CountCGetMatches(ctx, req)
 	if err != nil {
-		DefaultLogger.Error("streaming C-GET could not count matches: %v", err)
+		s.log().Error("streaming C-GET could not count matches: %v", err)
 		return StatusUnableToProcess
 	}
 
@@ -75,7 +75,7 @@ func (s *SCP) streamGetSubOperations(ctx context.Context, assoc *Association, st
 	case canceled.wasSet():
 		status = StatusQRCancelMatchingTerminated
 	case handlerErr != nil:
-		DefaultLogger.Error("streaming C-GET handler failed: %v", handlerErr)
+		s.log().Error("streaming C-GET handler failed: %v", handlerErr)
 		status = StatusUnableToProcess
 	case counts.failed > 0:
 		status = StatusGetWarningPartial
@@ -105,7 +105,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 
 	total, err := streamer.CountCMoveMatches(ctx, req)
 	if err != nil {
-		DefaultLogger.Error("streaming C-MOVE could not count matches: %v", err)
+		s.log().Error("streaming C-MOVE could not count matches: %v", err)
 		s.sendMoveFinal(ctx, assoc, ctxID, messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0)
 		return
 	}
@@ -174,7 +174,7 @@ func (s *SCP) streamMoveSubOperations(ctx context.Context, assoc *Association, s
 	case watcher != nil && watcher.wasCanceled():
 		status = StatusQRCancelMatchingTerminated
 	case handlerErr != nil:
-		DefaultLogger.Error("streaming C-MOVE handler failed: %v", handlerErr)
+		s.log().Error("streaming C-MOVE handler failed: %v", handlerErr)
 		status = StatusUnableToProcess
 	case counts.failed > 0:
 		status = StatusGetWarningPartial

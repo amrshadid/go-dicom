@@ -287,7 +287,7 @@ func (t *Transport) Close() error {
 	if o := t.obs; o != nil {
 		// Not under the lock a handler might want.
 		t.mu.Unlock()
-		o.events.Emit(o.event(EVTConnClose))
+		o.emit(o.event(EVTConnClose))
 		t.mu.Lock()
 	}
 	return err

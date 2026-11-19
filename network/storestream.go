@@ -244,7 +244,7 @@ func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, stream
 		// did. A timeout or a canceled context has not: the association is
 		// left partway through a message no response can follow, so it is
 		// aborted here (PS3.8 9.1.5 for the timeout).
-		DefaultLogger.Error("C-STORE of %s: %v", req.AffectedSOPInstance, stream.err)
+		s.log().Error("C-STORE of %s: %v", req.AffectedSOPInstance, stream.err)
 		if assoc.State() == StateAssociated {
 			_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0, streamAbort(stream.err))
 		}
@@ -255,7 +255,7 @@ func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, stream
 	if err == nil && resp != nil {
 		status = resp.Status
 	} else if err != nil {
-		DefaultLogger.Error("C-STORE handler failed for %s: %v", req.AffectedSOPInstance, err)
+		s.log().Error("C-STORE handler failed for %s: %v", req.AffectedSOPInstance, err)
 	}
 	s.sendCStoreRSP(ctx, assoc, ctxID, req, status)
 }
@@ -265,7 +265,7 @@ func (s *SCP) sendCStoreRSP(ctx context.Context, assoc *Association, ctxID byte,
 	rspBytes, err := EncodeCommandDataset(BuildCStoreRSP(req.MessageID, req.AffectedSOPClass,
 		req.AffectedSOPInstance, status))
 	if err != nil {
-		DefaultLogger.Error("failed to encode C-STORE-RSP: %v", err)
+		s.log().Error("failed to encode C-STORE-RSP: %v", err)
 		return
 	}
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)

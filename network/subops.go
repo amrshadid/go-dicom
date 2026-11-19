@@ -58,13 +58,13 @@ func (s *SCP) sendPendingRetrieveRSP(ctx context.Context, assoc *Association, ct
 
 	pendingBytes, err := EncodeCommandDataset(pendingDS)
 	if err != nil {
-		DefaultLogger.Warn("could not encode a pending retrieval response: %v; "+
+		s.log().Warn("could not encode a pending retrieval response: %v; "+
 			"continuing with the remaining sub-operations", err)
 		return true
 	}
 
 	if err := assoc.SendPData(ctx, ctxID, pendingBytes, true); err != nil {
-		DefaultLogger.Error("pending retrieval response failed, abandoning sub-operations: %v", err)
+		s.log().Error("pending retrieval response failed, abandoning sub-operations: %v", err)
 		return false
 	}
 	return true
@@ -93,7 +93,7 @@ func (s *SCP) sendOneGetSubOperation(ctx context.Context, assoc *Association,
 
 	instClass, instUID, ok := instanceUIDs(inst)
 	if !ok {
-		DefaultLogger.Warn("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
+		s.log().Warn("C-GET sub-operation skipped: instance is missing SOP Class or SOP Instance UID")
 		counts.failed++
 		return
 	}
@@ -102,14 +102,14 @@ func (s *SCP) sendOneGetSubOperation(ctx context.Context, assoc *Association,
 	// Class, which may differ from the C-GET's.
 	subCtxID, ok := FindPresentationContextID(assoc.AcceptedContexts(), instClass)
 	if !ok {
-		DefaultLogger.Warn("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
+		s.log().Warn("C-GET sub-operation skipped: no accepted presentation context for %s", instClass)
 		counts.failed++
 		return
 	}
 
 	if err := s.sendCStoreSubOperation(ctx, assoc, subCtxID, subMessageID,
 		instClass, instUID, inst, parentMessageID, canceled); err != nil {
-		DefaultLogger.Error("C-GET sub-operation for %s failed: %v", instUID, err)
+		s.log().Error("C-GET sub-operation for %s failed: %v", instUID, err)
 		counts.failed++
 		return
 	}
@@ -131,7 +131,7 @@ func (s *SCP) sendOneMoveSubOperation(ctx context.Context, dest *SCU,
 	}
 
 	if err := dest.Store(ctx, inst); err != nil {
-		DefaultLogger.Error("C-MOVE sub-operation failed: %v", err)
+		s.log().Error("C-MOVE sub-operation failed: %v", err)
 		counts.failed++
 		return
 	}
@@ -148,7 +148,7 @@ func (s *SCP) sendOneMoveSubOperation(ctx context.Context, dest *SCU,
 func (s *SCP) resolveMoveDestinationOrReport(moveDest string) (string, bool) {
 	address, ok := s.config.resolveMoveDestination(moveDest)
 	if !ok {
-		DefaultLogger.Warn("C-MOVE destination %q is not configured; set SCPConfig.MoveDestinations "+
+		s.log().Warn("C-MOVE destination %q is not configured; set SCPConfig.MoveDestinations "+
 			"or SCPConfig.ResolveMoveDestination", moveDest)
 		return "", false
 	}
@@ -166,6 +166,7 @@ func (s *SCP) associateWithMoveDestination(ctx context.Context, destAE, destAddr
 	contexts []PresentationContextItem) *SCU {
 
 	dest := NewSCU(SCUConfig{
+		Logger:    s.config.Logger,
 		CallingAE: s.config.AETitle,
 		CalledAE:  destAE,
 		Address:   destAddress,
@@ -175,7 +176,7 @@ func (s *SCP) associateWithMoveDestination(ctx context.Context, destAE, destAddr
 	})
 
 	if err := dest.Associate(ctx, contexts); err != nil {
-		DefaultLogger.Error("C-MOVE could not associate with destination %s at %s: %v",
+		s.log().Error("C-MOVE could not associate with destination %s at %s: %v",
 			destAE, destAddress, err)
 		return nil
 	}

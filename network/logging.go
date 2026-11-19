@@ -106,6 +106,25 @@ func newTextLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// loggerFor is the Logger of a server or client given its own slog.Logger:
+// every line, at every level, goes to it, and its handler decides what to
+// keep. Nil for nil, meaning DefaultLogger.
+func loggerFor(l *slog.Logger) *Logger {
+	if l == nil {
+		return nil
+	}
+	return &Logger{level: LogLevelDebug, own: l}
+}
+
+// orDefault is l, or DefaultLogger when l is nil, read at call time so that
+// replacing DefaultLogger takes effect.
+func (l *Logger) orDefault() *Logger {
+	if l == nil {
+		return DefaultLogger
+	}
+	return l
+}
+
 // SetLevel changes the log level.
 func (l *Logger) SetLevel(level LogLevel) {
 	l.mu.Lock()

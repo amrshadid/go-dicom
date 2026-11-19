@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -125,6 +126,13 @@ type SCUConfig struct {
 	// EventType.
 	Events *EventManager
 
+	// Logger, when set, is where everything this SCU logs goes: its
+	// associations, their negotiation, and a panic in a handler of its
+	// Events. Nil means the package's DefaultLogger, as before. A logger
+	// given here receives every line at every level; filter with its
+	// handler's level.
+	Logger *slog.Logger
+
 	// OnCStore receives instances the peer sends as C-STORE sub-operations
 	// during a C-GET. Return a DIMSE status; StatusSuccess accepts the
 	// instance.
@@ -233,6 +241,18 @@ type SCPConfig struct {
 	// a non-nil list is used exactly as given, so an empty one accepts no
 	// presentation context at all.
 	TransferSyntaxes []string
+
+	// Logger, when set, is where everything this SCP logs goes: the
+	// associations it accepts, those it opens itself (C-MOVE sub-operations,
+	// storage commitment results, UPS event reports), its admission
+	// decisions, a panic in a handler or in a handler of its Events, and, for
+	// a Server, the start-up line and accept errors (Server.Logger writes
+	// here). Nil means the package's DefaultLogger, as before, and
+	// Server.Logger keeps its own default. A logger given here receives every
+	// line at every level; filter with its handler's level. The lines name AE
+	// titles, addresses and SOP Instance UIDs, which is why a server may want
+	// them kept apart from another's.
+	Logger *slog.Logger
 
 	// TLS, when set, makes ListenAndServe and StartServer accept associations
 	// over TLS only.
