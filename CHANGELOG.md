@@ -80,7 +80,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be made. Bulk values are read from the two files in chunks and never
   held whole, and report the byte they first differ at; a value is compared
   as what it means, so padding, a character set and the byte order of a number
-  or of pixel words do not make files differ. `--ignore` (a tag or keyword,
+  or of pixel samples do not make files differ. Big endian Pixel Data is
+  reversed at the sample width Bits Allocated gives, as the reader does: in
+  OW's two-byte words, a 32-bit RT Dose and its correct little endian copy
+  differed from the first byte (#426). `--ignore` (a tag or keyword,
   at every depth), `--ignore-meta` and `--ignore-private` leave elements out.
   `cli.ExitError` lets a command choose its exit status; the others still end
   with 1.
