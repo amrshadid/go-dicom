@@ -14,9 +14,8 @@ package jpeg2000
 // probability learned from the eight neighbors, so a smooth image spends
 // almost nothing on the long runs of zeros that make up most of a subband.
 //
-// Only code-block style 0x00 is decoded. Bypass, termall, vertical causal,
-// predictable termination and segmentation marks are refused by the parser, so
-// nothing here has to guess at a variant it has never seen.
+// The code-block style options (D.5 to D.7) are decoded in decodeStyled, apart
+// from the loop that decodes style 0, which is what nearly every file uses.
 
 // The 19 contexts (Table D.1 and following): nine for significance, one for the
 // run of a cleanup pass, five for sign, three for refinement, and one uniform.
@@ -79,6 +78,10 @@ type passState struct {
 	flags  []uint16
 	// zc is the significance context table for this band's orientation.
 	zc *[256]uint8
+	// vertical is the vertically causal context (D.7): the last row of each
+	// stripe of four takes no context from the row below it, which belongs
+	// to the next stripe.
+	vertical bool
 }
 
 // newPassState prepares the state of a block of w by h samples.
@@ -223,8 +226,14 @@ func MagnitudeBits(q Quantization, band Band, resolution, levels int) (int, erro
 // counts. Dividing by two, rounding towards zero, gives the coefficient.
 //
 // magnitudeBits is the band's Mb, from MagnitudeBits.
+//
+// An HT code-block (T.814), one whose Style has BlockStyleHT, is decoded by
+// the HT block decoder into the same values.
 func DecodeBlock(block CodeBlockData, magnitudeBits int) ([]int32, error) {
-	d, err := decodeBlock(block, magnitudeBits)
+	if block.Style&BlockStyleHT != 0 {
+		return decodeHTBlock(&block, magnitudeBits)
+	}
+	d, err := decodeBlock(&block, magnitudeBits)
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +248,7 @@ func DecodeBlock(block CodeBlockData, magnitudeBits int) ([]int32, error) {
 // decisions in the encoder's contexts. That test reads the corpus, so it has to
 // live in the external test package, which cannot see decodeBlock.
 func DecodeBlockBytesReadForTest(block CodeBlockData, magnitudeBits int) (int, error) {
-	d, err := decodeBlock(block, magnitudeBits)
+	d, err := decodeBlock(&block, magnitudeBits)
 	if err != nil {
 		return 0, err
 	}
@@ -248,7 +257,7 @@ func DecodeBlockBytesReadForTest(block CodeBlockData, magnitudeBits int) (int, e
 
 // decodeBlock is DecodeBlock, returning the decoder itself so that tests can
 // ask how much of the block's data the passes consumed.
-func decodeBlock(block CodeBlockData, magnitudeBits int) (*blockDecoder, error) {
+func decodeBlock(block *CodeBlockData, magnitudeBits int) (*blockDecoder, error) {
 	w, h := block.Block.Width(), block.Block.Height()
 	if w <= 0 || h <= 0 {
 		return nil, errorf("a code-block of %dx%d samples", w, h)
@@ -288,6 +297,14 @@ func decodeBlock(block CodeBlockData, magnitudeBits int) (*blockDecoder, error) 
 			block.Passes, limit, plane+1)
 	}
 
+	if block.Style != 0 {
+		if err := d.decodeStyled(block, plane); err != nil {
+			return nil, err
+		}
+		d.applySigns()
+		return d, nil
+	}
+
 	passType := passCleanup
 	for pass := 0; pass < block.Passes && plane >= 0; pass++ {
 		switch passType {
@@ -309,6 +326,136 @@ func decodeBlock(block CodeBlockData, magnitudeBits int) (*blockDecoder, error) 
 
 	d.applySigns()
 	return d, nil
+}
+
+// decodeStyled runs a code-block's passes under the code-block style options
+// (D.5 to D.7), starting at bit plane first. It is apart from decodeBlock's
+// loop so that a block coded with style 0, which is nearly every block there
+// is, pays nothing for options it does not use.
+//
+// The block's data is a sequence of codeword segments, each its own
+// terminated stream. A segment's passes are raw when bypass is on and the
+// segment opens with a significance or refinement pass below the four most
+// significant planes the block codes (D.6); the rest are MQ-coded, and an
+// MQ-coded segment restarts the decoder on its own bytes without forgetting
+// the contexts, unless reset puts them back after every MQ-coded pass. The
+// segmentation symbol is four uniform decisions after each cleanup pass.
+// Their value, 1010, is not checked: the reference decoder reads them and
+// moves on too, and a pass cut short by rate allocation may end without them
+// intact. Predictable termination is how the encoder ended its segments, and
+// asks nothing of a decoder.
+func (d *blockDecoder) decodeStyled(block *CodeBlockData, first int) error {
+	d.vertical = block.Style&BlockStyleVertical != 0
+	segments := block.Segments
+	if len(segments) == 0 {
+		segments = []CodewordSegment{{Passes: block.Passes, Length: len(block.Data)}}
+	}
+
+	var raw rawDecoder
+	plane, passType := first, passCleanup
+	offset, segment, left, bypassed := 0, -1, 0, false
+	for pass := 0; pass < block.Passes && plane >= 0; pass++ {
+		if left == 0 {
+			segment++
+			if segment >= len(segments) {
+				return errorf("a code-block's %d coding passes run past its %d codeword segments",
+					block.Passes, len(segments))
+			}
+			s := segments[segment]
+			if s.Length < 0 || s.Passes <= 0 || offset+s.Length > len(block.Data) {
+				return errorf("codeword segment %d of a code-block claims %d passes in %d bytes, %d remain",
+					segment, s.Passes, s.Length, len(block.Data)-offset)
+			}
+			data := block.Data[offset : offset+s.Length]
+			offset += s.Length
+			left = s.Passes
+			bypassed = block.Style&BlockStyleBypass != 0 && passType != passCleanup && plane <= first-4
+			if bypassed {
+				raw = rawDecoder{data: data}
+			} else {
+				d.mq.start(data)
+			}
+		}
+
+		switch {
+		case bypassed && passType == passSignificance:
+			d.significancePassRaw(plane, &raw)
+		case bypassed && passType == passRefinement:
+			d.refinementPassRaw(plane, &raw)
+		case passType == passSignificance:
+			d.significancePass(plane)
+		case passType == passRefinement:
+			d.refinementPass(plane)
+		default:
+			d.cleanupPass(plane)
+			if block.Style&BlockStyleSegmentation != 0 {
+				for range 4 {
+					d.mq.decode(cxUniform)
+				}
+			}
+		}
+		if block.Style&BlockStyleReset != 0 && !bypassed {
+			d.mq.resetContexts()
+		}
+		if d.vertical {
+			d.forgetTheRowBelow()
+		}
+		left--
+
+		if passType == passCleanup {
+			plane--
+			passType = passSignificance
+		} else {
+			passType++
+		}
+	}
+	return nil
+}
+
+// significancePassRaw is significancePass with selective arithmetic coding
+// bypass (D.6): the same coefficients in the same order, each decision and
+// each sign a raw bit, a sign of 1 being negative.
+func (b *blockDecoder) significancePassRaw(plane int, raw *rawDecoder) {
+	for y0 := 0; y0 < b.h; y0 += 4 {
+		for x := 0; x < b.w; x++ {
+			i := b.index(x, y0)
+			for y := y0; y < y0+4 && y < b.h; y, i = y+1, i+b.stride {
+				f := b.flags[i]
+				if f&flagSignificant != 0 || f&flagNeighbors == 0 {
+					continue
+				}
+				if raw.bit() == 1 {
+					b.setSignificant(x, y, i, plane)
+					if raw.bit() == 1 {
+						b.flags[i] |= flagNegative
+					}
+				}
+				b.flags[i] |= flagVisited
+			}
+		}
+	}
+}
+
+// refinementPassRaw is refinementPass with selective arithmetic coding bypass:
+// one raw bit per coefficient refined.
+func (b *blockDecoder) refinementPassRaw(plane int, raw *rawDecoder) {
+	for y0 := 0; y0 < b.h; y0 += 4 {
+		for x := 0; x < b.w; x++ {
+			i := b.index(x, y0)
+			for y := y0; y < y0+4 && y < b.h; y, i = y+1, i+b.stride {
+				f := b.flags[i]
+				if f&flagSignificant == 0 || f&flagVisited != 0 {
+					continue
+				}
+				if raw.bit() == 1 {
+					b.data[y*b.w+x] += 1 << uint(plane)
+				} else {
+					b.data[y*b.w+x] -= 1 << uint(plane)
+				}
+				b.flags[i] |= flagRefined
+			}
+		}
+	}
 }
 
 // The three pass types, in the order they run within a bit plane.
@@ -386,7 +533,10 @@ func (b *passState) significanceContext(i int) int {
 // the decoded bit means the sign it appears to or its opposite.
 func (b *passState) signContext(i int) (int, int) {
 	h := b.contribution(i-1) + b.contribution(i+1)
-	v := b.contribution(i-b.stride) + b.contribution(i+b.stride)
+	v := b.contribution(i - b.stride)
+	if !b.vertical || (i/b.stride-1)%4 != 3 {
+		v += b.contribution(i + b.stride)
+	}
 	h, v = clampUnit(h), clampUnit(v)
 
 	if h == 0 {
@@ -475,6 +625,27 @@ func (b *passState) markSignificant(i int) {
 	b.flags[i] |= flagSignificant
 	for _, n := range neighborWrites {
 		b.flags[i+n.dy*b.stride+n.dx] |= n.bit
+	}
+}
+
+// forgetTheRowBelow applies the vertically causal context (D.7) between
+// passes: in the last row of every stripe it clears the bits that say a
+// neighbor in the row below, the next stripe's first, is significant.
+//
+// Clearing after the pass is the same as never setting them. Only the
+// coefficient directly below sets those three bits of a sample, so nothing
+// else is lost; and a pass finishes a stripe before it starts the next, so
+// a bit set while the stripe below is coded is not read until a later pass,
+// by which time it is gone. Doing it here keeps markSignificant, which every
+// block runs for every coefficient that becomes significant, as small as it
+// was and inlined.
+func (b *passState) forgetTheRowBelow() {
+	const below = flagDown | flagSW | flagSE
+	for y := 3; y+1 < b.h; y += 4 {
+		start := b.index(0, y)
+		for k := start; k < start+b.w; k++ {
+			b.flags[k] &^= below
+		}
 	}
 }
 

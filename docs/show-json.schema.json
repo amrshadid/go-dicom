@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "go-dicom show --json, schemaVersion 1",
+  "description": "What `go-dicom show --json <file>` prints: a DICOM file and where each part of it sits. Readers ignore properties this schema does not name; a property added later does not change schemaVersion. See show-json.md.",
+  "type": "object",
+  "required": [
+    "schemaVersion", "file", "size", "preamble", "regions", "transferSyntax",
+    "offsetsRelativeTo", "fileMeta", "dataSet", "warnings"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "The version of this document format."
+    },
+    "file": {
+      "type": "string",
+      "description": "The path as it was given on the command line."
+    },
+    "size": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The size of the file in bytes."
+    },
+    "preamble": {
+      "type": "boolean",
+      "description": "True for a Part 10 file, with a 128-byte preamble, the DICM prefix and a file meta group. False for a bare data set."
+    },
+    "regions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/region" },
+      "description": "The parts of the file in order: preamble, prefix and fileMeta for a Part 10 file, then dataSet."
+    },
+    "transferSyntax": { "$ref": "#/$defs/transferSyntax" },
+    "offsetsRelativeTo": {
+      "enum": ["file", "inflatedDataSet"],
+      "description": "What every offset in fileMeta and dataSet counts from: the start of the file, or, for a deflated data set, the start of the data set after it was inflated."
+    },
+    "fileMeta": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/element" },
+      "description": "The elements of the file meta group, in file order. Empty for a bare data set."
+    },
+    "dataSet": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/element" },
+      "description": "The elements of the data set, in file order."
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What the reader noticed about the file and recovered from."
+    }
+  },
+  "$defs": {
+    "tag": {
+      "type": "string",
+      "pattern": "^\\([0-9A-F]{4},[0-9A-F]{4}\\)$",
+      "description": "A tag as (gggg,eeee), in upper-case hexadecimal."
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "A byte offset."
+    },
+    "region": {
+      "type": "object",
+      "required": ["name", "offset", "endOffset"],
+      "properties": {
+        "name": { "enum": ["preamble", "prefix", "fileMeta", "dataSet"] },
+        "offset": { "$ref": "#/$defs/offset" },
+        "endOffset": { "$ref": "#/$defs/offset", "description": "The offset of the first byte after the region." }
+      }
+    },
+    "transferSyntax": {
+      "type": "object",
+      "required": ["uid", "explicitVR", "littleEndian", "deflated"],
+      "properties": {
+        "uid": { "type": "string", "description": "The Transfer Syntax UID of the file meta group; empty when the file has none." },
+        "explicitVR": { "type": "boolean" },
+        "littleEndian": { "type": "boolean" },
+        "deflated": { "type": "boolean" }
+      }
+    },
+    "delimiter": {
+      "type": "object",
+      "description": "An Item Delimitation Item or Sequence Delimitation Item: a tag and a length of zero, 8 bytes.",
+      "required": ["tag", "tagOffset", "endOffset"],
+      "properties": {
+        "tag": { "enum": ["(FFFE,E00D)", "(FFFE,E0DD)"] },
+        "tagOffset": { "$ref": "#/$defs/offset" },
+        "endOffset": { "$ref": "#/$defs/offset" }
+      }
+    },
+    "element": {
+      "type": "object",
+      "required": [
+        "tag", "keyword", "name", "vr", "vm", "tagOffset", "vrOffset", "lengthOffset", "lengthSize",
+        "valueOffset", "valueLength", "undefinedLength", "endOffset"
+      ],
+      "properties": {
+        "tag": { "$ref": "#/$defs/tag" },
+        "keyword": { "type": "string", "description": "The dictionary keyword; empty for a tag the dictionary does not know." },
+        "name": { "type": "string", "description": "The dictionary name; empty for a tag the dictionary does not know." },
+        "vr": { "type": "string", "description": "The VR the element is read as; empty when neither the file nor the dictionary gives one." },
+        "vm": { "type": "integer", "minimum": 0, "description": "How many values the element holds." },
+        "value": {
+          "type": "string",
+          "description": "The value as text, with a backslash between multiple values. Absent for a sequence and for binary values, which are given by their position alone."
+        },
+        "tagOffset": { "$ref": "#/$defs/offset" },
+        "vrOffset": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Where the two VR bytes are; null in an implicit VR data set."
+        },
+        "lengthOffset": { "$ref": "#/$defs/offset" },
+        "lengthSize": { "type": "integer", "enum": [2, 4], "description": "How many bytes the length field takes." },
+        "valueOffset": { "$ref": "#/$defs/offset" },
+        "valueLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The bytes from valueOffset to the end of the content. A delimiter that closes the value is not part of it."
+        },
+        "undefinedLength": { "type": "boolean" },
+        "endOffset": { "$ref": "#/$defs/offset", "description": "The offset of the first byte after the element, delimiter included." },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/item" },
+          "description": "The items of a sequence. Absent when the sequence has none."
+        },
+        "fragments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fragment" },
+          "description": "The items of encapsulated Pixel Data: the offset table first, then the fragments."
+        },
+        "delimiter": { "$ref": "#/$defs/delimiter" }
+      }
+    },
+    "item": {
+      "type": "object",
+      "required": [
+        "tag", "tagOffset", "lengthOffset", "lengthSize", "valueOffset", "valueLength",
+        "undefinedLength", "endOffset", "elements"
+      ],
+      "properties": {
+        "tag": { "const": "(FFFE,E000)" },
+        "tagOffset": { "$ref": "#/$defs/offset" },
+        "lengthOffset": { "$ref": "#/$defs/offset" },
+        "lengthSize": { "const": 4 },
+        "valueOffset": { "$ref": "#/$defs/offset" },
+        "valueLength": { "type": "integer", "minimum": 0 },
+        "undefinedLength": { "type": "boolean" },
+        "endOffset": { "$ref": "#/$defs/offset" },
+        "elements": { "type": "array", "items": { "$ref": "#/$defs/element" } },
+        "delimiter": { "$ref": "#/$defs/delimiter" }
+      }
+    },
+    "fragment": {
+      "type": "object",
+      "required": ["tag", "tagOffset", "valueOffset", "valueLength", "endOffset"],
+      "properties": {
+        "tag": { "const": "(FFFE,E000)" },
+        "tagOffset": { "$ref": "#/$defs/offset" },
+        "valueOffset": { "$ref": "#/$defs/offset" },
+        "valueLength": { "type": "integer", "minimum": 0 },
+        "endOffset": { "$ref": "#/$defs/offset" }
+      }
+    }
+  }
+}

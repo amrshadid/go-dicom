@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -213,18 +214,46 @@ const (
 // mediaStorageDirectory is the SOP class of a DICOMDIR.
 const mediaStorageDirectory = "1.2.840.10008.1.3.10"
 
+// leftInFileAbove is the length above which a binary value other than Pixel
+// Data stays in the input file while it is de-identified. Pixel Data stays
+// there whatever its length.
+const leftInFileAbove = 1 << 20
+
+// anonymizeRead is how anonymizeFile reads its input: whole, or with the
+// pixels and the binary values longer than threshold left in the file.
+type anonymizeRead struct {
+	whole     bool
+	threshold uint32
+}
+
 // anonymizeFile reads input, de-identifies it and writes it to output.
+//
+// Unless the pixels are to be changed, they are not read (#331): Pixel Data,
+// and any binary value over a megabyte, stays in the input file and is copied
+// from there into the output as it is written, so memory follows the
+// attributes and not the image. The output is the same, byte for byte, as
+// when the file is read whole: the values left behind are ones the profiles
+// keep or remove whole, never read or replace, and an element the
+// anonymizer removes or replaces takes its reference with it.
 func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error {
+	return ac.anonymizeFileAs(anonymizer, input, output,
+		anonymizeRead{whole: ac.redact.asked(), threshold: leftInFileAbove})
+}
+
+// anonymizeFileAs is anonymizeFile, reading as read says.
+func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, input, output string, read anonymizeRead) error {
 	in, err := os.Open(input)
 	if err != nil {
 		return err
 	}
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(in))
-	_ = in.Close()
+	// Open until the output is written: the values left in it are copied
+	// from it then.
+	defer in.Close()
+
+	df, ds, inFile, err := readForAnonymizing(in, read)
 	if err != nil {
 		return errNotDICOM
 	}
-	ds := df.GetDataset()
 
 	// A file with no preamble is read as a bare data set, and so is anything
 	// else that happens to parse. Without a SOP Class and Instance UID it is
@@ -255,7 +284,7 @@ func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, inpu
 				// nothing here says the image is now clean.
 				regions, err := anonymizer.RedactDetectedText(ds, nil)
 				if err != nil {
-					return err
+					return implausibleHint(err)
 				}
 				fmt.Printf("  %s: %d region(s) detected and filled\n", filepath.Base(input), len(regions))
 			}
@@ -295,6 +324,9 @@ func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, inpu
 		return err
 	}
 	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
+	if inFile {
+		w.SetValueSource(in, df.IsLittleEndian)
+	}
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    sopClass,
 		MediaStorageSOPInstanceUID: instance,
@@ -315,19 +347,41 @@ func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, inpu
 	return nil
 }
 
+// readForAnonymizing reads the input as read asks, and reports whether some
+// values were left in the file. A deflated data set is read whole whatever was
+// asked: its values are in the inflated bytes, not in the file. So is a file
+// that cannot be read the other way, so it fails, or not, as it always did.
+func readForAnonymizing(in *os.File, read anonymizeRead) (*filereader.DICOMFile, *dataset.Dataset, bool, error) {
+	if !read.whole {
+		df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(in),
+			filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: read.threshold})
+		if err == nil && !df.Deflated {
+			if ds, err := df.GetDatasetWithValuesInFile(); err == nil {
+				return df, ds, true, nil
+			}
+		}
+		if _, err := in.Seek(0, io.SeekStart); err != nil {
+			return nil, nil, false, err
+		}
+	}
+	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(in))
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return df, df.GetDataset(), false, nil
+}
+
 // datasetText reads a text value without its padding.
 func datasetText(ds *dataset.Dataset, t tag.Tag) string {
 	elem, ok := ds.Get(t)
 	if !ok {
 		return ""
 	}
-	switch v := elem.GetValue().(type) {
-	case []byte:
-		return strings.TrimRight(string(v), " \x00")
-	case string:
-		return strings.TrimRight(v, " \x00")
+	raw, ok := elem.Bytes()
+	if !ok {
+		return ""
 	}
-	return ""
+	return strings.TrimRight(string(raw), " \x00")
 }
 
 // sameFile reports whether two paths name one file, existing or not.
@@ -380,6 +434,9 @@ OPTIONS:
                      miss: Burned In Annotation is left as it was, and the
                      method records that the redaction was automatic and
                      unverified. Look at each image before it leaves you.
+                     When what is found covers more than a quarter of the
+                     picture, more than text does, nothing is filled and
+                     the file is not written.
   -detect            Print those regions for one file, as -redact takes
                      them, and write nothing: go-dicom anonymize -detect x.dcm
   -allow-burned-in   Write images that may hold burned-in text as they are.
@@ -388,7 +445,10 @@ OPTIONS:
 WHAT IT DOES:
   Removes or replaces the attributes PS3.15 Table E.1-1 lists, replaces UIDs
   consistently across the run so a study stays one study, sets Patient
-  Identity Removed, and records the method used.
+  Identity Removed, and records the method used. Unless -redact is given,
+  the pixels are never read into memory: they are copied from the input as
+  the output is written, so an image of any size takes the memory of its
+  attributes.
 
 BURNED-IN TEXT:
   Ultrasound, endoscopy, secondary captures and screen captures often have

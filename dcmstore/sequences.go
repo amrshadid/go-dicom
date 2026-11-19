@@ -3,6 +3,7 @@ package dcmstore
 import (
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/matching"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -121,134 +122,46 @@ func indexSequences(ds *dataset.Dataset) map[string][]map[string]IndexedValue {
 	return indexed
 }
 
-// matchSequence reports whether a stored instance satisfies a query sequence.
-//
-// The query element must have VR SQ. Its item — the standard permits at most one —
-// holds the attributes to match. An empty or absent item is universal matching:
-// it selects everything and asks for the sequence to be returned. encodings are
-// the query's, which the item's text is read with.
-func matchSequence(queryElem *dataelem.DataElement, inst *Instance, seqTag tag.Tag, encodings []string) bool {
-	queryItem, ok := sequenceQueryItem(queryElem)
-	if !ok {
-		// No item, or an item that is not a data set: universal matching, which
-		// matches an instance whether or not it carries the sequence. Returning the
-		// sequence is buildResponse's job.
-		return true
-	}
-
-	criteria := sequenceCriteria(queryItem, seqTag, encodings)
-	if len(criteria) == 0 {
-		// An item holding only zero-length values is universal matching too.
-		return true
-	}
-
-	storedItems := inst.Sequences[seqTag.String()]
-	if len(storedItems) == 0 {
-		// The query asks for values in a sequence the instance does not have, so
-		// nothing in it can match.
-		return false
-	}
-
-	// Any one item satisfying every criterion is a match. All criteria must be met
-	// by the *same* item: a step scheduled at station A on Monday and another at
-	// station B on Tuesday must not match a query for station A on Tuesday.
-	for _, storedItem := range storedItems {
-		if itemSatisfies(storedItem, criteria) {
-			return true
-		}
-	}
-	return false
+// instanceAttributes is an indexed instance as package matching reads a
+// candidate: its indexed keys, and the items of its indexed sequences. The
+// matching of a sequence — any one stored item meeting every key of the query
+// item, all of them by the same item — is matching's; what is this store's is
+// that only the indexed attributes are there to meet them, which
+// skipUnindexed has already narrowed the query to.
+type instanceAttributes struct {
+	inst *Instance
 }
 
-// sequenceCriterion is one attribute to match inside a sequence item.
-type sequenceCriterion struct {
-	tag   tag.Tag
-	vr    dataelem.VR
-	value string
+// Value returns an indexed attribute's value.
+func (a instanceAttributes) Value(t tag.Tag) (string, bool) {
+	v, ok := a.inst.Keys[t.String()]
+	return v.Value, ok
 }
 
-// sequenceCriteria reads the match criteria out of a query sequence item.
-//
-// An attribute the index does not hold for this sequence is skipped, for the same
-// reason an unindexed flat key is: matching on it would return nothing, which
-// reads as an empty archive rather than as an unsupported query.
-func sequenceCriteria(queryItem *dataset.Dataset, seqTag tag.Tag, encodings []string) []sequenceCriterion {
-	indexedAttrs := indexedSequences[seqTag]
-	encodings = textEncodings(queryItem, encodings)
-
-	var criteria []sequenceCriterion
-	for _, elem := range queryItem.GetAll() {
-		t, ok := elem.Tag()
-		if !ok {
-			continue
-		}
-
-		if trimPadding(elementString(elem)) == "" {
-			// Universal matching on this attribute: it selects nothing.
-			continue
-		}
-
-		fallback, indexed := indexedAttrs[t]
-		if !indexed {
-			storeLogger.Debug("dcmstore: ignoring %s inside %s in a query; it is not indexed",
-				t.String(), seqTag.String())
-			continue
-		}
-
-		vr := elem.GetVR()
-		if vr == "" || !dataelem.IsValidVR(vr) {
-			vr = fallback
-		}
-
-		criteria = append(criteria, sequenceCriterion{tag: t, vr: vr, value: elementText(elem, vr, encodings)})
+// Items returns the indexed items of a sequence.
+func (a instanceAttributes) Items(t tag.Tag) []matching.Attributes {
+	stored := a.inst.Sequences[t.String()]
+	if len(stored) == 0 {
+		return nil
 	}
-
-	return criteria
+	items := make([]matching.Attributes, len(stored))
+	for i, item := range stored {
+		items[i] = indexedItem(item)
+	}
+	return items
 }
 
-// itemSatisfies reports whether one stored item meets every criterion.
-func itemSatisfies(storedItem map[string]IndexedValue, criteria []sequenceCriterion) bool {
-	for _, c := range criteria {
-		if !matchValue(c.vr, c.value, storedItem[c.tag.String()].Value) {
-			return false
-		}
-	}
-	return true
+// indexedItem is one indexed item of a sequence, as matching reads it.
+type indexedItem map[string]IndexedValue
+
+// Value returns an indexed attribute of the item.
+func (item indexedItem) Value(t tag.Tag) (string, bool) {
+	v, ok := item[t.String()]
+	return v.Value, ok
 }
 
-// sequenceQueryItem returns the single item of a query sequence.
-//
-// PS3.4 C.2.2.2.6 allows zero or one item. More than one is non-conformant; the
-// first is used and the rest reported, since refusing the query outright would
-// answer a peer's minor error with no results at all.
-func sequenceQueryItem(elem *dataelem.DataElement) (*dataset.Dataset, bool) {
-	if elem == nil {
-		return nil, false
-	}
-
-	seq, ok := elem.GetValue().(*sequence.Sequence)
-	if !ok || seq == nil || seq.Length() == 0 {
-		return nil, false
-	}
-
-	if seq.Length() > 1 {
-		if t, ok := elem.Tag(); ok {
-			storeLogger.Warn("dcmstore: the query sequence %s carries %d items and "+
-				"PS3.4 C.2.2.2.6 allows one; matching on the first",
-				t.String(), seq.Length())
-		}
-	}
-
-	item, err := seq.Get(0)
-	if err != nil {
-		return nil, false
-	}
-	itemDS, ok := item.(*dataset.Dataset)
-	if !ok {
-		return nil, false
-	}
-	return itemDS, true
-}
+// Items returns nothing: no sequence inside an item is indexed.
+func (item indexedItem) Items(tag.Tag) []matching.Attributes { return nil }
 
 // isIndexedSequence reports whether a tag names a sequence this store matches on.
 func isIndexedSequence(t tag.Tag) bool {
@@ -260,13 +173,12 @@ func isIndexedSequence(t tag.Tag) bool {
 // matched instance.
 //
 // It carries one item, holding the indexed attributes of the first stored item
-// that satisfies the query — the item that caused the match, which is the one the
-// requestor asked about. A matched instance with no stored items yields an empty
-// sequence, which is how a universal sequence key is answered for an instance that
-// does not carry the sequence at all.
-func buildSequenceResponse(queryElem *dataelem.DataElement, inst *Instance,
-	seqTag tag.Tag, encodings []string) *dataelem.DataElement {
-
+// that satisfies the query's item, itemID — the item that caused the match,
+// which is the one the requestor asked about. A nil itemID, a query item of
+// universal keys only, takes the first. A matched instance with no stored items
+// yields an empty sequence, which is how a universal sequence key is answered
+// for an instance that does not carry the sequence at all.
+func buildSequenceResponse(itemID *matching.Identifier, inst *Instance, seqTag tag.Tag) *dataelem.DataElement {
 	seq := sequence.New()
 
 	storedItems := inst.Sequences[seqTag.String()]
@@ -275,10 +187,9 @@ func buildSequenceResponse(queryElem *dataelem.DataElement, inst *Instance,
 
 		// Prefer the item that matched, so a response describes the step the query
 		// was about rather than whichever came first.
-		if queryItem, ok := sequenceQueryItem(queryElem); ok {
-			criteria := sequenceCriteria(queryItem, seqTag, encodings)
+		if itemID != nil {
 			for _, storedItem := range storedItems {
-				if itemSatisfies(storedItem, criteria) {
+				if itemID.Match(indexedItem(storedItem)) {
 					chosen = storedItem
 					break
 				}

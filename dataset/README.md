@@ -36,12 +36,18 @@ func NewDatasetWithCapacity(capacity int) *Dataset
 
 // Element operations
 func (ds *Dataset) Add(elem *DataElement) error
+// Add, logging its validation warnings to the logger ctx carries (config.WithLogger)
+func (ds *Dataset) AddWithContext(ctx context.Context, elem *DataElement) error
 func (ds *Dataset) Get(tag Tag) (*DataElement, bool)
 func (ds *Dataset) GetByKeyword(keyword string) (*DataElement, bool)
 func (ds *Dataset) GetString(tag Tag) (string, error)
 func (ds *Dataset) Remove(tag Tag) bool
 func (ds *Dataset) UpdateElement(tag Tag, newValue []byte) error
 func (ds *Dataset) GetAll() []*DataElement
+
+// The image's ICC profile (PS3.3 C.11.15), for a rendered PNG or JPEG to
+// carry; nothing converts color
+func (ds *Dataset) ICCProfile() ([]byte, error)
 
 // Search
 func (ds *Dataset) Find(predicate func(*DataElement) bool) []*DataElement
@@ -51,8 +57,18 @@ func (ds *Dataset) Count() int
 
 // Sequences
 func (ds *Dataset) AddSequence(tag Tag, items []*Dataset) error
+func (ds *Dataset) AddSequenceWithContext(ctx context.Context, tag Tag, seq *sequence.Sequence) error
 func (ds *Dataset) GetSequenceItems(tag Tag) ([]*Dataset, error)
 func (ds *Dataset) GetNested(tags ...Tag) (*Dataset, error)
+
+// Rendering for display (PS3.3 C.11): an *image.Gray or *image.NRGBA
+func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, error)
+func (ds *Dataset) RenderEachFrame(opts *RenderOptions, use func(frame int, img image.Image) error) error
+// The same from a data set without its Pixel Data, reading the frames from
+// a FrameReader (filereader.DICOMFile.FrameReader): a compressed frame
+// decoded alone, a native one a band of rows at a time
+func (ds *Dataset) RenderFramesFrom(frames FrameReader, list []int, opts *RenderOptions,
+    use func(frame int, img image.Image) error) error
 ```
 
 ## References

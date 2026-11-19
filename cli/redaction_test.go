@@ -41,8 +41,9 @@ const (
 
 // writeCaptionedInstance writes a 96 by 96 ultrasound whose top margin
 // holds a caption in white, 14 pixels tall, with a gray square below it for
-// the picture itself.
-func writeCaptionedInstance(t *testing.T, path string) {
+// the picture itself. More rows, given by the top of each, write the
+// caption again there.
+func writeCaptionedInstance(t *testing.T, path string, more ...int) {
 	t.Helper()
 	ds := dataset.NewDataset()
 	ds.SetTransferSyntaxUID("1.2.840.10008.1.2.1")
@@ -76,17 +77,19 @@ func writeCaptionedInstance(t *testing.T, path string) {
 			px[y*captionedSize+x] = 90
 		}
 	}
-	for g, glyph := range captionGlyphs {
-		for col := 0; col < 5; col++ {
-			for row := 0; row < 7; row++ {
-				if glyph[col]&(1<<uint(row)) == 0 {
-					continue
-				}
-				for dy := 0; dy < captionScale; dy++ {
-					for dx := 0; dx < captionScale; dx++ {
-						x := captionX + (g*6+col)*captionScale + dx
-						y := captionY + row*captionScale + dy
-						px[y*captionedSize+x] = 255
+	for _, top := range append([]int{captionY}, more...) {
+		for g, glyph := range captionGlyphs {
+			for col := 0; col < 5; col++ {
+				for row := 0; row < 7; row++ {
+					if glyph[col]&(1<<uint(row)) == 0 {
+						continue
+					}
+					for dy := 0; dy < captionScale; dy++ {
+						for dx := 0; dx < captionScale; dx++ {
+							x := captionX + (g*6+col)*captionScale + dx
+							y := top + row*captionScale + dy
+							px[y*captionedSize+x] = 255
+						}
 					}
 				}
 			}
@@ -99,6 +102,11 @@ func writeCaptionedInstance(t *testing.T, path string) {
 }
 
 // captured runs fn and returns what it printed.
+//
+// The pipe is read while fn writes to it. Reading only after fn returned
+// held a command that printed more than the pipe does: 64 KiB on Linux and
+// macOS, where nothing printed that much, and 4 KiB on Windows, where a JSON
+// listing did and the test ran until it was killed.
 func captured(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 	old := os.Stdout
@@ -106,11 +114,17 @@ func captured(t *testing.T, fn func() error) (string, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	read := make(chan []byte, 1)
+	go func() {
+		out, _ := io.ReadAll(r)
+		read <- out
+	}()
 	os.Stdout = w
 	runErr := fn()
-	_ = w.Close()
 	os.Stdout = old
-	out, _ := io.ReadAll(r)
+	_ = w.Close()
+	out := <-read
+	_ = r.Close()
 	return string(out), runErr
 }
 
@@ -252,6 +266,36 @@ func TestShareRedactAutoAndPreview(t *testing.T) {
 
 	if err := runShare("-preview", "-redact", "auto", in, filepath.Join(dir, "both.png")); err == nil {
 		t.Error("-preview and -redact were taken together")
+	}
+}
+
+// TestRedactAutoRefusesMostOfAPicture: when what the detector finds covers
+// more of the picture than text does, -redact auto fills none of it, in
+// either command: the command fails naming the share found, says how to go
+// on, and writes nothing. Here the caption is written three times, down the
+// whole picture.
+func TestRedactAutoRefusesMostOfAPicture(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "us.dcm")
+	writeCaptionedInstance(t, in, 40, 70)
+
+	for name, run := range map[string]func(...string) error{"anonymize": runAnonymize, "share": runShare} {
+		out := filepath.Join(dir, name+".out")
+		if name == "share" {
+			out += ".png"
+		}
+		_, err := captured(t, func() error { return run("-redact", "auto", in, out) })
+		if err == nil {
+			t.Fatalf("%s -redact auto filled most of the picture", name)
+		}
+		for _, want := range []string{"more of the picture than text does", "of a 96 by 96 picture", "Nothing was redacted", "-redact x,y,width,height"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s -redact auto: %q does not say %q", name, err, want)
+			}
+		}
+		if _, statErr := os.Stat(out); statErr == nil {
+			t.Errorf("%s -redact auto wrote %s after refusing", name, out)
+		}
 	}
 }
 

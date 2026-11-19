@@ -12,7 +12,8 @@
 //
 //   - Application Entity (AE) title — the name a DICOM node answers to. Peers
 //     are addressed by AE title as well as host and port, and an SCP rejects an
-//     association whose called AE title is not its own.
+//     association whose called AE title is not its own, unless
+//     SCPConfig.AcceptAnyCalledAE leaves that to SCPConfig.Admit.
 //   - Association — the negotiated session. Everything happens inside one; it
 //     is established, used, then released.
 //   - Presentation context — a pairing of an abstract syntax (a SOP Class: what
@@ -114,6 +115,18 @@
 //
 //	log.Fatal(scp.ListenAndServe(ctx))
 //
+// The SOP classes and transfer syntaxes an SCP accepts are
+// SCPConfig.AbstractSyntaxes and SCPConfig.TransferSyntaxes, read before it
+// listens. Nil keeps the defaults, which include query and retrieve; a non-nil
+// list is used exactly as given, so an empty one accepts nothing.
+// [StorageAndVerificationSyntaxes] is the list for a storage-only archive.
+//
+// A [Server] from [StartServer] stops in one of two ways. [Server.Stop] cancels
+// the context every handler was given, cutting what is in flight.
+// [Server.Shutdown] stops taking new associations and lets the operations in
+// progress finish, until the context it is given ends; it returns a
+// [*ShutdownError] counting the associations it then had to abort.
+//
 // The handler runs on the association's goroutine, so a slow handler holds that
 // association open; hand long work to a queue. Handlers may be called
 // concurrently for different associations and must be safe for concurrent use.
@@ -123,6 +136,12 @@
 // C-GET, [WorklistHandler] for Modality Worklist, and [CompositeHandler] to
 // combine separate handlers per service. For full control, implement [Handler]
 // directly, embedding [BaseHandler] to inherit defaults for the rest.
+//
+// A C-STORE handler that also implements [CStoreStreamer] is given the data
+// set as the bytes the peer sent, read from the association as it reads,
+// instead of a decoded copy assembled in memory. Memory stays bounded whatever
+// the instance's size, and [WriteCStoreFile] writes the bytes as a Part 10 file
+// untouched, so what is stored is what was sent.
 //
 // [AssociationInfoFromContext] gives a handler the calling AE title, peer
 // address, negotiated contexts, and peer implementation details without
@@ -165,6 +184,20 @@
 // identity negotiation is in use. Set SCPConfig.MaxAssociations to bound
 // concurrency on an exposed server.
 //
+// SCPConfig.Admit decides who may associate, before anything is negotiated:
+// it is given the calling and called AE titles, the remote address and, over
+// TLS, the verified certificate chains, and admits the caller or refuses it
+// with an A-ASSOCIATE-RJ of its choosing. An SCP that lists its callers there
+// is closed to everyone else, and a refused caller learns nothing of what it
+// supports. It is asked only about well-formed AE titles, and the SCP goes on
+// checking the called AE title itself unless SCPConfig.AcceptAnyCalledAE is
+// set.
+//
+// A panic in a handler ends the association it happened on, with an A-ABORT
+// and its stack in the log, and nothing else: the server and its other
+// associations go on. A panic in an event handler is logged and passed over.
+// Goroutines a handler starts itself are its own to guard.
+//
 // Decoders reject input that would otherwise exhaust memory: a PDU's length
 // is checked against what one of its type can be before its body is read
 // ([MaxAssociatePDULength] before an association exists, the advertised
@@ -172,6 +205,21 @@
 // allocated as its bytes arrive, deflated data sets are capped at
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
 // actually available. The parsers have fuzz targets that run in CI.
+//
+// # Events
+//
+// An SCU reports what happens on its associations to SCUConfig.Events, and an
+// SCP to SCPConfig.Events: see [EventType]. The EVTPDUSent and EVTAssocAborted
+// of an A-ABORT this side sent carry a [LocalAbort] saying why: a timeout, a
+// protocol violation by the peer, a handler that panicked, the server
+// stopping, or the application asking ([AbortCause]), with the error behind
+// it. The PDU says only what PS3.8 Table 9-26 lets it, which several causes
+// share.
+//
+// A TLS server that turns a client away during the handshake reports
+// EVTTLSHandshakeFailed, before any association exists, with the client's
+// address and a [TLSHandshakeError] naming the check that failed; it carries
+// nothing of the client's certificate.
 //
 // # Logging
 //
@@ -190,6 +238,25 @@
 //
 // The default is [LogLevelWarn], matching config.Logger's own default: failures
 // and refusals are reported, PDU and DIMSE detail is not.
+//
+// A server or client can be given a logger of its own, SCPConfig.Logger or
+// SCUConfig.Logger, a *slog.Logger: everything it logs then goes there, at
+// every level, and nothing to DefaultLogger. Nil means DefaultLogger, as
+// before. Two servers in one process can so keep apart lines that name AE
+// titles, addresses and SOP Instance UIDs.
+//
+// That includes the validation warnings dataset.Add raises while a command
+// set or data set it received is decoded (a retired attribute, a VR the
+// dictionary does not give): the data set is built with
+// dataset.AddWithContext under a context carrying the logger
+// (config.WithLogger), the way a file read with ReadOptions.Logger builds its
+// own. Each handler of a server, and a client's OnCStore, is given that
+// context too, so config.LoggerFromContext(ctx) in it is the server's or
+// client's logger, and the built-in UPS handler logs there as it applies an
+// N-SET. Not covered: a panic in an event handler when the application calls
+// EventManager.Emit itself, and anything the application adds to a data set
+// with dataset.Add rather than AddWithContext(ctx, ...). DecodeDataset and
+// DecodeCommandDataset, called directly, log to config.Logger as before.
 //
 // # Limitations
 //

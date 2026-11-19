@@ -21,10 +21,43 @@ import (
 type Image struct {
 	Width, Height int
 	// Components holds one plane per component, in raster order, each already
-	// level shifted and clamped to the component's declared depth.
+	// level shifted and clamped to the component's declared depth. A plane is
+	// Width by Height samples unless its component is subsampled.
 	Components [][]int32
 	Depths     []int
 	Signed     []bool
+
+	// ComponentWidths and ComponentHeights give each plane's size when a
+	// component is subsampled (B.2): the samples it has on the reference
+	// grid, ceil(Xsiz/XRsiz) - ceil(XOsiz/XRsiz) across. Nil means every
+	// plane is the image's size, which is all an encoder here takes.
+	ComponentWidths, ComponentHeights []int
+}
+
+// ComponentSize is the width and height of a component's plane.
+func (img *Image) ComponentSize(c int) (width, height int) {
+	if c < len(img.ComponentWidths) && c < len(img.ComponentHeights) {
+		return img.ComponentWidths[c], img.ComponentHeights[c]
+	}
+	return img.Width, img.Height
+}
+
+// Subsampled reports whether any component's plane is smaller than the image.
+func (img *Image) Subsampled() bool {
+	for c := range img.Components {
+		if w, h := img.ComponentSize(c); w != img.Width || h != img.Height {
+			return true
+		}
+	}
+	return false
+}
+
+// componentBounds is where a component's samples lie on its own grid (B.2):
+// the image's rectangle divided by its separation, rounded up at both ends.
+func (c *Codestream) componentBounds(comp int) (x0, y0, x1, y1 int) {
+	dx, dy := c.Components[comp].DX, c.Components[comp].DY
+	return ceilDivInt(int(c.XOffset), dx), ceilDivInt(int(c.YOffset), dy),
+		ceilDivInt(int(c.Width), dx), ceilDivInt(int(c.Height), dy)
 }
 
 // Decode decodes a whole codestream to samples.
@@ -42,24 +75,57 @@ func Decode(c *Codestream) (*Image, error) {
 	width := int(c.Width) - int(c.XOffset)
 	height := int(c.Height) - int(c.YOffset)
 
+	// Every tile's packets first, and the image only after them. What the
+	// packets cost is held to the bytes that carry them (ReadTilePackets);
+	// the image and the coefficients are sized by the header, and are not
+	// allocated until every tile has shown the data the header promised.
+	tiles := make([]*TileData, c.NumTiles())
+	for tile, bytes := range c.tileData() {
+		data, err := c.readTilePackets(tile, bytes)
+		if err != nil {
+			return nil, err
+		}
+		tiles[tile] = data
+	}
+
 	img := &Image{Width: width, Height: height}
+	subsampled := false
 	for _, comp := range c.Components {
-		img.Components = append(img.Components, make([]int32, width*height))
+		subsampled = subsampled || comp.DX != 1 || comp.DY != 1
+	}
+	for i, comp := range c.Components {
+		w, h := width, height
+		if subsampled {
+			x0, y0, x1, y1 := c.componentBounds(i)
+			w, h = x1-x0, y1-y0
+			img.ComponentWidths = append(img.ComponentWidths, w)
+			img.ComponentHeights = append(img.ComponentHeights, h)
+		}
+		img.Components = append(img.Components, make([]int32, w*h))
 		img.Depths = append(img.Depths, comp.Depth)
 		img.Signed = append(img.Signed, comp.Signed)
 	}
 
-	for tile := 0; tile < c.NumTiles(); tile++ {
-		if err := c.decodeTile(tile, img); err != nil {
+	for tile, data := range tiles {
+		if err := c.decodeTile(tile, data, img); err != nil {
 			return nil, err
 		}
+		tiles[tile] = nil // its coefficients are in the image now
 	}
 	return img, nil
 }
 
+// maxImageSamples is the most samples Decode returns, counted over every
+// component: 1 GiB of int32 planes. A side is held to 2^16 as well.
+const maxImageSamples = 1 << 28
+
 // checkImageSize refuses an image too large to decode. The parser applies it
 // as well as Decode, because the packet reader sizes its precincts from the
 // same dimensions.
+//
+// The samples are counted over every component, since each is a plane of its
+// own. A SIZ costs three bytes a component and may declare 16384, so a limit
+// on one plane let a header of 50 KB ask for 16384 of them.
 func checkImageSize(c *Codestream) error {
 	width := int(c.Width) - int(c.XOffset)
 	height := int(c.Height) - int(c.YOffset)
@@ -67,19 +133,20 @@ func checkImageSize(c *Codestream) error {
 		return errorf("an image of %dx%d samples", width, height)
 	}
 	// The product in 64 bits: 65536 squared is 0 in a 32-bit int (#258).
-	if width > 1<<16 || height > 1<<16 || int64(width)*int64(height) > 1<<28 {
+	if width > 1<<16 || height > 1<<16 || int64(width)*int64(height) > maxImageSamples {
 		return errorf("an image of %dx%d samples is larger than this decoder accepts",
 			width, height)
+	}
+	if n := int64(len(c.Components)); n > 1 && int64(width)*int64(height)*n > maxImageSamples {
+		return errorf("an image of %dx%d samples in %d components is larger than this decoder accepts",
+			width, height, n)
 	}
 	return nil
 }
 
-// decodeTile decodes one tile and writes its samples into the image.
-func (c *Codestream) decodeTile(tile int, img *Image) error {
-	data, err := c.ReadTilePackets(tile)
-	if err != nil {
-		return err
-	}
+// decodeTile decodes one tile from its packets and writes its samples into the
+// image.
+func (c *Codestream) decodeTile(tile int, data *TileData, img *Image) error {
 
 	planes := make([][]float32, len(c.Components))
 	for comp := range c.Components {
@@ -116,18 +183,22 @@ func (c *Codestream) decodeTile(tile int, img *Image) error {
 		}
 		lo, hi := sampleRange(c.Components[comp])
 
+		// The tile-component is on the component's own grid, and so is its
+		// plane, which starts where the image does on that grid (B.2).
+		ox, oy, _, _ := c.componentBounds(comp)
+		pw, ph := img.ComponentSize(comp)
 		for y := tc.Y0; y < tc.Y1; y++ {
-			row := y - int(c.YOffset)
-			if row < 0 || row >= img.Height {
+			row := y - oy
+			if row < 0 || row >= ph {
 				continue
 			}
 			for x := tc.X0; x < tc.X1; x++ {
-				col := x - int(c.XOffset)
-				if col < 0 || col >= img.Width {
+				col := x - ox
+				if col < 0 || col >= pw {
 					continue
 				}
 				v := int32(roundSample(plane[(y-tc.Y0)*tc.Width()+(x-tc.X0)])) + shift
-				img.Components[comp][row*img.Width+col] = clampInt32(v, lo, hi)
+				img.Components[comp][row*pw+col] = clampInt32(v, lo, hi)
 			}
 		}
 	}
@@ -151,10 +222,11 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 		}
 	}
 
-	var mine []CodeBlockData
-	for _, block := range blocks {
-		if block.Component == comp {
-			mine = append(mine, block)
+	// Pointers, not copies: a tile can hold thousands of small blocks.
+	var mine []*CodeBlockData
+	for i := range blocks {
+		if blocks[i].Component == comp {
+			mine = append(mine, &blocks[i])
 		}
 	}
 
@@ -164,13 +236,14 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 	// read back in block order, so the result does not depend on scheduling.
 	errs := make([]error, len(mine))
 	next := make(chan int)
+	roiShift := c.ROIShiftForTile(tile, comp)
 	var wg sync.WaitGroup
 	for w := 0; w < min(runtime.GOMAXPROCS(0), len(mine)); w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range next {
-				errs[i] = c.decodeBlockInto(bands, tc, quant, style, comp, mine[i])
+				errs[i] = c.decodeBlockInto(bands, tc, quant, style, comp, roiShift, mine[i])
 			}
 		}()
 	}
@@ -188,9 +261,10 @@ func (c *Codestream) subbandsOf(tile, comp int, tc TileComponent, quant Quantiza
 }
 
 // decodeBlockInto decodes one code-block and writes its dequantized
-// coefficients into the band it belongs to.
+// coefficients into the band it belongs to. roiShift is the component's
+// region-of-interest shift, 0 when it has none.
 func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc TileComponent,
-	quant Quantization, style CodingStyle, comp int, block CodeBlockData) error {
+	quant Quantization, style CodingStyle, comp, roiShift int, block *CodeBlockData) error {
 
 	if block.Resolution >= len(tc.Resolutions) {
 		return errorf("a code-block at resolution %d of %d", block.Resolution, len(tc.Resolutions))
@@ -207,9 +281,17 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 	if err != nil {
 		return err
 	}
-	coefficients, err := DecodeBlock(block, magnitudeBits)
+	if block.Style&BlockStyleHT != 0 && roiShift > 0 {
+		// T.814 allows it (A.5, 8.4) and nothing here can check it: no
+		// codestream available has one, and OpenJPEG refuses it.
+		return &ErrUnsupported{Feature: "a region of interest in HT code-blocks"}
+	}
+	coefficients, err := DecodeBlock(*block, magnitudeBits+roiShift)
 	if err != nil {
 		return err
+	}
+	if roiShift > 0 {
+		descaleRegionOfInterest(coefficients, roiShift)
 	}
 	step, err := stepSize(quant, band, block.Resolution, style.Levels, c.Components[comp].Depth)
 	if err != nil {
@@ -239,6 +321,31 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 		}
 	}
 	return nil
+}
+
+// descaleRegionOfInterest undoes the Maxshift scaling (Annex H.1): the
+// encoder raised the region's coefficients by s bit planes, past every
+// coefficient of the background, so any coefficient of magnitude 2^s or more
+// is in the region and is scaled back down, and the rest are background and
+// stay as they are. The band's bit planes were counted s higher to read them
+// (decodeBlockInto), which is the other half of the method.
+//
+// The values are in halves (DecodeBlock), so the threshold is 2^(s+1) of
+// them; shifting a value in halves right by s keeps it in halves.
+func descaleRegionOfInterest(values []int32, shift int) {
+	if shift >= 31 {
+		// Nothing a block can hold reaches the threshold: all background.
+		return
+	}
+	threshold := int32(1) << uint(shift+1)
+	for i, v := range values {
+		switch {
+		case v >= threshold:
+			values[i] = v >> uint(shift)
+		case v <= -threshold:
+			values[i] = -((-v) >> uint(shift))
+		}
+	}
 }
 
 // scaleCoefficient turns one code-block value, which is in halves, into the

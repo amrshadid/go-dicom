@@ -1,4 +1,7 @@
-// Package jpeg2000 decodes JPEG 2000 Part 1 codestreams in pure Go.
+// Package jpeg2000 decodes JPEG 2000 Part 1 codestreams in pure Go, and
+// encodes them: losslessly with Encode, and lossy with EncodeLossy. It also
+// decodes High-Throughput JPEG 2000 (Part 15, ITU-T T.814), whose code-blocks
+// are coded by the HT block coder and which it does not encode.
 //
 // DICOM carries JPEG 2000 in two transfer syntaxes, 1.2.840.10008.1.2.4.90
 // (lossless) and .91 (lossy), and this library bundled no decoder for either:
@@ -12,16 +15,53 @@
 // decoder that quietly mis-decodes is worse than none: the image looks
 // plausible while the numbers are wrong, and in an RT Dose a wrong number is a
 // wrong dose.
+//
+// # What a codestream may cost
+//
+// A codestream comes from a file or a peer nobody vouches for, and every size
+// in it is the sender's word. The rule the decoder keeps is this: anything it
+// allocates is in proportion to bytes the codestream actually holds, or to the
+// image's dimensions, and those are first held to a stated limit and to the
+// data that follows them.
+//
+//   - Lengths, counts and lists read from a segment (components, quantization
+//     values, progression order changes, tile-parts) are checked against the
+//     bytes that remain before anything is made from them.
+//   - The image is at most 2^16 samples on a side and 2^28 samples in all,
+//     counted over every component: 1 GiB of decoded planes. Within that, a
+//     tile must hold at least as many bytes as it has precincts, since each
+//     precinct has a packet of at least one byte in every layer (B.9,
+//     B.10.3); a resolution without samples counts as one.
+//   - What the packet headers describe costs what they hold. Code-blocks are
+//     not listed but found by arithmetic; a block has state only once a
+//     packet includes it; and the blocks a tag tree answers for together are
+//     stepped over together, so the work of reading a header follows its bits
+//     and not the number of blocks in its precinct. A tile that takes more
+//     than 64 steps a byte (no real file takes 3) is refused.
+//   - Nothing sized by the image (the planes, the coefficients of a tile) is
+//     made until every tile's packets have been read.
+//
+// The second rule does not make a small codestream a small image. JPEG 2000
+// can describe a large image in very few bytes, and honestly: opj_compress
+// writes a black image of 16384 by 16384 samples in 938 bytes. Such a
+// codestream decodes, at the cost of the image it describes: under 16 bytes a
+// sample allocated in all, four of them the decoded planes and the rest the
+// coefficients of a tile while it is rebuilt. A caller that knows the size it
+// expects, as a DICOM reader knows Rows and Columns, can compare it with the
+// header ParseCodestream returns before calling Decode. The data set's pixel
+// path does (compress.FrameHeaderReader).
 package jpeg2000
 
 import (
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 )
 
 // Markers delimit the segments of a codestream (PS 15444-1 Annex A).
 const (
 	markerSOC = 0xFF4F // start of codestream
+	markerCAP = 0xFF50 // extended capabilities (Part 1 A.5.2, Part 15 A.3)
 	markerSIZ = 0xFF51 // image and tile size
 	markerCOD = 0xFF52 // coding style default
 	markerCOC = 0xFF53 // coding style component
@@ -35,22 +75,40 @@ const (
 	markerPPM = 0xFF60 // packed packet headers, main header
 	markerPPT = 0xFF61 // packed packet headers, tile-part header
 	markerCRG = 0xFF63 // component registration
+	markerCPF = 0xFF59 // corresponding profile (Part 15 A.6)
 	markerCOM = 0xFF64 // comment
 	markerSOT = 0xFF90 // start of tile-part
 	markerSOD = 0xFF93 // start of data
 	markerEOC = 0xFFD9 // end of codestream
 )
 
-// Progression orders (Annex A.6.1). Only the two the corpus uses are decoded.
+// Progression orders (Annex A.6.1, Table A.16): the order the packets of a
+// tile are written in, named by its loops from the outermost in (B.12.1).
 const (
 	ProgressionLRCP = 0 // layer, resolution, component, position
 	ProgressionRLCP = 1 // resolution, layer, component, position
+	ProgressionRPCL = 2 // resolution, position, component, layer
+	ProgressionPCRL = 3 // position, component, resolution, layer
+	ProgressionCPRL = 4 // component, position, resolution, layer
 )
 
 // Wavelet transforms (Annex A.6.1, SPcod transformation).
 const (
 	Wavelet97Irreversible = 0
 	Wavelet53Reversible   = 1
+)
+
+// Code-block style bits (Annex A.6.1, Table A.19). Each changes how tier-1
+// reads a code-block (D.5 to D.7), and bypass and termination also change how
+// a packet header gives the block's lengths (B.10.7.2). Any combination may
+// be set.
+const (
+	BlockStyleBypass       = 0x01 // selective arithmetic coding bypass
+	BlockStyleReset        = 0x02 // reset context probabilities after each pass
+	BlockStyleTermAll      = 0x04 // termination on each coding pass
+	BlockStyleVertical     = 0x08 // vertically causal context
+	BlockStylePredictable  = 0x10 // predictable termination
+	BlockStyleSegmentation = 0x20 // segmentation symbols
 )
 
 // Quantization styles (Annex A.6.4, Sqcd low five bits).
@@ -66,8 +124,10 @@ type Component struct {
 	Signed bool
 	// Depth is the bit depth, 1 to 38 in the standard and at most 16 here.
 	Depth int
-	// DX and DY are the sample separations. Anything but 1 is subsampling,
-	// which this decoder refuses rather than resample.
+	// DX and DY are the sample separations on the reference grid, XRsiz
+	// and YRsiz (A.5.1): a component with a separation of 2 has a sample at
+	// every other point of the grid, so its plane is half the image's size
+	// in that direction (B.2). 1 is no subsampling.
 	DX, DY int
 }
 
@@ -79,10 +139,33 @@ type CodingStyle struct {
 	Levels         int  // decomposition levels
 	CodeBlockWidth int
 	CodeBlockHt    int
-	BlockStyle     byte // Annex A.6.1 SPcod code-block style; only 0 is decoded
+	BlockStyle     byte // Annex A.6.1 SPcod code-block style: the BlockStyle bits
 	Wavelet        int
-	UsePrecincts   bool
-	SOP, EPH       bool
+	// UsePrecincts says the style declares its own precinct sizes, one per
+	// resolution in Precincts. Without it every precinct is 2^15 on a side,
+	// which in practice is one precinct per resolution (A.6.1).
+	UsePrecincts bool
+	Precincts    []PrecinctSize
+	SOP, EPH     bool
+}
+
+// PrecinctSize is one resolution's precinct size as powers of two (A.6.1,
+// Table A.21): a precinct is 2^PPx samples wide and 2^PPy high on the
+// resolution's grid.
+type PrecinctSize struct {
+	PPx, PPy int
+}
+
+// defaultPrecinct is the exponent of a precinct when the coding style
+// declares none (A.6.1).
+const defaultPrecinct = 15
+
+// PrecinctFor returns the precinct size in force at a resolution.
+func (s CodingStyle) PrecinctFor(resolution int) PrecinctSize {
+	if !s.UsePrecincts || resolution < 0 || resolution >= len(s.Precincts) {
+		return PrecinctSize{PPx: defaultPrecinct, PPy: defaultPrecinct}
+	}
+	return s.Precincts[resolution]
 }
 
 // Quantization is a QCD segment, or a QCC override for one component.
@@ -128,7 +211,57 @@ type Codestream struct {
 	TileQuant           map[int]Quantization
 	TileComponentQuant  map[TileComponentKey]Quantization
 
+	// ROIShift is the Maxshift value s of a component's region of interest,
+	// from an RGN segment in the main header, and TileROIShift a tile's own
+	// (A.6.3, Annex H). A component without one has no region of interest.
+	ROIShift     map[int]int
+	TileROIShift map[TileComponentKey]int
+
+	// ProgressionChanges are the POC segment's volumes from the main header,
+	// and TileProgressionChanges a tile's own from its tile-part headers
+	// (A.6.6). Either replaces the coding style's single progression.
+	ProgressionChanges     []ProgressionChange
+	TileProgressionChanges map[int][]ProgressionChange
+
+	// HTCapabilities is Ccap15, the CAP segment's word for Part 15 (T.814
+	// Table A.2), and HasHTCapabilities says the segment declared Part 15. A
+	// codestream with HT code-blocks must declare it; the word itself states
+	// constraints on the codestream that a decoder may use and need not.
+	HTCapabilities    uint16
+	HasHTCapabilities bool
+
 	TileParts []TilePart
+}
+
+// ProgressionChange is one entry of a POC segment (A.6.6, B.12.2): a volume
+// of a tile's packets, written in its own progression order. It holds the
+// resolutions from ResolutionStart up to but not including ResolutionEnd, the
+// components likewise, and the layers below LayerEnd, less any packet a
+// volume before it already holds.
+type ProgressionChange struct {
+	ResolutionStart, ResolutionEnd int
+	ComponentStart, ComponentEnd   int
+	LayerEnd                       int
+	Progression                    int
+}
+
+// ProgressionChangesForTile returns the progression order changes in force
+// for a tile: its own, then the main header's. None means the coding style's
+// progression orders the whole tile.
+func (c *Codestream) ProgressionChangesForTile(tile int) []ProgressionChange {
+	if changes, ok := c.TileProgressionChanges[tile]; ok {
+		return changes
+	}
+	return c.ProgressionChanges
+}
+
+// ROIShiftForTile returns the region-of-interest shift in force for a
+// component of a tile: the tile's own RGN, then the main header's, then 0.
+func (c *Codestream) ROIShiftForTile(tile, component int) int {
+	if s, ok := c.TileROIShift[TileComponentKey{Tile: tile, Component: component}]; ok {
+		return s
+	}
+	return c.ROIShift[component]
 }
 
 // TileComponentKey names one component of one tile, for the override maps.
@@ -232,6 +365,10 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		TileComponentCoding: map[TileComponentKey]CodingStyle{},
 		TileQuant:           map[int]Quantization{},
 		TileComponentQuant:  map[TileComponentKey]Quantization{},
+		ROIShift:            map[int]int{},
+		TileROIShift:        map[TileComponentKey]int{},
+
+		TileProgressionChanges: map[int][]ProgressionChange{},
 	}
 	pos := 2
 	seenSIZ, seenCOD, seenQCD := false, false, false
@@ -274,6 +411,8 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		case markerSIZ:
 			err = parseSIZ(c, segment)
 			seenSIZ = true
+		case markerCAP:
+			err = parseCAP(c, segment)
 		case markerCOD:
 			c.Coding, err = parseCOD(segment)
 			seenCOD = true
@@ -284,16 +423,23 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 			seenQCD = true
 		case markerQCC:
 			err = parseQCC(c, segment)
-		case markerCOM, markerTLM, markerPLM, markerPLT, markerCRG:
+		case markerCOM, markerTLM, markerPLM, markerPLT, markerCRG, markerCPF:
 			// Comments and length indexes say nothing about how to decode;
 			// skipping them is what the standard expects of a reader that does
-			// not use them.
+			// not use them. CPF names the Part 1 profile an HTJ2K codestream
+			// can be transcoded back to, which decoding does not need either.
 		case markerPPM, markerPPT:
 			err = &ErrUnsupported{Feature: "packed packet headers (PPM/PPT)"}
 		case markerPOC:
-			err = &ErrUnsupported{Feature: "progression order change (POC)"}
+			var changes []ProgressionChange
+			if changes, err = parsePOC(c, segment); err == nil {
+				c.ProgressionChanges = append(c.ProgressionChanges, changes...)
+			}
 		case markerRGN:
-			err = &ErrUnsupported{Feature: "region of interest (RGN)"}
+			var index, shift int
+			if index, shift, err = parseRGN(c, segment); err == nil {
+				c.ROIShift[index] = shift
+			}
 		default:
 			err = fmt.Errorf("jpeg2000: unexpected marker %04X at offset %d", marker, pos-2)
 		}
@@ -317,9 +463,20 @@ func codestreamFromJP2(data []byte) ([]byte, error) {
 		length := int(be32(data[pos:]))
 		boxType := be32(data[pos+4:])
 		body := pos + 8
+		if length == 1 {
+			// I.4: the length is in the eight bytes after the type, XLBox, and
+			// counts them. It is compared before it is converted, since a
+			// 64-bit value does not fit an int everywhere this builds.
+			if pos+16 > len(data) {
+				return nil, fmt.Errorf("jpeg2000: JP2 box with a 64-bit length stops in its header")
+			}
+			xl := binary.BigEndian.Uint64(data[pos+8:])
+			if xl < 16 || xl > uint64(len(data)-pos) {
+				return nil, fmt.Errorf("jpeg2000: JP2 box declares %d bytes, %d remain", xl, len(data)-pos)
+			}
+			length, body = int(xl), pos+16
+		}
 		switch {
-		case length == 1:
-			return nil, &ErrUnsupported{Feature: "JP2 box with a 64-bit length"}
 		case length == 0:
 			length = len(data) - pos // to the end of the file
 		case length < 8 || pos+length > len(data):
@@ -332,6 +489,32 @@ func codestreamFromJP2(data []byte) ([]byte, error) {
 		pos += length
 	}
 	return nil, fmt.Errorf("jpeg2000: JP2 container holds no codestream box")
+}
+
+// parseCAP reads a CAP segment (Part 1 A.5.2): Pcap, a bit for each part of
+// ISO/IEC 15444 whose capabilities the codestream uses, the most significant
+// bit being Part 1, and a 16-bit Ccap word for each bit set, in order.
+//
+// Part 15 is the only part this decoder has. A codestream that needs another
+// part's capabilities is refused by name: decoding it as if they were not
+// there would quietly produce the wrong samples.
+func parseCAP(c *Codestream, s []byte) error {
+	if len(s) < 4 {
+		return fmt.Errorf("jpeg2000: CAP is %d bytes, want at least 4", len(s))
+	}
+	pcap := be32(s)
+	if words := bits.OnesCount32(pcap); len(s) != 4+2*words {
+		return fmt.Errorf("jpeg2000: CAP declares %d capability words in %d bytes", words, len(s))
+	}
+	const part15 = 1 << (32 - 15) // Pcap15, the 15th most significant bit (T.814 A.3.1)
+	if other := pcap &^ part15; other != 0 {
+		return &ErrUnsupported{Feature: fmt.Sprintf("the capabilities of Part %d", bits.LeadingZeros32(other)+1)}
+	}
+	if pcap&part15 != 0 {
+		c.HTCapabilities = uint16(be16(s[4:]))
+		c.HasHTCapabilities = true
+	}
+	return nil
 }
 
 func parseSIZ(c *Codestream, s []byte) error {
@@ -390,12 +573,15 @@ func parseSIZ(c *Codestream, s []byte) error {
 		if comp.Depth > 16 {
 			return &ErrUnsupported{Feature: fmt.Sprintf("%d-bit components", comp.Depth)}
 		}
-		if comp.DX != 1 || comp.DY != 1 {
-			return &ErrUnsupported{Feature: "component subsampling"}
+		if comp.DX == 0 || comp.DY == 0 {
+			// A.5.1: XRsiz and YRsiz are 1 to 255; a separation of 0 would
+			// divide every coordinate of the component by zero.
+			return fmt.Errorf("jpeg2000: SIZ gives component %d a separation of %dx%d", i, comp.DX, comp.DY)
 		}
 		c.Components[i] = comp
 	}
-	return nil
+	// Again with the components, which the limit counts.
+	return checkImageSize(c)
 }
 
 func parseCOD(s []byte) (CodingStyle, error) {
@@ -417,7 +603,7 @@ func parseCOD(s []byte) (CodingStyle, error) {
 	if style.Layers == 0 {
 		return CodingStyle{}, fmt.Errorf("jpeg2000: COD declares zero layers")
 	}
-	if style.Progression != ProgressionLRCP && style.Progression != ProgressionRLCP {
+	if style.Progression < ProgressionLRCP || style.Progression > ProgressionCPRL {
 		return CodingStyle{}, &ErrUnsupported{
 			Feature: fmt.Sprintf("progression order %d", style.Progression)}
 	}
@@ -467,6 +653,79 @@ func parseTileCOC(c *Codestream, tile int, s []byte) error {
 	return nil
 }
 
+// parseRGN reads an RGN segment (A.6.3): the component it applies to, and the
+// shift of its region of interest.
+//
+// Part 1 defines one method, Maxshift (Annex H, Srgn 0). The encoder scales
+// the region's coefficients up by 2^s, past every coefficient of the
+// background, and says nothing else about where the region is: the decoder
+// finds it again by magnitude. Any other Srgn is Part 2's and is refused by
+// name.
+func parseRGN(c *Codestream, s []byte) (index, shift int, err error) {
+	if len(c.Components) == 0 {
+		return 0, 0, fmt.Errorf("jpeg2000: RGN before SIZ")
+	}
+	index, rest, err := componentIndex(c, s)
+	if err != nil {
+		return 0, 0, err
+	}
+	if index >= len(c.Components) {
+		return 0, 0, fmt.Errorf("jpeg2000: RGN for component %d of %d", index, len(c.Components))
+	}
+	if len(rest) < 2 {
+		return 0, 0, fmt.Errorf("jpeg2000: RGN is too short")
+	}
+	if rest[0] != 0 {
+		return 0, 0, &ErrUnsupported{Feature: fmt.Sprintf("region of interest style %d", rest[0])}
+	}
+	return index, int(rest[1]), nil
+}
+
+// parsePOC reads a POC segment's volumes (A.6.6): for each, the first
+// resolution and component, the layer, resolution and component it ends
+// before, and its progression order. Components are named in one byte below
+// 257 components and in two above, and an end of 0 in one byte means 256.
+func parsePOC(c *Codestream, s []byte) ([]ProgressionChange, error) {
+	if len(c.Components) == 0 {
+		return nil, fmt.Errorf("jpeg2000: POC before SIZ")
+	}
+	wide := len(c.Components) >= 257
+	size := 7
+	if wide {
+		size = 9
+	}
+	if len(s) == 0 || len(s)%size != 0 {
+		return nil, fmt.Errorf("jpeg2000: POC of %d bytes is not a whole number of %d-byte entries", len(s), size)
+	}
+	changes := make([]ProgressionChange, 0, len(s)/size)
+	for ; len(s) > 0; s = s[size:] {
+		var change ProgressionChange
+		change.ResolutionStart = int(s[0])
+		rest := s[1:]
+		if wide {
+			change.ComponentStart, rest = be16(rest), rest[2:]
+		} else {
+			change.ComponentStart, rest = int(rest[0]), rest[1:]
+		}
+		change.LayerEnd, rest = be16(rest), rest[2:]
+		change.ResolutionEnd, rest = int(rest[0]), rest[1:]
+		if wide {
+			change.ComponentEnd, rest = be16(rest), rest[2:]
+		} else {
+			change.ComponentEnd, rest = int(rest[0]), rest[1:]
+			if change.ComponentEnd == 0 {
+				change.ComponentEnd = 256
+			}
+		}
+		change.Progression = int(rest[0])
+		if change.Progression > ProgressionCPRL {
+			return nil, &ErrUnsupported{Feature: fmt.Sprintf("progression order %d", change.Progression)}
+		}
+		changes = append(changes, change)
+	}
+	return changes, nil
+}
+
 // parseTileQCC records quantization for one component of one tile.
 func parseTileQCC(c *Codestream, tile int, s []byte) error {
 	index, rest, err := componentIndex(c, s)
@@ -481,8 +740,9 @@ func parseTileQCC(c *Codestream, tile int, s []byte) error {
 	return nil
 }
 
-// parseCodingParameters reads SPcod/SPcoc: levels, code-block size, style and
-// wavelet, which COD and COC share.
+// parseCodingParameters reads SPcod/SPcoc: levels, code-block size, style,
+// wavelet and, when style.UsePrecincts is set, the precinct sizes, which COD
+// and COC share.
 func parseCodingParameters(style *CodingStyle, s []byte) error {
 	if len(s) < 5 {
 		return fmt.Errorf("jpeg2000: coding parameters are %d bytes, want 5", len(s))
@@ -493,22 +753,54 @@ func parseCodingParameters(style *CodingStyle, s []byte) error {
 	style.BlockStyle = s[3]
 	style.Wavelet = int(s[4])
 
+	// A COC that inherits a COD's style also inherits its precincts unless it
+	// says otherwise, and a COC without precincts says otherwise: its own flag
+	// is the whole answer, so the inherited list is dropped first.
+	style.Precincts = nil
+	if style.UsePrecincts && style.Levels <= 32 {
+		// Table A.21: one byte per resolution, lowest first, the width's
+		// exponent in the low four bits and the height's in the high four.
+		resolutions := style.Levels + 1
+		if len(s) < 5+resolutions {
+			return fmt.Errorf("jpeg2000: coding parameters declare precincts for %d resolutions and hold %d",
+				resolutions, len(s)-5)
+		}
+		style.Precincts = make([]PrecinctSize, resolutions)
+		for r := range style.Precincts {
+			size := PrecinctSize{PPx: int(s[5+r] & 0x0F), PPy: int(s[5+r] >> 4)}
+			// A.6.1: a size of 1 is allowed only at the lowest resolution. Above
+			// it the precinct is halved on its way into the subbands (B.6), and
+			// half of one sample is not a precinct.
+			if r > 0 && (size.PPx == 0 || size.PPy == 0) {
+				return fmt.Errorf("jpeg2000: a precinct of 2^%d by 2^%d at resolution %d",
+					size.PPx, size.PPy, r)
+			}
+			style.Precincts[r] = size
+		}
+	}
+
 	switch {
 	case style.Levels > 32:
 		return fmt.Errorf("jpeg2000: %d decomposition levels", style.Levels)
 	case style.CodeBlockWidth*style.CodeBlockHt > 4096:
 		return fmt.Errorf("jpeg2000: code-block %dx%d exceeds 4096 samples",
 			style.CodeBlockWidth, style.CodeBlockHt)
-	case style.BlockStyle != 0:
-		// Selective arithmetic bypass, termination on each pass, vertically
-		// causal context, predictable termination, segmentation symbols. Each
-		// changes how tier-1 reads a block, and none appears in the corpus.
+	case style.BlockStyle&blockStyleHTMixed != 0:
+		// The six low bits are Part 1's and bit 6 is Part 15's High-Throughput
+		// block coder. Bit 7 alone is reserved; with bit 6 it lets HT and Part
+		// 1 code-blocks mix within a tile-component, told apart only by trying
+		// to decode a block as one and falling back to the other (T.814 A.4).
+		// No codestream to check that against exists here, and OpenJPEG does
+		// not decode it either.
+		return &ErrUnsupported{
+			Feature: fmt.Sprintf("code-block style 0x%02X", style.BlockStyle)}
+	case style.BlockStyle&BlockStyleHT != 0 && style.BlockStyle&^(BlockStyleHT|BlockStyleVertical) != 0:
+		// T.814 Table A.3: beside bit 6, only the vertically causal bit has a
+		// meaning, and the rest are reserved.
 		return &ErrUnsupported{
 			Feature: fmt.Sprintf("code-block style 0x%02X", style.BlockStyle)}
 	case style.Wavelet != Wavelet53Reversible && style.Wavelet != Wavelet97Irreversible:
 		return &ErrUnsupported{Feature: fmt.Sprintf("wavelet transform %d", style.Wavelet)}
-	case style.UsePrecincts:
-		return &ErrUnsupported{Feature: "user-defined precinct sizes"}
 	}
 	return nil
 }
@@ -650,8 +942,20 @@ func parseTilePart(c *Codestream, data []byte, pos int) (int, error) {
 			}
 		case markerQCC:
 			err = parseTileQCC(c, tile, segment)
+		case markerRGN:
+			var index, shift int
+			if index, shift, err = parseRGN(c, segment); err == nil {
+				c.TileROIShift[TileComponentKey{Tile: tile, Component: index}] = shift
+			}
 		case markerPPT:
 			err = &ErrUnsupported{Feature: "packed packet headers (PPT)"}
+		case markerPOC:
+			// A tile's progression may continue in its later tile-parts, each
+			// adding volumes after those before it (A.6.6).
+			var changes []ProgressionChange
+			if changes, err = parsePOC(c, segment); err == nil {
+				c.TileProgressionChanges[tile] = append(c.TileProgressionChanges[tile], changes...)
+			}
 		case markerCOM, markerPLT:
 			// Nothing to decode.
 		default:
@@ -695,11 +999,39 @@ func validate(c *Codestream, seenSIZ, seenCOD, seenQCD bool) error {
 	case len(c.TileParts) == 0:
 		return fmt.Errorf("jpeg2000: codestream has no tile-parts")
 	}
+	if usesHT(c) && !c.HasHTCapabilities {
+		// T.814 A.3.1: an HTJ2K codestream declares Part 15 in a CAP segment.
+		return fmt.Errorf("jpeg2000: HT code-blocks in a codestream whose CAP segment does not declare Part 15")
+	}
 	if c.Coding.MCT && len(c.Components) < 3 {
 		return fmt.Errorf("jpeg2000: the multiple component transform needs three components, not %d",
 			len(c.Components))
 	}
 	return nil
+}
+
+// usesHT reports whether any coding style of the codestream, in the main
+// header or a tile-part header, codes its blocks with the HT block coder.
+func usesHT(c *Codestream) bool {
+	if c.Coding.BlockStyle&BlockStyleHT != 0 {
+		return true
+	}
+	for _, style := range c.ComponentCoding {
+		if style.BlockStyle&BlockStyleHT != 0 {
+			return true
+		}
+	}
+	for _, style := range c.TileCoding {
+		if style.BlockStyle&BlockStyleHT != 0 {
+			return true
+		}
+	}
+	for _, style := range c.TileComponentCoding {
+		if style.BlockStyle&BlockStyleHT != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // errorf builds a package error with the package's prefix.

@@ -40,6 +40,13 @@ const (
 	JPEGLSNearLossless      = "1.2.840.10008.1.2.4.81"
 	JPEG2000Lossless        = "1.2.840.10008.1.2.4.90"
 	JPEG2000Lossy           = "1.2.840.10008.1.2.4.91"
+	// The three High-Throughput JPEG 2000 syntaxes (ISO/IEC 15444-15): lossless,
+	// lossless in RPCL order, and lossless or lossy. They
+	// carry JPEG 2000 codestreams whose code-blocks may be HT ones, so they
+	// decode through the same decoder as .90 and .91.
+	HTJ2KLossless     = "1.2.840.10008.1.2.4.201"
+	HTJ2KLosslessRPCL = "1.2.840.10008.1.2.4.202"
+	HTJ2K             = "1.2.840.10008.1.2.4.203"
 )
 
 // ========================================================================
@@ -59,7 +66,7 @@ func TransferSyntaxToCompressionType(uid string) (CompressionType, error) {
 		return JPEG_LOSSLESS, nil
 	case JPEGLSLossless, JPEGLSNearLossless:
 		return JPEG_LS, nil
-	case JPEG2000Lossless, JPEG2000Lossy:
+	case JPEG2000Lossless, JPEG2000Lossy, HTJ2KLossless, HTJ2KLosslessRPCL, HTJ2K:
 		return JPEG_2000, nil
 	case DeflatedExplicitVRLittleEnd:
 		return DEFLATE, nil
@@ -118,7 +125,7 @@ func GetCompressionType(uid string) CompressionType {
 		return JPEG_LOSSLESS
 	case JPEGLSLossless, JPEGLSNearLossless:
 		return JPEG_LS
-	case JPEG2000Lossless, JPEG2000Lossy:
+	case JPEG2000Lossless, JPEG2000Lossy, HTJ2KLossless, HTJ2KLosslessRPCL, HTJ2K:
 		return JPEG_2000
 	case DeflatedExplicitVRLittleEnd:
 		return DEFLATE

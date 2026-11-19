@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/amrshadid/go-dicom/charset"
+	fileparse "github.com/amrshadid/go-dicom/internal/filereader"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -14,7 +15,7 @@ const SpecificCharacterSetTag = tag.Tag(0x00080005)
 
 // GetCharacterSet extracts the CharacterSet from the DICOM file data elements.
 func (df *DICOMFile) GetCharacterSet() *charset.CharacterSet {
-	return df.GetCharacterSetWithContext(context.Background())
+	return df.GetCharacterSetWithContext(df.context())
 }
 
 // GetCharacterSetWithContext extracts the CharacterSet with context support.
@@ -26,7 +27,7 @@ func (df *DICOMFile) GetCharacterSetWithContext(ctx context.Context) *charset.Ch
 				return nil
 			}
 
-			values := parseSpecificCharacterSetValue(valueStr)
+			values := fileparse.ParseSpecificCharacterSet(valueStr)
 
 			cs, err := charset.NewCharacterSetWithContext(ctx, values)
 			if err != nil {
@@ -44,7 +45,7 @@ func (df *DICOMFile) GetCharacterSetWithContext(ctx context.Context) *charset.Ch
 // This method is for single-byte text VRs (LO, LT, SH, ST, UC, UT).
 // For PersonName (PN) VR, use DecodePersonName instead.
 func (df *DICOMFile) DecodeTextValue(elem *DataElementValue) (string, error) {
-	return df.DecodeTextValueWithContext(context.Background(), elem)
+	return df.DecodeTextValueWithContext(df.context(), elem)
 }
 
 // DecodeTextValueWithContext decodes a text value with context support.
@@ -75,7 +76,7 @@ func (df *DICOMFile) DecodeTextValueWithContext(ctx context.Context, elem *DataE
 
 // DecodePersonName decodes a PersonName value from a data element using the file's character set.
 func (df *DICOMFile) DecodePersonName(elem *DataElementValue) (*charset.PersonName, error) {
-	return df.DecodePersonNameWithContext(context.Background(), elem)
+	return df.DecodePersonNameWithContext(df.context(), elem)
 }
 
 // DecodePersonNameWithContext decodes a PersonName with context support.
@@ -162,7 +163,7 @@ func (df *DICOMFile) DecodeAllPersonNamesWithContext(ctx context.Context) map[ta
 
 // GetTextValueByTag is a convenience method to get a decoded text value by tag.
 func (df *DICOMFile) GetTextValueByTag(t tag.Tag) (string, error) {
-	return df.GetTextValueByTagWithContext(context.Background(), t)
+	return df.GetTextValueByTagWithContext(df.context(), t)
 }
 
 // GetTextValueByTagWithContext gets a text value by tag with context support.
@@ -178,7 +179,7 @@ func (df *DICOMFile) GetTextValueByTagWithContext(ctx context.Context, t tag.Tag
 
 // GetPersonNameByTag is a convenience method to get a decoded PersonName by tag.
 func (df *DICOMFile) GetPersonNameByTag(t tag.Tag) (*charset.PersonName, error) {
-	return df.GetPersonNameByTagWithContext(context.Background(), t)
+	return df.GetPersonNameByTagWithContext(df.context(), t)
 }
 
 // GetPersonNameByTagWithContext gets a PersonName by tag with context support.
@@ -201,22 +202,4 @@ func isTextVR(vr string) bool {
 	default:
 		return false
 	}
-}
-
-// parseSpecificCharacterSetValue parses the SpecificCharacterSet tag value.
-// The value may contain multiple character set names separated by backslash (e.g., "ISO_IR 192" for UTF-8).
-func parseSpecificCharacterSetValue(value string) []string {
-	if value == "" {
-		return []string{}
-	}
-
-	parts := strings.Split(value, "\\")
-
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		result = append(result, trimmed)
-	}
-
-	return result
 }

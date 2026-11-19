@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 
 	"github.com/amrshadid/go-dicom/compress"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // ConvertCommand converts DICOM files to other formats.
@@ -43,7 +45,7 @@ func (cc *ConvertCommand) Description() string {
 func (cc *ConvertCommand) AddFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&cc.help, "h", false, "Show help for this command")
 	fs.BoolVar(&cc.help, "help", false, "Show help for this command")
-	fs.StringVar(&cc.format, "format", "json", "Output format: json, csv, nifti, png, jpeg")
+	fs.StringVar(&cc.format, "format", "json", "Output format: json, dicom-json, csv, nifti, png, jpeg")
 	fs.BoolVar(&cc.compressed, "compress", false, "Apply compression to output")
 	fs.StringVar(&cc.window, "window", "", "For png and jpeg: window as center,width (default: the file's)")
 	fs.StringVar(&cc.frame, "frame", "", "For png and jpeg: a frame number from 1, or all (default: 1)")
@@ -84,9 +86,20 @@ func (cc *ConvertCommand) Execute(args []string) error {
 		"nifti": true,
 		"png":   true,
 		"jpeg":  true,
+
+		"dicom-json": true,
 	}
 	if !validFormats[cc.format] {
 		return fmt.Errorf("convert: unsupported format: %s", cc.format)
+	}
+
+	// DICOM JSON is made from the data set, sequences and binary values
+	// included, which the element list behind "json" leaves out.
+	if cc.format == "dicom-json" {
+		if cc.compressed {
+			return fmt.Errorf("convert: --compress does not apply to dicom-json")
+		}
+		return convertToDICOMJSON(cc.inputFile, cc.outputFile)
 	}
 
 	// An image is rendered from the data set, not from the element list the
@@ -157,6 +170,36 @@ func (cc *ConvertCommand) Execute(args []string) error {
 	return nil
 }
 
+// convertToDICOMJSON writes the data set as the DICOM JSON Model (PS3.18
+// Annex F), binary values inline, which `create` reads back.
+//
+// The model has no file meta, so it cannot say what transfer syntax the
+// pixel data is in. Native pixel data needs nothing more; encapsulated
+// fragments are written as they are and the syntax to give `create` is
+// printed, since decoding them here would make a different file.
+func convertToDICOMJSON(input, output string) error {
+	df, ds, err := readForRewrite("convert", input)
+	if err != nil {
+		return err
+	}
+	m, err := ds.ToDICOMJSON()
+	if err != nil {
+		return fmt.Errorf("convert: %w", err)
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return fmt.Errorf("convert: %w", err)
+	}
+	if err := os.WriteFile(output, append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("convert: %w", err)
+	}
+	fmt.Printf("Wrote %s: DICOM JSON, %d top-level elements\n", output, len(m))
+	if syntax := instanceMeta(df, ds).TransferSyntaxUID; compress.IsEncapsulated(syntax) && ds.Contains(tag.New(0x7FE0, 0x0010)) {
+		fmt.Printf("  its Pixel Data is compressed, in %s; create it back with -syntax %s\n", syntax, syntax)
+	}
+	return nil
+}
+
 // showHelp displays help information for the convert command.
 func (cc *ConvertCommand) showHelp() {
 	printHelp(`COMMAND: convert - Convert DICOM to other formats
@@ -170,8 +213,15 @@ DESCRIPTION:
 
 OPTIONS:
   -h, --help          Show help for this command
-  --format <format>   Output format: json, csv, nifti, png, jpeg (default: json)
+  --format <format>   Output format: json, dicom-json, csv, nifti, png, jpeg
+                      (default: json)
   --compress          Apply compression to output (json, csv, nifti)
+
+DICOM JSON (--format dicom-json):
+  The DICOM JSON Model of PS3.18 Annex F, as DICOMweb serves it: every
+  element, sequences and binary values (as InlineBinary) included, which
+  "go-dicom create" reads back into a file. "json" is a flat rendering for
+  reading, without sequences or binary values, and cannot be read back.
 
 IMAGES (--format png or jpeg):
   --window <c,w>      Window center and width, in the image's output units
@@ -182,13 +232,18 @@ IMAGES (--format png or jpeg):
                       name-0001.png, name-0002.png and so on.
   --quality <1-100>   JPEG quality (default: 90). PNG is lossless.
 
-  The image is what a viewer shows: rescaled, windowed, MONOCHROME1 inverted,
-  and color converted to RGB, at 8 bits. It holds pixels only, so none of the
-  file's attributes are in it. Text burned into the picture itself still is.
+  The image is what a viewer shows: through the file's lookup tables or its
+  rescale and window, inverted where MONOCHROME1 or Presentation LUT Shape
+  says, and color converted to RGB, at 8 bits. An image's ICC profile goes
+  into the PNG or JPEG as it is, so a viewer that manages color shows it as
+  the image means; the samples are not converted. Apart from that profile,
+  which describes a device, it holds pixels only, so none of the file's
+  attributes are in it. Text burned into the picture itself still is.
 
 EXAMPLES:
   go-dicom convert patient.dcm output.json
   go-dicom convert patient.dcm output.json --format json
+  go-dicom convert patient.dcm dicom.json --format dicom-json
   go-dicom convert patient.dcm data.csv --format csv
   go-dicom convert patient.dcm image.nii --format nifti
   go-dicom convert ct.dcm ct.png --format png --window 40,400

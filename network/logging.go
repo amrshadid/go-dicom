@@ -106,6 +106,49 @@ func newTextLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// loggerFor is the Logger of a server or client given its own slog.Logger:
+// every line, at every level, goes to it, and its handler decides what to
+// keep. Nil for nil, meaning DefaultLogger.
+func loggerFor(l *slog.Logger) *Logger {
+	if l == nil {
+		return nil
+	}
+	return &Logger{level: LogLevelDebug, own: l}
+}
+
+// carriedBy returns ctx carrying, for config.LoggerFromContext, the slog.Logger
+// of the server or client l belongs to. A nil l, which is a server or client
+// given no logger, leaves ctx as it is, so what is logged under it goes to
+// config.Logger, as it always did.
+//
+// It is how the lines that are not this package's own reach that logger:
+// the validation warnings dataset.AddWithContext raises while the codec builds
+// a data set it received. Those went to config.Logger whatever logger the
+// server had been given, one line for each retired or VR-mismatched element
+// of every instance (#503). The logger travels the way a file read's does
+// (#481), in the context, and no global is changed.
+func (l *Logger) carriedBy(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if l == nil {
+		return ctx
+	}
+	l.mu.RLock()
+	own := l.own
+	l.mu.RUnlock()
+	return config.WithLogger(ctx, own)
+}
+
+// orDefault is l, or DefaultLogger when l is nil, read at call time so that
+// replacing DefaultLogger takes effect.
+func (l *Logger) orDefault() *Logger {
+	if l == nil {
+		return DefaultLogger
+	}
+	return l
+}
+
 // SetLevel changes the log level.
 func (l *Logger) SetLevel(level LogLevel) {
 	l.mu.Lock()
@@ -155,6 +198,36 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 		fmt.Sprintf(format, args...), slog.String("component", "network"))
 }
 
+// writesLike reports whether a message l logs at level is written, and to the
+// same place as other's messages: other is l, or both write to the same
+// slog.Logger, config.Logger for one with no output of its own. That is how
+// a server's Logger and its SCP's, two Loggers over the server's
+// SCPConfig.Logger, are found to share a log. Both filters are asked, this
+// Logger's level and the slog handler's.
+func (l *Logger) writesLike(other *Logger, level LogLevel) bool {
+	l.mu.RLock()
+	target, enabled := l.own, l.level >= level
+	l.mu.RUnlock()
+	if !enabled {
+		return false
+	}
+	if target == nil {
+		target = config.Logger
+	}
+	if other != l {
+		other.mu.RLock()
+		otherTarget := other.own
+		other.mu.RUnlock()
+		if otherTarget == nil {
+			otherTarget = config.Logger
+		}
+		if target != otherTarget {
+			return false
+		}
+	}
+	return target != nil && target.Enabled(context.Background(), level.slogLevel())
+}
+
 // Error logs an error message.
 func (l *Logger) Error(format string, args ...interface{}) {
 	l.log(LogLevelError, format, args...)
@@ -195,6 +268,12 @@ func DebugLogger() {
 
 // LoggingEventHandlers returns event handlers that log association lifecycle events.
 // Attach these to an SCP's EventManager for operational visibility.
+//
+// A refusal an SCP sends is logged by the SCP itself, to the server's logger
+// (SCPConfig.Logger, or DefaultLogger when it has none); the
+// EVTAssocRejected handler leaves it out when that line went to the same log
+// as logger, so each refusal is there once, in the server's log and in
+// logger's.
 func LoggingEventHandlers(logger *Logger) map[EventType]EventHandler {
 	return map[EventType]EventHandler{
 		EVTConnOpen: func(e *Event) {
@@ -209,7 +288,23 @@ func LoggingEventHandlers(logger *Logger) map[EventType]EventHandler {
 		EVTAssocAccepted: func(e *Event) {
 			logger.Info("Association accepted: %s -> %s", e.CallingAE, e.CalledAE)
 		},
+		// An SCP logs each refusal it sends where it decides it, at the info
+		// level, with the caller's address and the cause, whether or not
+		// anyone handles its events. A server with these handlers on the same
+		// log then had every refusal in it twice. The SCP cannot be the one
+		// to give way: it cannot tell whether a logger is listening, since a
+		// Server always has an EventManager, and an earlier attempt that
+		// logged only without one silenced the line for everyone. So this
+		// line gives way, and only where the SCP's line reached the same log:
+		// at the default warning level the SCP's line is not written, and
+		// this one is the only report of the refusal. The SCP's line is the
+		// one the event carries, written to the server's logger: asking
+		// DefaultLogger instead, as this did, was right only for a server
+		// with no logger of its own.
 		EVTAssocRejected: func(e *Event) {
+			if e.Role == "SCP" && e.refusal != nil && e.refusal.log.writesLike(logger, e.refusal.level) {
+				return
+			}
 			logger.Warn("Association rejected: %s -> %s: %s", e.CallingAE, e.CalledAE, e.Description)
 		},
 		EVTAssocReleased: func(e *Event) {

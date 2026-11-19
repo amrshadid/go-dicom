@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -63,6 +64,14 @@ func (ds *Dataset) TransferSyntaxUID() string {
 // Elements are validated against the DICOM dictionary for semantic checks.
 // Validation is non-fatal; warnings are printed but the element is added.
 func (ds *Dataset) Add(elem *dataelem.DataElement) error {
+	return ds.AddWithContext(context.Background(), elem)
+}
+
+// AddWithContext is Add, logging its validation warnings to the logger ctx
+// carries (config.WithLogger) instead of config.Logger. A file read with a
+// logger of its own builds its data set this way, so that nothing the read
+// does reaches the global logger.
+func (ds *Dataset) AddWithContext(ctx context.Context, elem *dataelem.DataElement) error {
 	if elem == nil {
 		return fmt.Errorf("element is nil")
 	}
@@ -84,7 +93,7 @@ func (ds *Dataset) Add(elem *dataelem.DataElement) error {
 	// Perform semantic validation against DICOM dictionary.
 	// Non-fatal; logs a warning through the configurable logger and continues.
 	if err := validateElementSemantics(t, elem); err != nil {
-		config.Logger.Warn("dataset: semantic validation",
+		config.LoggerFromContext(ctx).Warn("dataset: semantic validation",
 			"tag", t.String(), "err", err)
 	}
 
@@ -405,9 +414,8 @@ func (ds *Dataset) String() string {
 		elem := ds.elements[tagVal]
 		t := tag.FromInt(tagVal)
 		vr := elem.GetVR()
-		value := elem.GetValue()
 		var valueLen int
-		if b, ok := value.([]byte); ok {
+		if b, ok := elem.Bytes(); ok {
 			valueLen = len(b)
 		}
 		result += fmt.Sprintf("  [%d] %s (%s): %d bytes\n", i, t.Hex(), vr, valueLen)
@@ -454,30 +462,13 @@ func validateElementSemantics(t tag.Tag, elem *dataelem.DataElement) error {
 	// Validate VR if present in element and dictionary
 	elemVR := elem.GetVR()
 	if elemVR != "" && info.VR != "" {
-		if string(elemVR) != info.VR && !isValidVRVariant(string(elemVR), info.VR) {
+		if !dataelem.VRMatchesDictionary(string(elemVR), info.VR) {
 			return fmt.Errorf("VR mismatch for %s: expected %s, got %s",
 				t.String(), info.VR, elemVR)
 		}
 	}
 
 	return nil
-}
-
-// isValidVRVariant checks if a VR is a valid variant of the expected VR.
-// Handles DICOM cases where multiple VRs are acceptable (e.g., "OB or OW").
-func isValidVRVariant(actual, expected string) bool {
-	switch expected {
-	case "OB or OW":
-		return actual == "OB" || actual == "OW"
-	case "OB or OD":
-		return actual == "OB" || actual == "OD"
-	case "US or SS":
-		return actual == "US" || actual == "SS"
-	case "OW or OB":
-		return actual == "OW" || actual == "OB"
-	default:
-		return false
-	}
 }
 
 // SortedDataset returns a new dataset with elements sorted by tag value.
@@ -513,8 +504,7 @@ func (ds *Dataset) GetValue(t tag.Tag) []byte {
 		return nil
 	}
 
-	value := elem.GetValue()
-	if b, ok := value.([]byte); ok {
+	if b, ok := elem.Bytes(); ok {
 		return b
 	}
 	return nil
@@ -617,9 +607,8 @@ func (ds *Dataset) GetStatistics() Statistics {
 	for _, tagVal := range ds.order {
 		elem := ds.elements[tagVal]
 		vr := elem.GetVR()
-		value := elem.GetValue()
 
-		if b, ok := value.([]byte); ok {
+		if b, ok := elem.Bytes(); ok {
 			stats.TotalBytes += len(b)
 		}
 		stats.ByVR[string(vr)]++

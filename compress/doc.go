@@ -152,8 +152,10 @@
 //   - RLE: Run-Length Encoding (lossless, suitable for simple patterns)
 //   - JPEG: JPEG baseline and extended (lossy, for photographic images)
 //   - JPEG_LOSSLESS: JPEG Lossless, .57 and .70, every predictor
-//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless
-//   - JPEG_2000: JPEG 2000, .90 and .91, both wavelets, tiled and layered
+//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless, with or
+//     without restart intervals
+//   - JPEG_2000: JPEG 2000, .90 and .91, both wavelets, tiled and layered,
+//     and High-Throughput JPEG 2000, .201, .202 and .203, decoded only
 //
 // ## Substituting your own decoder
 //
@@ -168,15 +170,29 @@
 //
 // # Compression
 //
-// Three syntaxes can be compressed *to*: RLE Lossless; JPEG-LS Lossless through
-// EncodeJPEGLS — lossless, 2 to 16 bits, one scan per component; and JPEG
-// Baseline through EncodeJPEGBaseline — lossy, 8 bits, one or three components
-// at full resolution. Decoding is broader than encoding, and a request to
-// compress to any other syntax fails rather than producing bytes described as
-// something they are not.
+// These syntaxes can be compressed *to*: RLE Lossless; JPEG-LS through
+// EncodeJPEGLS — lossless — and EncodeJPEGLSNearLossless — every sample within
+// the allowed error NEAR the caller gives — 2 to 16 bits, one scan per
+// component; JPEG 2000 through EncodeJPEG2000Lossless and, lossy at a ratio or
+// a PSNR, EncodeJPEG2000; lossless JPEG (.57 and .70) through
+// EncodeJPEGLossless — Process 14, 2 to 16 bits, one to four components in
+// one scan, with Huffman tables built for each frame; JPEG Baseline through
+// EncodeJPEGBaseline — lossy, 8 bits, one or three components at full
+// resolution; and JPEG Extended through EncodeJPEGExtended — lossy, 8 or 12
+// bits, its Huffman tables built for each frame. Decoding is broader than
+// encoding, and a request to compress to any other syntax fails rather than
+// producing bytes described as something they are not.
 //
-// JPEG-LS Near-Lossless is refused although the same encoder could produce it: it
-// is lossy, so how much error to accept belongs to the caller.
+// How much error to accept belongs to the caller, so nothing here chooses a
+// NEAR or a quality.
+//
+// JPEG-LS frames are coded and decoded with the default thresholds of T.87
+// C.2.4.1.1, which are CharLS's since 2.1 and libjpeg's. dcmtk bundles an older
+// CharLS whose defaults differ below 8 bits (losslessly at 6 and 7 bits, and at
+// most NEAR values from 2 to 7 bits), so where they differ the encoder writes
+// the thresholds in an LSE segment and dcmtk reads the frame. dcmtk's own frames
+// at 6 and 7 bits are coded with its thresholds and refused here; the error
+// names it.
 //
 // # Type Definitions
 //
@@ -237,10 +253,36 @@
 //
 //	type Decompressor interface {
 //		// Decompress decompresses pixel data
-//		Decompress(data []byte, width, height, bitsPerPixel int) ([]byte, error)
+//		Decompress(data []byte) ([]byte, error)
 //
 //		// CanDecompress checks if this decompressor can handle the data
 //		CanDecompress(data []byte) bool
+//	}
+//
+// Decompress returns samples at the codestream's own width: one byte a sample
+// at a precision of 8 or fewer, two above. A decoder that also satisfies
+// FrameDecompressor writes them at the width a data set's Bits Allocated says
+// instead, which is what a data set's pixel path asks for; every decoder here
+// does. A frame coded at 8 bits in an image of 16 bits allocated is legal, and
+// at its own width it is half the image.
+//
+//	type FrameDecompressor interface {
+//		Decompressor
+//		DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
+//	}
+//
+// A decoder that also satisfies FrameHeaderReader reads the size of a frame's
+// image from its header without decoding it, and a data set's pixel path
+// refuses a frame whose columns, rows or components are not its Columns, Rows
+// and Samples per Pixel before decoding it (FrameHeader.Check, wrapping
+// ErrFrameMismatch). Every decoder here with a size in its header does; RLE,
+// which has none, is held to Rows times Columns by DecompressFrameOfSize. A
+// frame of any other length than the data set's is refused after the decode
+// whatever the decoder.
+//
+//	type FrameHeaderReader interface {
+//		Decompressor
+//		FrameHeader(data []byte) (FrameHeader, error)
 //	}
 //
 // ## Compressor Interface

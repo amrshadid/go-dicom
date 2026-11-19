@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -147,6 +148,54 @@ func TestConvertFrames(t *testing.T) {
 	}
 }
 
+// TestConvertFramesAreAllOrNothing: the frames are written under temporary
+// names and take theirs together. A successful run leaves the pictures and
+// nothing else; a run that cannot name one of them leaves none of them, and
+// no temporary file either.
+func TestConvertFramesAreAllOrNothing(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "in.dcm")
+	writeTwoFrameImage(t, in)
+
+	out := filepath.Join(dir, "ok")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConvert(in, filepath.Join(out, "cine.png"), "--format", "png", "--frame", "all"); err != nil {
+		t.Fatalf("--frame all: %v", err)
+	}
+	if got := listDir(t, out); got != "cine-0001.png cine-0002.png" {
+		t.Errorf("the directory holds %s", got)
+	}
+
+	// The second frame's name is taken by a directory that is not empty,
+	// which a file cannot replace.
+	out = filepath.Join(dir, "blocked")
+	if err := os.MkdirAll(filepath.Join(out, "cine-0002.png", "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := runConvert(in, filepath.Join(out, "cine.png"), "--format", "png", "--frame", "all"); err == nil {
+		t.Error("a frame that could not be written was not an error")
+	}
+	if got := listDir(t, out); got != "cine-0002.png" {
+		t.Errorf("after the failure the directory holds %s; want what it held before", got)
+	}
+}
+
+// listDir names what a directory holds, hidden files too, in order.
+func listDir(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.Name()
+	}
+	return strings.Join(names, " ")
+}
+
 // TestConvertWindow: --window replaces the file's.
 func TestConvertWindow(t *testing.T) {
 	dir := t.TempDir()
@@ -191,6 +240,59 @@ func TestConvertToJPEG(t *testing.T) {
 	}
 	if err := runConvert(in, out, "--format", "jpeg", "--quality", "0"); err == nil {
 		t.Error("--quality 0 was accepted")
+	}
+}
+
+// TestConvertWritesWhatTheWholeFileRenders: convert reads the pixels from
+// the file a frame or a band at a time, and the PNG and JPEG it writes are
+// byte for byte what the frames rendered from the whole file encode to:
+// grayscale signed and big endian, a palette, YBR color, and every frame
+// of a compressed and of a native multi-frame image. A grayscale JPEG has
+// one component, as it always had: image/jpeg writes three for a picture
+// that is not an *image.Gray.
+func TestConvertWritesWhatTheWholeFileRenders(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"CT_small.dcm", "MR_small_bigendian.dcm", "examples_palette.dcm",
+		"examples_ybr_color.dcm", "SC_rgb_rle_2frame.dcm", "rtdose.dcm"} {
+		in := filepath.Join(corpus, name)
+		ds, err := readImageDataset(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		frames, err := ds.RenderFrames(nil)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, format := range []string{"png", "jpeg"} {
+			out := filepath.Join(dir, strings.TrimSuffix(name, ".dcm")+"."+format)
+			if err := runConvert(in, out, "--format", format, "--frame", "all"); err != nil {
+				t.Fatalf("convert %s to %s: %v", name, format, err)
+			}
+			for f, img := range frames {
+				var want bytes.Buffer
+				if format == "png" {
+					err = png.Encode(&want, img)
+				} else {
+					err = jpeg.Encode(&want, img, &jpeg.Options{Quality: 90})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				written := fmt.Sprintf("%s-%04d.%s", strings.TrimSuffix(out, "."+format), f+1, format)
+				got, err := os.ReadFile(written)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(got, want.Bytes()) {
+					t.Errorf("%s frame %d as %s: %d bytes, and the whole file's frame encodes to %d",
+						name, f+1, format, len(got), want.Len())
+				}
+			}
+		}
 	}
 }
 

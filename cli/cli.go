@@ -71,7 +71,7 @@ func NewCLI(name, version string) *CLI {
 // reports it, and a user simply never learns the command is there.
 var netCommands = []string{
 	"echoscu", "echoscp", "storescu", "storescp",
-	"findscu", "movescu", "getscu", "commitscu", "qrscp",
+	"findscu", "movescu", "getscu", "commitscu", "mppsscu", "upsscu", "qrscp", "wlmscp",
 }
 
 var netDescriptions = map[string]string{
@@ -83,7 +83,10 @@ var netDescriptions = map[string]string{
 	"movescu":   "DICOM Move SCU — retrieve studies to a destination",
 	"getscu":    "DICOM Get SCU — retrieve on same association",
 	"commitscu": "DICOM Storage Commitment SCU — ask a peer to take responsibility",
+	"mppsscu":   "DICOM MPPS SCU — report a performed procedure step started, completed or discontinued",
+	"upsscu":    "DICOM UPS SCU — create, query, claim, update and finish unified procedure steps",
 	"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
+	"wlmscp":    "DICOM Modality Worklist SCP — serve the worklist files of a directory",
 }
 
 // webCommands and webDescriptions are the same for the DICOMweb commands.
@@ -180,15 +183,24 @@ func (c *CLI) ShowHelp() {
 
 	// Display commands in a specific order
 	fmt.Printf("  FILE COMMANDS:\n")
-	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "tag-doc", "codify"}
+	fileCommands := []string{"show", "info", "convert", "anonymize", "share", "diff", "dicomdir", "sr", "validate", "modify", "compress", "decompress", "create", "tag-doc", "codify"}
 	fileDescriptions := map[string]string{
 		"show":      "Display DICOM file contents",
 		"info":      "Show DICOM file metadata and information",
+		"validate":  "Check a file against what its SOP class requires (PS3.3)",
 		"convert":   "Convert DICOM files to other formats (JSON, CSV, NIfTI, PNG, JPEG)",
+		"modify":    "Set, insert or delete attributes of a DICOM file",
 		"anonymize": "De-identify a DICOM file or directory (PS3.15 Annex E)",
 		"share":     "Render an image as a PNG or JPEG that is safe to hand on",
+		"diff":      "Compare two DICOM files element by element",
+		"dicomdir":  "Write the DICOMDIR of a directory, or list one",
+		"sr":        "Print the content tree of a structured report",
 		"tag-doc":   "Generate documentation for DICOM tags",
 		"codify":    "Read a DICOM file and produce Go code to create it",
+
+		"compress":   "Write a file's pixel data in RLE, JPEG-LS, JPEG 2000 or JPEG",
+		"decompress": "Write a file's pixel data uncompressed",
+		"create":     "Make a DICOM file from DICOM JSON, a picture or a PDF",
 	}
 	for _, cmdName := range fileCommands {
 		if desc, ok := fileDescriptions[cmdName]; ok {

@@ -84,8 +84,8 @@ type PixelDataInfo struct {
 	PixelRepresentation       int     // 0 for unsigned, 1 for signed
 	PlanarConfiguration       int     // 0 = R1G1B1R2G2B2, 1 = R1R2...G1G2...B1B2
 	BytesPerFrame             int     // Calculated: (Rows * Columns * SamplesPerPixel * BitsAllocated) / 8
-	RescaleIntercept          float64 // Linear transformation intercept for pixel values
-	RescaleSlope              float64 // Linear transformation slope for pixel values
+	RescaleIntercept          float64 // Rescale Intercept; 0 when absent. Frame 0's in an enhanced multi-frame image
+	RescaleSlope              float64 // Rescale Slope; 1 when absent. Frame 0's in an enhanced multi-frame image
 }
 
 // WindowingParameters represents VOI (Value of Interest) window settings.

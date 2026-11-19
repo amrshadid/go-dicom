@@ -33,7 +33,18 @@ type SCP struct {
 	// carrying a storage commitment result, for instance. Incremented
 	// atomically because associations are handled concurrently.
 	messageID atomic.Uint32
+
+	// drainer is what Server.Shutdown keeps: whether a stop has begun, and
+	// the connections being served. Made on first use (drain).
+	drainInit sync.Once
+	drainer   *drainState
+
+	// ownLog is SCPConfig.Logger as a Logger, nil for DefaultLogger; see log.
+	ownLog *Logger
 }
+
+// log is where this SCP's lines go: SCPConfig.Logger, or s.log().
+func (s *SCP) log() *Logger { return s.ownLog.orDefault() }
 
 // nextMessageID returns the next message ID for a request this SCP originates.
 //
@@ -51,9 +62,19 @@ func NewSCP(config SCPConfig) *SCP {
 		handler:                   &BaseHandler{},
 		supportedAbstractSyntaxes: defaultSupportedAbstractSyntaxes(),
 		supportedTransferSyntaxes: defaultSupportedTransferSyntaxes(),
+		ownLog:                    loggerFor(config.Logger),
 	}
 	if config.MaxAssociations > 0 {
 		scp.assocSlots = make(chan struct{}, config.MaxAssociations)
+	}
+	// Taken here, before any listener exists, so the first association is
+	// negotiated with them. Nil keeps the defaults; an empty list is a
+	// choice, and is kept.
+	if config.AbstractSyntaxes != nil {
+		scp.supportedAbstractSyntaxes = syntaxSet(config.AbstractSyntaxes)
+	}
+	if config.TransferSyntaxes != nil {
+		scp.supportedTransferSyntaxes = syntaxSet(config.TransferSyntaxes)
 	}
 	return scp
 }
@@ -65,24 +86,32 @@ func (s *SCP) SetHandler(handler Handler) {
 	s.handler = handler
 }
 
-// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports.
+// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.AbstractSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedAbstractSyntaxes = make(map[string]bool, len(syntaxes))
-	for _, syn := range syntaxes {
-		s.supportedAbstractSyntaxes[syn] = true
-	}
+	s.supportedAbstractSyntaxes = syntaxSet(syntaxes)
 }
 
-// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports.
+// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.TransferSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedTransferSyntaxes = make(map[string]bool, len(syntaxes))
+	s.supportedTransferSyntaxes = syntaxSet(syntaxes)
+}
+
+// syntaxSet is a list of UIDs as the set negotiation looks them up in. It is
+// a copy, so a caller changing its slice later changes nothing.
+func syntaxSet(syntaxes []string) map[string]bool {
+	set := make(map[string]bool, len(syntaxes))
 	for _, syn := range syntaxes {
-		s.supportedTransferSyntaxes[syn] = true
+		set[syn] = true
 	}
+	return set
 }
 
 // ListenAndServe starts the SCP server, listening for incoming associations.
@@ -107,7 +136,7 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 		s.wg.Wait()
 	}()
 
-	return s.serve(ctx, ln, DefaultLogger, nil)
+	return s.serve(ctx, ln, s.log(), nil)
 }
 
 // The pause before retrying a failed accept doubles from acceptRetryMin to
@@ -181,7 +210,7 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 
 		// Reports the connection opening now, and closing when the
 		// transport is closed.
-		transport.observe(events)
+		transport.observe(events, s.ownLog)
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
@@ -227,6 +256,7 @@ func (s *SCP) Close() error {
 func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 
 	// Only an A-ASSOCIATE-RQ can be answered with an A-ASSOCIATE-RJ; anything
 	// else gets the connection closed.
@@ -239,19 +269,57 @@ func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	}
 
 	assoc := NewAssociation(transport)
-	// Result: rejected-transient, Source: service-user,
-	// Reason 2: local-limit-exceeded (PS3.8 Table 9-21).
-	_ = assoc.RejectAssociation(ctx, RJResultRejectedTransient, RJSourceServiceUser, 2)
+	assoc.logger = s.ownLog
+	// Rejected-transient, so the caller tries again later, from the DICOM UL
+	// service-provider (presentation related function) with reason 2,
+	// local-limit-exceeded (PS3.8 Table 9-21). A reason means something only
+	// with its source: sent as service-user, reason 2 told the caller its
+	// application context name was not supported (#318).
+	s.rejectAndAwaitClose(ctx, assoc, transport, RJResultRejectedTransient, RJSourceServiceProviderPresentation, 2)
+}
+
+// rejectAndAwaitClose sends an A-ASSOCIATE-RJ and leaves the connection for the caller to
+// close, as the acceptor's state machine has it (PS3.8 9.2, AE-8: issue the
+// PDU, start ARTIM, and await the transport connection close in Sta13; AA-2
+// closes it when the timer expires).
+//
+// Closing behind the PDU let the close reach the caller before it had acted
+// on the rejection. pynetdicom, on a loaded machine, then held the PDU with
+// the right result, source and reason and did not count the association as
+// rejected (#430): what the caller learned depended on the order two events
+// reached it in.
+//
+// Whatever arrives while waiting is not answered: nothing is due from a
+// caller that has been refused but the close.
+func (s *SCP) rejectAndAwaitClose(ctx context.Context, assoc *Association, transport *Transport, result, source, reason byte) {
+	if err := assoc.RejectAssociation(ctx, result, source, reason); err != nil {
+		return
+	}
+	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
+	_, _ = transport.ReadPDU(ctx)
 }
 
 func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 
 	assoc := NewAssociation(transport)
+	defer s.track(transport, assoc)()
+	assoc.logger = s.ownLog
+	// Every handler of this association is given the server's logger in its
+	// context, so that what it builds with dataset.AddWithContext, or anything
+	// else that asks config.LoggerFromContext, logs where the server does. The
+	// built-in UPS handler applies the attributes of an N-SET this way.
+	ctx = assoc.logContext(ctx)
+	// A panic below, which is to say in a handler, ends this association and
+	// nothing else. Deferred after Close so that it runs first, while there
+	// is still a connection to send the A-ABORT on.
+	defer s.recoverAssociation(assoc)
 
 	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
 	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 	// The only PDU due is an A-ASSOCIATE-RQ, which has its own bound. A
 	// P-DATA-TF sent in its place is not read past the Maximum Length this
 	// SCP will advertise: without a limit set yet it was read up to
@@ -259,29 +327,55 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	transport.SetReceiveLimit(s.config.Network.MaxPDUSize)
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
+		// On a TLS server the handshake ran inside that read. A client it
+		// turned away is reported as such, not only logged.
+		if failure := handshakeFailure(transport, err); failure != nil && ctx.Err() == nil {
+			if o := transport.observed(); o != nil {
+				e := o.event(EVTTLSHandshakeFailed)
+				e.Description, e.Error = failure.Error(), failure
+				o.events.Emit(e)
+			}
+		}
 		// A connection that opens and closes without sending a PDU is not a fault.
 		// Every TCP health check, load-balancer probe and port scan does exactly
 		// that, and each one was logging an error describing a working server: a
 		// bare connect-and-close arrives here as EOF on the PDU header.
 		if endedNormally(err) {
-			DefaultLogger.Debug("connection from %s closed before an association was requested: %v",
+			s.log().Debug("connection from %s closed before an association was requested: %v",
 				transport.RemoteAddr(), err)
 			return
 		}
-		DefaultLogger.Error("failed to read association request: %v", err)
+		s.log().Error("failed to read association request: %v", err)
 		return
 	}
 
 	rq, ok := pdu.(*AssociateRQ)
 	if !ok {
-		DefaultLogger.Warn("expected A-ASSOCIATE-RQ, got %T", pdu)
-		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 2)
+		s.log().Warn("expected A-ASSOCIATE-RQ, got %T", pdu)
+		_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, abortUnexpectedPDU,
+			abortedBy(AbortCauseProtocolViolation, fmt.Errorf("expected A-ASSOCIATE-RQ, got %T", pdu)))
 		return
 	}
 
-	// Check AE title
-	if rq.CalledAE != s.config.AETitle {
-		_ = assoc.RejectAssociation(ctx, RJResultRejectedPermanent, RJSourceServiceUser, 7)
+	// A server that is stopping takes no new association, even on a
+	// connection it accepted before the stop: rejected-transient, so the
+	// caller tries again later (PS3.8 Table 9-21, temporary-congestion).
+	if s.draining() {
+		// Logged like every refusal the SCP decides. Nothing logged this one
+		// but LoggingEventHandlers, and those gave way to an SCP line that
+		// was never written.
+		s.refusing(transport, LogLevelInfo, "refusing %q from %s: the server is stopping",
+			rq.CallingAE, transport.RemoteAddr())
+		r := RejectBusy()
+		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
+		return
+	}
+
+	// Who may associate is decided before anything is negotiated, so a caller
+	// that is refused learns nothing of what this SCP supports. The connection
+	// is then the caller's to close.
+	if r := s.decideAdmission(ctx, transport, rq); r != nil {
+		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return
 	}
 
@@ -295,7 +389,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 
 	// Accept association
 	if err := assoc.AcceptAssociation(ctx, rq, supportedAS, supportedTS, s.config.Network.MaxPDUSize); err != nil {
-		DefaultLogger.Error("failed to accept association: %v", err)
+		s.log().Error("failed to accept association: %v", err)
 		return
 	}
 
@@ -322,42 +416,70 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 	}
 	ctx = ContextWithAssociationInfo(ctx, info)
 
+	// servedWhileStopping is set once an operation has finished after a
+	// Shutdown began: the peer's next PDU is then waited for, to answer a
+	// release, but no new operation is started (see shutdown.go).
+	servedWhileStopping := false
 	for {
 		if assoc.State() != StateAssociated {
 			return
 		}
+		// Waiting for a request while the server stops: everything the peer
+		// sent has been answered, so the association is aborted at once.
+		if !servedWhileStopping && s.draining() {
+			s.abortStopping(assoc)
+			return
+		}
 
-		// Receive a PDU (could be command data or release/abort)
-		ctxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		// Receive a PDU (could be command data or release/abort). A Shutdown
+		// beginning ends the wait, unless an operation has already finished
+		// since it began.
+		readCtx, endRead := ctx, context.CancelFunc(func() {})
+		if !servedWhileStopping {
+			readCtx, endRead = s.idleReadContext(ctx)
+		}
+		ctxID, cmdData, isCmd, err := assoc.ReceivePData(readCtx)
+		endRead()
 		if err != nil {
+			if ctx.Err() == nil && s.draining() && errors.Is(err, context.Canceled) {
+				s.abortStopping(assoc)
+				return
+			}
 			var timeout *TimeoutError
 			if errors.As(err, &timeout) {
-				DefaultLogger.Warn("aborting the association with %s: %v", assoc.CallingAE(), err)
-				_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+				s.log().Warn("aborting the association with %s: %v", assoc.CallingAE(), err)
+				_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0, abortedBy(AbortCauseTimeout, err))
 				return
 			}
 			if endedNormally(err) {
-				DefaultLogger.Debug("association with %s ended: %v", assoc.CallingAE(), err)
+				s.log().Debug("association with %s ended: %v", assoc.CallingAE(), err)
 				return
 			}
-			DefaultLogger.Error("error receiving data: %v", err)
+			s.log().Error("error receiving data: %v", err)
 			return
 		}
 
 		if !isCmd {
-			DefaultLogger.Warn("expected command, got data")
+			s.log().Warn("expected command, got data")
 			continue
 		}
 
-		cmdDS, err := DecodeCommandDataset(cmdData)
+		cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 		if err != nil {
-			DefaultLogger.Error("failed to decode command: %v", err)
+			s.log().Error("failed to decode command: %v", err)
 			return
 		}
 
 		commandField, messageID, _, err := ParseCommandDataset(cmdDS)
 		if err != nil {
-			DefaultLogger.Error("failed to parse command: %v", err)
+			s.log().Error("failed to parse command: %v", err)
+			return
+		}
+
+		// A request read after an operation finished during a Shutdown is
+		// not started: the peer is aborted and knows it was not answered.
+		if servedWhileStopping {
+			s.abortStopping(assoc)
 			return
 		}
 
@@ -394,11 +516,15 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			// association and discards results the requestor already has. Log
 			// and carry on, which is what PS3.7 9.3.2.3 permits when the
 			// operation is no longer in progress.
-			DefaultLogger.Warn("C-CANCEL received for message %d; no operation in progress", messageID)
+			s.log().Warn("C-CANCEL received for message %d; no operation in progress", messageID)
 		default:
-			DefaultLogger.Warn("unsupported command: 0x%04X", commandField)
-			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+			s.log().Warn("unsupported command: 0x%04X", commandField)
+			_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0,
+				abortedBy(AbortCauseProtocolViolation, fmt.Errorf("unsupported command 0x%04X", commandField)))
 			return
+		}
+		if s.draining() {
+			servedWhileStopping = true
 		}
 	}
 }
@@ -427,7 +553,7 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 	rspDS := BuildCEchoRSP(messageID, resp.Status)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
-		DefaultLogger.Error("failed to encode C-ECHO-RSP: %v", err)
+		s.log().Error("failed to encode C-ECHO-RSP: %v", err)
 		return
 	}
 
@@ -437,35 +563,48 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Handler,
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
-	sopClassUID, _ := GetAffectedSOPClassUID(cmdDS)
-	sopInstanceUID, _ := GetAffectedSOPInstanceUID(cmdDS)
+	req := cstoreRequest(messageID, cmdDS)
+	sopClassUID, sopInstanceUID := req.AffectedSOPClass, req.AffectedSOPInstance
 
-	// Read the data set if present
-	var ds *dataset.Dataset
-	if HasDataSet(cmdDS) {
-		_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
-		if err != nil {
-			DefaultLogger.Error("failed to receive C-STORE data: %v", err)
-			return
-		}
-		if isCmd {
-			DefaultLogger.Warn("expected data, got command during C-STORE")
-			return
-		}
-		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
-		if err != nil {
-			s.refuse(ctx, assoc, ctxID, "C-STORE", err,
-				BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
-			return
-		}
+	// A C-STORE-RQ carries the instance to store (PS3.7 9.3.1.1). One whose
+	// Command Data Set Type says none follows has nothing to store, and
+	// whatever a handler answered would describe an instance it never had.
+	// It is refused here, before either kind of handler: the streamed path
+	// refused it since #321, while a handler given the decoded data set was
+	// called with a nil one, and a StorageHandler answered for it. A data set
+	// the peer sends anyway is not this message's: the next read takes it as
+	// stray data.
+	if !HasDataSet(cmdDS) {
+		s.log().Warn("refusing a C-STORE of %s that says no data set follows (PS3.7 9.3.1.1)",
+			sopInstanceUID)
+		s.sendCStoreRSP(ctx, assoc, ctxID, req, StatusUnableToProcess)
+		return
 	}
 
-	req := &CStoreRequest{
-		MessageID:           messageID,
-		AffectedSOPClass:    sopClassUID,
-		AffectedSOPInstance: sopInstanceUID,
-		DataSet:             ds,
+	// A handler that reads the data set as it arrives is given the bytes
+	// before they are assembled, and is never handed a decoded copy.
+	if streamer, ok := streamsCStore(handler); ok {
+		s.handleCStoreStream(ctx, assoc, streamer, ctxID, req)
+		return
 	}
+
+	_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		s.log().Error("failed to receive C-STORE data: %v", err)
+		return
+	}
+	if isCmd {
+		s.log().Warn("expected data, got command during C-STORE")
+		return
+	}
+	ds, err := decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
+	if err != nil {
+		s.refuse(ctx, assoc, ctxID, "C-STORE", err,
+			BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
+		return
+	}
+
+	req.DataSet = ds
 
 	resp, err := handler.HandleCStore(ctx, req)
 	// A handler that returns nothing has not stored anything it has said.
@@ -482,7 +621,7 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 	rspDS := BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, resp.Status)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
-		DefaultLogger.Error("failed to encode C-STORE-RSP: %v", err)
+		s.log().Error("failed to encode C-STORE-RSP: %v", err)
 		return
 	}
 
@@ -496,10 +635,10 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 func (s *SCP) refuse(ctx context.Context, assoc *Association, ctxID byte, service string,
 	err error, rsp *dataset.Dataset) {
 
-	DefaultLogger.Error("refusing a %s whose data set does not decode: %v", service, err)
+	s.log().Error("refusing a %s whose data set does not decode: %v", service, err)
 	encoded, encErr := EncodeCommandDataset(rsp)
 	if encErr != nil {
-		DefaultLogger.Error("failed to encode the %s refusal: %v", service, encErr)
+		s.log().Error("failed to encode the %s refusal: %v", service, encErr)
 		return
 	}
 	_ = assoc.SendPData(ctx, ctxID, encoded, true)
@@ -515,14 +654,14 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 	if HasDataSet(cmdDS) {
 		_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
 		if err != nil {
-			DefaultLogger.Error("failed to receive C-FIND query: %v", err)
+			s.log().Error("failed to receive C-FIND query: %v", err)
 			return
 		}
 		if isCmd {
-			DefaultLogger.Warn("expected data, got command during C-FIND")
+			s.log().Warn("expected data, got command during C-FIND")
 			return
 		}
-		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		queryDS, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			s.refuse(ctx, assoc, ctxID, "C-FIND", err,
 				BuildCFindRSP(messageID, sopClassUID, StatusUnableToProcess, false))
@@ -592,13 +731,13 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 	if HasDataSet(cmdDS) {
 		_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
 		if err != nil {
-			DefaultLogger.Error("failed to receive C-MOVE query: %v", err)
+			s.log().Error("failed to receive C-MOVE query: %v", err)
 			return
 		}
 		if isCmd {
 			return
 		}
-		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		queryDS, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			s.refuse(ctx, assoc, ctxID, "C-MOVE", err,
 				BuildCMoveRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0))
@@ -608,7 +747,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 
 	moveDest := ""
 	if elem, ok := cmdDS.Get(tagMoveDestination); ok {
-		moveDest = extractStringValue(elem.GetValue())
+		moveDest = extractStringValue(elem)
 	}
 
 	req := &CMoveRequest{
@@ -707,7 +846,7 @@ func (s *SCP) sendMoveFinalRemaining(ctx context.Context, assoc *Association, ct
 	rspDS := BuildCMoveRSP(messageID, sopClassUID, status, remaining, completed, failed, warning)
 	rspBytes, err := EncodeCommandDataset(rspDS)
 	if err != nil {
-		DefaultLogger.Error("failed to encode C-MOVE-RSP: %v", err)
+		s.log().Error("failed to encode C-MOVE-RSP: %v", err)
 		return
 	}
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
@@ -807,7 +946,7 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 		if isCmd {
 			return
 		}
-		if queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); err != nil {
+		if queryDS, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); err != nil {
 			s.refuse(ctx, assoc, ctxID, "C-GET", err,
 				BuildCGetRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0))
 			return
@@ -916,13 +1055,17 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 	if err != nil {
 		return fmt.Errorf("encode C-STORE-RQ: %w", err)
 	}
-	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
-		return fmt.Errorf("send C-STORE-RQ: %w", err)
-	}
-
-	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(ctxID), s.config.Network.JPEGQuality)
+	// The instance is encoded before anything is sent. The C-STORE-RQ says a
+	// data set follows, and an instance that cannot be put in the negotiated
+	// syntax was found out only after it had gone: the requestor, owed a data
+	// set, read the next sub-operation's C-STORE-RQ in its place and the
+	// whole retrieve ended there (#518). SCU.Store has always encoded first.
+	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(ctxID), s.config.Network)
 	if err != nil {
 		return fmt.Errorf("encode instance: %w", err)
+	}
+	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
+		return fmt.Errorf("send C-STORE-RQ: %w", err)
 	}
 	if err := assoc.SendPData(ctx, ctxID, dataBytes, false); err != nil {
 		return fmt.Errorf("send instance: %w", err)
@@ -947,7 +1090,7 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 			return fmt.Errorf("expected C-STORE-RSP command, got a data set")
 		}
 
-		decoded, err := DecodeCommandDataset(respData)
+		decoded, err := decodeCommandDataset(assoc.logContext(ctx), respData)
 		if err != nil {
 			return fmt.Errorf("decode C-STORE-RSP: %w", err)
 		}
@@ -980,12 +1123,54 @@ func instanceUIDs(ds *dataset.Dataset) (sopClassUID, sopInstanceUID string, ok b
 		return "", "", false
 	}
 
-	sopClassUID = extractStringValue(classElem.GetValue())
-	sopInstanceUID = extractStringValue(instElem.GetValue())
+	sopClassUID = extractStringValue(classElem)
+	sopInstanceUID = extractStringValue(instElem)
 	if sopClassUID == "" || sopInstanceUID == "" {
 		return "", "", false
 	}
 	return sopClassUID, sopInstanceUID, true
+}
+
+// sendNResponse sends an N-service response command and, when the handler
+// returned one, the data set that goes with it: the reply of an N-EVENT-REPORT
+// or N-ACTION, the attribute list of an N-GET, N-SET or N-CREATE (PS3.7 10.1).
+//
+// The Command Data Set Type says whether a data set follows (PS3.7 E.2), so it
+// is set here, from what is actually sent, rather than by each builder. The
+// response builders said "no data set" for every service but N-GET, and the
+// handlers' data sets were dropped: an MPPS SCP could not return the attribute
+// list PS3.4 F.7.2.1.2 describes, and an N-ACTION could not reply at all.
+//
+// The data set is encoded before the command goes out. A command that promises
+// a data set and is followed by none leaves the peer waiting on a read that
+// never completes, so a data set that cannot be encoded turns the response
+// into 0x0110 Processing failure with no data set.
+func (s *SCP) sendNResponse(ctx context.Context, assoc *Association, ctxID byte, service string,
+	rsp, data *dataset.Dataset) {
+
+	var dataBytes []byte
+	if data != nil {
+		encoded, err := EncodeDataset(data, assoc.TransferSyntaxFor(ctxID))
+		if err != nil {
+			s.log().Error("the %s handler's data set could not be encoded; answering 0x%04X without it: %v",
+				service, StatusProcessingFailure, err)
+			addUSElement(rsp, tagStatus, StatusProcessingFailure)
+			data = nil
+		} else {
+			dataBytes = encoded
+			addUSElement(rsp, tagCommandDataSetType, CommandDataSetTypePresent)
+		}
+	}
+
+	rspBytes, err := EncodeCommandDataset(rsp)
+	if err != nil {
+		s.log().Error("failed to encode the %s response: %v", service, err)
+		return
+	}
+	if err := assoc.SendPData(ctx, ctxID, rspBytes, true); err != nil || data == nil {
+		return
+	}
+	_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
 }
 
 func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handler Handler,
@@ -1002,7 +1187,7 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-EVENT-REPORT", decodeErr,
 				BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, StatusProcessingFailure))
 			return
@@ -1028,10 +1213,10 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 		if receiver, ok := handler.(StorageCommitmentResultReceiver); ok {
 			result, parseErr := ParseStorageCommitmentResult(ds)
 			if parseErr != nil {
-				DefaultLogger.Error("storage commitment result could not be read: %v", parseErr)
+				s.log().Error("storage commitment result could not be read: %v", parseErr)
 				status = StatusUnableToProcess
 			} else if err := receiver.HandleStorageCommitmentResult(ctx, result); err != nil {
-				DefaultLogger.Error("storage commitment result handler failed: %v", err)
+				s.log().Error("storage commitment result handler failed: %v", err)
 				status = StatusUnableToProcess
 			}
 
@@ -1043,15 +1228,16 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 	}
 
 	resp, err := handler.HandleNEventReport(ctx, req)
+	var reply *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		reply = resp.DataSet
 	}
 
-	rspDS := BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-EVENT-REPORT",
+		BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, status), reply)
 }
 
 func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handler,
@@ -1060,30 +1246,39 @@ func (s *SCP) handleNGet(ctx context.Context, assoc *Association, handler Handle
 	sopClassUID, _ := getUIValue(cmdDS, tagRequestedSOPClassUID)
 	sopInstanceUID, _ := GetRequestedSOPInstanceUID(cmdDS)
 
+	// The list is what the requester asked for. Without it a handler cannot
+	// tell a request for one attribute from a request for all of them
+	// (PS3.7 10.1.2.1.4), and the classes whose N-GET is defined by the list,
+	// such as Display System, Media Creation and UPS, answered with everything.
+	// A list that is not a list of tags is refused as this SCP refuses any
+	// request it cannot read, rather than answered as if it were absent.
+	asked, err := attributeIdentifierList(cmdDS)
+	if err != nil {
+		s.log().Error("refusing an N-GET whose Attribute Identifier List does not decode: %v", err)
+		s.sendNResponse(ctx, assoc, ctxID, "N-GET",
+			BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure, false), nil)
+		return
+	}
+
 	req := &NGetRequest{
 		MessageID:            messageID,
 		RequestedSOPClass:    sopClassUID,
 		RequestedSOPInstance: sopInstanceUID,
+		AttributeList:        asked,
 	}
 
 	resp, err := handler.HandleNGet(ctx, req)
 	status := StatusSuccess
-	hasDS := false
+	var attrs *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
-		hasDS = resp.DataSet != nil
+		attrs = resp.DataSet
 	}
 
-	rspDS := BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, status, hasDS)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
-
-	if hasDS && resp != nil && resp.DataSet != nil {
-		dataBytes, _ := EncodeDataset(resp.DataSet, assoc.TransferSyntaxFor(ctxID))
-		_ = assoc.SendPData(ctx, ctxID, dataBytes, false)
-	}
+	s.sendNResponse(ctx, assoc, ctxID, "N-GET",
+		BuildNGetRSP(messageID, sopClassUID, sopInstanceUID, status, false), attrs)
 }
 
 func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handler,
@@ -1099,7 +1294,7 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-SET", decodeErr,
 				BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure))
 			return
@@ -1115,15 +1310,16 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 
 	resp, err := handler.HandleNSet(ctx, req)
 	status := StatusSuccess
+	var attrs *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		attrs = resp.DataSet
 	}
 
-	rspDS := BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-SET",
+		BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, status), attrs)
 }
 
 func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Handler,
@@ -1140,7 +1336,7 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-ACTION", decodeErr,
 				BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, StatusProcessingFailure))
 			return
@@ -1166,15 +1362,16 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 
 	resp, err := handler.HandleNAction(ctx, req)
 	status := StatusSuccess
+	var reply *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		reply = resp.DataSet
 	}
 
-	rspDS := BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-ACTION",
+		BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, status), reply)
 }
 
 // handleStorageCommitment answers a commitment request and then reports the
@@ -1194,7 +1391,7 @@ func (s *SCP) handleStorageCommitment(ctx context.Context, assoc *Association, h
 
 	commitHandler, ok := handler.(StorageCommitmentProvider)
 	if !ok {
-		DefaultLogger.Warn("storage commitment requested but the handler does not provide it")
+		s.log().Warn("storage commitment requested but the handler does not provide it")
 		s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID,
 			StatusStorageCommitmentRefused)
 		return
@@ -1202,7 +1399,7 @@ func (s *SCP) handleStorageCommitment(ctx context.Context, assoc *Association, h
 
 	req, err := ParseStorageCommitmentRequest(ds)
 	if err != nil {
-		DefaultLogger.Error("storage commitment request could not be read: %v", err)
+		s.log().Error("storage commitment request could not be read: %v", err)
 		s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID,
 			StatusUnableToProcess)
 		return
@@ -1211,7 +1408,7 @@ func (s *SCP) handleStorageCommitment(ctx context.Context, assoc *Association, h
 	result, err := commitHandler.HandleStorageCommitment(ctx, req)
 	if err != nil || result == nil {
 		if err != nil {
-			DefaultLogger.Error("storage commitment handler failed: %v", err)
+			s.log().Error("storage commitment handler failed: %v", err)
 		}
 		s.replyNAction(ctx, assoc, ctxID, messageID, sopClassUID, sopInstanceUID,
 			StatusUnableToProcess)
@@ -1232,7 +1429,7 @@ func (s *SCP) handleStorageCommitment(ctx context.Context, assoc *Association, h
 	}
 
 	if err := s.sendCommitmentReport(ctx, assoc, ctxID, sopClassUID, sopInstanceUID, result); err != nil {
-		DefaultLogger.Error("failed to report storage commitment (%s): %v",
+		s.log().Error("failed to report storage commitment (%s): %v",
 			storageCommitmentSummary(result), err)
 	}
 }
@@ -1282,7 +1479,7 @@ func (s *SCP) sendCommitmentReport(ctx context.Context, assoc *Association, ctxI
 	if err != nil {
 		return err
 	}
-	respDS, err := DecodeCommandDataset(respData)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), respData)
 	if err != nil {
 		return err
 	}
@@ -1306,7 +1503,7 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-CREATE", decodeErr,
 				BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure))
 			return
@@ -1322,15 +1519,16 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 
 	resp, err := handler.HandleNCreate(ctx, req)
 	status := StatusSuccess
+	var attrs *dataset.Dataset
 	if err != nil {
 		status = StatusUnableToProcess
 	} else if resp != nil {
 		status = resp.Status
+		attrs = resp.DataSet
 	}
 
-	rspDS := BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, status)
-	rspBytes, _ := EncodeCommandDataset(rspDS)
-	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
+	s.sendNResponse(ctx, assoc, ctxID, "N-CREATE",
+		BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, status), attrs)
 }
 
 func (s *SCP) handleNDelete(ctx context.Context, assoc *Association, handler Handler,

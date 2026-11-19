@@ -313,7 +313,7 @@ func readReferencedSequence(ds *dataset.Dataset, t tag.Tag) ([]SOPInstanceRefere
 
 		var reason uint16
 		if elem, ok := item.Get(tagFailureReason); ok {
-			if b, ok := elem.GetValue().([]byte); ok && len(b) >= 2 {
+			if b, ok := elem.Bytes(); ok && len(b) >= 2 {
 				reason = binary.LittleEndian.Uint16(b)
 			}
 		}
@@ -328,7 +328,7 @@ func uidValue(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	b, ok := elem.GetValue().([]byte)
+	b, ok := elem.Bytes()
 	if !ok {
 		return ""
 	}
@@ -405,7 +405,7 @@ func (s *SCU) ReceiveStorageCommitmentResult(ctx context.Context) (*StorageCommi
 			"expected an N-EVENT-REPORT command, got a data set")
 	}
 
-	cmdDS, err := DecodeCommandDataset(cmdData)
+	cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +424,7 @@ func (s *SCU) ReceiveStorageCommitmentResult(ctx context.Context) (*StorageCommi
 	if err != nil {
 		return nil, err
 	}
-	ds, err := DecodeDataset(dsData, assoc.TransferSyntaxFor(dsCtxID))
+	ds, err := decodeDataset(assoc.logContext(ctx), dsData, assoc.TransferSyntaxFor(dsCtxID))
 	if err != nil {
 		return nil, err
 	}
@@ -487,6 +487,7 @@ func (s *SCP) ReportStorageCommitment(ctx context.Context, requestorAE string,
 	// The roles invert for this exchange: the archive is the one initiating,
 	// so it associates as an SCU on the Storage Commitment SOP Class.
 	requestor := NewSCU(SCUConfig{
+		Logger:    s.config.Logger,
 		CallingAE: s.config.AETitle,
 		CalledAE:  requestorAE,
 		Address:   address,

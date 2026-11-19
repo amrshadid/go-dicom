@@ -26,9 +26,71 @@ type Transport struct {
 	// established, DIMSETimeout after. Zero is no bound.
 	readTimeout time.Duration
 
+	// closeWait is ARTIM, set by the SCU or SCP that owns the transport: the
+	// most the peer is given to close the connection after this side sent an
+	// A-ABORT, itself capped by abortLinger. Zero closes at once.
+	closeWait time.Duration
+
 	// obs reports what passes as events, when the SCU or SCP that owns the
 	// transport was given somewhere to report to. Nil otherwise.
 	obs *observer
+}
+
+// setCloseWait gives the peer d to close the connection after an A-ABORT
+// this side sends. Zero or less closes at once.
+func (t *Transport) setCloseWait(d time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closeWait = d
+}
+
+// abortLinger is the longest the peer is given to close after an A-ABORT.
+//
+// The state machine gives it ARTIM (PS3.8 9.2: AA-1 and AA-8 send the PDU,
+// start the timer and await the transport connection close in Sta13). A
+// second is long enough for the A-ABORT to cross and be read, and a
+// connection that a peer will not close is not worth holding for thirty.
+const abortLinger = time.Second
+
+// closeAfterPeer ends this side's use of the connection after an A-ABORT it
+// sent, and leaves the connection itself for the peer to close, for a
+// moment, reading and dropping what arrives meanwhile (AA-6).
+//
+// Closing behind the PDU lost it. A peer still sending has bytes on their way
+// that this side will never read, and a connection closed with bytes unread
+// is reset: the reset discards what the peer had not yet read, the A-ABORT
+// with it, and the peer saw a broken connection in place of an abort (#513,
+// on Windows in CI). So this side stops sending, which tells the peer the
+// A-ABORT is the last of it, and reads until the peer closes or the linger
+// ends, and closes then.
+//
+// The transport is closed to its owner at once: the association is over, its
+// slot and its handler are given back now, and only the connection lingers,
+// on a goroutine of its own. A caller whose context is already over, which
+// is a server being stopped, closes without waiting. It is a bound, not a
+// promise: a peer still sending when the linger ends is closed on as before.
+func (t *Transport) closeAfterPeer(ctx context.Context) error {
+	t.mu.Lock()
+	wait := min(t.closeWait, abortLinger)
+	if t.closed || wait <= 0 || ctx.Err() != nil {
+		t.mu.Unlock()
+		return t.Close()
+	}
+	t.closed = true
+	conn, obs := t.conn, t.obs
+	t.mu.Unlock()
+	if obs != nil {
+		obs.emit(obs.event(EVTConnClose))
+	}
+	go func() {
+		if half, ok := conn.(interface{ CloseWrite() error }); ok {
+			_ = half.CloseWrite()
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wait))
+		_, _ = io.Copy(io.Discard, conn)
+		_ = conn.Close()
+	}()
+	return nil
 }
 
 // SetReadTimeout bounds how long each ReadPDU waits for a whole PDU, whatever
@@ -86,6 +148,18 @@ func (t *Transport) WritePDU(ctx context.Context, pdu PDU) error {
 	return nil
 }
 
+// writeAbort sends an A-ABORT and reports it with why this side sent it.
+func (t *Transport) writeAbort(ctx context.Context, pdu *AbortPDU, local *LocalAbort) error {
+	data, err := t.writePDU(ctx, pdu)
+	if err != nil {
+		return err
+	}
+	if o := t.observed(); o != nil {
+		o.pduWhy(true, pdu, data, local)
+	}
+	return nil
+}
+
 // writePDU encodes and sends a PDU, and returns the bytes it sent.
 func (t *Transport) writePDU(ctx context.Context, pdu PDU) ([]byte, error) {
 	t.mu.Lock()
@@ -124,7 +198,12 @@ func (t *Transport) writePDU(ctx context.Context, pdu PDU) ([]byte, error) {
 
 // ReadPDU reads and decodes a PDU from the connection.
 func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
-	if t.closed {
+	// Under the lock: Shutdown closes a transport from another goroutine.
+	t.mu.Lock()
+	closed := t.closed
+	timeout := t.readTimeout
+	t.mu.Unlock()
+	if closed {
 		return nil, NewCommunicationError("CLOSED", "transport is closed", nil)
 	}
 
@@ -132,9 +211,6 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	// read: one left by an earlier read would otherwise still apply. Without
 	// the timeout a peer that stops sending holds the association, and its
 	// slot, for good (#206).
-	t.mu.Lock()
-	timeout := t.readTimeout
-	t.mu.Unlock()
 	var deadline time.Time
 	if timeout > 0 && ctx.Value(noReadTimeoutKey{}) == nil {
 		deadline = time.Now().Add(timeout)
@@ -169,11 +245,13 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	obs := t.obs
 	t.mu.Unlock()
 	// The bytes are kept as they are read only when something will be told
-	// of them.
+	// of them, and for a P-DATA-TF only when a handler is registered that is
+	// given them (observer.wantsBytes).
 	var source io.Reader = t.conn
-	var raw bytes.Buffer
+	var raw *pduCopy
 	if obs != nil {
-		source = io.TeeReader(t.conn, &raw)
+		raw = &pduCopy{keep: obs.wantsBytes}
+		source = io.TeeReader(t.conn, raw)
 	}
 	pdu, err := decodePDU(source, limit)
 	if err != nil {
@@ -199,9 +277,41 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	}
 
 	if obs != nil {
-		obs.pdu(false, pdu, raw.Bytes())
+		obs.pdu(false, pdu, raw.bytes())
 	}
 	return pdu, nil
+}
+
+// pduCopy keeps the bytes of one PDU as they are read, or none of them.
+//
+// Whether to keep them is decided on the first byte written, the PDU's type
+// (PS3.8 9.3.1), before its body is read, so a P-DATA-TF nobody will be
+// shown is never copied. Copying every PDU made a second copy of every
+// instance received, for a Server always has an EventManager: 64 MiB more for
+// a 64 MiB store, with no handler registered (#469).
+type pduCopy struct {
+	keep    func(pduType byte) bool
+	decided bool
+	on      bool
+	buf     bytes.Buffer
+}
+
+func (c *pduCopy) Write(p []byte) (int, error) {
+	if !c.decided && len(p) > 0 {
+		c.on, c.decided = c.keep(p[0]), true
+	}
+	if c.on {
+		c.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+// bytes returns the PDU as it was read, or nil when it was not kept.
+func (c *pduCopy) bytes() []byte {
+	if !c.on {
+		return nil
+	}
+	return c.buf.Bytes()
 }
 
 // SetReceiveLimit sets the Maximum Length this side advertised. A P-DATA-TF
@@ -239,7 +349,7 @@ func (t *Transport) Close() error {
 	if o := t.obs; o != nil {
 		// Not under the lock a handler might want.
 		t.mu.Unlock()
-		o.events.Emit(o.event(EVTConnClose))
+		o.emit(o.event(EVTConnClose))
 		t.mu.Lock()
 	}
 	return err

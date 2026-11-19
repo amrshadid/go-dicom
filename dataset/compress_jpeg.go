@@ -52,16 +52,9 @@ func (ds *Dataset) CompressJPEGBaselineInPlace(quality int) error {
 
 	// The decoded image, described as decoded, on a copy when decoding is
 	// needed so that a refusal below leaves the caller's data set alone.
-	source := ds
-	if stored, err := extractBytesValue(elem); err == nil {
-		if info, err := ds.GetPixelDataInfo(); err == nil {
-			if _, encapsulated := ds.pixelCompression(stored, info); encapsulated {
-				source = ds.Clone()
-				if err := source.DecompressInPlace(); err != nil {
-					return fmt.Errorf("compress: %w", err)
-				}
-			}
-		}
+	source, err := ds.decodedForCompression(elem)
+	if err != nil {
+		return err
 	}
 	info, err := source.GetPixelDataInfo()
 	if err != nil {
@@ -114,12 +107,13 @@ func (ds *Dataset) CompressJPEGBaselineInPlace(quality int) error {
 		return fmt.Errorf("compress: %w", err)
 	}
 	ds.SetTransferSyntaxUID(jpegBaselineSyntax)
+	// Color is coded as YBR_FULL, converted from RGB where it was RGB, each
+	// component at full resolution.
+	transform := ""
 	if info.SamplesPerPixel == 3 {
-		replaceElement(ds, tag.New(0x0028, 0x0004), dataelem.CS, []byte("YBR_FULL"))
-		planar := make([]byte, 2)
-		binary.LittleEndian.PutUint16(planar, 0)
-		replaceElement(ds, tag.New(0x0028, 0x0006), dataelem.US, planar)
+		transform = "YBR_FULL"
 	}
+	ds.describeCoded(source, info, transform)
 	replaceElement(ds, tag.New(0x0028, 0x2110), dataelem.CS, []byte("01"))
 	ratio := float64(frameLen*info.NumberOfFrames) / float64(compressed)
 	appendValue(ds, tag.New(0x0028, 0x2112), dataelem.DS, fmt.Sprintf("%.2f", ratio))

@@ -3,6 +3,8 @@ package network_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -140,6 +142,91 @@ func TestUndecodableCompressionIsRefusedNotMislabeled(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decode") && !strings.Contains(err.Error(), "decoder") {
 		t.Errorf("the error does not explain that the pixel data could not be decoded: %v", err)
+	}
+}
+
+// TestHTJ2KIsDecodedForAnUncompressedContext: an instance in each of the
+// three High-Throughput JPEG 2000 syntaxes, encoded for an Explicit VR Little
+// Endian context, is decoded on the way and arrives as the samples pydicom 3
+// decodes the file to (the digests of dataset/htj2k_test.go). Until HTJ2K had
+// a decoder the send was refused by name.
+func TestHTJ2KIsDecodedForAnUncompressedContext(t *testing.T) {
+	for file, digest := range map[string]string{
+		"htj2k_lossless_rgb.dcm":        "746f7d32eb7cd276",
+		"htj2k_lossless_rpcl_16bit.dcm": "3663c9abef3d1384",
+		"htj2k_irreversible.dcm":        "5d0d0efe8e5cb8b9",
+	} {
+		f, err := os.Open(filepath.Join("..", "dataset", "testdata", "htj2k", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
+		_ = f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := df.GetDataset()
+		syntax := source.TransferSyntaxUID()
+		encoded, err := network.EncodeDataset(source, network.ExplicitVRLittleEndianUID)
+		if err != nil {
+			t.Fatalf("%s (%s): %v", file, syntax, err)
+		}
+		if source.TransferSyntaxUID() != syntax {
+			t.Errorf("%s: sending changed the caller's data set", file)
+		}
+		received, err := network.DecodeDataset(encoded, network.ExplicitVRLittleEndianUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		elem, ok := received.Get(tag.New(0x7FE0, 0x0010))
+		if !ok {
+			t.Fatalf("%s: no Pixel Data arrived", file)
+		}
+		pixels, _ := elem.GetValue().([]byte)
+		info, err := received.GetPixelDataInfo()
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := info.BytesPerFrame * info.NumberOfFrames
+		if len(pixels) < n {
+			t.Fatalf("%s: %d bytes arrived for %d", file, len(pixels), n)
+		}
+		sum := sha256.Sum256(pixels[:n])
+		if got := hex.EncodeToString(sum[:])[:16]; got != digest {
+			t.Errorf("%s (%s): the samples sent hash to %s, pydicom's to %s", file, syntax, got, digest)
+		}
+	}
+}
+
+// TestJPEGXLIsRefusedByNameNotSentAsNative: an instance in a syntax with no
+// decoder here, JPEG XL, encoded for an uncompressed context. Its pixel data
+// was taken for native and passed through, so storescu sent such an image to
+// dcmtk's storescp as Explicit VR Little Endian, both sides reported success,
+// and dcmtk stored fragments as pixels; High-Throughput JPEG 2000 did the
+// same until it had a decoder. The send has to fail, naming the syntax.
+func TestJPEGXLIsRefusedByNameNotSentAsNative(t *testing.T) {
+	ds := dataset.NewDataset()
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0016), dataelem.UI,
+		[]byte(network.MRImageStorageUID)))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0018), dataelem.UI,
+		[]byte("1.2.826.0.1.3680043.10.511.5.2\x00")))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0010), dataelem.US, []byte{0x02, 0x00}))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0011), dataelem.US, []byte{0x02, 0x00}))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0100), dataelem.US, []byte{0x08, 0x00}))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x0028, 0x0002), dataelem.US, []byte{0x01, 0x00}))
+	_ = ds.Add(dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OB, []byte{
+		0xFE, 0xFF, 0x00, 0xE0, 0x00, 0x00, 0x00, 0x00, // empty Basic Offset Table
+		0xFE, 0xFF, 0x00, 0xE0, 0x04, 0x00, 0x00, 0x00, 0xFF, 0x0A, 0xFA, 0x7A, // the start of a JPEG XL codestream
+	}))
+	ds.SetTransferSyntaxUID("1.2.840.10008.1.2.4.112")
+
+	_, err := network.EncodeDataset(ds, network.ExplicitVRLittleEndianUID)
+	if err == nil {
+		t.Fatal("a JPEG XL instance encoded for an uncompressed context; " +
+			"its fragments would have arrived described as pixels")
+	}
+	if !strings.Contains(err.Error(), "JPEG XL (1.2.840.10008.1.2.4.112)") {
+		t.Errorf("the refusal does not name the syntax: %v", err)
 	}
 }
 

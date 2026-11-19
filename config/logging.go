@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"os"
@@ -89,6 +90,34 @@ func SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		Logger = logger
 	}
+}
+
+// loggerKey is the context key WithLogger stores a logger under.
+type loggerKey struct{}
+
+// WithLogger returns a context that carries logger, for the operations
+// given that context to log to instead of Logger. It is how one file read
+// logs to a logger of its own while another, at the same time, logs to a
+// different one: the logger travels with the work, the way the reading
+// validation mode does (WithReadingValidationMode), and no global is
+// changed. A nil logger leaves ctx as it is.
+func WithLogger(ctx context.Context, logger *slog.Logger) context.Context {
+	if logger == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, loggerKey{}, logger)
+}
+
+// LoggerFromContext returns the logger WithLogger put in ctx, or Logger
+// when there is none. It is looked up at each line, so a context without
+// one follows SetLogger as it always did.
+func LoggerFromContext(ctx context.Context) *slog.Logger {
+	if ctx != nil {
+		if logger, ok := ctx.Value(loggerKey{}).(*slog.Logger); ok {
+			return logger
+		}
+	}
+	return Logger
 }
 
 // GetLogger returns the current global logger.

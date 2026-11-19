@@ -6,6 +6,14 @@
 // character set decoding, and waveform data handling. Includes validation against DICOM dictionary
 // and support for both compressed and uncompressed transfer syntaxes.
 //
+// A program that reads only attributes can use filereader/attributes instead:
+// the same parser and the same element types, without the packages
+// GetDataset, FrameRanges and GetWaveforms bring in (compress, encaps,
+// pixels, waveforms, dataset). The parser lives in an internal package both
+// share; FileMetaInfo, ReadOptions, DataElementValue and the other element
+// types here are its types under aliases, so a value from one package is a
+// value of the other.
+//
 // # Core Concepts
 //
 // ## FileMetaInfo
@@ -231,6 +239,91 @@
 //	for _, e := range dicom.DataElements {
 //		fmt.Println(e.Tag, e.Position.ValueOffset, e.Position.End, e.ValueSkipped)
 //	}
+//
+// GetDataset gives a skipped value as nothing. GetDatasetWithValuesInFile
+// gives it as a dataelem.ValueInFile, where its bytes are, and filewriter,
+// given the file with SetValueSource, copies them from there as it writes:
+// a data set can be changed and written back without its pixels in memory,
+// byte for byte as if it had been read whole. A deflated file is refused,
+// since its values are not in the file.
+//
+// ReadOptions.Logger is where the read logs. Everything the read does logs
+// there: the reader itself, the character set decisions, and the validation
+// GetDataset runs as it builds the data set, later, for the file the read
+// returned. None of it reaches config.Logger, so two reads at once can log to
+// two loggers, or one of them to none. Nil is config.Logger, as before. To
+// read silently:
+//
+//	dicom, err := filereader.ReadDICOMFileWithOptions(reader,
+//		filereader.ReadOptions{Logger: slog.New(slog.DiscardHandler)})
+//
+// The logger travels in a context.Context (config.WithLogger), the way the
+// reading validation mode does, through charset's WithContext functions and
+// dataset's AddWithContext; no global is changed. A line names tags, VRs,
+// lengths and offsets, and never a value's bytes or text, since a file from
+// an untrusted source writes what it likes there. What a program should act
+// on is in DICOMFile.Warnings as well.
+//
+// ReadOptions.MaxValueLength is the longest value the read holds in memory.
+// A longer one ends the read with a *ValueTooLongError naming its attribute,
+// tag, offset and stated length, before any of it is allocated, from a file
+// or from a stream whose size is unknown; errors.Is(err, ErrValueTooLong)
+// tells it from a file that is merely broken. It bounds element values, File
+// Meta elements and encapsulated Pixel Data as a whole. Sequences and items
+// are read element by element and are not values, so their lengths are not
+// bounded by it. Zero is no maximum, as before.
+//
+// The two options combine as a server reading what it is sent wants them
+// to: SkipBulkData passes over Pixel Data and long binary values, which are
+// not held and so not refused, and MaxValueLength holds everything that is
+// read, text and short binary values, to the maximum.
+//
+//	dicom, err := filereader.ReadDICOMFileWithOptions(reader, filereader.ReadOptions{
+//		SkipBulkData:   true,
+//		MaxValueLength: 1 << 20,
+//	})
+//	if errors.Is(err, filereader.ErrValueTooLong) {
+//		// refused by policy: err names the element and its length
+//	}
+//
+// Whatever the options, a source that cannot seek, such as a socket, has
+// each value read as its bytes arrive, so what a read holds follows what was
+// sent and not the length a header states. A source whose size is known
+// holds every length to the bytes left in it.
+//
+// ### DICOMFile.FrameRanges
+//
+//	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
+//	func (df *DICOMFile) FrameFirstBit(i int) (int, error)
+//	func (df *DICOMFile) PixelDataElement() *DataElementValue
+//
+// Where each frame of Pixel Data lies in the file, so one frame is read
+// without the rest: a range a frame for native data, and for encapsulated
+// data the fragments that hold it, found by the Extended Offset Table, the
+// Basic Offset Table, the counts and the end-of-image markers. Float Pixel
+// Data and Double Float Pixel Data have frames too; PixelDataElement finds
+// whichever of the three an image holds. The frames of a 1-bit image are
+// packed with no padding between them, so one that is not a whole number of
+// bytes starts inside a byte: its range is the bytes holding its bits, and
+// FrameFirstBit the bit of the first byte it starts at.
+//
+//	file, _ := os.Open(path)
+//	dicom, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),
+//		filereader.ReadOptions{SkipBulkData: true})
+//	frames, err := dicom.FrameRanges(file)
+//	// frames[i] are the byte ranges of frame i+1, to be read and joined.
+//
+// ### DICOMFile.FrameReader
+//
+//	func (df *DICOMFile) FrameReader(src io.ReaderAt) (*FrameReader, error)
+//	func (r *FrameReader) ReadFrame(i int) ([]byte, error)
+//	func (r *FrameReader) ReadFrameBytes(i int, offset int64, p []byte) error
+//
+// Reads those ranges: a frame, native samples little endian whatever the
+// file's byte order, a 1-bit frame moved to start at bit 0, a compressed
+// frame as its fragments joined; or part of a native frame, a band of its
+// rows. It is a dataset.FrameReader, so Dataset.RenderFramesFrom draws an
+// image from the file a frame or a band at a time.
 //
 // ### TextEncodings and DecodeText
 //

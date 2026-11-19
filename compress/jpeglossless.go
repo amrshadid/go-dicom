@@ -90,6 +90,41 @@ func (d *JPEGLosslessDecompressor) Decompress(data []byte) ([]byte, error) {
 	return img.pack(), nil
 }
 
+// DecompressFrame decodes one lossless JPEG frame to samples bitsAllocated
+// bits wide, the layout a data set describes; see FrameDecompressor.
+//
+// T.81 allows any precision from 2 to 16 for the lossless process, and a frame
+// coded at 8 bits in an image of 16 bits allocated unpacked by Decompress is
+// half the image. bitsStored and pixelRepresentation are not needed, since a
+// lossless JPEG sample has no sign of its own.
+func (d *JPEGLosslessDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsStored,
+	pixelRepresentation int) ([]byte, error) {
+
+	img, err := decodeLosslessJPEG(data)
+	if err != nil {
+		return nil, err
+	}
+	samples, err := atBitsAllocated(img.pack(), img.precision, bitsAllocated)
+	if err != nil {
+		return nil, fmt.Errorf("jpeglossless: %w", err)
+	}
+	return samples, nil
+}
+
+// FrameHeader reads the frame's size from its SOF3 segment without decoding
+// it; see FrameHeaderReader.
+func (d *JPEGLosslessDecompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	header, marker, err := jpegFrameHeader(data)
+	if err != nil {
+		return FrameHeader{}, fmt.Errorf("jpeglossless: %w", err)
+	}
+	if marker != markerSOF3 {
+		return FrameHeader{}, fmt.Errorf("%w: frame marker 0x%02X is not lossless Huffman (SOF3)",
+			errNotLosslessJPEG, marker)
+	}
+	return header, nil
+}
+
 // losslessComponent is one color component of the frame.
 type losslessComponent struct {
 	id       byte
@@ -251,11 +286,18 @@ func (b *bitReader) readBit() int32 {
 	return bit
 }
 
+// readBits reads count bits, at most 16, as one number. fill leaves more than
+// 24 bits buffered, so one refill is always enough.
 func (b *bitReader) readBits(count int) int32 {
-	var v int32
-	for i := 0; i < count; i++ {
-		v = v<<1 | b.readBit()
+	if count <= 0 {
+		return 0
 	}
+	if b.n < uint(count) {
+		b.fill()
+	}
+	v := int32(b.bits >> (32 - uint(count)))
+	b.bits <<= uint(count)
+	b.n -= uint(count)
 	return v
 }
 

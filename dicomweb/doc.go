@@ -83,11 +83,46 @@
 // the instances as DICOM JSON with Pixel Data and other bulk values named
 // and not carried.
 //
+// Frames of an instance, …/instances/{instance}/frames/1,2, come one part a
+// frame in the order asked. A request that says nothing gets them
+// uncompressed, application/octet-stream in Explicit VR Little Endian, as
+// PS3.18 makes the default, a compressed frame decoded for it. With
+// application/octet-stream and transfer-syntax=*, or the frame's own type
+// (image/jpeg, image/jls, image/jp2, image/dicom-rle), each frame is the bytes
+// the file holds. A frame is read from the file by where it lies, not by
+// loading the instance. A frame number the image does not have is 404.
+// Float and Double Float Pixel Data have frames too, their floats little
+// endian. A frame of a 1-bit image that starts inside a byte is sent from
+// the lowest bit of its first byte, as a 1-bit image of one frame is laid
+// out.
+// A compressed type or syntax the frame is not held in is encoded on
+// request with the library's coders, a type named alone into its lossless
+// default; a lossy syntax only when named, losing what [WithFrameEncoding]
+// sets. A frame held lossy is not coded again.
+//
+// Metadata gives a BulkDataURI for each value it leaves out, and
+// …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level
+// of sequence, serves it from where it lies in the file, little endian.
+// Pixel Data there is its frames, joined in one part when uncompressed.
+// …/bulkdata of a study, a series or an instance sends every such value, a
+// part each whose Content-Location is the BulkDataURI metadata gives it.
+//
 // The server matches literally: a request for fuzzy matching is answered
 // with a warning that says so. It does not authenticate, and it serves
 // whatever the archive holds to whoever reaches it, so a deployment wraps it
-// in a handler that decides who may. Frames, rendered images and bulk data
-// on their own are not served.
+// in a handler that decides who may.
+//
+// …/rendered and …/thumbnail, of an instance or of frames, and the
+// thumbnail of a series or a study, draw a frame with Dataset.RenderFrame,
+// as image/jpeg or image/png. The window, viewport and quality query
+// parameters are applied. iccprofile=yes embeds the instance's own ICC
+// profile (Dataset.ICCProfile) in the PNG or JPEG, the pixels unchanged,
+// and a Warning says so when there is none to embed; no, or no parameter,
+// embeds none. What is not done, a flipped viewport region or a picture
+// converted into a named color space (iccprofile=srgb and the others), is
+// refused with 400, and a study or a series rendered whole with 501. With no window given and none in the image, a frame is drawn
+// over the range its Bits Stored can hold, the identity VOI LUT of PS3.3
+// C.11.2.1.2.2, so every frame of an image is on one scale.
 //
 // Instances are stored as the application/dicom parts of a multipart
 // request, to /studies or into a study. Each is kept or refused on its own,

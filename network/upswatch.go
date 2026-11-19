@@ -371,7 +371,7 @@ func upsFilterKeys(ds *dataset.Dataset) *dataset.Dataset {
 		if !ok || t == tagReceivingAE || t == tagDeletionLock {
 			continue
 		}
-		value, ok := elem.GetValue().([]byte)
+		value, ok := elem.Bytes()
 		if !ok {
 			continue
 		}
@@ -437,6 +437,7 @@ func (s *SCP) ReportUPSEvent(ctx context.Context, receivingAE string, event *UPS
 	}
 
 	subscriber := NewSCU(SCUConfig{
+		Logger:    s.config.Logger,
 		CallingAE: s.config.AETitle,
 		CalledAE:  receivingAE,
 		Address:   address,

@@ -26,8 +26,8 @@ import (
 func TestNetworkCommandsRefuseTLSOptionsWithoutTLS(t *testing.T) {
 	binary := buildCLI(t)
 	for _, command := range []string{
-		"echoscu", "storescu", "findscu", "movescu", "getscu", "commitscu",
-		"echoscp", "storescp", "qrscp",
+		"echoscu", "storescu", "findscu", "movescu", "getscu", "commitscu", "mppsscu", "upsscu",
+		"echoscp", "storescp", "qrscp", "wlmscp",
 	} {
 		t.Run(command, func(t *testing.T) {
 			out, err := exec.Command(binary, command, "-tls-ca", "ca.crt", "127.0.0.1:1").CombinedOutput()
@@ -36,7 +36,7 @@ func TestNetworkCommandsRefuseTLSOptionsWithoutTLS(t *testing.T) {
 			}
 		})
 	}
-	for _, command := range []string{"echoscp", "storescp", "qrscp"} {
+	for _, command := range []string{"echoscp", "storescp", "qrscp", "wlmscp"} {
 		t.Run(command+" without a certificate", func(t *testing.T) {
 			out, err := exec.Command(binary, command, "-tls").CombinedOutput()
 			if err == nil || !strings.Contains(string(out), "-tls-cert and -tls-key") {
