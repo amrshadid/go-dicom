@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A server can stop without cutting the stores in progress** (#464).
+  `Server.Stop` cancels the context every handler is given before anything
+  else, so a C-STORE in flight was cut wherever it was: dcmtk's storescu,
+  sending a 96 MiB instance, was reset partway and failed. `Server.Shutdown(ctx)`
+  closes the listener, refuses an association asked for on a connection
+  already open (rejected-transient, temporary-congestion), aborts at once an
+  association waiting for its next request, since everything it sent was
+  answered, and lets one in the middle of an operation finish it and release.
+  When `ctx` ends first, what is left is aborted and the returned
+  `*ShutdownError` counts the associations cut short. The same storescu send
+  is now answered Success and released. `Stop` is unchanged.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and

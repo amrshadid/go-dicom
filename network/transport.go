@@ -124,7 +124,12 @@ func (t *Transport) writePDU(ctx context.Context, pdu PDU) ([]byte, error) {
 
 // ReadPDU reads and decodes a PDU from the connection.
 func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
-	if t.closed {
+	// Under the lock: Shutdown closes a transport from another goroutine.
+	t.mu.Lock()
+	closed := t.closed
+	timeout := t.readTimeout
+	t.mu.Unlock()
+	if closed {
 		return nil, NewCommunicationError("CLOSED", "transport is closed", nil)
 	}
 
@@ -132,9 +137,6 @@ func (t *Transport) ReadPDU(ctx context.Context) (PDU, error) {
 	// read: one left by an earlier read would otherwise still apply. Without
 	// the timeout a peer that stops sending holds the association, and its
 	// slot, for good (#206).
-	t.mu.Lock()
-	timeout := t.readTimeout
-	t.mu.Unlock()
 	var deadline time.Time
 	if timeout > 0 && ctx.Value(noReadTimeoutKey{}) == nil {
 		deadline = time.Now().Add(timeout)

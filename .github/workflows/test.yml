@@ -370,7 +370,7 @@ jobs:
           GODICOM_PYDICOM_DATA=$("$HOME/dicomvenv/bin/python" -c \
             "import pydicom.data, os; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
           export GODICOM_PYDICOM_DATA
-          go test ./network/ -race -v -run 'TestDcmtkStoresAStreamedFile|TestPynetdicomStoresAStreamedFile'
+          go test ./network/ -race -v -run 'TestDcmtkStoresAStreamedFile|TestPynetdicomStoresAStreamedFile|TestDcmtkStoreFinishesWhileTheServerShutsDown'
 
       # Decoding is checked against pydicom's own reading of the same files,
       # not against this library's writer. Unit tests build their fixtures with

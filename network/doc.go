@@ -115,6 +115,12 @@
 //
 //	log.Fatal(scp.ListenAndServe(ctx))
 //
+// A [Server] from [StartServer] stops in one of two ways. [Server.Stop] cancels
+// the context every handler was given, cutting what is in flight.
+// [Server.Shutdown] stops taking new associations and lets the operations in
+// progress finish, until the context it is given ends; it returns a
+// [*ShutdownError] counting the associations it then had to abort.
+//
 // The handler runs on the association's goroutine, so a slow handler holds that
 // association open; hand long work to a queue. Handlers may be called
 // concurrently for different associations and must be safe for concurrent use.
