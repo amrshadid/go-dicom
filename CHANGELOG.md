@@ -978,6 +978,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already accepted was logged by nothing at all; the SCP logs it, at the
   info level, as it logs every refusal it decides.
 
+- **A JPEG 2000 codestream of a few hundred bytes no longer costs
+  gigabytes to decode** (#526). The decoder sized its work from the header
+  before it read a packet: a list of every code-block of the image, a state
+  for each block of a precinct as soon as a packet named the precinct, and a
+  visit to each of those blocks in every packet. A codestream of 244 bytes
+  declaring 185 million samples in 4x4 code-blocks made `Decode` allocate
+  4.3 GB, and `Dataset.PixelArray` and rendering decode `.90` and `.91`
+  unasked, so a small file or a C-STORE was enough. Now a tile must hold a
+  byte for each precinct it declares, which the 244 bytes do not, and is
+  refused with less than a megabyte allocated. Code-blocks are found by
+  arithmetic rather than listed, a block has state only once a packet
+  includes it, and the blocks a tag tree answers for together are stepped
+  over together, so reading packet headers costs what their bits say: the
+  120 bytes of an empty 2048 by 2048 image in 4x4 blocks and 20 layers took
+  475 MB to read and take under 4 MB. The image limit of 2^28 samples now
+  counts every component. Nothing sized by the image is allocated until
+  every tile's packets are read. A codestream within these bounds still
+  decodes at the size it declares, which JPEG 2000 can describe in very few
+  bytes; the package documentation states the rule. Every Part 1 codestream
+  that decoded before decodes to the same samples.
+
 - **A C-GET goes on past an instance it cannot encode** (#518). A C-GET
   sub-operation sent its C-STORE-RQ, which says a data set follows, and
   encoded the instance only then. When the instance could not be put in the
