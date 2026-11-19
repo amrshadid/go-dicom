@@ -96,7 +96,7 @@ func TestStreamedStoreDrainsWhatTheHandlerLeft(t *testing.T) {
 		t.Fatalf("status 0x%04X answering %d, want 0x0001 answering 7", status, answers)
 	}
 	t.Logf("drained %d MiB with a peak heap of %.1f MiB", remainder>>20, float64(got)/(1<<20))
-	if got > limit {
+	if overHeapLimit(t, got, limit) {
 		t.Errorf("peak heap %.1f MiB while draining: the remainder was held", float64(got)/(1<<20))
 	}
 
@@ -660,7 +660,7 @@ func TestStreamedStoresAtOnceStayBounded(t *testing.T) {
 	close(stop)
 	got := <-peak
 	t.Logf("8 x 128 MiB at once, peak heap %.1f MiB", float64(got)/(1<<20))
-	if got > limit {
+	if overHeapLimit(t, got, limit) {
 		t.Errorf("peak heap %.1f MiB, over the %d MiB limit", float64(got)/(1<<20), limit>>20)
 	}
 	server.Stop()

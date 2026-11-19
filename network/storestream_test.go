@@ -740,6 +740,30 @@ func peakHeap(stop <-chan struct{}) <-chan uint64 {
 	return out
 }
 
+// overHeapLimit reports whether a peak heap is over the limit a test set, in a
+// build where that says something about the code under test.
+//
+// The limit is the runtime's soft memory limit, which the collector keeps to
+// by running more often. Under the race detector every allocation and every
+// collection is several times slower, and on a busy machine the collector
+// falls behind what eight senders allocate: the same code that peaks under
+// 64 MiB without the detector was measured at 68 to 122 MiB with it (#432).
+// That is the detector's cost and not a stream being held, so a race build
+// logs the figure and does not judge it. The builds without the detector do,
+// and CI runs both.
+func overHeapLimit(t *testing.T, peak uint64, limit int64) bool {
+	t.Helper()
+	if peak <= uint64(limit) {
+		return false
+	}
+	if raceEnabled {
+		t.Logf("peak heap %.1f MiB, over the %d MiB limit, under the race detector: not judged",
+			float64(peak)/(1<<20), limit>>20)
+		return false
+	}
+	return true
+}
+
 // TestStreamedStoreMemoryIsBounded: an instance sixteen times the memory allowed
 // is received whole by a streaming handler while the heap stays under the
 // limit. The same instance received by HandleCStore passes the limit: that is
@@ -786,7 +810,7 @@ func TestStreamedStoreMemoryIsBounded(t *testing.T) {
 		if want := size + 12 + int64(len(CTImageStorageUID)+1) + 8; received.Load() != want {
 			t.Errorf("the handler read %d bytes, want %d", received.Load(), want)
 		}
-		if peak > limit {
+		if overHeapLimit(t, peak, limit) {
 			t.Errorf("peak heap %.1f MiB, over the %d MiB limit", float64(peak)/(1<<20), limit>>20)
 		}
 	})
