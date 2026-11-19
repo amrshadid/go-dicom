@@ -72,12 +72,11 @@ func TestCreateFromDICOMJSONGivesBackTheDataSet(t *testing.T) {
 }
 
 // TestCreateFromDICOMJSONRefusesWhatItCannotMake: a value held by URI, more
-// than one object, and an object with no SOP Class UID.
+// and an object with no SOP Class UID.
 func TestCreateFromDICOMJSONRefusesWhatItCannotMake(t *testing.T) {
 	dir := t.TempDir()
 	for name, c := range map[string]struct{ body, want string }{
 		"bulk": {`{"00080016":{"vr":"UI","Value":["1.2.840.10008.5.1.4.1.1.7"]},"7FE00010":{"vr":"OB","BulkDataURI":"http://x/1"}}`, "BulkDataURI"},
-		"two":  {`[{"00080016":{"vr":"UI","Value":["1.2"]}},{"00080016":{"vr":"UI","Value":["1.2"]}}]`, "2 objects"},
 		"none": {`{"00100010":{"vr":"PN","Value":[{"Alphabetic":"Doe^Jane"}]}}`, "SOP Class UID"},
 	} {
 		in := filepath.Join(dir, name+".json")
@@ -300,5 +299,233 @@ func TestCreateJoinsTheTemplatesStudy(t *testing.T) {
 	}
 	if _, err := os.Stat(bad); err == nil {
 		t.Error("a refused value left a file")
+	}
+}
+
+// dicomJSONOf writes a corpus file as DICOM JSON, as `convert --format
+// dicom-json` does, and returns the JSON object and the file's data set.
+func dicomJSONOf(t *testing.T, source string) (map[string]any, *dataset.Dataset) {
+	t.Helper()
+	js := filepath.Join(t.TempDir(), "x.json")
+	if err := (&ConvertCommand{}).Execute([]string{source, js, "--format", "dicom-json"}); err != nil {
+		t.Fatalf("convert %s: %v", source, err)
+	}
+	data, err := os.ReadFile(js)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatal(err)
+	}
+	_, ds := readAnonymized(t, source)
+	return object, ds
+}
+
+// sameAsJSON fails the test unless two data sets are the same as DICOM JSON,
+// which holds every element and every binary value.
+func sameAsJSON(t *testing.T, label string, got, want *dataset.Dataset) {
+	t.Helper()
+	g, err := got.ToDICOMJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := want.ToDICOMJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, _ := json.Marshal(g)
+	wantJSON, _ := json.Marshal(w)
+	if !bytes.Equal(gotJSON, wantJSON) {
+		t.Errorf("%s: the created data set differs from the source:\n%.300s\n---\n%.300s", label, gotJSON, wantJSON)
+	}
+}
+
+// TestCreateMakesOneFilePerObjectOfAnArray: an array of three objects, as a
+// DICOMweb metadata response is, makes three files named by SOP Instance
+// UID, each the data set it came from; a name that two objects would share,
+// an output that is a file, and an object with no SOP Class UID refuse the
+// whole array with nothing written.
+func TestCreateMakesOneFilePerObjectOfAnArray(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	dir := t.TempDir()
+	var objects []map[string]any
+	originals := map[string]*dataset.Dataset{}
+	for _, name := range []string{"CT_small.dcm", "MR_small.dcm", "rtplan.dcm"} {
+		object, ds := dicomJSONOf(t, filepath.Join(corpus, name))
+		objects = append(objects, object)
+		originals[text(ds, tagSOPInstanceUID)] = ds
+	}
+	writeJSON := func(name string, v any) string {
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	in := writeJSON("array.json", objects)
+	out := filepath.Join(dir, "out")
+	if err := runCreate(in, out); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("the output holds %d entries (%v), want 3 files", len(entries), err)
+	}
+	for sopUID, original := range originals {
+		_, made := createdFile(t, filepath.Join(out, sopUID+".dcm"))
+		sameAsJSON(t, sopUID, made, original)
+	}
+
+	refuse := func(label, source, output, want string) {
+		t.Helper()
+		err := runCreate(source, output)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want a refusal naming %q", label, err, want)
+		}
+		if _, statErr := os.Stat(output); statErr == nil {
+			t.Errorf("%s: %s was written", label, output)
+		}
+	}
+	refuse("the same UID twice", writeJSON("twice.json", []any{objects[0], objects[0]}), filepath.Join(dir, "twice"), "same SOP Instance UID")
+	noClass := map[string]any{"00080018": map[string]any{"vr": "UI", "Value": []any{"2.25.7"}}}
+	refuse("an object with no SOP Class UID", writeJSON("noclass.json", []any{objects[0], noClass}), filepath.Join(dir, "noclass"), "object 2: ")
+	refuse("a UID that is a path", writeJSON("path.json", []any{objects[0],
+		map[string]any{"00080016": objects[1]["00080016"], "00080018": map[string]any{"vr": "UI", "Value": []any{"../x"}}}}), filepath.Join(dir, "path"), "cannot name a file")
+	file := filepath.Join(dir, "afile")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCreate(in, file); err == nil || !strings.Contains(err.Error(), "directory") {
+		t.Errorf("an array into a file: %v", err)
+	}
+	if err := runCreate(writeJSON("empty.json", []any{}), filepath.Join(dir, "empty")); err == nil || !strings.Contains(err.Error(), "no objects") {
+		t.Errorf("an empty array: %v", err)
+	}
+
+	// An array of one object is as it was: the output is the file.
+	single := filepath.Join(dir, "single.dcm")
+	if err := runCreate(writeJSON("one.json", []any{objects[0]}), single); err != nil {
+		t.Fatalf("an array of one: %v", err)
+	}
+	if _, made := createdFile(t, single); text(made, tagSOPInstanceUID) == "" {
+		t.Error("the file made from an array of one has no SOP Instance UID")
+	}
+}
+
+// TestCreateReadsABulkDataURIFromALocalFile: Pixel Data held at a BulkDataURI
+// that is a relative path, a file: URI with a relative path and a file: URI
+// with an absolute one comes back as the data set it was taken from; so does
+// a value inside a sequence item. A network address is refused by name, as
+// is a file outside the directory (by a path, by a file: URI, by a symbolic
+// link), a value that is not binary, and a byte range.
+func TestCreateReadsABulkDataURIFromALocalFile(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	object, original := dicomJSONOf(t, filepath.Join(corpus, "CT_small.dcm"))
+	dir := t.TempDir()
+	pixels := rawValue(original, tag.New(0x7FE0, 0x0010))
+	if err := os.WriteFile(filepath.Join(dir, "pixels.raw"), pixels, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	element := object["7FE00010"].(map[string]any)
+	if _, ok := element["InlineBinary"]; !ok {
+		t.Fatal("the JSON has no inline Pixel Data to move out")
+	}
+	bulk := func(uri string) string {
+		moved := map[string]any{}
+		for k, v := range object {
+			moved[k] = v
+		}
+		moved["7FE00010"] = map[string]any{"vr": element["vr"], "BulkDataURI": uri}
+		data, _ := json.Marshal(moved)
+		path := filepath.Join(dir, "bulk.json")
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	absolute := "file://" + filepath.ToSlash(filepath.Join(dir, "pixels.raw"))
+	if filepath.VolumeName(dir) != "" {
+		absolute = "file:///" + filepath.ToSlash(filepath.Join(dir, "pixels.raw"))
+	}
+	for _, uri := range []string{"pixels.raw", "file:pixels.raw", "./pixels.raw", absolute} {
+		out := filepath.Join(t.TempDir(), "out.dcm")
+		if err := runCreate(bulk(uri), out); err != nil {
+			t.Errorf("BulkDataURI %q: %v", uri, err)
+			continue
+		}
+		_, made := createdFile(t, out)
+		sameAsJSON(t, uri, made, original)
+		if !bytes.Equal(rawValue(made, tag.New(0x7FE0, 0x0010)), pixels) {
+			t.Errorf("BulkDataURI %q: Pixel Data is not the file's bytes", uri)
+		}
+	}
+
+	refused := []struct{ uri, want string }{
+		{"http://pacs.example/studies/1/bulkdata/7FE00010", "does not fetch"},
+		{"https://pacs.example/bulk", "reach the network"},
+		{"ftp://host/x", "ftp"},
+		{"file://other-host/pixels.raw", "other-host"},
+		{"pixels.raw?range=0-9", "byte range"},
+		{"../pixels.raw", "outside"},
+		{"file:///etc/hosts", "outside"},
+		{"absent.raw", "absent.raw"},
+	}
+	secret := t.TempDir()
+	if err := os.WriteFile(filepath.Join(secret, "secret"), []byte("not for the file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(dir, "link")); err == nil {
+		refused = append(refused, struct{ uri, want string }{"link/secret", "outside"})
+	}
+	for _, c := range refused {
+		out := filepath.Join(t.TempDir(), "out.dcm")
+		err := runCreate(bulk(c.uri), out)
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "BulkDataURI") {
+			t.Errorf("BulkDataURI %q: %v, want a refusal naming BulkDataURI and %q", c.uri, err, c.want)
+		}
+		if _, statErr := os.Stat(out); statErr == nil {
+			t.Errorf("BulkDataURI %q: a file was written", c.uri)
+		}
+	}
+
+	// A file outside the JSON's directory is read when -bulk-dir says so,
+	// and a relative path then counts from there.
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "other.raw"), pixels, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := bulk("other.raw")
+	if err := runCreate(in, filepath.Join(t.TempDir(), "o.dcm")); err == nil {
+		t.Error("a file that is not in the JSON's directory was read without -bulk-dir")
+	}
+	out := filepath.Join(t.TempDir(), "out.dcm")
+	if err := runCreate("-bulk-dir", elsewhere, in, out); err != nil {
+		t.Fatalf("-bulk-dir: %v", err)
+	}
+	if _, made := createdFile(t, out); !bytes.Equal(rawValue(made, tag.New(0x7FE0, 0x0010)), pixels) {
+		t.Error("-bulk-dir: Pixel Data is not the file's bytes")
+	}
+
+	// A value of a VR that is not binary is not read from a file.
+	text := `{"00080016":{"vr":"UI","Value":["1.2.840.10008.5.1.4.1.1.7"]},"00100010":{"vr":"PN","BulkDataURI":"pixels.raw"}}`
+	textIn := filepath.Join(dir, "text.json")
+	if err := os.WriteFile(textIn, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runCreate(textIn, filepath.Join(t.TempDir(), "o.dcm")); err == nil || !strings.Contains(err.Error(), "binary") {
+		t.Errorf("a BulkDataURI of a PN: %v", err)
 	}
 }
