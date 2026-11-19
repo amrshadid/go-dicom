@@ -508,6 +508,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`validate` no longer holds the image to check the attributes** (#440).
+  It read every value of the file, Pixel Data included, though the checker
+  needs only a value's presence and length: a 200 MB CT took 240 MB of
+  memory. Pixel Data and binary values longer than 1 KB now stay in the file,
+  and the same file takes 28 MB. The findings are the same, text, `--json`
+  and exit status, for every file of pydicom's corpus. A deflated file is
+  still read whole, as its values are not in the file as written.
+
 - **A subsampled color JPEG decodes to the picture libjpeg gives** (#398).
   The decoder repeated each chroma sample of a 4:2:2 or 4:2:0 frame, where
   libjpeg, which both dcmtk and pydicom decode with, filters between

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
@@ -128,4 +129,51 @@ func TestValidateRefusesWhatItCannotCheck(t *testing.T) {
 	if err == nil || errors.As(err, &status) {
 		t.Errorf("a file that is not DICOM gave %v", err)
 	}
+}
+
+// TestValidateFindsTheSameWithBulkDataLeftInTheFile: the command reads a file
+// with Pixel Data and long binary values left in it, and every file of the
+// corpus gets the report, finding for finding, that reading it whole gives.
+// The deflated file is among them; it is read whole, as its values are not in
+// the file as written.
+func TestValidateFindsTheSameWithBulkDataLeftInTheFile(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	paths, _ := filepath.Glob(filepath.Join(corpus, "*.dcm"))
+	compared, skipped := 0, 0
+	for _, path := range paths {
+		whole, errWhole := checkFile(path, false)
+		left, errLeft := validateFile(path)
+		if (errWhole == nil) != (errLeft == nil) {
+			t.Errorf("%s: read whole: %v; with bulk data left in the file: %v", filepath.Base(path), errWhole, errLeft)
+			continue
+		}
+		if errWhole != nil {
+			continue
+		}
+		a, _ := json.Marshal(whole)
+		b, _ := json.Marshal(left)
+		if string(a) != string(b) {
+			t.Errorf("%s: the reports differ:\nread whole: %s\nleft in the file: %s", filepath.Base(path), a, b)
+		}
+		compared++
+
+		// That something was left in the file, or the comparison proves
+		// nothing.
+		if df, err := readForValidation(path, true); err == nil && !df.Deflated {
+			if ds, err := df.GetDatasetWithValuesInFile(); err == nil {
+				if e, ok := ds.Get(tag.New(0x7FE0, 0x0010)); ok {
+					if _, inFile := e.GetValue().(dataelem.ValueInFile); inFile {
+						skipped++
+					}
+				}
+			}
+		}
+	}
+	if compared < 60 || skipped < 50 {
+		t.Errorf("%d corpus files compared, %d with Pixel Data left in the file", compared, skipped)
+	}
+	t.Logf("%d corpus files compared, %d with Pixel Data left in the file", compared, skipped)
 }
