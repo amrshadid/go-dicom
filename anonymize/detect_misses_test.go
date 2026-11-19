@@ -19,6 +19,13 @@ import (
 // first was found too generously: its region grew across and down the scan
 // until it held a third of the picture.
 //
+// The real screen's clock and labels are now found (#535), on the grid of
+// cells a fixed-pitch font stands on: detect_grid_test.go. The ones drawn
+// here are not, and the grid cannot reach them: this font has one pixel
+// between glyphs, so a three by three blur joins neighbors into one shape
+// ("GE" is one, the "09" of the clock is one) and no box of a single glyph
+// is left to stand on a grid.
+//
 // TestKnownMisses holds the line: a change to the detector may find more of
 // these, and may not find fewer, or mark more of the picture beside them.
 

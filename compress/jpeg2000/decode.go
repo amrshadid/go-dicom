@@ -210,11 +210,15 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 	if err != nil {
 		return err
 	}
-	decoded, err := decodeBlock(block, magnitudeBits+roiShift)
+	if block.Style&BlockStyleHT != 0 && roiShift > 0 {
+		// T.814 allows it (A.5, 8.4) and nothing here can check it: no
+		// codestream available has one, and OpenJPEG refuses it.
+		return &ErrUnsupported{Feature: "a region of interest in HT code-blocks"}
+	}
+	coefficients, err := DecodeBlock(*block, magnitudeBits+roiShift)
 	if err != nil {
 		return err
 	}
-	coefficients := decoded.data
 	if roiShift > 0 {
 		descaleRegionOfInterest(coefficients, roiShift)
 	}

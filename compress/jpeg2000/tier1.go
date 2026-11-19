@@ -226,7 +226,13 @@ func MagnitudeBits(q Quantization, band Band, resolution, levels int) (int, erro
 // counts. Dividing by two, rounding towards zero, gives the coefficient.
 //
 // magnitudeBits is the band's Mb, from MagnitudeBits.
+//
+// An HT code-block (T.814), one whose Style has BlockStyleHT, is decoded by
+// the HT block decoder into the same values.
 func DecodeBlock(block CodeBlockData, magnitudeBits int) ([]int32, error) {
+	if block.Style&BlockStyleHT != 0 {
+		return decodeHTBlock(&block, magnitudeBits)
+	}
 	d, err := decodeBlock(&block, magnitudeBits)
 	if err != nil {
 		return nil, err

@@ -804,6 +804,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `wlmscp` finds VIVALDI^ANTONIO for `vivaldi*`, as the archive does, and
   `wlmscpfs` does not.
 
+- **The JPEG 2000 decoder decodes High-Throughput code-blocks** (#403). An
+  HTJ2K codestream (ISO/IEC 15444-15, ITU-T T.814) keeps everything of Part 1
+  but the block coder, and `jpeg2000.ParseCodestream` stopped at its CAP
+  marker: `unexpected marker FF50`. `compress/jpeg2000` now reads the CAP
+  segment and decodes HT code-blocks, the cleanup pass and the SigProp and
+  MagRef refinement passes, written from the standard's text, inside the
+  existing decoder, so tiles, precincts, progressions, layers and both filters
+  carry over. pydicom-data's two HTJ2K files and openjpeg-data's HT
+  codestreams decode to OpenJPEG 2.5.4's samples, exactly where reversible, and
+  so do 390 codestreams transcoded to HT by the tests from `opj_compress`
+  output at 8 to 16 bits, signed and unsigned, gray and color. HTJ2K pixel
+  data in a data set is still refused by name until the transfer syntaxes are
+  wired to it. Placeholder passes, more than one HT set, a region of interest
+  on HT blocks, and HT and Part 1 blocks mixed in one tile-component are
+  refused by name; HTJ2K is not encoded.
+
+- **High-Throughput JPEG 2000 images decode** (#403). Pixel data in
+  `1.2.840.10008.1.2.4.201`, `.202` and `.203` was refused by name since #406:
+  `the pixel data is in High-Throughput JPEG 2000 Image Compression ...,
+  which is read and carried and not decoded`. It now decodes through the JPEG
+  2000 decoder wherever pixel data is decoded: the samples, rendering,
+  `decompress`, `convert`, redaction, DICOMweb frames (as stored, typed
+  `image/jphc`), and a send to a peer that accepts only uncompressed syntaxes.
+  pydicom-data's `.201` file decodes to pydicom 3's samples; no third-party
+  `.202` file exists, so a generated RPCL one, wrapped by pydicom 3, is in the
+  tests with two others, and all three decode to pydicom's samples. Nothing is
+  encoded into HTJ2K. JPEG XL stays refused by name.
+
+- **The text detector finds a clock and short labels in a small fixed-pitch
+  font** (#535). On the ultrasound screen in pydicom's corpus,
+  `examples_rgb_color.dcm`, the clock and the `PWR` labels beside the color
+  bars were not found: their glyphs are 4 by 6 pixels with soft edges, and
+  measured one by one a soft glyph is drawn like a blob (a `W` fills its
+  box, a `0` has a stroke 4 pixels wide), so what was left of each label was
+  two shapes. A screen's character generator puts every glyph in a cell of
+  one size, so its glyphs have identical boxes a whole number of cells apart
+  however soft their strokes; the detector now looks for three or more on
+  such a grid, on a plain ground, and adds what it finds where nothing else
+  was. On that screen 15 of 17 lines are covered whole, from 11; the fourth
+  `PWR` touches its color bar and is still missed. Every other region over
+  the 79 files of the corpus, and on every picture the tests draw, is
+  unchanged. Lettering blurred until its characters run together is still
+  not found (the 7 drawn known misses), and `auto` stays not the default.
+  A new test measures the detector on lettering it was not shaped by: a
+  second font at three sizes, four kinds of blur, over six real scans of the
+  corpus (51 of 164 lines found, from 50, and no more of any scan marked).
+
 ### Changed
 
 - **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk

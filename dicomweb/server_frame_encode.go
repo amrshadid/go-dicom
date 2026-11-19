@@ -27,6 +27,9 @@ var mediaDefault = map[string]string{
 	"image/jls":  compress.JPEGLSLossless,
 	"image/jp2":  compress.JPEG2000Lossless,
 	"image/jpx":  "1.2.840.10008.1.2.4.92",
+	// HTJ2K is decoded and not encoded, so a frame not already held in it
+	// is refused as image/jpx is.
+	"image/jphc": compress.HTJ2KLossless,
 	mediaRLE:     compress.RLELossless,
 }
 
@@ -34,9 +37,12 @@ var mediaDefault = map[string]string{
 // is not encoded into another compressed syntax: the copy would carry a loss
 // its syntax does not say, or add a second one. They are the lossy syntaxes
 // of the library's table of coders, and the ones it reads but does not
-// write: JPEG 2000 Part 2, lossy.
+// write: JPEG 2000 Part 2, lossy, and High-Throughput JPEG 2000, lossy.
 var lossySyntaxes = func() map[string]bool {
-	lossy := map[string]bool{"1.2.840.10008.1.2.4.93": true}
+	lossy := map[string]bool{
+		"1.2.840.10008.1.2.4.93": true,
+		compress.HTJ2K:           true,
+	}
 	for _, e := range dataset.PixelEncoders() {
 		if e.Lossy {
 			lossy[e.UID] = true

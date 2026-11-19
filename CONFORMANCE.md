@@ -314,18 +314,28 @@ are using that package.
 | RLE Lossless | read/write | **yes** |
 | JPEG Baseline | read/write | yes, via the standard library |
 | JPEG Extended, Lossless, JPEG-LS, JPEG 2000 | read/write | **yes**, all in pure Go |
-| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`), JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
+| High-Throughput JPEG 2000 (`.201`, `.202`, `.203`) | read/write | **yes**, in pure Go; not encoded |
+| JPEG XL (`.110`, `.111`, `.112`) | read/write, carried | **no**: refused by name |
 
 Values in a big endian file are normalized to little endian while parsing and
 converted back on write, so byte order does not reach code above the reader.
 
-A file in High-Throughput JPEG 2000 or JPEG XL is read, stored, de-identified
-and sent as it is, to a peer that accepts its syntax. Its pixel data is not
-decoded: rendering, reading the samples, redacting, and sending it over a
-context that needs it decoded are refused with the syntax's name. pydicom 3
-decodes HTJ2K through OpenJPEG 2.5, and OpenJPEG 2.5.4's `opj_decompress`
-decodes pydicom-data's two HTJ2K files to the same samples; nothing in pydicom,
-dcmtk 3.7.0 or this library decodes JPEG XL.
+High-Throughput JPEG 2000 pixel data decodes like any other compressed
+syntax: rendering, the samples, `decompress`, `convert`, redaction, DICOMweb
+frames (as stored, typed `image/jphc`), and sending to a peer that accepts
+only uncompressed syntaxes, which decodes it on the way. It is not encoded:
+nothing is converted or sent into HTJ2K, and a DICOMweb request for a frame
+as `image/jphc` that is not held so is refused with 406. pydicom-data's
+`.201` file decodes to pydicom 3's samples (pydicom decodes HTJ2K through
+OpenJPEG), and its `.203` file within the tolerance of §8.1; no third-party
+file in `.202` exists, so the tests carry a generated one, an RPCL codestream
+wrapped by pydicom 3, and decode it to pydicom's samples too.
+
+A file in JPEG XL is read, stored, de-identified and sent as it is, to a peer
+that accepts its syntax. Its pixel data is not decoded: rendering, reading the
+samples, redacting, and sending it over a context that needs it decoded are
+refused with the syntax's name. Nothing in pydicom, dcmtk 3.7.0 or this library
+decodes JPEG XL, and no JPEG XL file in DICOM was found to check one against.
 
 ### 3.3 Extended negotiation
 
@@ -569,15 +579,73 @@ how decoded samples are shaped and coloured, and the one tolerance.
   to the samples that were encoded: on a generated 70×65 16-bit image written
   by `opj_compress -I`, a mean squared error of 370 against OpenJPEG's 1281.
 
+  **High-Throughput code-blocks (Part 15, ITU-T T.814) decode too**: the HT
+  cleanup pass with its MEL, VLC and MagSgn streams, the HT SigProp pass
+  (with the vertically causal style) and the HT MagRef pass, the CAP marker
+  that declares Part 15, and HT tile-components beside Part 1 ones. Everything
+  around the code-blocks is the Part 1 decoder above, so HT codestreams have
+  every tiling, precinct, progression, layer and filter it has. The CxtVLC
+  tables of Annex C were read out of the ITU-T text by a script and are checked
+  to be complete prefix codes with consistent patterns
+  (`TestCxtVLCTablesAreCompletePrefixCodes`). The third-party HT codestreams
+  that exist, pydicom-data's two HTJ2K files and openjpeg-data's four HT
+  codestreams, all decode to OpenJPEG 2.5.4's samples, exactly where
+  reversible. None of them has a refinement pass, a second layer, tiles, more
+  than 8 bits or the vertically causal style, and nothing available writes HT
+  (OpenJPEG decodes it and does not encode it), so the tests carry an HT
+  encoder of their own written from T.814 Annex F: every codestream of an
+  `opj_compress` matrix like the one above is transcoded to HT code-blocks,
+  cleanup alone or with refinement passes, and OpenJPEG's decoder is the
+  reference (`TestHTDecodeMatchesOpenJPEG`, 390 codestreams, run in CI).
+  Refinement passes in a later layer than their cleanup pass are the one case
+  OpenJPEG 2.5.4 cannot decode: its packet reader adds them to the cleanup
+  segment, where T.814 B.2 makes them a segment of their own. That case is
+  checked to decode exactly as the same blocks in one layer
+  (`TestHTRefinementInLaterLayers`). HTJ2K pixel data in a data set is still
+  refused by name; the decoder is reached through `compress/jpeg2000` alone.
+
+  **High-Throughput code-blocks (Part 15, ITU-T T.814) decode too**: the HT
+  cleanup pass with its MEL, VLC and MagSgn streams, the HT SigProp pass
+  (with the vertically causal style) and the HT MagRef pass, the CAP marker
+  that declares Part 15, and HT tile-components beside Part 1 ones. Everything
+  around the code-blocks is the Part 1 decoder above, so HT codestreams have
+  every tiling, precinct, progression, layer and filter it has. The CxtVLC
+  tables of Annex C were read out of the ITU-T text by a script and are checked
+  to be complete prefix codes with consistent patterns
+  (`TestCxtVLCTablesAreCompletePrefixCodes`). The third-party HT codestreams
+  that exist, pydicom-data's two HTJ2K files and openjpeg-data's four HT
+  codestreams, all decode to OpenJPEG 2.5.4's samples, exactly where
+  reversible. None of them has a refinement pass, a second layer, tiles, more
+  than 8 bits or the vertically causal style, and nothing available writes HT
+  (OpenJPEG decodes it and does not encode it), so the tests carry an HT
+  encoder of their own written from T.814 Annex F: every codestream of an
+  `opj_compress` matrix like the one above is transcoded to HT code-blocks,
+  cleanup alone or with refinement passes, and OpenJPEG's decoder is the
+  reference (`TestHTDecodeMatchesOpenJPEG`, 390 codestreams, run in CI).
+  Refinement passes in a later layer than their cleanup pass are the one case
+  OpenJPEG 2.5.4 cannot decode: its packet reader adds them to the cleanup
+  segment, where T.814 B.2 makes them a segment of their own. That case is
+  checked to decode exactly as the same blocks in one layer
+  (`TestHTRefinementInLaterLayers`). The three HTJ2K transfer syntaxes,
+  `.201`, `.202` and `.203`, decode through this decoder.
+
   Features outside that set are refused rather than guessed at. A decoder that
   quietly mis-decodes is worse than none — the image looks plausible and the
   numbers are wrong, and in an RT Dose that is a wrong dose. Each of these is
   refused with an `ErrUnsupported` that names it, quoted here as the error
-  reads (ITU-T T.800 clauses in brackets):
+  reads (ITU-T T.800 clauses in brackets, T.814's marked):
 
-  - the High-Throughput block coder of Part 15, and the reserved bit, in the
-    code-block style: `code-block style 0x40` or `0x80` and up [A.6.1 Table
-    A.19];
+  - the reserved bit of the code-block style, alone or with HT's bit 6 where
+    it mixes HT and Part 1 code-blocks within a tile-component, and the bits
+    T.814 leaves reserved beside bit 6: `code-block style 0x80`, `0xC0`,
+    `0x41` and so on [A.6.1 Table A.19; T.814 A.4];
+  - an HT code-block of more than three coding passes, which placeholder
+    passes or a second HT set make: `an HT code-block of N coding passes`
+    [T.814 B.1, B.2];
+  - a region of interest on HT code-blocks: `a region of interest in HT
+    code-blocks` [T.814 A.5]; OpenJPEG refuses all three as well;
+  - the capabilities of any other part in a CAP segment: `the capabilities of
+    Part N` [A.5.2];
   - a region of interest coded by a method other than Maxshift, which Part 2
     defines: `region of interest style N` [A.6.3];
   - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
@@ -586,8 +654,8 @@ how decoded samples are shaped and coloured, and the one tolerance.
   - the Part 2 wavelets and quantization styles: `wavelet transform N`,
     `quantization style N`.
 
-  Any marker from Part 2 or from Part 15 (High-Throughput JPEG 2000) is
-  refused too, but as `unexpected marker` with its code rather than by name.
+  Any marker from Part 2 is refused too, but as `unexpected marker` with its
+  code rather than by name.
 
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an
