@@ -3239,6 +3239,62 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
             sys.exit("%s: decoded frame 1 differs from pydicom's" % name)
         decoded += 1
 
+# Pixels that are not whole bytes of integers (#441), in files pydicom
+# writes: Float and Double Float Pixel Data, little and big endian, whose
+# frames are their floats little endian; and a 1-bit image of 5 x 5 frames,
+# packed with no padding between them, so frames 2 and 3 start inside a
+# byte. Each frame is sent starting at the lowest bit of its first byte, and
+# has to be pydicom's pixel_array for that frame.
+import io
+from pydicom.dataset import Dataset, FileMetaDataset
+from pydicom.uid import generate_uid
+odd = 0
+for kind, ts in (("FloatPixelData", "1.2.840.10008.1.2.1"), ("DoubleFloatPixelData", "1.2.840.10008.1.2.1"),
+                 ("FloatPixelData", "1.2.840.10008.1.2.2"), ("DoubleFloatPixelData", "1.2.840.10008.1.2.2"),
+                 ("PixelData", "1.2.840.10008.1.2.1")):
+    ds = Dataset()
+    ds.file_meta = FileMetaDataset()
+    ds.file_meta.TransferSyntaxUID = ts
+    ds.SOPClassUID = ds.file_meta.MediaStorageSOPClassUID = (
+        "1.2.840.10008.5.1.4.1.1.30" if kind != "PixelData" else "1.2.840.10008.5.1.4.1.1.7")
+    ds.SOPInstanceUID = ds.file_meta.MediaStorageSOPInstanceUID = generate_uid()
+    ds.StudyInstanceUID, ds.SeriesInstanceUID = generate_uid(), generate_uid()
+    ds.is_little_endian, ds.is_implicit_VR = ts != "1.2.840.10008.1.2.2", False
+    ds.SamplesPerPixel, ds.PhotometricInterpretation = 1, "MONOCHROME2"
+    if kind == "PixelData":
+        from pydicom.pixel_data_handlers.numpy_handler import pack_bits
+        ds.Rows, ds.Columns, ds.NumberOfFrames = 5, 5, 3
+        ds.BitsAllocated = ds.BitsStored = 1
+        ds.HighBit = ds.PixelRepresentation = 0
+        ds.PixelData = pack_bits(numpy.random.default_rng(7).integers(0, 2, 75).astype(numpy.uint8))
+        ds["PixelData"].VR = "OB"
+    else:
+        ds.Rows, ds.Columns, ds.NumberOfFrames = 3, 5, 4
+        dtype = numpy.float32 if kind == "FloatPixelData" else numpy.float64
+        ds.BitsAllocated = 32 if dtype == numpy.float32 else 64
+        values = ((numpy.arange(60) - 7.25) * 1.5).astype(dtype)
+        setattr(ds, kind, values.astype(dtype().dtype.newbyteorder(">" if ts.endswith(".2") else "<")).tobytes())
+    out = io.BytesIO()
+    ds.save_as(out, write_like_original=False)
+    ds = pydicom.dcmread(io.BytesIO(out.getvalue()))
+    if stow(ours, out.getvalue()) != 200:
+        sys.exit("%s in %s: not stored" % (kind, ts))
+    path = "/studies/%s/series/%s/instances/%s/frames/" % (ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID)
+    array, n = ds.pixel_array, int(ds.NumberOfFrames)
+    order = list(range(n, 0, -1))
+    status, ctype, body = request(ours, path + ",".join(map(str, order)))
+    if status != 200:
+        sys.exit("%s in %s: frames answered %d: %s" % (kind, ts, status, body[:200]))
+    for (header, data), number in zip(parts(ctype, body), order):
+        frame = array[number - 1]
+        if kind == "PixelData":
+            got = numpy.unpackbits(numpy.frombuffer(data, numpy.uint8), bitorder="little")
+            if len(data) != 4 or got[25:].any() or not numpy.array_equal(got[:25].reshape(5, 5), frame):
+                sys.exit("1-bit frame %d is %s, pydicom reads %s" % (number, data.hex(), frame.ravel()))
+        elif data != frame.astype(frame.dtype.newbyteorder("<")).tobytes():
+            sys.exit("%s in %s frame %d differs from pydicom's" % (kind, ts, number))
+    odd += 1
+
 # What is not served, as PS3.18 10.4.3 answers it, asked of a native image
 # held at the end: not frame numbers, a frame past the last, and a
 # compressed type, which nothing is encoded into on request.
@@ -3254,8 +3310,8 @@ for frames, accept, want_status in (("0", None, 400), ("1,x", None, 400), ("16",
 
 if checked < 40 or not multi:
     sys.exit("only %d files checked, %d of them multi-frame" % (checked, len(multi)))
-print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads; %d decoded frames equal to pydicom's%s"
-      % (checked, len(multi), ", ".join(multi), bulk, decoded,
+print("%d files, %d multi-frame (%s): every frame byte-equal to pydicom's; %d BulkDataURIs serve the value pydicom reads; %d decoded frames equal to pydicom's; %d float and 1-bit images' frames equal to pydicom's%s"
+      % (checked, len(multi), ", ".join(multi), bulk, decoded, odd,
          "; %d byte-equal to Orthanc's, %d where Orthanc swaps 32-bit big endian in words (%s)"
          % (len(agreed), len(disagreed), ", ".join(disagreed)) if orthanc else ""))
 PY
