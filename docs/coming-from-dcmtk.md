@@ -47,6 +47,8 @@ The network commands keep dcmtk's names. Two habits change:
 | `movescu -S -aem DEST -k StudyInstanceUID=1.2.3 host port` | `go-dicom movescu -aec QRSCP -dest DEST -study 1.2.3 host:port` |
 | `getscu -S -k StudyInstanceUID=1.2.3 host port` | `go-dicom getscu -aec QRSCP -study 1.2.3 -output retrieved host:port` |
 | `dcmqrscp` with `dcmqrscp.cfg` | `go-dicom qrscp -port 11114 -output archive -move-dest DEST=host:port` | 
+| `findscu -W -k "ScheduledProcedureStepSequence[0].Modality=MR" host port` | `go-dicom findscu -aec RIS -worklist -modality MR host:port` |
+| `wlmscpfs -dfp wlistdb port` (one subdirectory per AE title) | `go-dicom wlmscp -dir wlistdb/OFFIS -aet OFFIS -port 11112` (one directory) |
 | `dcmsend host port files...` | `go-dicom storescu -aec STORESCP host:port study/*.dcm` |
 | `+tls key cert` on any network tool | `-tls -tls-cert node.crt -tls-key node.key -tls-ca ca.crt` |
 | `-d` or `-ll trace` (a log of the association) | `-events trace.jsonl`: every PDU with its bytes, the contexts, every DIMSE message, as JSON lines |

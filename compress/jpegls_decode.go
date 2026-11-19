@@ -68,6 +68,10 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 		haveFrame bool
 		scans     int
 		pos       = 2
+
+		// restartInterval is Ri of the last DRI segment, in lines; zero is
+		// none. A DRI holds for every scan after it until another replaces it.
+		restartInterval int
 	)
 
 	for pos+1 < len(data) {
@@ -118,6 +122,14 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 			}
 			pos += segLen
 
+		case markerDRI:
+			ri, err := parseJPEGLSRestartInterval(body)
+			if err != nil {
+				return nil, err
+			}
+			restartInterval = ri
+			pos += segLen
+
 		case markerSOS:
 			if !haveFrame {
 				return nil, fmt.Errorf("jpegls: scan before any frame header")
@@ -133,7 +145,7 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 				return nil, err
 			}
 
-			consumed, err := decodeJPEGLSScan(img, scan, &scanParams, data[pos+segLen:])
+			consumed, err := decodeJPEGLSScan(img, scan, &scanParams, data[pos+segLen:], restartInterval)
 			if err != nil {
 				return nil, nameLegacyThresholds(err, params, scanParams, img.precision)
 			}
@@ -208,6 +220,25 @@ func parseJPEGLSFrameHeader(body, stream []byte) (*jpeglsImage, []byte, error) {
 		img.planes = append(img.planes, make([]int32, width*height))
 	}
 	return img, ids, nil
+}
+
+// parseJPEGLSRestartInterval reads a DRI segment, T.87 C.2.5. JPEG-LS lets Ri
+// be 16, 24 or 32 bits, told apart by the segment's length, where T.81 has
+// only 16; CharLS and libjpeg read all three. An interval longer than any
+// frame can be tall restarts nothing, so it is held at that, which keeps a
+// 32-bit value from wrapping an int where int is 32 bits.
+func parseJPEGLSRestartInterval(body []byte) (int, error) {
+	if len(body) < 2 || len(body) > 4 {
+		return 0, fmt.Errorf("jpegls: DRI segment carries %d bytes; T.87 C.2.5 gives Ri 2, 3 or 4", len(body))
+	}
+	var ri uint32
+	for _, b := range body {
+		ri = ri<<8 | uint32(b)
+	}
+	if ri > 1<<16 {
+		ri = 1 << 16
+	}
+	return int(ri), nil
 }
 
 // parseLSE reads a preset parameters segment into params. A zero field is left
@@ -345,16 +376,35 @@ type jpeglsDecoder struct {
 	// indexing instead of needing a branch per sample.
 	prev [][]int32
 	cur  [][]int32
+
+	// entropy is the data from the end of the scan header on, and start the
+	// offset in it of the restart interval being decoded: zero until the first
+	// restart marker. reader reads entropy[start:].
+	entropy []byte
+	start   int
+
+	// restartInterval is the number of lines (MCUs) in a restart interval,
+	// zero for none, and restarts counts the markers passed in this scan,
+	// which says which RSTm comes next.
+	restartInterval int
+	restarts        int
+
+	// restartFailed records that the error being returned came from a
+	// restart marker, which already says what was wrong with it.
+	restartFailed bool
 }
 
 // decodeJPEGLSScan decodes one scan and reports the bytes it consumed.
+// restartInterval is Ri from the DRI segment in force, zero for none.
 func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
-	entropy []byte) (int, error) {
+	entropy []byte, restartInterval int) (int, error) {
 
 	d := &jpeglsDecoder{
-		img:    img,
-		params: params,
-		reader: &jpeglsBitReader{data: entropy},
+		img:             img,
+		params:          params,
+		reader:          &jpeglsBitReader{data: entropy},
+		entropy:         entropy,
+		restartInterval: restartInterval,
 	}
 	d.resetContexts()
 
@@ -376,9 +426,23 @@ func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
 		err = d.decodeSampleInterleaved(scan)
 	}
 	if err != nil {
-		return 0, err
+		if d.restartFailed {
+			return 0, err
+		}
+		return 0, d.nameStrayRestart(err)
 	}
 
+	end, err := d.endInterval("scan")
+	if err != nil {
+		return 0, err
+	}
+	return d.start + end, nil
+}
+
+// endInterval checks that the data of the interval just decoded, the whole
+// scan or one restart interval, was all read and not run past, and returns
+// its length in bytes from d.start. what names it in an error.
+func (d *jpeglsDecoder) endInterval(what string) (int, error) {
 	if d.reader.overrun > maxJPEGLSTrailingSlack {
 		return 0, fmt.Errorf("jpegls: entropy-coded data ends %d bytes early; the frame is "+
 			"truncated and the samples past that point would be invented", d.reader.overrun)
@@ -395,13 +459,105 @@ func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
 	// top bit set. Stuffing guarantees a 0xFF inside the segment is followed by
 	// seven data bits with that bit clear, so the two cannot be confused — the
 	// bit reader relies on the same rule to stop.
-	end := entropyLength(entropy)
+	end := entropyLength(d.entropy[d.start:])
 	if unread := d.reader.unreadBytes(end); unread > maxJPEGLSUnreadBytes {
-		return 0, fmt.Errorf("jpegls: every sample of the scan is decoded with %d bytes of its "+
+		if what == "restart interval" {
+			// Within a scan with restart markers the likelier cause is a
+			// marker that is missing, so the next interval's data follows on.
+			return 0, fmt.Errorf("jpegls: every sample of the restart interval of %d lines is "+
+				"decoded with %d bytes of its entropy-coded data unread: a restart marker is "+
+				"missing, or the interval was coded with other parameters than this decoder used",
+				d.restartInterval, unread)
+		}
+		return 0, fmt.Errorf("jpegls: every sample of the %s is decoded with %d bytes of its "+
 			"entropy-coded data unread, so it was coded with other parameters than this decoder "+
-			"used and the image would be wrong", unread)
+			"used and the image would be wrong", what, unread)
 	}
 	return end, nil
+}
+
+// nameStrayRestart adds the cause to an error from decoding lines when the
+// data being read ended at a restart marker: the markers do not fall where
+// the DRI in force puts them, or there is none in force. The bit reader stops
+// at any marker and the decoder then fails on invented bits, which by itself
+// reads as damage.
+func (d *jpeglsDecoder) nameStrayRestart(err error) error {
+	seg := d.entropy[d.start:]
+	end := entropyLength(seg)
+	if end+1 >= len(seg) || seg[end+1] < markerRST0 || seg[end+1] > markerRST7 {
+		return err
+	}
+	m := seg[end+1] - markerRST0
+	if d.restartInterval == 0 {
+		return fmt.Errorf("%w; the data runs into RST%d in a scan with no restart interval "+
+			"(no DRI segment, or Ri 0)", err, m)
+	}
+	return fmt.Errorf("%w; the data runs into RST%d before the %d lines of the restart "+
+		"interval are decoded", err, m, d.restartInterval)
+}
+
+// endOfLine is called after each MCU of a scan, line counting from zero, and
+// restarts the decoder when a restart interval ends there and lines remain.
+//
+// A JPEG-LS MCU is a line: of the one component of a non-interleaved scan, of
+// every component of a line-interleaved one, of interleaved samples otherwise.
+// So Ri counts lines, and a frame coded one scan per component has its own
+// intervals, and its own RST0, in each scan.
+func (d *jpeglsDecoder) endOfLine(line int) error {
+	if d.restartInterval == 0 || (line+1)%d.restartInterval != 0 || line+1 == d.img.height {
+		return nil
+	}
+	if err := d.restart(); err != nil {
+		d.restartFailed = true
+		return fmt.Errorf("after row %d: %w", line, err)
+	}
+	return nil
+}
+
+// restart moves the decoder past a restart marker, T.87 C.2.5 with T.81
+// E.2.4 as T.87 applies it. The coder starts again as it did at the top of
+// the scan: the contexts and the run index initialized (T.87 A.2.1), the line
+// above taken to be zeros, and the bits read from the byte after the marker,
+// the interval before it having been padded out to a byte. That is why each
+// interval decodes exactly as the same lines coded as an image of their own,
+// which is how CharLS's restart test files are made.
+//
+// The interval before the marker is held to the same checks as the end of a
+// scan, so data left over or missing is refused at the interval where it
+// happens, not carried into the next.
+func (d *jpeglsDecoder) restart() error {
+	end, err := d.endInterval("restart interval")
+	if err != nil {
+		return err
+	}
+
+	want := byte(markerRST0 + d.restarts%8)
+	pos := d.start + end
+	if pos >= len(d.entropy) {
+		return fmt.Errorf("jpegls: the entropy-coded data ends where RST%d was due", d.restarts%8)
+	}
+	// Any number of 0xFF fill bytes may come before a marker (T.81 B.1.1.2).
+	for pos < len(d.entropy) && d.entropy[pos] == 0xFF {
+		pos++
+	}
+	if pos >= len(d.entropy) {
+		return fmt.Errorf("jpegls: the entropy-coded data ends where RST%d was due", d.restarts%8)
+	}
+	if got := d.entropy[pos]; got != want {
+		return fmt.Errorf("jpegls: marker 0x%02X where the restart interval of %d lines ends, "+
+			"not RST%d", got, d.restartInterval, d.restarts%8)
+	}
+
+	d.start = pos + 1
+	d.restarts++
+	d.reader = &jpeglsBitReader{data: d.entropy[d.start:]}
+	d.resetContexts()
+	clear(d.runIndexes)
+	for i := range d.prev {
+		clear(d.prev[i])
+		clear(d.cur[i])
+	}
+	return nil
 }
 
 // entropyLength returns the number of bytes of entropy-coded data before the next
@@ -443,6 +599,9 @@ func (d *jpeglsDecoder) decodePlane(comp int) error {
 
 		copy(plane[y*width:(y+1)*width], d.cur[0][1:width+1])
 		d.prev[0], d.cur[0] = d.cur[0], d.prev[0]
+		if err := d.endOfLine(y); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -476,6 +635,9 @@ func (d *jpeglsDecoder) decodeLineInterleaved(scan *jpeglsScan) error {
 		if err := d.checkNotExhausted(y, height); err != nil {
 			return err
 		}
+		if err := d.endOfLine(y); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -501,6 +663,9 @@ func (d *jpeglsDecoder) decodeSampleInterleaved(scan *jpeglsScan) error {
 			d.prev[i], d.cur[i] = d.cur[i], d.prev[i]
 		}
 		if err := d.checkNotExhausted(y, height); err != nil {
+			return err
+		}
+		if err := d.endOfLine(y); err != nil {
 			return err
 		}
 	}

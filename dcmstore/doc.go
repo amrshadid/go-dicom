@@ -88,7 +88,9 @@
 //
 // # Matching
 //
-// [Store.Query] implements the matching rules of PS3.4 C.2.2:
+// [Store.Query] matches by the rules of PS3.4 C.2.2, through package
+// [github.com/amrshadid/go-dicom/matching], which matches a query against any
+// data set the same way: the store runs it against its index. The rules:
 //
 //   - Universal (C.2.2.2.3) — a zero-length query value matches everything, and
 //     the attribute is returned.
@@ -115,6 +117,12 @@
 //     stored item satisfies every attribute in the query item; the criteria must
 //     be met by the same item, so a station from one scheduled step and a date
 //     from another is not a match.
+//
+//   - Empty value (C.2.2.2.7) — "" matches an entity where the attribute is
+//     empty or absent.
+//
+//   - Multiple values (C.2.2.2.8) — a key of more than one value, CT\MR,
+//     matches an entity that matches any one of them.
 //
 // An attribute the index does not hold is treated as an unsupported optional key
 // and returned with a zero-length value, which C.2.2.1.2 allows. Matching on it

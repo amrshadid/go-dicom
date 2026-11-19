@@ -48,6 +48,7 @@ func allCommands() []Command {
 		&MoveSCUCommand{},
 		&GetSCUCommand{},
 		&QRSCPCommand{},
+		&WLMSCPCommand{},
 		&QidoCommand{},
 		&WadoCommand{},
 		&StowCommand{},
@@ -217,7 +218,7 @@ func TestHelpListingMatchesRealCommands(t *testing.T) {
 
 	// The reverse: a network command missing from the listing.
 	networkish := []string{"echoscu", "echoscp", "storescu", "storescp",
-		"findscu", "movescu", "getscu", "commitscu", "mppsscu", "upsscu", "qrscp"}
+		"findscu", "movescu", "getscu", "commitscu", "mppsscu", "upsscu", "qrscp", "wlmscp"}
 	listed := make(map[string]bool)
 	for _, n := range netCommands {
 		listed[n] = true

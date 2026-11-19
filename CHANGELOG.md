@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A query can be matched against a data set** (#515). C-FIND matching
+  lived only inside `dcmstore`, unexported and written against its index, so
+  a program with entries of its own, a worklist for one, had nothing to call:
+  `WorklistHandler` sends whatever `OnWorklist` returns. Package `matching`
+  reads a query once (`Compile`) and matches it against any data set, by
+  every rule of PS3.4 C.2.2.2: universal, single value, list of UID,
+  wildcard, range, sequence matching item by item, so a step at one station
+  and a date from another step is not a match, and the two rules nothing
+  had: `""` matches an entity where the attribute is empty, and a key of
+  more than one value, `CT\MR`, matches either. Both were compared as plain
+  text before and never matched. `Response` builds the answer from a match:
+  the keys asked for, empty where the entry has none, sequences cut to the
+  items that matched and the keys asked for in them, text in UTF-8 with
+  ISO_IR 192 declared when it needs it. `dcmstore` now matches through it
+  rather than its own code. Over the pydicom corpus and 24 generated
+  instances, 192 queries at the four levels give answers byte for byte the
+  same as before, except the 12 that use the two new rules, which matched
+  nothing before. A text value of LT, ST, UT or UR is one value: split at a
+  backslash, a comment `a\b` matched a query for `a` and never itself.
+
 - **An N-GET can ask for the attributes it wants** (#486). An SCP has read
   the Attribute Identifier List (0000,1005) since #380, but `SCU.NGet` could
   not send one, so a requester always asked for every attribute.
@@ -753,6 +773,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   class, and a completion under another Transaction UID (C301H) and a
   cancellation of a final step (C311H) refused.
 
+- **`wlmscp` serves a Modality Worklist from a directory of files** (#506).
+  The command line could ask a worklist (`findscu -worklist`) and not answer
+  one, so a modality, or `findscu -worklist` itself, could not be tested
+  against this tool alone. `wlmscp -dir` serves the worklist files of a
+  directory, one entry per file, with File Meta Information or without, as
+  dcmtk's `wlmscpfs` does. It reads the directory again at every query, so
+  a file added, changed or removed while it runs is served as it is; a file
+  that is not a worklist entry, not DICOM or with no Scheduled Procedure Step
+  Sequence, is not served and is reported once. It answers Modality Worklist
+  C-FIND by package `matching`, the step matched item by item and each
+  answer holding the keys asked for, answers C-ECHO, refuses every other SOP
+  class, and takes `-tls`, `-events` and `-allow`. Over dcmtk's sample
+  worklist database, dcmtk's `findscu -W` and pynetdicom get the same
+  entries, attribute for attribute, from `wlmscp` as from `wlmscpfs`, for 14
+  queries by modality, date, date range, time range, station, patient name
+  with wildcards, universal matching and one that matches nothing; so does
+  `go-dicom findscu -worklist`. They differ on a name in another case:
+  `wlmscp` finds VIVALDI^ANTONIO for `vivaldi*`, as the archive does, and
+  `wlmscpfs` does not.
+
 ### Changed
 
 - **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk
@@ -1280,6 +1320,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dcmcjpls codes a frame everyone reads. Lossless frames from 2 to 8 bits
   are byte for byte CharLS 2.2's; CONFORMANCE §8.2 has the comparison.
 
+- **A JPEG-LS run that reaches the end of a line is coded as T.87 codes it**
+  (#453). When the line ended partway through a block, the encoder wrote a 0
+  bit and the length left, as for a run that a sample interrupts, where T.87
+  A.7.1.2 writes a single 1 bit. Every decoder read both to the same
+  samples, so no image was wrong, but such a line cost up to 15 bits more
+  and the output could not be compared with CharLS's byte for byte. Frames
+  are now byte for byte CharLS 2.2's at every precision from 2 to 16,
+  lossless and near-lossless (above 12 bits CharLS adds an LSE segment
+  repeating the default parameters). Frames written by 1.10.0 still decode.
+
 - **A JPEG decoded to RGB is converted as libjpeg converts it** (#497). The
   conversion was image/color's, which scales Y with the products and
   truncates, so a frame decoded straight to RGB differed from dcmtk and
@@ -1318,6 +1368,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given. `RenderOptions.StoredRange` asks `RenderFrame` for this; without it
   `RenderFrame` and `convert` keep spanning the values across all frames.
   Orthanc 1.13 stretches each frame to its own values, as this server did.
+
+- **A server or client given its own logger gets the warnings of what it
+  receives** (#503). The data sets and command sets the network decoded were
+  built with `dataset.Add`, whose validation warnings (a retired attribute, a
+  VR the dictionary does not give) went to `config.Logger` whatever logger
+  the server or client had: the corpus sent as C-STOREs wrote 14 lines to the
+  global logger and none to the server's. They are now built with
+  `dataset.AddWithContext` under a context carrying that logger, as a file
+  read with its own logger builds its data set (#481): C-STORE, the C-FIND,
+  C-MOVE and C-GET identifiers and results, the C-GET sub-operations a client
+  receives, the N-service data sets both ways, storage commitment, and the
+  command sets. A server's handlers, and a client's `OnCStore`, are given the
+  same context, so the built-in UPS handler's warnings, as it applies an
+  N-SET, go to the server's logger too. With no logger given, nothing
+  changes. Never in a release.
+
+- **A JPEG-LS frame with restart markers decodes** (#452). A frame coded with
+  a restart interval, a DRI segment and an RSTm marker every so many lines
+  as T.87 allows, was refused as corrupt at the first marker: the scan was
+  read straight through it, without starting the decoder again or moving to
+  the byte after it. A frame whose only marker came near the end could
+  decode with no error to a wrong last few lines. CharLS's restart test
+  files now decode to the T.87 test images, as libjpeg decodes them, and
+  1237 generated frames at 2 to 16 bits in all three interleave modes decode
+  as libjpeg decodes them. A marker missing, out of order or where the DRI
+  does not put it is refused with an error saying so.
 
 ## [1.10.0] - 2026-11-17
 

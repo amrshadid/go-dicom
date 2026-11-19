@@ -405,7 +405,7 @@ func (s *SCU) ReceiveStorageCommitmentResult(ctx context.Context) (*StorageCommi
 			"expected an N-EVENT-REPORT command, got a data set")
 	}
 
-	cmdDS, err := DecodeCommandDataset(cmdData)
+	cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 	if err != nil {
 		return nil, err
 	}
@@ -424,7 +424,7 @@ func (s *SCU) ReceiveStorageCommitmentResult(ctx context.Context) (*StorageCommi
 	if err != nil {
 		return nil, err
 	}
-	ds, err := DecodeDataset(dsData, assoc.TransferSyntaxFor(dsCtxID))
+	ds, err := decodeDataset(assoc.logContext(ctx), dsData, assoc.TransferSyntaxFor(dsCtxID))
 	if err != nil {
 		return nil, err
 	}

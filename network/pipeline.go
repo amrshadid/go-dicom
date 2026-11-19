@@ -218,7 +218,7 @@ func (a *Association) readMessage(ctx context.Context) (*dimseMessage, error) {
 		return nil, NewDIMSEError("UNEXPECTED", "received a data set with no command before it", 0)
 	}
 
-	commandDS, err := DecodeCommandDataset(commandBytes)
+	commandDS, err := decodeCommandDataset(a.logContext(ctx), commandBytes)
 	if err != nil {
 		return nil, fmt.Errorf("decoding a command: %w", err)
 	}

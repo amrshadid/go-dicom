@@ -385,6 +385,14 @@ func (e *jpeglsEncoder) updateContext(ctx *jpeglsContext, errval int32) {
 // The run index advances only when a whole block fit. A block cut short by the end
 // of the line does not earn a longer code next time, and the decoder is explicit
 // about it.
+//
+// A run that reaches the end of the line with part of a block left is a single 1
+// bit (T.87 A.7.1.2, code segment A.15): the line's end says where the run stops,
+// so it needs no length and no interrupting sample. This encoder once wrote a 0
+// and the remainder in J bits there, as for an interrupted run. Every decoder
+// reads that to the same samples, so this package's decoder still accepts it, but
+// it cost up to 15 more bits a line and kept the output from being byte for byte what
+// CharLS writes.
 func (e *jpeglsEncoder) encodeRun(x, width int, ra int32) (int, error) {
 	remaining := width - x + 1
 
@@ -418,16 +426,19 @@ func (e *jpeglsEncoder) encodeRun(x, width int, ra int32) (int, error) {
 		}
 	}
 
-	// The run ended before a whole block would have fit.
+	if runLength == remaining {
+		// The line ended less than a block into the run. The index does not
+		// advance, as for any block cut short.
+		e.writer.writeBit(1)
+		return runLength, nil
+	}
+
+	// The run was interrupted before a whole block would have fit.
 	e.writer.writeBit(0)
 	if j := runLengthOrder[e.runIndex]; j > 0 {
 		e.writer.writeBits(int32(runLength-count), j)
 	}
 	count = runLength
-
-	if x+count > width {
-		return maxInt(count, 1), nil
-	}
 
 	// The sample that broke the run.
 	reconstructed, err := e.encodeRunInterruption(e.cur[x+count], ra, e.prev[x+count])

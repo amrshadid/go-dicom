@@ -20,7 +20,8 @@ import (
 // comes out exactly right or it comes out visibly wrong, which makes
 // whole-image comparison against a third party the only test worth writing.
 //
-// Single and multi component, both interleave modes, lossless and near-lossless.
+// Single and multi component, both interleave modes, lossless and near-lossless,
+// with or without restart intervals.
 
 const (
 	markerSOF55 = 0xF7 // JPEG-LS frame header
