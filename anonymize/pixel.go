@@ -99,12 +99,22 @@ const AutomaticRedactionNote = "Burned-in text redacted where detected, unverifi
 // An image is clean when a person has looked at it.
 //
 // When nothing is found, nothing is changed and no regions are returned.
+// When what is found covers more of the picture than text does, nothing is
+// changed either, and the error wraps ErrImplausibleRedaction: see
+// CheckDetectedShare.
 func (a *Anonymizer) RedactDetectedText(ds *dataset.Dataset, detector TextDetector) ([]dataset.PixelRegion, error) {
 	if ds == nil {
 		return nil, fmt.Errorf("dataset is nil")
 	}
 	regions, err := DetectBurnedInText(ds, detector)
 	if err != nil || len(regions) == 0 {
+		return nil, err
+	}
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckDetectedShare(regions, info.Columns, info.Rows); err != nil {
 		return nil, err
 	}
 	if err := redactRegions(ds, regions); err != nil {
