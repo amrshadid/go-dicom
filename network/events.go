@@ -187,7 +187,9 @@ func abortedBy(cause AbortCause, err error) *LocalAbort {
 // EventDetail is the part of an Event that holds lists.
 type EventDetail struct {
 	// PDUBytes is the event's PDU as it crossed the connection, header
-	// included.
+	// included. A received P-DATA-TF carries its bytes only when a handler
+	// of EVTPDURecv was registered as it began to arrive: it holds the data
+	// sets, and copying it for nobody doubled what an instance cost.
 	PDUBytes []byte
 	// PresentationContexts is the outcome of each presentation context, on
 	// EVTAssocAccepted and EVTAssocEstablished.

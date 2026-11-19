@@ -9,15 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **An abort says why** (#470). A timeout, a protocol violation by the peer,
-  a handler that panicked and an unknown command all sent an A-ABORT that was
-  reported to events with nothing but the PDU, and a timeout and a panic were
-  byte for byte the same. The EVTPDUSent and EVTAssocAborted of an A-ABORT this
-  side sends now carry `Event.LocalAbort`, with its `Cause`
-  (`AbortCauseTimeout`, `AbortCauseProtocolViolation`, `AbortCauseHandlerPanic`,
-  `AbortCauseStopping`, `AbortCauseRequested`) and the error behind it. An
-  abort the peer sent has none. The PDU on the wire is unchanged, and the
-  `-events` log does not write the cause.
+- **An N-GET can ask for the attributes it wants** (#486). An SCP has read
+  the Attribute Identifier List (0000,1005) since #380, but `SCU.NGet` could
+  not send one, so a requester always asked for every attribute.
+  `SCU.NGetAttributes` takes the tags wanted and sends them in that order
+  (PS3.7 10.1.2.1.4). `NGet` is unchanged and sends no list. It is a new
+  method, not a parameter added to `NGet`, so that a method value or an
+  interface written against `NGet` keeps compiling. Against pynetdicom's
+  N-GET SCP, `NGetAttributes` with Manufacturer and Device Serial Number
+  receives those two of the five attributes, and pynetdicom reports the two
+  tags as the list it was given.
 
 - **`modify` takes a binary value from a file, and changes or removes an
   attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
@@ -41,6 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schemas, and fail on a property the schemas do not describe. Nothing the
   commands print changed. The `-events` lines carry no `schemaVersion`; the
   document says so and what a future one would mean.
+
+- **Every `-events` line says `"schemaVersion":1`** (#480). A reader could not
+  tell a version 1 line from a later one by anything in the line. The
+  property is on every line, so a reader that starts following the file
+  midway, or reads a file two processes append to, can check each line, and
+  it is the last property: a line is the line 1.10.0 wrote with
+  `,"schemaVersion":1` before the closing brace, every other property in its
+  place, byte for byte. A line without one, as 1.10.0 wrote, is version 1;
+  the schema does not require it.
 
 - **Media Creation Management and the two event logging classes are
   verified against a peer** (#370). CONFORMANCE §8.5 said they "still have
@@ -103,7 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be made. Bulk values are read from the two files in chunks and never
   held whole, and report the byte they first differ at; a value is compared
   as what it means, so padding, a character set and the byte order of a number
-  or of pixel words do not make files differ. `--ignore` (a tag or keyword,
+  or of pixel samples do not make files differ. Big endian Pixel Data is
+  reversed at the sample width Bits Allocated gives, as the reader does: in
+  OW's two-byte words, a 32-bit RT Dose and its correct little endian copy
+  differed from the first byte (#426). `--ignore` (a tag or keyword,
   at every depth), `--ignore-meta` and `--ignore-private` leave elements out.
   `cli.ExitError` lets a command choose its exit status; the others still end
   with 1.
@@ -561,7 +574,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing Type 1 or Type 2 attribute of a Mandatory module that it had not
   reported. CONFORMANCE §8.6 says what was compared, and what was not.
 
+- **A read logs to a logger of its own** (#481). A file read logged only to
+  the global `config.Logger`, stderr by default, so a server could not give
+  one read its own logger, or keep one read quiet, without changing it for
+  every read in the process. `ReadOptions.Logger` takes a `*slog.Logger` for
+  everything the read logs, the reader, the character set decisions and the
+  validation `GetDataset` runs, and none of it reaches the global one; nil
+  is the global one, as before. `slog.New(slog.DiscardHandler)` reads
+  silently. The logger is carried in a context, by the new
+  `config.WithLogger` and `config.LoggerFromContext`, to `charset`'s
+  `WithContext` functions and the new `Dataset.AddWithContext` and
+  `AddSequenceWithContext`. The character set lines printed the file's own
+  Specific Character Set value; they now name only the defined term assumed,
+  or the length of one that is not a term.
+
+- **Attributes are read without linking the codecs** (#498). `filereader`
+  was the only way to read a file, and it depends on `dataset`, `encaps`,
+  `compress`, `compress/jpeg2000`, `pixels` and `waveforms` through
+  `GetDataset`, `FrameRanges` and `GetWaveforms`, so a program that only
+  reads attributes linked them all. The new `filereader/attributes` package is
+  the parser alone: `Read`, `TextEncodings` and `DecodeText`, returning the
+  same element types as `filereader`. A test runs `go list -deps` on it and
+  fails if any of those packages, or `dataelem`, joins its dependencies, and
+  another holds its elements to `GetDataset`'s for every corpus file. The
+  parser moved to an internal package that `filereader` is now built on;
+  every `filereader` identifier is where it was, the element types by alias
+  and printing with `%T` as they did (`*filereader.DataElementValue`).
+  A program that prints a file's attributes is 235 KB smaller built this
+  way (5.67 MB against 5.91 MB). What it saves depends on what else a
+  program calls, since the linker drops unreachable code.
+
+- **What a server accepts can be set before it listens** (#468). The abstract
+  and transfer syntaxes could only be set by method, and a `Server` exists only
+  once `StartServer` has started accepting, so a peer that connected in the
+  gap negotiated with the defaults: a storage archive accepted Study Root FIND
+  and MOVE from it. `SCPConfig.AbstractSyntaxes` and
+  `SCPConfig.TransferSyntaxes` are read before the listener opens. Nil keeps
+  the defaults; a non-nil list is used exactly as given, so an empty one
+  accepts nothing. `StorageAndVerificationSyntaxes()` returns Verification and
+  every storage class. The setters still work.
+
+- **A server can stop without cutting the stores in progress** (#464).
+  `Server.Stop` cancels the context every handler is given before anything
+  else, so a C-STORE in flight was cut wherever it was: dcmtk's storescu,
+  sending a 96 MiB instance, was reset partway and failed. `Server.Shutdown(ctx)`
+  closes the listener, refuses an association asked for on a connection
+  already open (rejected-transient, temporary-congestion), aborts at once an
+  association waiting for its next request, since everything it sent was
+  answered, and lets one in the middle of an operation finish it and release.
+  When `ctx` ends first, what is left is aborted and the returned
+  `*ShutdownError` counts the associations cut short. The same storescu send
+  is now answered Success and released. `Stop` is unchanged.
+
+- **An abort says why** (#470). A timeout, a protocol violation by the peer,
+  a handler that panicked and an unknown command all sent an A-ABORT that was
+  reported to events with nothing but the PDU, and a timeout and a panic were
+  byte for byte the same. The EVTPDUSent and EVTAssocAborted of an A-ABORT this
+  side sends now carry `Event.LocalAbort`, with its `Cause`
+  (`AbortCauseTimeout`, `AbortCauseProtocolViolation`, `AbortCauseHandlerPanic`,
+  `AbortCauseStopping`, `AbortCauseRequested`) and the error behind it. An
+  abort the peer sent has none. The PDU on the wire is unchanged, and the
+  `-events` log does not write the cause.
+
 ### Changed
+
+- **Events no longer copy every received byte** (#469). A received PDU was
+  copied whenever its connection reported events, and a `Server` always has
+  an `EventManager`, so every instance received was copied once more with no
+  handler registered: 64 MiB more for a 64 MiB C-STORE. Whether to keep a
+  PDU's bytes is now decided from its type before its body is read: a
+  P-DATA-TF is copied only while a handler of EVTPDURecv, the one event that
+  is given its bytes, is registered; every other PDU, small and bounded, is
+  copied as before, so the association events keep their `PDUBytes`. A
+  server with only association-level handlers allocates 0.5 MiB over one with
+  no `EventManager` for a 64 MiB store, where it allocated 67 MiB. The
+  `-events` log registers every event type and is unchanged, byte for byte.
 
 - **`validate` no longer holds the image to check the attributes** (#440).
   It read every value of the file, Pixel Data included, though the checker
@@ -639,6 +726,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than read without its log.
 
 ### Fixed
+
+- **An Implicit VR image is no longer warned about for its own VR** (#483).
+  Where the dictionary offers a choice of VRs, an element read from an
+  Implicit VR file carries the whole choice, and the check added with the fix
+  for LUT Data compared it with each choice only. Pixel Data was reported as
+  `expected OB or OW, got OB or OW`, and Smallest and Largest Image Pixel
+  Value the same way, on ordinary images. Never in a release.
+
+- **A C-STORE with no data set is refused whatever the handler** (#457). A
+  C-STORE-RQ whose Command Data Set Type says no data set follows was
+  refused with C000H by a handler that streams, but a handler given the
+  decoded data set was called with a nil one and its status sent:
+  pynetdicom's request got Success from `storescp`, which wrote a 316-byte
+  file with an empty data set. PS3.7 9.3.1.1 requires the data set. The
+  check now comes before either kind of handler is chosen, so both answer
+  C000H without being called, and `CStoreRequest.DataSet` is never nil for
+  a handler given the decoded data set.
 
 - **A refused caller is left to close the connection** (#430). An SCP sent
   its A-ASSOCIATE-RJ and closed the connection behind it. PS3.8 9.2 has the
@@ -906,8 +1010,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back in its own syntax and in Implicit VR reads in pydicom to the elements
   of the original, the three files with private sequences included,
   except two truncated files whose cut-off element this library does not
-  read. The network codec has the same defect, and refuses such a sequence
-  on receipt (#424).
+  read. The network codec had the same defect (#424, below).
+
+- **A private sequence crosses an association as a sequence** (#424). The
+  network codec sent every sequence with its byte count, so in Implicit VR a
+  vendor's private sequence reached the peer as one opaque value: dcmtk's
+  `storescp +B` stored `nested_priv_SQ.dcm`'s `(0001,0001)` as
+  `?? fe\ff\00\e0...`, 66 bytes. On receipt it read an undefined-length
+  element the dictionary does not call a sequence as encapsulated pixel data,
+  so the same instance from pynetdicom's `storescu` was refused with 0110
+  ("a pixel data fragment declares 4294967295 bytes but only 179 remain"), on
+  every path that hands a handler the decoded data set: `storescp`, `qrscp`,
+  queries and storage commitment. Inside an item such an element silently
+  ended the item. Sending now follows the file writer's rule, undefined
+  length and a delimiter for a sequence the dictionary does not know in
+  Implicit VR, and receiving follows the file reader's: undefined length on
+  anything but pixel data is a sequence, and a UN element's items are
+  Implicit VR Little Endian (PS3.5 6.2.2). Both writers and both readers ask
+  `tag.Tag` the same two questions, `SequenceNeedsUndefinedLength` and
+  `IsPixelData`. `nested_priv_SQ.dcm` and `UN_sequence.dcm` now cross in
+  Implicit VR from pynetdicom to `storescp`, and from `storescu` to dcmtk's
+  `storescp` and to pynetdicom, and read in pydicom element for element like
+  the original. dcmtk's own `storescu` still sends a private sequence with its
+  byte count, which no receiver can tell from a value; dcmtk's `storescp`
+  stores it so too.
 
 - **A file-set does not take in a data set with no File Meta Information**
   (#394). `FileSet.AddFile` and `ScanDirectory` accepted a bare data set,
@@ -954,6 +1080,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it two bytes a sample or, for JPEG 2000, keeping its low bits. A decoded
   frame shorter than the image is now an error from `DecodedPixelData` too,
   as it already was from `DecompressInPlace`.
+
+- **A value held as a Go string or number is read in every package**
+  (#420). `validate`, `fileset`, `network`, `sr`, `dcmstore` and the
+  commands read a value only when it was held as `[]byte`, so a data set
+  built in memory read differently from the same data set read from a file:
+  a file-set of such data sets could not be indexed (its UIDs read as
+  absent), a storage commitment report read as no instances, a UPS state
+  as none, a command set built with numbers could not be encoded, a SOP
+  Instance UID held as a `[]string` was sent as `[1.2.3]`, an SR lost its
+  text and its by-reference items, and the store indexed a person name with
+  its other groups as the alphabetic group alone. Each now reads through
+  `DataElement.Bytes`. Files read from disk hold `[]byte` and read as
+  before; `show --json` is unchanged.
+
+- **A refusal is logged once** (#476). An SCP logs each refusal of
+  `SCPConfig.Admit` at the info level, and `LoggingEventHandlers` logged its
+  `EVTAssocRejected` again, so a server logging its events had every refusal
+  twice. Making the SCP give way cannot work, because a `Server` always has
+  an `EventManager`. So the event handler gives way, and only when the
+  SCP's line went to the same log: at the default warning level, where the
+  SCP's line is not written, the handler's line is still the one report. An
+  SCP with no admission function now logs its refusal of a called AE title
+  that is not its own, which before only the event handler reported.
+
+- **A JPEG whose Photometric Interpretation is RGB is no longer decoded as
+  YCbCr** (#443). The decoder let image/jpeg guess the color space from the
+  stream, and with no JFIF or Adobe marker and component identifiers other
+  than R, G, B it guesses YCbCr and converts. pydicom's
+  `SC_jpeg_no_color_transform.dcm` is such a frame: a gray picture, which
+  came out magenta, `[255 122 255]` where dcmtk shows `[244 244 244]`, in
+  decoded pixel data, `decompress`, `convert`, rendering, the DICOMweb
+  frames and rendered endpoints and `share`. **Pictures change color with
+  this fix, and v1.10.0 shows the same magenta.** PS3.5 8.2.1 has the data
+  set say what the components are, so with RGB, YBR_FULL or YBR_FULL_422
+  they are now returned as stored, whatever markers the stream carries, as
+  dcmtk's `dcmdjpeg` decodes by default; a YBR frame with an Adobe marker
+  saying RGB is no longer left half-decided either. Every color JPEG in
+  pydicom's corpus renders within one level of dcmtk's picture; this one
+  was 137 levels off. CONFORMANCE §8.1 says where pydicom 3 decides
+  differently.
+
+- **JPEG-LS thresholds follow T.87 at every precision, and a frame read with
+  the wrong ones is refused by name** (#422). Near-lossless coding with a
+  large NEAR clamped a default threshold above MAXVAL to MAXVAL, where T.87
+  C.2.4.1.1 sets it to the threshold below: at 8 bits and NEAR 127 the frame
+  was coded with 255, 255, 255 instead of 128, 128, 128, and CharLS and dcmtk
+  refused it while libjpeg decoded it to a different image. The same holds
+  from 3 bits upward wherever NEAR is large, and frames of theirs failed
+  here the same way. An LSE segment that gave some thresholds and left the
+  others at zero was refused instead of having each zero one defaulted. At 6
+  and 7 bits this library was right and dcmtk is not: its bundled CharLS
+  predates the 2.1 fix of the default thresholds there, so each refuses the
+  other's frames. A 7-bit dcmtk frame decoded here without an error to an
+  image up to 127 levels off; a scan whose samples are all decoded with more
+  than a byte of its data unread is now refused, and at 6 and 7 bits the
+  error says dcmtk's thresholds may be the cause, gives both sets, and how
+  dcmcjpls codes a frame everyone reads. Lossless frames from 2 to 8 bits
+  are byte for byte CharLS 2.2's; CONFORMANCE §8.2 has the comparison.
+
+- **A JPEG decoded to RGB is converted as libjpeg converts it** (#497). The
+  conversion was image/color's, which scales Y with the products and
+  truncates, so a frame decoded straight to RGB differed from dcmtk and
+  Pillow by up to two levels where their inverse DCT agreed with this one,
+  and three on pydicom's corpus. It now rounds as libjpeg's `jdcolor.c`
+  does: on a frame of flat blocks every sample equals Pillow's and dcmtk's,
+  where one in six differed, and every color JPEG in the corpus is within
+  one level of both except `examples_ybr_color.dcm`, at two, from the
+  inverse DCT.
+
+- **A value read from a stream costs what arrived, not what its header
+  states, and a read can set a maximum** (#458). A declared length was held
+  to the bytes left only when the source could seek; from a socket or an
+  upload body the value was allocated whole first, so a 200-byte stream
+  whose first element stated 1 GiB cost 1 GiB. A File Meta element was never
+  checked at all, from any source. Such a value is now read in pieces as its
+  bytes arrive, never holding more than twice what came, and a meta element
+  is held to the size of a file like any other. `ReadOptions.MaxValueLength`
+  refuses a longer value before allocating it, with a `*ValueTooLongError`
+  (`errors.Is(err, filereader.ErrValueTooLong)`) naming the attribute, its
+  tag, offset and stated length; zero, the default, is no maximum. With
+  `SkipBulkData`, Pixel Data is passed over and everything read is held to
+  the maximum.
 
 ## [1.10.0] - 2026-11-17
 

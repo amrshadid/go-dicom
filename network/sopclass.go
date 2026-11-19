@@ -353,6 +353,15 @@ const (
 	ImplantTemplateGroupUID    = "1.2.840.10008.5.1.4.45.1"
 )
 
+// StorageAndVerificationSyntaxes returns Verification and every Storage SOP
+// Class (AllStorageSOPClassUIDs): the abstract syntaxes of an archive that
+// receives instances and answers C-ECHO, and offers no query, retrieve or
+// storage commitment. Set it as SCPConfig.AbstractSyntaxes. A new slice is
+// returned each time.
+func StorageAndVerificationSyntaxes() []string {
+	return append([]string{VerificationSOPClassUID}, AllStorageSOPClassUIDs()...)
+}
+
 // AllStorageSOPClassUIDs returns all supported Storage SOP Class UIDs.
 // This is the equivalent of pynetdicom's StoragePresentationContexts.
 func AllStorageSOPClassUIDs() []string {

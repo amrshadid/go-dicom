@@ -55,7 +55,8 @@ them as a Part 10 file with File Meta Information built from the command (PS3.10
 handler's read with an error that is never `io.EOF`, and no response is sent; one
 the handler stops reading early is read to its end and discarded before the
 handler's status is sent. A C-STORE-RQ that states no data set follows is
-refused with C000H without the handler being called (PS3.7 9.3.1.1).
+refused with C000H without the handler being called, whether it streams or is
+given the decoded data set (PS3.7 9.3.1.1).
 
 `WriteCStoreFile` checks the command's Affected SOP Class UID and Affected SOP
 Instance UID, and the transfer syntax, against PS3.5 9.1 before it writes
@@ -390,11 +391,12 @@ of, and does not name a file it could not read; both are counted as refused.
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
+| Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Why this side aborted | The events of an A-ABORT this side sends carry `Event.LocalAbort`: the cause (`AbortCauseTimeout`, `AbortCauseProtocolViolation`, `AbortCauseHandlerPanic`, `AbortCauseStopping`, `AbortCauseRequested`) and the error behind it. The PDU is unchanged |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
-| Supported SOP classes | `SetSupportedAbstractSyntaxes` |
-| Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
+| Supported SOP classes | `SCPConfig.AbstractSyntaxes`, read before the listener opens (nil keeps the defaults, which include query and retrieve; a non-nil list is used as given, so an empty one accepts nothing; `StorageAndVerificationSyntaxes()` is the storage-only list), or `SetSupportedAbstractSyntaxes` for associations from then on |
+| Supported transfer syntaxes | `SCPConfig.TransferSyntaxes`, the same way, or `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
 | Logging destination and format | `config.SetLogger`, for the whole library |
@@ -466,7 +468,8 @@ advisory.
 | `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
 | `valuerep.MaxUIDLength` | 64 characters | A UID longer than PS3.5 §9.1 permits |
-| Element length verification | every element | An element declaring more bytes than the stream holds |
+| Element length verification | every element | An element declaring more bytes than the stream holds; from a stream of unknown size, each value is allocated as its bytes arrive |
+| `filereader.ReadOptions.MaxValueLength` | no limit unless set | A value longer than the reader will hold, refused by tag and length before it is allocated |
 
 The parsers that consume untrusted input — PDU decoding, data set decoding, DIMSE
 command decoding, and file reading — have fuzz targets that run in continuous
@@ -586,6 +589,18 @@ how decoded samples are shaped and coloured, and the one tolerance.
   would leave a reader to convert a second time. This matches pydicom. Convert
   with the attribute, not despite it.
 
+  For a three-component JPEG the attribute is also what says whether the
+  components were transformed at all, since the JPEG Interchange Format does
+  not carry a color space (PS3.5 8.2.1). RGB means they were not, YBR_FULL and
+  YBR_FULL_422 that they were, and a JFIF or Adobe marker or component
+  identifiers spelling R, G, B do not overrule it. This is dcmtk's default
+  (`dcmdjpeg +cp`). pydicom 3 lets a marker overrule the attribute where the
+  two disagree: an RGB frame with a JFIF marker or an Adobe marker saying
+  YCbCr is converted there and not here, and a YBR frame with an Adobe marker
+  saying RGB or identifiers R, G, B is left as stored there and converted
+  here. No file in pydicom's corpus is in one of those cells. Without a data
+  set, `compress.NewJPEGDecompressor` guesses from the stream as libjpeg does.
+
 - **Subsampled JPEG chroma is filtered as libjpeg filters it.** T.81 leaves
   the filter to the decoder. A 4:2:2 or 4:2:0 frame is brought to full
   resolution with libjpeg's default "fancy upsampling", the triangle filter
@@ -596,6 +611,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   level being the inverse DCT, as on frames that are not subsampled. Other
   layouts (4:4:0, 4:1:1) are repeated, as libjpeg 6b does. 12-bit frames are
   repeated too; DICOM has no 12-bit color (PS3.5 Table 8.2.1-1).
+
+- **A JPEG decoded to RGB is converted with libjpeg's arithmetic.** JFIF gives
+  the YCbCr equations and leaves the rounding to the decoder; this one rounds
+  as libjpeg's `jdcolor.c` does (each coefficient scaled by 2^16, each product
+  rounded, Y added after the shift), which is what dcmtk and Pillow use. On
+  frames whose inverse DCT agrees the result is theirs exactly; elsewhere a
+  one-level difference in the YCbCr planes can become two in RGB, since Cb
+  is multiplied by 1.772. On pydicom's corpus every color JPEG decoded to RGB
+  is within one level of dcmtk and Pillow except `examples_ybr_color.dcm`, at
+  two for that reason.
 
 - **`RenderFrame` renders for display, within what it knows.** It applies the
   sign of the samples, the Modality LUT Sequence or Rescale Slope and
@@ -684,6 +709,38 @@ how decoded samples are shaped and coloured, and the one tolerance.
   the signed ones included, come back exact. The size matches dcmtk's own
   encoder at the same NEAR to within a few hundred bytes. CI runs the dcmtk
   check at NEAR 2.
+
+  **Below 8 bits the thresholds are T.87's, and dcmtk's are not at 6 and 7
+  bits.** A frame with no LSE segment is coded with the default thresholds of
+  T.87 C.2.4.1.1, which below MAXVAL 128 come from a formula of their own:
+  T1, T2, T3 are 2, 3, 5 at 6 bits and 2, 3, 10 at 7 (3, 7, 21 at 8 bits). Its
+  CLAMP sends a threshold above MAXVAL to the one below it, not to MAXVAL,
+  which decides the thresholds of near-lossless coding with a large NEAR
+  (128, 128, 128 at 8 bits and NEAR 127). Both rules are followed when coding
+  and decoding, and an LSE segment that leaves a threshold at zero has that
+  one defaulted on its own. CharLS before 2.1 used the 8-bit formula at every
+  precision (CharLS issue 51), giving 2, 3, 4 at 6 and 7 bits; at every other
+  precision the two agree. dcmtk 3.7.0 still bundles that CharLS, so between
+  dcmtk and every current decoder a 6 or 7 bit frame without an LSE segment is
+  read with the wrong thresholds: dcmtk refuses this library's frames ("Too
+  much compressed data" or "Invalid compressed image data"), and this library
+  refuses dcmtk's, with an error that names the cause and both sets of
+  thresholds. Decoding them with the old thresholds is not offered, because a
+  stream does not say which it was coded with. A 7-bit dcmtk frame used to
+  decode here without an error to an image up to 127 levels off: a scan whose
+  samples are all decoded with more than a byte of its data unread is now
+  refused, as CharLS and dcmtk refuse it. `dcmcjpls +t1 2 +t2 3 +t3 5` (or
+  `+t3 10` at 7 bits) writes the thresholds into an LSE segment, and that
+  frame decodes the same everywhere.
+
+  *Verified:* a 41 by 37 image at every precision from 2 to 8, coded at NEAR 0,
+  1, 2 and the largest NEAR allowed: this library's lossless frames are byte
+  for byte CharLS 2.2's, and every frame either of them codes decodes to the
+  same samples in this library, CharLS 2.2 and libjpeg (pylibjpeg-libjpeg).
+  dcmtk 3.7.0 agrees with them at 8 bits and at the largest NEAR, where the
+  clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
+  refuses to code below 6 bits. With the thresholds given explicitly all four
+  decode dcmtk's 6 and 7 bit frames exactly.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
@@ -817,7 +874,7 @@ how decoded samples are shaped and coloured, and the one tolerance.
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 
-  *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
+  *Verified:* the encoder's output is decoded by libjpeg through pylibjpeg, which
   shares no code with this library. A round trip through this package's own
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
@@ -839,7 +896,7 @@ In an Implicit VR file, a sequence whose tag the dictionary does not call a
 sequence, a private one above all, is written with undefined length and a
 Sequence Delimitation Item (PS3.5 7.5.1): nothing else tells a reader it holds
 items (Note 5 below). Every other sequence and every item has an explicit length.
-The network codec does not do this yet (#424).
+A data set sent on an association follows the same rule (#424).
 
 On reading, an element encoded as UN whose tag the dictionary knows takes that
 VR, and its value is read as Implicit VR Little Endian, which PS3.5 6.2.2 Note 2
@@ -848,7 +905,10 @@ creator is LO (PS3.5 7.8.1). Anything else private keeps UN, an ambiguous
 dictionary entry keeps UN, and a UN element in a big endian file keeps UN,
 because Note 2's little endian value must not be byte-swapped with the rest of
 the data set. An undefined length means items whatever the dictionary says
-(Note 5), and they are parsed as a sequence.
+(Note 5), and they are parsed as a sequence. A data set received on an
+association is read the same way: only pixel data with undefined length is taken
+for fragments, and a UN element's items are read as Implicit VR Little Endian
+(#424).
 
 On writing, a private attribute read without a VR, as every attribute of an
 implicit VR file is, takes the VR GDCM's private dictionary gives it, looked up
@@ -967,6 +1027,9 @@ checks that pynetdicom receives the attribute list); and an SCP never gave an
 N-GET handler the Attribute Identifier List (#380, fixed: the media creation
 SCP test now asserts the handler is given the two tags pynetdicom asks for, in
 order). The media creation SCP answers N-CREATE without an attribute list.
+The SCU sends an Attribute Identifier List with `SCU.NGetAttributes` (#486);
+pynetdicom's N-GET SCP receives the tags in the order given and returns only
+those attributes. `SCU.NGet` sends none, which asks for every attribute.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes

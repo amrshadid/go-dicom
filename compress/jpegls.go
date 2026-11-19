@@ -157,8 +157,9 @@ func (img *jpeglsImage) pack() []byte {
 	return out
 }
 
-// jpeglsParams holds the coding parameters, either defaults derived from the
-// precision or the presets an LSE segment supplied.
+// jpeglsParams holds the coding parameters: the presets an LSE segment
+// supplied, and the defaults derived from the precision for every one it did
+// not. A zero threshold or RESET means "not given".
 type jpeglsParams struct {
 	maxVal int
 	near   int
@@ -173,37 +174,96 @@ type jpeglsParams struct {
 	limit    int
 }
 
-// computeDefaults fills in the thresholds T.87 A.1 derives from MAXVAL and NEAR,
-// for a stream that carries no LSE segment. Most do not.
-func (p *jpeglsParams) computeDefaults(presetT bool) {
+// computeDefaults fills in each threshold and RESET the stream did not give,
+// T.87 C.2.4.1.1, and the values A.2.1 derives from MAXVAL and NEAR.
+//
+// The standard defaults each parameter on its own: an LSE segment that gives T3
+// and leaves T1 and T2 at zero still has T1 and T2 computed, and the lower
+// bound of each clamp is the threshold actually in use below it. A given value
+// outside the range Table C.1 allows is refused rather than clamped, because
+// the encoder used it as written and a decoder that adjusts it decodes a
+// different image.
+func (p *jpeglsParams) computeDefaults() error {
 	maxVal, near := p.maxVal, p.near
+	given := [3]int{p.t1, p.t2, p.t3}
 
-	if !presetT {
-		if maxVal >= 128 {
-			factor := (minInt(maxVal, 4095) + 128) / 256
-			p.t1 = factor*(basicT1-2) + 2 + 3*near
-			p.t2 = factor*(basicT2-3) + 3 + 5*near
-			p.t3 = factor*(basicT3-4) + 4 + 7*near
-		} else {
-			factor := 256 / (maxVal + 1)
-			p.t1 = maxInt(2, basicT1/factor+3*near)
-			p.t2 = maxInt(3, basicT2/factor+5*near)
-			p.t3 = maxInt(4, basicT3/factor+7*near)
-		}
-		// The thresholds must stay ordered and within range, which the formulas
-		// above can violate for unusual precisions.
-		p.t1 = clampInt(p.t1, near+1, maxVal)
-		p.t2 = clampInt(p.t2, p.t1, maxVal)
-		p.t3 = clampInt(p.t3, p.t2, maxVal)
+	b1, b2, b3 := basicThresholds(maxVal, near)
+	if p.t1 == 0 {
+		p.t1 = clampThreshold(b1, near+1, maxVal)
+	}
+	if p.t2 == 0 {
+		p.t2 = clampThreshold(b2, p.t1, maxVal)
+	}
+	if p.t3 == 0 {
+		p.t3 = clampThreshold(b3, p.t2, maxVal)
 	}
 	if p.reset == 0 {
 		p.reset = defaultReset
+	}
+
+	if p.t1 < near+1 || p.t1 > maxVal || p.t2 < p.t1 || p.t2 > maxVal || p.t3 < p.t2 || p.t3 > maxVal {
+		return fmt.Errorf("jpegls: LSE thresholds %d,%d,%d (0 is the default) are outside the "+
+			"ordered range %d to %d that T.87 Table C.1 allows at NEAR %d",
+			given[0], given[1], given[2], near+1, maxVal, near)
+	}
+	if p.reset < 3 || p.reset > maxInt(255, maxVal) {
+		return fmt.Errorf("jpegls: LSE RESET %d is outside the 3 to %d T.87 Table C.1 allows",
+			p.reset, maxInt(255, maxVal))
 	}
 
 	p.rangeVal = (maxVal+2*near)/(2*near+1) + 1
 	p.qbpp = ceilLog2(p.rangeVal)
 	p.bpp = maxInt(2, ceilLog2(maxVal+1))
 	p.limit = 2 * (p.bpp + maxInt(8, p.bpp))
+	return nil
+}
+
+// basicThresholds is the first half of T.87 C.2.4.1.1.1: the three default
+// thresholds before they are clamped.
+//
+// The two branches are the standard's. Above MAXVAL 127 the 8-bit values (3, 7,
+// 21) are scaled up with the range; below it they are divided down, and never
+// below 2, 3 and 4. That second branch only changes anything at 6 and 7 bits:
+// T3 is 5 at MAXVAL 63 and 10 at MAXVAL 127 where the first formula would give
+// 4. At 5 bits and fewer both give 2, 3, 4, which the clamp then fits to MAXVAL.
+func basicThresholds(maxVal, near int) (int, int, int) {
+	if maxVal >= 128 {
+		factor := (minInt(maxVal, 4095) + 128) / 256
+		return factor*(basicT1-2) + 2 + 3*near,
+			factor*(basicT2-3) + 3 + 5*near,
+			factor*(basicT3-4) + 4 + 7*near
+	}
+	factor := 256 / (maxVal + 1)
+	return maxInt(2, basicT1/factor+3*near),
+		maxInt(3, basicT2/factor+5*near),
+		maxInt(4, basicT3/factor+7*near)
+}
+
+// clampThreshold is CLAMP of T.87 C.2.4.1.1.1: a value above MAXVAL or below j
+// becomes j, not MAXVAL.
+//
+// The difference shows only where 3*NEAR, 5*NEAR or 7*NEAR carries a threshold
+// past MAXVAL, which is near-lossless coding with a large NEAR: at MAXVAL 255
+// and NEAR 127, T1 is NEAR+1 = 128, not 255. Clamping to MAXVAL instead codes a
+// stream every other decoder reads as a different image.
+func clampThreshold(i, j, maxVal int) int {
+	if i > maxVal || i < j {
+		return j
+	}
+	return i
+}
+
+// legacyCharLSThresholds is what CharLS before 2.1 used as the default
+// thresholds: the first branch of C.2.4.1.1.1 for every MAXVAL, so T3 is 4 at 6
+// and 7 bits instead of 5 and 10 (CharLS issue 51). dcmtk still bundles that
+// CharLS, which is why dcmtk and this package each read the other's 6 and 7
+// bit frames as damaged. It is used only to name that situation in an error.
+func legacyCharLSThresholds(maxVal, near int) (int, int, int) {
+	factor := (minInt(maxVal, 4095) + 128) / 256
+	t1 := clampThreshold(factor*(basicT1-2)+2+3*near, near+1, maxVal)
+	t2 := clampThreshold(factor*(basicT2-3)+3+5*near, t1, maxVal)
+	t3 := clampThreshold(factor*(basicT3-4)+4+7*near, t2, maxVal)
+	return t1, t2, t3
 }
 
 // quantize maps a local gradient to one of nine buckets, T.87 A.3.3.
@@ -265,16 +325,6 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
 func ceilLog2(v int) int {
 	n := 0
 	for (1 << n) < v {
@@ -301,6 +351,10 @@ type jpeglsBitReader struct {
 	bits    uint64
 	n       uint
 	overrun int
+	// loaded counts the bits taken from data, as opposed to the zero bits fill
+	// invents past its end, so the end of a scan can say how much of the
+	// entropy-coded segment it actually read.
+	loaded int
 }
 
 func (r *jpeglsBitReader) fill() {
@@ -324,12 +378,33 @@ func (r *jpeglsBitReader) fill() {
 			r.pos++
 			r.bits |= uint64(c&0x7F) << (57 - r.n)
 			r.n += 7
+			r.loaded += 7
 			continue
 		}
 		r.pos++
 		r.bits |= uint64(c) << (56 - r.n)
 		r.n += 8
+		r.loaded += 8
 	}
+}
+
+// unreadBytes reports how many bytes of the first end bytes of data lie wholly
+// after the last bit the decoder consumed. The bits still buffered come off
+// the invented ones first, because fill appends those after every real bit.
+func (r *jpeglsBitReader) unreadBytes(end int) int {
+	consumed := min(r.loaded, r.loaded+8*r.overrun-int(r.n))
+	bits := 0
+	for i := 0; i < end; i++ {
+		if bits >= consumed {
+			return end - i
+		}
+		if i > 0 && r.data[i-1] == 0xFF {
+			bits += 7
+		} else {
+			bits += 8
+		}
+	}
+	return 0
 }
 
 func (r *jpeglsBitReader) readBit() int32 {

@@ -371,7 +371,7 @@ func upsFilterKeys(ds *dataset.Dataset) *dataset.Dataset {
 		if !ok || t == tagReceivingAE || t == tagDeletionLock {
 			continue
 		}
-		value, ok := elem.GetValue().([]byte)
+		value, ok := elem.Bytes()
 		if !ok {
 			continue
 		}

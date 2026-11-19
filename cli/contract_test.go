@@ -141,6 +141,11 @@ func TestEventLogLinesAreWhatTheSchemaSays(t *testing.T) {
 			if problems := schema.check(line, true); len(problems) > 0 {
 				t.Errorf("%s has a line that does not match the schema:\n%s\n%.300s", name, strings.Join(problems[:min(len(problems), 5)], "\n"), scanner.Text())
 			}
+			// The schema allows a line without it, as 1.10.0 wrote; the
+			// writer puts it on every line, last.
+			if !strings.HasSuffix(scanner.Text(), `,"schemaVersion":1}`) {
+				t.Errorf("%s has a line that does not end with its schemaVersion:\n%.300s", name, scanner.Text())
+			}
 			seen[line.(map[string]any)["event"].(string)] = true
 			lines++
 		}
@@ -155,6 +160,45 @@ func TestEventLogLinesAreWhatTheSchemaSays(t *testing.T) {
 		if !seen[event] {
 			t.Errorf("no %s line was among the %d checked", event, lines)
 		}
+	}
+}
+
+// TestEventLogSchemaVersionIsTheOneDocumented: the schema says
+// schemaVersion is 1, and the writer says what it puts on each line.
+func TestEventLogSchemaVersionIsTheOneDocumented(t *testing.T) {
+	schema := loadSchema(t, "events.schema.json")
+	properties, _ := schema.root["properties"].(map[string]any)
+	version, _ := properties["schemaVersion"].(map[string]any)
+	if got := version["const"]; got == nil || got.(interface{ String() string }).String() != "1" || eventsSchemaVersion != 1 {
+		t.Errorf("the schema says schemaVersion %v and the writer writes %d", got, eventsSchemaVersion)
+	}
+	if required, _ := schema.root["required"].([]any); len(required) != 2 {
+		t.Errorf("required is %v; a line of go-dicom 1.10.0, without schemaVersion, is version 1 and must still match", required)
+	}
+}
+
+// TestEventLogLineIsTheOldLineWithItsVersionAdded proves that adding
+// schemaVersion changed nothing else: a line is, byte for byte, the line
+// go-dicom 1.10.0 wrote for the same event, with ,"schemaVersion":1 before
+// its closing brace. A reader that matched on a line's start or on any
+// property sees what it saw.
+func TestEventLogLineIsTheOldLineWithItsVersionAdded(t *testing.T) {
+	var out bytes.Buffer
+	w := &eventWriter{out: &out, maxBytes: 4}
+	w.event(&network.Event{
+		Type: network.EVTAssocAborted, Timestamp: time.Date(2026, 11, 18, 19, 14, 7, 82782000, time.UTC),
+		AssociationID: 2, Role: "SCU", LocalAE: "ECHOSCU", RemoteAE: "ECHOSCP",
+		LocalAddr: "127.0.0.1:65005", RemoteAddr: "127.0.0.1:41296",
+		PDU:    &network.AbortPDU{Source: 2, Reason: 1},
+		Detail: &network.EventDetail{PDUBytes: []byte{7, 0, 0, 0, 0, 4, 0, 0, 2, 1}},
+	})
+	// What go-dicom 1.10.0 wrote for this event.
+	const old = `{"event":"EVT_ABORTED","time":"2026-11-18T19:14:07.082782Z","associationId":2,"role":"SCU",` +
+		`"localAE":"ECHOSCU","remoteAE":"ECHOSCP","localAddr":"127.0.0.1:65005","remoteAddr":"127.0.0.1:41296",` +
+		`"pdu":{"type":"A-ABORT","typeCode":7,"length":4,"bytes":"07000000","bytesTruncated":true,"source":2,"reason":1}}`
+	want := strings.TrimSuffix(old, "}") + `,"schemaVersion":1}` + "\n"
+	if out.String() != want {
+		t.Errorf("the line is\n%s\nwant\n%s", out.String(), want)
 	}
 }
 
