@@ -697,7 +697,9 @@ JPEG 2000 decodes both wavelets at 1 to 16 bits, signed or unsigned, with any
 number of tiles and quality layers.
 JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
 JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
-in both line- and sample-interleaved modes.
+in both line- and sample-interleaved modes. A 6 or 7 bit frame that dcmtk coded
+without an LSE segment is refused, as dcmtk refuses this library's: its CharLS
+uses default thresholds there that T.87 does not (CONFORMANCE §8.2).
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above
