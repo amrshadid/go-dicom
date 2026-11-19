@@ -91,6 +91,10 @@
 // (image/jpeg, image/jls, image/jp2, image/dicom-rle), each frame is the bytes
 // the file holds. A frame is read from the file by where it lies, not by
 // loading the instance. A frame number the image does not have is 404.
+// Float and Double Float Pixel Data have frames too, their floats little
+// endian. A frame of a 1-bit image that starts inside a byte is sent from
+// the lowest bit of its first byte, as a 1-bit image of one frame is laid
+// out.
 //
 // Metadata gives a BulkDataURI for each value it leaves out, and
 // …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level

@@ -294,41 +294,18 @@
 // ### DICOMFile.FrameRanges
 //
 //	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
+//	func (df *DICOMFile) FrameFirstBit(i int) (int, error)
+//	func (df *DICOMFile) PixelDataElement() *DataElementValue
 //
 // Where each frame of Pixel Data lies in the file, so one frame is read
 // without the rest: a range a frame for native data, and for encapsulated
 // data the fragments that hold it, found by the Extended Offset Table, the
-// Basic Offset Table, the counts and the end-of-image markers.
-//
-//	file, _ := os.Open(path)
-//	dicom, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),
-//		filereader.ReadOptions{SkipBulkData: true})
-//	frames, err := dicom.FrameRanges(file)
-//	// frames[i] are the byte ranges of frame i+1, to be read and joined.
-//
-// ### DICOMFile.FrameRanges
-//
-//	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
-//
-// Where each frame of Pixel Data lies in the file, so one frame is read
-// without the rest: a range a frame for native data, and for encapsulated
-// data the fragments that hold it, found by the Extended Offset Table, the
-// Basic Offset Table, the counts and the end-of-image markers.
-//
-//	file, _ := os.Open(path)
-//	dicom, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),
-//		filereader.ReadOptions{SkipBulkData: true})
-//	frames, err := dicom.FrameRanges(file)
-//	// frames[i] are the byte ranges of frame i+1, to be read and joined.
-//
-// ### DICOMFile.FrameRanges
-//
-//	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
-//
-// Where each frame of Pixel Data lies in the file, so one frame is read
-// without the rest: a range a frame for native data, and for encapsulated
-// data the fragments that hold it, found by the Extended Offset Table, the
-// Basic Offset Table, the counts and the end-of-image markers.
+// Basic Offset Table, the counts and the end-of-image markers. Float Pixel
+// Data and Double Float Pixel Data have frames too; PixelDataElement finds
+// whichever of the three an image holds. The frames of a 1-bit image are
+// packed with no padding between them, so one that is not a whole number of
+// bytes starts inside a byte: its range is the bytes holding its bits, and
+// FrameFirstBit the bit of the first byte it starts at.
 //
 //	file, _ := os.Open(path)
 //	dicom, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(file),

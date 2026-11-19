@@ -414,6 +414,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   four lossy JPEGs whose subsampled chroma the two decoders upsample
   differently at color edges.
 
+- **The DICOMweb server serves the frames of float and packed 1-bit
+  images** (#441). An image held in Float Pixel Data (7FE0,0008) or Double
+  Float Pixel Data (7FE0,0009), a Parametric Map for one, was answered as an
+  instance with no pixels (404). A 1-bit image whose frame is not a whole
+  number of bytes, 5 x 5 for one, was answered 500: its frames are packed with
+  no padding between them (PS3.5 8.1.1), so all but the first start inside a
+  byte, and `FrameRanges` refused it. Float frames are now sent as
+  `application/octet-stream`, their floats little endian whatever the file's
+  byte order. A packed 1-bit frame is sent as a 1-bit image of one frame is
+  laid out: its first pixel in the lowest bit of the first byte, zero bits
+  after its last; its rendered picture is drawn too. A float image is not
+  drawn, and its rendered resource says so (501). `FrameRanges` gives such a
+  frame the bytes that hold its bits, and `DICOMFile.FrameFirstBit` the bit
+  it starts at; `DICOMFile.PixelDataElement` finds whichever of the three
+  pixel elements an image has. Files pydicom writes, float and double, little
+  and big endian, and a 3-frame 5 x 5 1-bit image: every frame equals
+  pydicom's `pixel_array`. Orthanc 1.13 answers all three with 400.
+
 - **A file or a send can be compressed to JPEG-LS Near-Lossless** (#337).
   The JPEG-LS encoder coded NEAR 0 only, so `1.2.840.10008.1.2.4.81` was
   refused by name and a peer that accepted only it could not be sent an
