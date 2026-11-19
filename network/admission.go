@@ -206,7 +206,7 @@ func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *Ass
 			// logged once whether or not anyone logs the events: this one was
 			// logged only by LoggingEventHandlers, and a server without them
 			// refused callers without a word.
-			s.log().Info("refusing %q from %s: it called %q, and this SCP answers to %q",
+			s.refusing(transport, LogLevelInfo, "refusing %q from %s: it called %q, and this SCP answers to %q",
 				rq.CallingAE, transport.RemoteAddr(), rq.CalledAE, s.config.AETitle)
 			return RejectCalledAE()
 		}
@@ -216,20 +216,21 @@ func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *Ass
 	req := associationRequest(transport, rq)
 	var wellFormed bool
 	if req.CallingAE, wellFormed = cleanAETitle(rq.CallingAE); !wellFormed {
-		s.log().Info("refusing %s: its calling AE title %q is not an AE title (PS3.5 6.2)", req.RemoteAddr, rq.CallingAE)
+		s.refusing(transport, LogLevelInfo, "refusing %s: its calling AE title %q is not an AE title (PS3.5 6.2)",
+			req.RemoteAddr, rq.CallingAE)
 		return RejectCallingAE()
 	}
 	if req.CalledAE, wellFormed = cleanAETitle(rq.CalledAE); !wellFormed {
-		s.log().Info("refusing %q from %s: the called AE title %q is not an AE title (PS3.5 6.2)",
+		s.refusing(transport, LogLevelInfo, "refusing %q from %s: the called AE title %q is not an AE title (PS3.5 6.2)",
 			req.CallingAE, req.RemoteAddr, rq.CalledAE)
 		return RejectCalledAE()
 	}
 
-	if r := s.admit(ctx, req); r != nil {
+	if r := s.admit(ctx, transport, req); r != nil {
 		return r
 	}
 	if !s.config.AcceptAnyCalledAE && req.CalledAE != s.config.AETitle {
-		s.log().Info("refusing %q from %s: it called %q, and this SCP answers to %q",
+		s.refusing(transport, LogLevelInfo, "refusing %q from %s: it called %q, and this SCP answers to %q",
 			req.CallingAE, req.RemoteAddr, req.CalledAE, s.config.AETitle)
 		return RejectCalledAE()
 	}
@@ -246,7 +247,7 @@ func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *Ass
 // ignores that holds only its own goroutine, until it returns. A panic in it
 // is recovered there, so it refuses the association and does not take the
 // server down.
-func (s *SCP) admit(parent context.Context, req *AssociationRequest) *AssociationRejection {
+func (s *SCP) admit(parent context.Context, transport *Transport, req *AssociationRequest) *AssociationRejection {
 	decide := s.config.Admit
 	if decide == nil {
 		return nil
@@ -278,7 +279,7 @@ func (s *SCP) admit(parent context.Context, req *AssociationRequest) *Associatio
 	select {
 	case a := <-answers:
 		if a.panicked != nil {
-			s.log().Error("refusing %q from %s: the admission function panicked: %v",
+			s.refusing(transport, LogLevelError, "refusing %q from %s: the admission function panicked: %v",
 				req.CallingAE, req.RemoteAddr, a.panicked)
 			r := rejectNoReason
 			return &r
@@ -294,7 +295,7 @@ func (s *SCP) admit(parent context.Context, req *AssociationRequest) *Associatio
 				"Table 9-21 does not define; refusing with %s instead", r.Result, r.Source, r.Reason, rejectNoReason)
 			r = rejectNoReason
 		}
-		s.log().Info("refusing %q calling %q from %s: %s", req.CallingAE, req.CalledAE, req.RemoteAddr, r)
+		s.refusing(transport, LogLevelInfo, "refusing %q calling %q from %s: %s", req.CallingAE, req.CalledAE, req.RemoteAddr, r)
 		return &r
 	case <-ctx.Done():
 		r := rejectAfterTimeout
@@ -302,11 +303,25 @@ func (s *SCP) admit(parent context.Context, req *AssociationRequest) *Associatio
 			// The server is stopping, which is not the function being slow:
 			// it was logged as "did not answer within 30s" a moment after
 			// the request arrived.
-			s.log().Debug("refusing %q from %s: the server is stopping", req.CallingAE, req.RemoteAddr)
+			s.refusing(transport, LogLevelDebug, "refusing %q from %s: the server is stopping", req.CallingAE, req.RemoteAddr)
 			return &r
 		}
-		s.log().Warn("refusing %q from %s: the admission function did not answer within %v",
+		s.refusing(transport, LogLevelWarn, "refusing %q from %s: the admission function did not answer within %v",
 			req.CallingAE, req.RemoteAddr, s.config.Network.ARTIMTimeout)
 		return &r
 	}
+}
+
+// refusing logs, at level, why the SCP refuses the caller on transport, and
+// records where the line went: the EVTAssocRejected of that refusal carries
+// it, so that LoggingEventHandlers leaves the refusal out of a log this line
+// has already reached, and only that one. A server with a logger of its own
+// (SCPConfig.Logger) logs here to that logger and not to DefaultLogger, so
+// whether the line reached the handlers' log cannot be asked of
+// DefaultLogger: asked that way, a refusal was in the server's log twice, or
+// in the global one not at all.
+func (s *SCP) refusing(transport *Transport, level LogLevel, format string, args ...any) {
+	log := s.log()
+	log.log(level, format, args...)
+	transport.loggedRefusal(log, level)
 }

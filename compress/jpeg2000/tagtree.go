@@ -58,25 +58,38 @@ func (t *tagTree) reset() {
 // threshold without being confirmed is a lower bound: the answer is "not yet,
 // and not before threshold".
 func (t *tagTree) decode(r *bitReader, leaf int, threshold int32) (int32, bool, error) {
+	value, known, _, err := t.decodeLeaf(r, leaf, threshold)
+	return value, known, err
+}
+
+// decodeLeaf is decode, and also says where on the leaf's path the answer was
+// settled: stop is the level of the node whose value reached threshold
+// without being known, or -1 when the leaf's value is known.
+//
+// Every leaf under that node gets the same answer at this threshold, with no
+// bit read, since each starts from its ancestors' values and they are already
+// at threshold. A packet header reader uses this to step over them: a
+// precinct can hold millions of code-blocks, and a header of one byte can say
+// that none of them is included.
+func (t *tagTree) decodeLeaf(r *bitReader, leaf int, threshold int32) (value int32, known bool, stop int, err error) {
 	if len(t.levels) == 0 {
-		return 0, false, errorf("tag tree has no levels")
+		return 0, false, -1, errorf("tag tree has no levels")
 	}
 	leaves := t.levels[0]
 	if leaf < 0 || leaf >= len(leaves.value) {
-		return 0, false, errorf("tag tree leaf %d of %d", leaf, len(leaves.value))
+		return 0, false, -1, errorf("tag tree leaf %d of %d", leaf, len(leaves.value))
 	}
 
-	// The path from the root down to the leaf, as an index per level.
+	// The path from the root down to the leaf, a node per level. The index is
+	// worked out on the way down rather than gathered first: a packet header
+	// asks this of every code-block of its precinct, and a slice for the path
+	// was an allocation each time.
 	x, y := leaf%leaves.w, leaf/leaves.w
-	path := make([]int, len(t.levels))
-	for level := range t.levels {
-		path[level] = (y>>level)*t.levels[level].w + (x >> level)
-	}
 
 	var lower int32
 	for level := len(t.levels) - 1; level >= 0; level-- {
 		node := &t.levels[level]
-		index := path[level]
+		index := (y>>level)*node.w + (x >> level)
 		if node.value[index] < lower {
 			// A child starts from its parent's value: everything below the
 			// parent has already been ruled out.
@@ -85,7 +98,7 @@ func (t *tagTree) decode(r *bitReader, leaf int, threshold int32) (int32, bool, 
 		for !node.known[index] && node.value[index] < threshold {
 			bit, err := r.readBit()
 			if err != nil {
-				return 0, false, err
+				return 0, false, -1, err
 			}
 			if bit == 1 {
 				node.known[index] = true
@@ -97,10 +110,10 @@ func (t *tagTree) decode(r *bitReader, leaf int, threshold int32) (int32, bool, 
 		if !node.known[index] {
 			// The parent is only known to be at least threshold, so nothing
 			// below it can be decided yet either.
-			return lower, false, nil
+			return lower, false, level, nil
 		}
 	}
-	return lower, true, nil
+	return lower, true, -1, nil
 }
 
 // bitReader reads a packet header bit by bit, with the bit un-stuffing the

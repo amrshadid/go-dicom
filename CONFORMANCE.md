@@ -657,6 +657,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   Any marker from Part 2 is refused too, but as `unexpected marker` with its
   code rather than by name.
 
+  What a codestream may cost is bounded. The image is at most 2^16 samples on
+  a side and 2^28 in all, counted over every component. A tile must hold at
+  least a byte for each of its precincts, since each has a packet of at least
+  a byte in every layer (T.800 B.9, B.10.3), and reading its packet headers is
+  work in proportion to their bits, not to the number of code-blocks they
+  name. Nothing sized by the image is allocated until every tile's packets
+  have been read. A codestream within those bounds decodes at the cost of the
+  image it describes, which can be large for a few bytes and honestly so:
+  `opj_compress` writes a black image of 16384 by 16384 in 938 bytes.
+
   A codestream's own signedness may disagree with the data set's Pixel
   Representation, and real files do: the data set is the authority, so an
   unsigned sample in a data set that calls it signed is read back as two's
