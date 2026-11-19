@@ -695,8 +695,10 @@ which is enough for an archive or a router, and not enough for a viewer.
 | HTJ2K (`.201`-`.203`), JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
-`YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
-configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
+`YBR_FULL` instance yields YBR rather than RGB — the same as pydicom — and a JPEG
+whose attribute says `RGB` is not converted from YCbCr, whatever its stream's markers
+say, as in dcmtk. Both planar configurations, 1 to 64 bits, and subsampled
+`YBR_FULL_422` are handled.
 
 JPEG 2000 decodes both wavelets at 1 to 16 bits, signed or unsigned, with any
 number of tiles and quality layers.

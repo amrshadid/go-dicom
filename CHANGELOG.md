@@ -1023,6 +1023,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SCP with no admission function now logs its refusal of a called AE title
   that is not its own, which before only the event handler reported.
 
+- **A JPEG whose Photometric Interpretation is RGB is no longer decoded as
+  YCbCr** (#443). The decoder let image/jpeg guess the color space from the
+  stream, and with no JFIF or Adobe marker and component identifiers other
+  than R, G, B it guesses YCbCr and converts. pydicom's
+  `SC_jpeg_no_color_transform.dcm` is such a frame: a gray picture, which
+  came out magenta, `[255 122 255]` where dcmtk shows `[244 244 244]`, in
+  decoded pixel data, `decompress`, `convert`, rendering, the DICOMweb
+  frames and rendered endpoints and `share`. **Pictures change color with
+  this fix, and v1.10.0 shows the same magenta.** PS3.5 8.2.1 has the data
+  set say what the components are, so with RGB, YBR_FULL or YBR_FULL_422
+  they are now returned as stored, whatever markers the stream carries, as
+  dcmtk's `dcmdjpeg` decodes by default; a YBR frame with an Adobe marker
+  saying RGB is no longer left half-decided either. Every color JPEG in
+  pydicom's corpus renders within one level of dcmtk's picture; this one
+  was 137 levels off. CONFORMANCE §8.1 says where pydicom 3 decides
+  differently.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
