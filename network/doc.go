@@ -194,6 +194,11 @@
 // [MaxInflatedDatasetSize], and element lengths are checked against the bytes
 // actually available. The parsers have fuzz targets that run in CI.
 //
+// A TLS server that turns a client away during the handshake reports
+// EVTTLSHandshakeFailed, before any association exists, with the client's
+// address and a [TLSHandshakeError] naming the check that failed; it carries
+// nothing of the client's certificate.
+//
 // # Logging
 //
 // Everything this package reports goes through [DefaultLogger], which writes to

@@ -16,7 +16,8 @@ type EventType int
 // Server.Events). What is emitted: the connection opening and closing, every
 // PDU either way, the association being requested, accepted, established,
 // rejected, released and aborted, every DIMSE message either way, and the
-// service event of each request received. EVTACSERecv, EVTACSESent,
+// service event of each request received, and on a TLS server a handshake
+// that failed (EVTTLSHandshakeFailed). EVTACSERecv, EVTACSESent,
 // EVTDataRecv, EVTDataSent, EVTFSMTransition and the four negotiation events
 // are declared for pynetdicom's names and are not emitted.
 const (
@@ -71,6 +72,12 @@ const (
 	EVTSOPExtended // SOP class extended negotiation requested
 	EVTSOPCommon   // SOP class common extended negotiation requested
 	EVTUserID      // User identity negotiation requested
+
+	// EVTTLSHandshakeFailed is a TLS server's handshake with a client
+	// failing, before any association exists. Its Error is a
+	// *TLSHandshakeError naming the check that failed; RemoteAddr says who.
+	// Declared after pynetdicom's names, which have none for it.
+	EVTTLSHandshakeFailed
 )
 
 // Event carries information about a network event.
@@ -217,7 +224,7 @@ func (em *EventManager) On(eventType EventType, handler EventHandler) {
 func (em *EventManager) OnAny(handler EventHandler) {
 	em.mu.Lock()
 	defer em.mu.Unlock()
-	for t := EVTConnOpen; t <= EVTUserID; t++ {
+	for t := EVTConnOpen; t <= EVTTLSHandshakeFailed; t++ {
 		em.handlers[t] = append(em.handlers[t], handler)
 	}
 }
@@ -331,6 +338,8 @@ func EventTypeString(et EventType) string {
 		return "EVT_SOP_COMMON"
 	case EVTUserID:
 		return "EVT_USER_ID"
+	case EVTTLSHandshakeFailed:
+		return "EVT_TLS_HANDSHAKE_FAILED"
 	default:
 		return "EVT_UNKNOWN"
 	}

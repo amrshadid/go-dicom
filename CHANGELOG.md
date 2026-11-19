@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A failed TLS handshake is an event** (#471). A TLS server runs the
+  handshake inside its read of the A-ASSOCIATE-RQ, so a client it turned away
+  left only a log line, and events saw the connection open and close as for a
+  port scan. It now emits `EVTTLSHandshakeFailed`, before any association
+  exists, with the client's address and a `*TLSHandshakeError` whose `Check`
+  names what failed: `TLSCheckNotTLS`, `TLSCheckNoClientCertificate`,
+  `TLSCheckUnknownAuthority`, `TLSCheckCertificateInvalid`,
+  `TLSCheckPeerAlert`, `TLSCheckProtocol` or `TLSCheckConnection`. It carries
+  nothing of the client's certificate: crypto/tls's verification error holds
+  the certificates themselves, and is not passed on. `OnAny` includes it, so
+  the `-events` log of a TLS server writes an `EVT_TLS_HANDSHAKE_FAILED` line
+  where it wrote none.
+
 - **`modify` takes a binary value from a file, and changes or removes an
   attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
   (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute
