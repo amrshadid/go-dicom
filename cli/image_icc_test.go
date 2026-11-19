@@ -131,3 +131,83 @@ func TestConvertCarriesTheICCProfile(t *testing.T) {
 		}
 	}
 }
+
+// TestConvertCarriesTheICCProfileThroughBands: a grayscale frame of 1024 x
+// 1024 x 16 bits, 2 MiB, is read from the file and drawn a band of about a
+// megabyte at a time, and the picture convert encodes is then not an
+// *image.Gray. Its PNG, which image/png writes as gray, still carries the
+// gray profile byte for byte, and so does its JPEG, copied into an
+// *image.Gray first; an RGB profile goes into neither. Taking the picture
+// for RGB because it is not an *image.Gray dropped the gray profile and
+// embedded the RGB one in a gray PNG.
+func TestConvertCarriesTheICCProfileThroughBands(t *testing.T) {
+	dir := t.TempDir()
+	write := func(path string, profile []byte) {
+		ds := dataset.NewDataset()
+		ds.SetTransferSyntaxUID("1.2.840.10008.1.2.1")
+		add := func(tg tag.Tag, vr dataelem.VR, value interface{}) {
+			if err := ds.Add(dataelem.NewDataElement(tg, vr, value)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		us := func(v uint16) []byte {
+			b := make([]byte, 2)
+			binary.LittleEndian.PutUint16(b, v)
+			return b
+		}
+		const side = 1024
+		pixels := make([]byte, side*side*2)
+		for i := 0; i < side*side; i++ {
+			binary.LittleEndian.PutUint16(pixels[2*i:], uint16((i*7)%4096))
+		}
+		if len(profile)%2 == 1 {
+			profile = append(profile[:len(profile):len(profile)], 0)
+		}
+		add(tag.New(0x0008, 0x0016), dataelem.UI, "1.2.840.10008.5.1.4.1.1.7")
+		add(tag.New(0x0008, 0x0018), dataelem.UI, "1.2.826.0.1.3680043.10.511.9.10")
+		add(tag.New(0x0028, 0x0002), dataelem.US, us(1))
+		add(tag.New(0x0028, 0x0004), dataelem.CS, "MONOCHROME2")
+		add(tag.New(0x0028, 0x0010), dataelem.US, us(side))
+		add(tag.New(0x0028, 0x0011), dataelem.US, us(side))
+		add(tag.New(0x0028, 0x0100), dataelem.US, us(16))
+		add(tag.New(0x0028, 0x0101), dataelem.US, us(12))
+		add(tag.New(0x0028, 0x0102), dataelem.US, us(11))
+		add(tag.New(0x0028, 0x0103), dataelem.US, us(0))
+		add(tag.New(0x0028, 0x2000), dataelem.OB, profile)
+		add(tag.New(0x7FE0, 0x0010), dataelem.OW, pixels)
+		if err := writeDICOMFile(path, "1.2.840.10008.5.1.4.1.1.7", "1.2.826.0.1.3680043.10.511.9.10", ds); err != nil {
+			t.Fatal(err)
+		}
+	}
+	grayProfile := icctest.Profile("GRAY", "a gray profile for bands")
+	for _, c := range []struct {
+		name    string
+		profile []byte
+		carried bool
+	}{
+		{"gray", grayProfile, true},
+		{"rgb", icctest.Profile("RGB ", "an RGB profile for bands"), false},
+	} {
+		in := filepath.Join(dir, c.name+".dcm")
+		write(in, c.profile)
+		for _, format := range []string{"png", "jpeg"} {
+			out := filepath.Join(dir, c.name+"."+format)
+			if err := runConvert(in, out, "--format", format); err != nil {
+				t.Fatalf("%s as %s: %v", c.name, format, err)
+			}
+			data, err := os.ReadFile(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := icctest.Embedded(data)
+			switch {
+			case err != nil:
+				t.Fatalf("%s as %s: %v", c.name, format, err)
+			case c.carried && !bytes.Equal(got, c.profile):
+				t.Errorf("a gray profile in a banded gray %s: %d bytes carried; want the %d of the image's", format, len(got), len(c.profile))
+			case !c.carried && got != nil:
+				t.Errorf("an RGB profile in a banded gray %s: carried, and the picture is gray", format)
+			}
+		}
+	}
+}

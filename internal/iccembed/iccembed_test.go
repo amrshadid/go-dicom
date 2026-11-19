@@ -121,24 +121,55 @@ func TestJPEGCarriesTheProfile(t *testing.T) {
 	}
 }
 
+// grayModel is a grayscale picture that is not an *image.Gray, as the
+// frame Dataset.RenderFramesFrom draws a band at a time is.
+type grayModel struct{ *image.Gray }
+
+func (g grayModel) At(x, y int) color.Color { return g.Gray.At(x, y) }
+
 // TestFits: an RGB profile describes a color picture and a gray profile a
-// grayscale one, and neither the other, which PNG forbids.
+// grayscale one, and neither the other, which PNG forbids. A grayscale
+// picture that is not an *image.Gray is gray to image/png, which writes
+// one sample a pixel for its color model, and RGB to image/jpeg, which
+// writes three components for it.
 func TestFits(t *testing.T) {
 	rgb, gray := icctest.Profile("RGB ", "rgb"), icctest.Profile("GRAY", "gray")
 	grayPicture := image.NewGray(image.Rect(0, 0, 2, 2))
+	banded := grayModel{grayPicture}
 	for _, c := range []struct {
 		profile []byte
 		img     image.Image
+		format  string
 		fits    bool
 	}{
-		{rgb, picture(), true},
-		{gray, grayPicture, true},
-		{rgb, grayPicture, false},
-		{gray, picture(), false},
-		{rgb[:10], picture(), false},
+		{rgb, picture(), "png", true},
+		{rgb, picture(), "jpeg", true},
+		{gray, grayPicture, "png", true},
+		{gray, grayPicture, "jpeg", true},
+		{rgb, grayPicture, "png", false},
+		{gray, picture(), "jpeg", false},
+		{gray, banded, "png", true},
+		{rgb, banded, "png", false},
+		{gray, banded, "jpeg", false},
+		{rgb, banded, "jpeg", true},
+		{rgb[:10], picture(), "png", false},
 	} {
-		if err := Fits(c.profile, c.img); (err == nil) != c.fits {
-			t.Errorf("a profile of %d bytes, a %T: %v", len(c.profile), c.img, err)
+		if err := Fits(c.profile, c.img, c.format); (err == nil) != c.fits {
+			t.Errorf("a profile of %d bytes, a %T as %s: %v", len(c.profile), c.img, c.format, err)
 		}
+	}
+	// What the encoders really do with that picture, which is why.
+	var p, j bytes.Buffer
+	if err := png.Encode(&p, banded); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(&j, banded, nil); err != nil {
+		t.Fatal(err)
+	}
+	if colorType := p.Bytes()[8+8+9]; colorType != 0 {
+		t.Errorf("image/png wrote color type %d for a gray color model; Fits takes it for 0, gray", colorType)
+	}
+	if config, err := jpeg.DecodeConfig(bytes.NewReader(j.Bytes())); err != nil || config.ColorModel == color.GrayModel {
+		t.Errorf("image/jpeg wrote %v (%v) for a gray color model; Fits takes it for three components", config.ColorModel, err)
 	}
 }

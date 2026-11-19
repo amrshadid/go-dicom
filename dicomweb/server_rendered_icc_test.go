@@ -132,3 +132,50 @@ func TestRenderedICCProfileRefusals(t *testing.T) {
 		t.Errorf("iccprofile=maybe: status %d", response.StatusCode)
 	}
 }
+
+// TestRenderedLargeGrayFrameCarriesItsProfile: a grayscale frame of 2 MiB,
+// larger than the band Dataset.RenderFramesFrom reads, rendered with
+// iccprofile=yes carries its gray profile byte for byte as PNG and as
+// JPEG. The server draws a frame from a data set holding that frame alone,
+// so its picture is an *image.Gray today; this holds whichever way the
+// frame comes to be drawn.
+func TestRenderedLargeGrayFrameCarriesItsProfile(t *testing.T) {
+	const side = 1024
+	ds := multiFrame(t, "1.2.3.22", 1, side, side)
+	pixels := make([]byte, side*side*2)
+	for i := 0; i < side*side; i++ {
+		pixels[2*i], pixels[2*i+1] = byte(i), byte(i>>8)&0x0F
+	}
+	for _, e := range []struct {
+		t     tag.Tag
+		vr    dataelem.VR
+		value any
+	}{
+		{tag.New(0x0028, 0x0100), dataelem.US, uint16(16)},
+		{tag.New(0x0028, 0x0101), dataelem.US, uint16(12)},
+		{tag.New(0x0028, 0x0102), dataelem.US, uint16(11)},
+		{tag.New(0x7FE0, 0x0010), dataelem.OW, pixels},
+	} {
+		ds.Remove(e.t)
+		if err := ds.Add(dataelem.NewDataElement(e.t, e.vr, e.value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := icctest.Profile("GRAY", "a gray profile for a large frame")
+	withProfile(t, ds, profile, false)
+	file, err := encodeFile(ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &recorder{}
+	backend.hold("1.2.3.22", file)
+	for _, media := range []string{mediaPNG, mediaJPEG} {
+		response, body := get(t, backend, heldInstances+"1.2.3.22/frames/1/rendered?iccprofile=yes", "Accept", media)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status %d: %s", media, response.StatusCode, body)
+		}
+		if got, err := icctest.Embedded([]byte(body)); err != nil || !bytes.Equal(got, profile) {
+			t.Errorf("%s: %d bytes of profile (%v); want the instance's %d", media, len(got), err, len(profile))
+		}
+	}
+}

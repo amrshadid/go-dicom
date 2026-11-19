@@ -468,7 +468,11 @@ func (s *Server) picture(source *frameSource, n int, want *renderTarget) ([]byte
 	var out bytes.Buffer
 	var encoder io.Writer = &out
 	if want.profile != nil {
-		if err := iccembed.Fits(want.profile, img); err != nil {
+		format := "jpeg"
+		if want.media == mediaPNG {
+			format = "png"
+		}
+		if err := iccembed.Fits(want.profile, img, format); err != nil {
 			want.warn("iccprofile=yes: " + err.Error() + ", so no profile is embedded")
 		} else if want.media == mediaPNG {
 			encoder = iccembed.PNG(&out, want.profile)

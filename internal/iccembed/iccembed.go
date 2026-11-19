@@ -18,21 +18,23 @@ import (
 	"io"
 )
 
-// Fits reports whether profile can describe img as image/png and
-// image/jpeg encode it: a grayscale profile for an *image.Gray, which both
-// write with one sample a pixel, and an RGB profile for anything else,
-// written as RGB. PNG requires the profile's color space to be the image's
-// (11.3.2.4), and a JPEG of one component cannot be RGB either. It says
-// why not when it does not.
-func Fits(profile []byte, img image.Image) error {
+// Fits reports whether profile can describe img as format, "png" or
+// "jpeg", encodes it: a grayscale profile for a picture written with one
+// sample a pixel, and an RGB profile for one written as RGB. PNG requires
+// the profile's color space to be the image's (11.3.2.4), and a JPEG of
+// one component cannot be RGB either. It says why not when it does not.
+//
+// The two encoders decide differently. image/png writes one sample a pixel
+// for any picture whose color model is color.GrayModel, which includes the
+// frame Dataset.RenderFramesFrom draws a band at a time; image/jpeg does so
+// only for an *image.Gray, and writes three components for any other.
+func Fits(profile []byte, img image.Image, format string) error {
 	if len(profile) < 20 {
 		return errors.New("the ICC profile is too short to have a header")
 	}
 	space := string(profile[16:20]) // ICC.1 7.2.6, data color space
 	gray := img.ColorModel() == color.GrayModel
-	if _, ok := img.(*image.Gray); !ok && gray {
-		// Neither encoder writes one sample a pixel for any other
-		// grayscale picture.
+	if _, ok := img.(*image.Gray); format == "jpeg" && !ok {
 		gray = false
 	}
 	switch {

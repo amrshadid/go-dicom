@@ -240,7 +240,7 @@ func (p *imageFiles) carrying(out io.Writer, img image.Image, format string) io.
 	if p.profile == nil {
 		return out
 	}
-	if err := iccembed.Fits(p.profile, img); err != nil {
+	if err := iccembed.Fits(p.profile, img, format); err != nil {
 		p.warn(err)
 		return out
 	}
