@@ -91,6 +91,10 @@
 // (image/jpeg, image/jls, image/jp2, image/dicom-rle), each frame is the bytes
 // the file holds. A frame is read from the file by where it lies, not by
 // loading the instance. A frame number the image does not have is 404.
+// A compressed type or syntax the frame is not held in is encoded on
+// request with the library's coders, a type named alone into its lossless
+// default; a lossy syntax only when named, losing what [WithFrameEncoding]
+// sets. A frame held lossy is not coded again.
 //
 // Metadata gives a BulkDataURI for each value it leaves out, and
 // …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level

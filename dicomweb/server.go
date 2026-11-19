@@ -85,6 +85,9 @@ type Backend interface {
 type Server struct {
 	backend  Backend
 	maxStore int64
+	// encoding is how much a frame encoded on request into a lossy syntax
+	// may lose.
+	encoding FrameEncoding
 }
 
 // ServerOption configures a Server.
@@ -102,7 +105,7 @@ func WithMaxStoreBytes(n int64) ServerOption {
 
 // NewServer returns a server over backend.
 func NewServer(backend Backend, options ...ServerOption) *Server {
-	server := &Server{backend: backend, maxStore: DefaultMaxStoreBytes}
+	server := &Server{backend: backend, maxStore: DefaultMaxStoreBytes, encoding: DefaultFrameEncoding}
 	for _, option := range options {
 		option(server)
 	}

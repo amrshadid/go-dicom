@@ -362,6 +362,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Across pydicom's corpus, all 61 URIs that metadata gives serve the bytes
   pydicom reads at that place in the file.
 
+- **The DICOMweb server encodes a frame into the syntax a request names**
+  (#474). A frame was sent in a compressed type only when the instance was
+  stored in it; anything else was 406, "nothing is encoded on request",
+  though the library has encoders for most of them. Now a frame is encoded
+  with them (PS3.18 8.7.3.3.2): RLE Lossless, JPEG-LS Lossless and
+  Near-Lossless, JPEG Lossless (Process 14 and SV1), JPEG Baseline and
+  Extended, and JPEG 2000 Lossless and lossy. A type named without a syntax
+  gets its default from Table 8.7.3-5, which is lossless for every type. A
+  lossy syntax is used only when the request names it, and loses what
+  `dicomweb.WithFrameEncoding` sets: JPEG quality 90, JPEG-LS NEAR 2 and JPEG
+  2000 at 10:1 unless told otherwise. The forms are taken in the order the
+  request lists them. JPEG 2000 Part 2, an image the coder does not take
+  (16 bits to JPEG Baseline, for one) and a frame held lossy, which is not
+  coded again, are 406 with the reason. Seven corpus images were asked for
+  in every syntax and each returned frame was decoded by pylibjpeg's
+  libjpeg and OpenJPEG or pydicom. Lossless encodings (32) decoded to the
+  stored pixels, JPEG-LS near-lossless within 2, and JPEG and lossy JPEG 2000
+  at 38 dB or better. The interop job installs pylibjpeg for this step.
+
 - **The DICOMweb server renders images and thumbnails** (#382).
   `…/rendered` and `…/thumbnail` answered 404. They are served now for an
   instance and for frames, and the thumbnail for a series and a study too,

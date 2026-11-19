@@ -353,18 +353,45 @@ func (s *Server) openInstance(r *http.Request, target retrieveTarget) (io.ReadSe
 // as bulk data.
 func (s *Server) sendFrames(w http.ResponseWriter, r *http.Request, source *frameSource, numbers []int, joined bool) {
 	wants, accept := frameWantsOf(r)
-	media, syntax, decode, ok := source.choose(wants)
+	// Each form in the order the request lists them: as held or decoded
+	// when that will do, else encoded, so a viewer that prefers a type it
+	// decodes is given that type.
+	var media, syntax, encode string
+	var decode, ok bool
+	var why []string
+	for _, want := range wants {
+		if media, syntax, decode, ok = source.choose([]frameWant{want}); ok {
+			break
+		}
+		if want.media == "" || want.asStored {
+			continue
+		}
+		target, err := source.encodeTo(want)
+		if err != nil {
+			why = append(why, err.Error())
+			continue
+		}
+		media, syntax, encode, ok = want.media, target, target, true
+		break
+	}
 	if !ok {
+		reason := "it cannot be sent in any form the request accepts"
+		if len(why) > 0 {
+			reason = strings.Join(why, "; ")
+		}
 		s.fail(w, refuse(http.StatusNotAcceptable,
-			"the frames are held in transfer syntax %s, and nothing is encoded on request; the request accepts %q",
-			source.syntax, accept))
+			"the frames are held in transfer syntax %s, and %s; the request accepts %q", source.syntax, reason, accept))
 		return
 	}
 	joined = joined && media == mediaOctetStream
 
 	// The first frame is made ready before anything is written, so a frame
-	// that cannot be read or decoded can still be answered with a status.
+	// that cannot be read, decoded or encoded can still be answered with a
+	// status.
 	frame := func(n int) ([]byte, error) {
+		if encode != "" {
+			return source.encode(n, encode, s.encoding)
+		}
 		data, err := source.read(n - 1)
 		if err != nil || !decode {
 			return data, err
