@@ -115,7 +115,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level; `wlmscp` answers them |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
@@ -147,7 +147,24 @@ Negotiated by default:
 Modality Worklist (`1.2.840.10008.5.1.4.31`) is served by `WorklistHandler` but
 is **not** in the default set, since an SCP that accepts worklist queries without
 a worklist to answer them from is worse than one that declines. Add it with
-`SetSupportedAbstractSyntaxes`.
+`SetSupportedAbstractSyntaxes`. `WorklistHandler` does no matching of its
+own; package `matching` matches a query against an entry and builds the
+answer (section 2.7).
+
+`go-dicom wlmscp` is a worklist SCP over a directory of worklist files, one
+entry per file, as dcmtk's `wlmscpfs` is. It accepts Verification and
+Modality Worklist FIND and refuses every other SOP class. The directory is
+read again at every query; a file that is not DICOM, or holds no Scheduled
+Procedure Step Sequence, is not served and is reported once. A query's
+Query/Retrieve Level, which Basic Worklist does not have, is neither matched
+nor returned; every other key is matched by section 2.7 and returned, so
+the answers carry status FF00, never FF01. Over dcmtk's sample worklist
+database, dcmtk's `findscu -W` and pynetdicom get the same entries,
+attribute for attribute, from `wlmscp` as from `wlmscpfs` for queries by
+modality, date and date range, time range, station AE title, patient name
+with wildcards, universal matching and one that matches nothing. They
+differ on a person's name in another case: `wlmscp` matches `vivaldi*` to
+VIVALDI^ANTONIO and `wlmscpfs` does not.
 
 Any other SOP class may be added with `SetSupportedAbstractSyntaxes`. The
 dictionary holds UID constants for far more classes than this list; a constant is
@@ -275,6 +292,7 @@ distribution accept everything:
 | `go-dicom storescp` | all 37 |
 | `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
 | `go-dicom echoscp` | the default four; verification carries no data set |
+| `go-dicom wlmscp` | the default four; a worklist query and its answers carry no pixel data |
 
 Before this, a modality that stores JPEG-LS or JPEG 2000 natively — most modern
 equipment — could not store to either server: every compressed context was

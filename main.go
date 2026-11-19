@@ -83,6 +83,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.MoveSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.GetSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.QRSCPCommand{})
+	dicomCLI.RegisterCommand(&cli.WLMSCPCommand{})
 
 	// Register DICOMweb commands
 	dicomCLI.RegisterCommand(&cli.QidoCommand{})
