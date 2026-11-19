@@ -28,7 +28,16 @@ func OffersVRChoice(entry string) bool {
 // entry allows for its tag: the entry itself, or any one of the choices it
 // offers. It is the one check behind the VR mismatch reported when an element
 // is read, added to a data set or validated.
+//
+// The entry itself matches because that is what an element read from an
+// Implicit VR file carries: its VR comes from the dictionary, and where the
+// dictionary offers a choice the reader keeps the whole of it, "OB or OW" for
+// Pixel Data. Compared with each choice only, such an element was reported as
+// a mismatch with itself (#483).
 func VRMatchesDictionary(actual, entry string) bool {
+	if actual == entry {
+		return true
+	}
 	for _, choice := range VRChoices(entry) {
 		if actual == choice {
 			return true
