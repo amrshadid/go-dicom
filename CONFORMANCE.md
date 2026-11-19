@@ -1007,10 +1007,19 @@ item for each frame, and each macro's attributes.
 Any other condition is prose, and a Conditional module, an absent Type 1C or
 2C attribute and a macro included under a condition whose condition is prose
 are reported as not checked. Repeating groups (60xx), context groups (PS3.16), rules
-between attributes and attributes the IOD does not name are not checked. No
-other validator was available to compare it with (`dciodvfy` is not
-installed where it was built); its findings for five corpus files were
-compared with the standard by hand.
+between attributes and attributes the IOD does not name are not checked.
+
+It has not been compared with another validator: neither `dciodvfy`
+(dicom3tools) nor the Python `dicom-validator` was available where it was
+built. Its findings were compared with PS3.3 by hand instead, for fifteen
+corpus files of thirteen IODs: CT Image, MR Image, Secondary Capture Image,
+RT Dose and MR Image with an overlay when it was written (#408), and RT
+Structure Set, RT Plan, RT Ion Plan, Segmentation, Ultrasound Multi-frame
+Image, Ultrasound Image, Basic Text SR, Comprehensive SR, 12-Lead ECG and
+Secondary Capture Image again once conditions and functional groups were
+checked (#482). Every error it reported in those files is a real defect of
+the file, and no Type 1 or Type 2 attribute of a Mandatory module that a
+second reading of the tables found missing went unreported.
 
 ---
 

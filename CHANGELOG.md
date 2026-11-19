@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`validate`'s findings are compared with the standard on ten more IODs**
+  (#482). No other IOD validator can be run where it is built (`dciodvfy`
+  and the Python `dicom-validator` are not installed), and CONFORMANCE said
+  so without saying what had been compared instead. Ten corpus files of ten
+  IODs (RT Structure Set, RT Plan, RT Ion Plan, Segmentation, both
+  Ultrasound IODs, Basic Text and Comprehensive SR, 12-Lead ECG, Secondary
+  Capture) were compared with PS3.3 by hand: each of their ten errors is a
+  real defect of the file, and a second reading of the tables found no
+  missing Type 1 or Type 2 attribute of a Mandatory module that it had not
+  reported. CONFORMANCE §8.6 says what was compared, and what was not.
+
 - **`validate` checks the functional groups of an enhanced multi-frame
   image** (#463). The IOD's Functional Group Macros table was not read, so
   an Enhanced CT with Pixel Measures removed, with Frame Content moved into
