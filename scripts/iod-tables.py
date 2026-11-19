@@ -27,8 +27,11 @@ numbers of each are printed on standard error. Enumerated Values and Defined
 Terms are taken from a variablelist titled exactly so, in the attribute's
 description or in the section its description names "for specialization"
 when that section is about the attribute alone; a list that is ambiguous (two
-for one value) is left out. The Functional Group Macro tables of the enhanced
-IODs are not read.
+for one value) is left out.
+
+An enhanced multi-frame IOD's Functional Group Macros table is read too: each
+macro with its table, its usage and condition, and where it may be ("May not
+be used as a Shared Functional Group"), when the usage says.
 """
 import re
 import sys
@@ -107,6 +110,7 @@ def condition_text(s):
 
 
 iods = {}  # section label -> (name, table label, [(module name, table id, usage, condition)])
+functional_groups = {}  # section label -> (table label, [(macro name, table id, usage as written)])
 wanted_tables = set()
 for uid, name, target in sop_classes:
     sec, tab = iod_table(target)
@@ -137,6 +141,29 @@ for uid, name, target in sop_classes:
         wanted_tables.add(mtab.get(XID))
     caption = text(tab.find(D + "caption"))
     iods[label] = (caption[: -len(" IOD Modules")], tab.get("label"), modules)
+
+    # An enhanced multi-frame IOD names, in a second table, the Functional
+    # Group Macros its Shared and Per-Frame Functional Groups Sequences hold
+    # (PS3.3 A.1.3, C.7.6.16): the macro, the section that defines it, and
+    # the usage, which may also say where the macro may be used.
+    fgtab = first_table(sec, lambda c: c.endswith("Functional Group Macros"))
+    if fgtab is None:
+        continue
+    groups = []
+    for tr in fgtab.find(D + "tbody"):
+        tds = tr.findall(D + "td")
+        if len(tds) < 3:
+            continue
+        xref = tds[1].find(".//" + D + "xref")
+        msec = ids3.get(xref.get("linkend")) if xref is not None else None
+        if msec is None:
+            continue
+        mtab = msec if msec.tag == D + "table" else first_table(msec, lambda c: "Attributes" in c)
+        if mtab is None:
+            continue
+        groups.append((text(tds[0]), mtab.get(XID), text(tds[2])))
+        wanted_tables.add(mtab.get(XID))
+    functional_groups[label] = (fgtab.get("label"), groups)
 
 # ------------------------------------------------------------ attribute rows
 
@@ -341,6 +368,9 @@ def sentences(paragraphs):
     out = []
     for p in paragraphs:
         p = re.sub(r"\.\.+", ".", p.strip())
+        # "Required if ..., may be present otherwise." says what the two
+        # sentences say; written so in many Functional Group Macro tables.
+        p = re.sub(r", may be present otherwise(?:\.|$)", ". " + OTHERWISE, p)
         out += [s.strip() for s in SENTENCE_END.split(p) if s.strip()]
     return out
 
@@ -411,6 +441,33 @@ for label, (name, tlabel, modules) in iods.items():
         count("module", form if parsed else "prose: " + form)
         module_conditions[(label, j)] = parsed
 
+# Where a Functional Group Macro may be, when the usage says ("M - May not be
+# used as a Shared Functional Group."). Said in no other words is said
+# nowhere: the macro may be in either.
+PER_FRAME_ONLY = re.compile(r"(?:may|shall) not be used as a shared functional group", re.I)
+SHARED_ONLY = re.compile(r"may not be used as a per-frame functional group|shall be used as a shared functional group", re.I)
+PLACEMENT = re.compile(r"[;.,]?\s*(?:may|shall) (?:not )?be used as an? (?:shared|per-frame) functional group"
+                       r"(?: \(see for specialization\))?\.?", re.I)
+fg_rows = {}  # IOD label -> [(macro, table id, usage, condition text, condition, placement)]
+for label, (tlabel, groups) in functional_groups.items():
+    out_rows = []
+    for macro, tid, said in groups:
+        m = re.match(r"^\s*([MCU])\s*[-–]?\s*", said)
+        usage = USAGE.get(m.group(1) if m else "", "UserOption")
+        placement = "Either"
+        if PER_FRAME_ONLY.search(said):
+            placement = "PerFrameOnly"
+        elif SHARED_ONLY.search(said):
+            placement = "SharedOnly"
+        rest = PLACEMENT.sub("", said[m.end():] if m else said).strip()
+        cond, parsed = "", None
+        if usage == "Conditional":
+            cond = rest
+            form, parsed = parse_condition([rest], [])
+            count("functional group", form if parsed else "prose: " + form)
+        out_rows.append((macro, tid, usage, cond, parsed, placement))
+    fg_rows[label] = (tlabel, out_rows)
+
 # -------------------------------------------------------------------- output
 
 
@@ -426,6 +483,7 @@ def tag_code(t):
     return f"0x{int(t, 16):08X}, 0xFFFFFFFF"
 
 
+PLACEMENT_NAMES = {"Either": "SharedOrPerFrame", "SharedOnly": "SharedOnly", "PerFrameOnly": "PerFrameOnly"}
 TEST_NAMES = {"Present": "IsPresent", "Absent": "IsAbsent", "HasValue": "HasValue",
               "PresentWithValue": "IsPresentWithValue"}
 
@@ -473,6 +531,14 @@ for label in sorted(iods):
     for j, (mname, tid, usage, cond) in enumerate(modules):
         when = condition_code(module_conditions.get((label, j)))
         out.append(f"\t\t{{{q(mname)}, {q(tables[tid][0] if tid in tables else '')}, {usage}, {q(cond)}, {when}}},")
+    if label not in fg_rows:
+        out.append("\t}},")
+        continue
+    fglabel, rows = fg_rows[label]
+    out.append(f"\t}}, FunctionalGroupsTable: {q(fglabel)}, FunctionalGroups: []FunctionalGroup{{")
+    for macro, tid, usage, cond, parsed, placement in rows:
+        out.append(f"\t\t{{{q(macro)}, {q(tables[tid][0] if tid in tables else '')}, {usage}, {q(cond)}, "
+                   f"{condition_code(parsed)}, {PLACEMENT_NAMES[placement]}}},")
     out.append("\t}},")
 out.append("}\n")
 
@@ -515,7 +581,7 @@ out.append("}")
 print("\n".join(out))
 print(f"PS3.3 {edition3}: {len(sop_classes)} SOP classes, {len(iods)} IODs, {len(tables)} tables",
       file=sys.stderr)
-for kind in ("attribute", "module"):
+for kind in ("attribute", "module", "functional group"):
     forms = condition_forms.get(kind, {})
     print(f"{kind} conditions: {sum(forms.values())}", file=sys.stderr)
     for form, n in sorted(forms.items(), key=lambda kv: (kv[0].startswith("prose"), -kv[1])):

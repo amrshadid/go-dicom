@@ -57,7 +57,38 @@ type IOD struct {
 	Section string // "A.3"
 	Table   string // the IOD module table, "A.3-1"
 	Modules []ModuleUsage
+
+	// FunctionalGroupsTable and FunctionalGroups are, for an enhanced
+	// multi-frame IOD, its Functional Group Macros table ("A.38-2") and the
+	// macros it lists: what the Shared and Per-Frame Functional Groups
+	// Sequences hold (PS3.3 C.7.6.16).
+	FunctionalGroupsTable string
+	FunctionalGroups      []FunctionalGroup
 }
+
+// FunctionalGroup is one row of an IOD's Functional Group Macros table.
+type FunctionalGroup struct {
+	Macro     string // "Pixel Measures"
+	Table     string // the macro's attribute table, "C.7.6.16-2"
+	Usage     Usage
+	Condition string     // for a Conditional macro, the condition as PS3.3 states it
+	When      *Condition // that condition read as data, or nil when it is prose
+	Placement Placement
+}
+
+// Placement is where a Functional Group Macro may be: in the item of the
+// Shared Functional Groups Sequence, which applies to every frame, or in the
+// item of each frame in the Per-Frame Functional Groups Sequence.
+type Placement int
+
+const (
+	// SharedOrPerFrame: either, as the IOD's table says nothing.
+	SharedOrPerFrame Placement = iota
+	// SharedOnly: "May not be used as a Per-Frame Functional Group".
+	SharedOnly
+	// PerFrameOnly: "May not be used as a Shared Functional Group".
+	PerFrameOnly
+)
 
 // ModuleUsage is one row of an IOD module table.
 type ModuleUsage struct {

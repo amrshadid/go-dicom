@@ -178,6 +178,11 @@ USAGE:
       table, or the section it names for the attribute, lists them
     how many items a sequence holds, where its description says
 
+  An enhanced multi-frame image's Shared and Per-Frame Functional Groups
+  are checked against the IOD's Functional Group Macros table: each macro
+  the IOD requires is there for every frame, none is in both or where the
+  table forbids it, and each is checked like a module.
+
   The rules are generated from the standard (the edition is printed), not
   written by hand. Pixel Data and other bulk values are left in the file:
   their presence and length are checked, not their bytes.
@@ -189,12 +194,18 @@ USAGE:
   is one present where it does not, unless PS3.3 says "May be present
   otherwise".
 
+  A condition PS3.3 states in a fixed form naming one attribute ("Required
+  if Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES") is evaluated: a Type 1C or 2C attribute, or a
+  Conditional module, absent where its condition holds is an error, and so
+  is one present where it does not, unless PS3.3 says "May be present
+  otherwise".
+
 NOT CHECKED:
   A condition PS3.3 states in prose is reported as "not checked", never
   passed. Also not checked: attributes of repeating groups such as
-  (60xx,eeee), the Functional Group Macros of the enhanced IODs, context
-  groups (PS3.16), rules that tie one attribute to another, and attributes
-  the IOD does not name.
+  (60xx,eeee), context groups (PS3.16), rules that tie one attribute to
+  another, and attributes the IOD does not name.
 
 OPTIONS:
   --json       Print the findings as JSON

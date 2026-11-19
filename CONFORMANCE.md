@@ -998,12 +998,15 @@ tables list them, and item counts where a sequence's description states them.
 A condition PS3.3 states in one of a few fixed sentence forms naming one
 attribute by its tag ("... is present", "... is not present", "... has a
 Value of X", "... Value 1 is X or Y", "... is present and has a Value of X",
-with or without "May be present otherwise") is evaluated: 580 of the 1681
-Type 1C and 2C attributes and 25 of the 316 Conditional modules of 2026d.
+with or without "May be present otherwise") is evaluated: 645 of the 1867
+Type 1C and 2C attributes, 25 of the 316 Conditional modules and 45 of the
+171 Conditional Functional Group Macros of 2026d. The Shared and Per-Frame
+Functional Groups of the 29 enhanced IODs with a Functional Group Macros
+table are checked against it: usage, where a macro may be, one per-frame
+item for each frame, and each macro's attributes.
 Any other condition is prose, and a Conditional module, an absent Type 1C or
 2C attribute and a macro included under a condition whose condition is prose
-are reported as not checked. Repeating groups (60xx), the
-Functional Group Macros of enhanced IODs, context groups (PS3.16), rules
+are reported as not checked. Repeating groups (60xx), context groups (PS3.16), rules
 between attributes and attributes the IOD does not name are not checked. No
 other validator was available to compare it with (`dciodvfy` is not
 installed where it was built); its findings for five corpus files were
