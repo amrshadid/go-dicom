@@ -231,20 +231,11 @@ func (a *Association) popPending() (pendingMessage, bool) {
 }
 
 // handleCStoreStream serves a C-STORE to a handler that reads its data set as
-// it arrives. See CStoreStreamer for what happens when.
+// it arrives. See CStoreStreamer for what happens when. handleCStore has
+// already refused a request that says no data set follows, for both kinds of
+// handler.
 func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, streamer CStoreStreamer,
-	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
-
-	req := cstoreRequest(messageID, cmdDS)
-	if !HasDataSet(cmdDS) {
-		// Nothing to store, and nothing to hand the handler that would not
-		// read as an empty instance stored. A data set the peer sends anyway
-		// is not this message's: the next read takes it as stray data.
-		DefaultLogger.Warn("refusing a C-STORE of %s that says no data set follows (PS3.7 9.3.1.1)",
-			req.AffectedSOPInstance)
-		s.sendCStoreRSP(ctx, assoc, ctxID, req, StatusUnableToProcess)
-		return
-	}
+	ctxID byte, req *CStoreRequest) {
 
 	stream := newDataSetStream(ctx, assoc, ctxID)
 	resp, err := streamer.HandleCStoreStream(ctx, req, assoc.TransferSyntaxFor(ctxID), stream)
