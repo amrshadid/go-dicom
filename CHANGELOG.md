@@ -755,6 +755,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk
+  3.7.0 bundles a CharLS from before 2.1, which works out the default
+  thresholds differently from T.87 below 8 bits: losslessly at 6 and 7 bits,
+  and at most NEAR values from 2 to 7 bits. It refused most of those frames
+  and decoded the odd one to a slightly different image without an error.
+  Where the two sets differ, and only there, the encoder now writes T.87's
+  thresholds in an LSE segment, as T.87 C.2.4.1.1 allows, so dcmtk uses
+  them. At 6 and 7 bits dcmtk now decodes every frame, at every NEAR, to
+  CharLS 2.2's and libjpeg's samples, where it refused 52 of 65. Every other
+  frame is unchanged, and the ones that gained the segment are byte for byte
+  what CharLS 2.2 writes when given the thresholds.
+
 - **Events no longer copy every received byte** (#469). A received PDU was
   copied whenever its connection reported events, and a `Server` always has
   an `EventManager`, so every instance received was copied once more with no

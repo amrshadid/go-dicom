@@ -721,28 +721,38 @@ how decoded samples are shaped and coloured, and the one tolerance.
   (128, 128, 128 at 8 bits and NEAR 127). Both rules are followed when coding
   and decoding, and an LSE segment that leaves a threshold at zero has that
   one defaulted on its own. CharLS before 2.1 used the 8-bit formula at every
-  precision (CharLS issue 51), giving 2, 3, 4 at 6 and 7 bits; at every other
-  precision the two agree. dcmtk 3.7.0 still bundles that CharLS, so between
-  dcmtk and every current decoder a 6 or 7 bit frame without an LSE segment is
-  read with the wrong thresholds: dcmtk refuses this library's frames ("Too
-  much compressed data" or "Invalid compressed image data"), and this library
-  refuses dcmtk's, with an error that names the cause and both sets of
-  thresholds. Decoding them with the old thresholds is not offered, because a
-  stream does not say which it was coded with. A 7-bit dcmtk frame used to
-  decode here without an error to an image up to 127 levels off: a scan whose
-  samples are all decoded with more than a byte of its data unread is now
-  refused, as CharLS and dcmtk refuse it. `dcmcjpls +t1 2 +t2 3 +t3 5` (or
-  `+t3 10` at 7 bits) writes the thresholds into an LSE segment, and that
-  frame decodes the same everywhere.
+  precision (CharLS issue 51). Losslessly that gives other thresholds at 6
+  and 7 bits only (2, 3, 4); near-lossless it differs at most NEAR values
+  from 2 to 7 bits: at NEAR 1 at 2 bits, 1 and 2 at 3 bits, 1 to 5 at 4 bits,
+  1 to 10 at 5 bits, 22 of the 32 values at 6 bits and 43 of the 64 at 7.
+  From 8 bits up the two agree. dcmtk 3.7.0 still bundles that CharLS.
+  **Where the two differ, this library's encoder writes T.87's thresholds in
+  an LSE segment** (T.87 C.2.4.1.1: MAXVAL, T1, T2, T3 and RESET, as CharLS
+  writes one when given them), so dcmtk reads the frame with the right ones;
+  everywhere else it writes none, and the frame is CharLS 2.2's. Without the
+  segment dcmtk refused most of those frames ("Too much compressed data" or
+  "Invalid compressed image data") and decoded the odd one to a slightly
+  different image without an error. dcmtk's own frames at 6 and 7 bits carry
+  no thresholds and are coded with the old ones, so this library refuses
+  them, with an error that names the cause and both sets of thresholds.
+  Decoding them with the old thresholds is not offered, because a stream does
+  not say which it was coded with. A 7-bit dcmtk frame used to decode here
+  without an error to an image up to 127 levels off: a scan whose samples are
+  all decoded with more than a byte of its data unread is now refused, as
+  CharLS and dcmtk refuse it. `dcmcjpls +t1 2 +t2 3 +t3 5` (or `+t3 10` at 7
+  bits) writes the thresholds into an LSE segment, and that frame decodes the
+  same everywhere.
 
   *Verified:* a 41 by 37 image at every precision from 2 to 8, coded at NEAR 0,
   1, 2 and the largest NEAR allowed: this library's lossless frames are byte
   for byte CharLS 2.2's, and every frame either of them codes decodes to the
   same samples in this library, CharLS 2.2 and libjpeg (pylibjpeg-libjpeg).
-  dcmtk 3.7.0 agrees with them at 8 bits and at the largest NEAR, where the
-  clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
-  refuses to code below 6 bits. With the thresholds given explicitly all four
-  decode dcmtk's 6 and 7 bit frames exactly.
+  dcmtk 3.7.0's `dcmdjpls` decodes this library's frames at 6 and 7 bits, at
+  every NEAR (96 frames, and 224 three-component ones from 6 to 8 bits), to
+  the same samples as CharLS 2.2 and libjpeg; before the LSE segment it
+  refused 52 of the 65 whose thresholds differ and decoded one differently.
+  dcmcjpls and dcmdjpls refuse below 6 bits. With the thresholds given
+  explicitly all four decode dcmtk's 6 and 7 bit frames exactly.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes

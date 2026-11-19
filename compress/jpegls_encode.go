@@ -59,7 +59,8 @@ type jpeglsEncoder struct {
 // so a caller passes what PixelData already holds.
 //
 // The result is a complete JPEG-LS codestream: SOI, SOF55, one SOS per component,
-// EOI. It is what goes in an encapsulated pixel data fragment.
+// EOI, with an LSE segment after SOF55 where older CharLS versions, dcmtk's
+// among them, would otherwise use other thresholds (thresholdsNeedWriting). It is what goes in an encapsulated pixel data fragment.
 func EncodeJPEGLS(samples []byte, width, height, components, bitsStored int) ([]byte, error) {
 	return EncodeJPEGLSNearLossless(samples, width, height, components, bitsStored, 0)
 }
@@ -108,6 +109,9 @@ func EncodeJPEGLSNearLossless(samples []byte, width, height, components, bitsSto
 	out := make([]byte, 0, len(samples)/2+64)
 	out = appendMarker(out, markerSOI)
 	out = appendJPEGLSFrameHeader(out, width, height, components, bitsStored)
+	if thresholdsNeedWriting(params) {
+		out = appendJPEGLSPresetParameters(out, params)
+	}
 
 	// One scan per component. Each is coded independently, which is what ILV=0
 	// means, so a flat channel cannot lend its run state to a busy one.
@@ -669,6 +673,38 @@ func appendJPEGLSFrameHeader(out []byte, width, height, components, bitsStored i
 		// which is the only sensible choice for lossless — then a quantization
 		// table selector JPEG-LS does not use.
 		out = append(out, byte(c+1), 0x11, 0x00)
+	}
+	return out
+}
+
+// thresholdsNeedWriting reports whether a frame coded with params has to carry
+// its thresholds in an LSE segment to be read the same everywhere.
+//
+// The thresholds are T.87's defaults, which a decoder is meant to work out for
+// itself. CharLS before 2.1 works them out differently below MAXVAL 128 (it has
+// only the formula for larger ranges, CharLS issue 51), and dcmtk 3.7.0 still
+// bundles that CharLS. Where its answer differs from T.87's it decodes the frame
+// with the wrong thresholds, and refuses it or, now and then, returns a
+// different image without an error. That is at 2 to 5 bits with any NEAR above
+// 0 and at most NEAR values of 6 and 7 bits, NEAR 0 among them; at 8 bits and
+// up the two agree. T.87 C.2.4.1.1 lets an encoder state the thresholds, and
+// every decoder then uses them. Only those frames carry the segment, so every
+// other frame stays byte for byte what CharLS 2.2 writes.
+func thresholdsNeedWriting(params *jpeglsParams) bool {
+	l1, l2, l3 := legacyCharLSThresholds(params.maxVal, params.near)
+	return l1 != params.t1 || l2 != params.t2 || l3 != params.t3
+}
+
+// appendJPEGLSPresetParameters appends an LSE segment of type 1, T.87
+// C.2.4.1.1, giving every coding parameter explicitly: MAXVAL, T1, T2, T3 and
+// RESET. It is laid out as CharLS writes one when given the parameters, after
+// the frame header and before the first scan, and no field is left at zero for
+// a decoder to default.
+func appendJPEGLSPresetParameters(out []byte, params *jpeglsParams) []byte {
+	out = appendMarker(out, markerLSE)
+	out = append(out, 0x00, 0x0D, 0x01)
+	for _, v := range []int{params.maxVal, params.t1, params.t2, params.t3, params.reset} {
+		out = append(out, byte(v>>8), byte(v))
 	}
 	return out
 }

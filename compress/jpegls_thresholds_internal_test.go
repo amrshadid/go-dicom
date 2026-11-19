@@ -62,3 +62,53 @@ func TestJPEGLSLegacyThresholdsDifferOnlyAtSixAndSevenBits(t *testing.T) {
 		}
 	}
 }
+
+// TestJPEGLSThresholdsAreWrittenWhereOldCharLSDiffers proves the encoder
+// writes an LSE segment exactly for the precisions and NEAR values where CharLS
+// before 2.1, which dcmtk 3.7.0 bundles, would decode with other thresholds than
+// T.87's, and that the segment states T.87's. Worked from both formulas for
+// every NEAR, they differ at 1 NEAR value of 2 bits, 2 of 3 bits, 5 of 4 bits
+// and 10 of 5 bits (from NEAR 1 up to a point), at 22 of the 32 of 6 bits and
+// 43 of the 64 of 7 bits, NEAR 0 among them, and nowhere from 8 bits up. Where
+// lossless, that is 6 and 7 bits only, as the test above has it.
+func TestJPEGLSThresholdsAreWrittenWhereOldCharLSDiffers(t *testing.T) {
+	want := map[int]int{2: 1, 3: 2, 4: 5, 5: 10, 6: 22, 7: 43}
+	for bits := 2; bits <= 16; bits++ {
+		maxVal := 1<<bits - 1
+		bytesPer := 1
+		if bits > 8 {
+			bytesPer = 2
+		}
+		written := 0
+		for near := 0; near <= maxVal/2 && near <= 255; near++ {
+			stream, err := EncodeJPEGLSNearLossless(make([]byte, 3*2*bytesPer), 3, 2, 1, bits, near)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := jpeglsParams{maxVal: maxVal, near: near}
+			if err := p.computeDefaults(); err != nil {
+				t.Fatal(err)
+			}
+			// SOI and the 13-byte SOF55 come first.
+			lse := stream[15:]
+			hasLSE := lse[0] == 0xFF && lse[1] == markerLSE
+			l1, l2, l3 := legacyCharLSThresholds(maxVal, near)
+			if differ := l1 != p.t1 || l2 != p.t2 || l3 != p.t3; hasLSE != differ {
+				t.Errorf("%d bits, NEAR %d: LSE written %v, old thresholds %d,%d,%d, T.87 %d,%d,%d",
+					bits, near, hasLSE, l1, l2, l3, p.t1, p.t2, p.t3)
+			}
+			if !hasLSE {
+				continue
+			}
+			written++
+			for i, f := range []int{maxVal, p.t1, p.t2, p.t3, 64} {
+				if got := int(lse[5+2*i])<<8 | int(lse[6+2*i]); got != f {
+					t.Errorf("%d bits, NEAR %d: LSE field %d is %d, want %d", bits, near, i, got, f)
+				}
+			}
+		}
+		if written != want[bits] {
+			t.Errorf("%d bits: LSE written at %d NEAR values, want %d", bits, written, want[bits])
+		}
+	}
+}
