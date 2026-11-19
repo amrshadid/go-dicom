@@ -255,7 +255,7 @@ func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, stream
 		// aborted here (PS3.8 9.1.5 for the timeout).
 		DefaultLogger.Error("C-STORE of %s: %v", req.AffectedSOPInstance, stream.err)
 		if assoc.State() == StateAssociated {
-			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+			_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0, streamAbort(stream.err))
 		}
 		return
 	}
@@ -417,4 +417,23 @@ func shortened(err error) string {
 		return text[:limit] + "..."
 	}
 	return err.Error()
+}
+
+// streamAbort is why a streamed C-STORE that did not arrive whole is
+// aborted: its peer went quiet, or the server's context ended, which is the
+// server stopping. Anything else that ends the read aborts the association
+// where it happens.
+func streamAbort(err error) *LocalAbort {
+	cause := err
+	if incomplete, ok := err.(*incompleteDataSetError); ok {
+		cause = incomplete.cause
+	}
+	var timeout *TimeoutError
+	if errors.As(cause, &timeout) {
+		return abortedBy(AbortCauseTimeout, cause)
+	}
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return abortedBy(AbortCauseStopping, cause)
+	}
+	return abortedBy(AbortCauseProtocolViolation, cause)
 }

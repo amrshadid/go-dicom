@@ -86,6 +86,18 @@ func (t *Transport) WritePDU(ctx context.Context, pdu PDU) error {
 	return nil
 }
 
+// writeAbort sends an A-ABORT and reports it with why this side sent it.
+func (t *Transport) writeAbort(ctx context.Context, pdu *AbortPDU, local *LocalAbort) error {
+	data, err := t.writePDU(ctx, pdu)
+	if err != nil {
+		return err
+	}
+	if o := t.observed(); o != nil {
+		o.pduWhy(true, pdu, data, local)
+	}
+	return nil
+}
+
 // writePDU encodes and sends a PDU, and returns the bytes it sent.
 func (t *Transport) writePDU(ctx context.Context, pdu PDU) ([]byte, error) {
 	t.mu.Lock()

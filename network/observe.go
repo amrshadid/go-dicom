@@ -95,6 +95,12 @@ func (o *observer) event(eventType EventType) *Event {
 // pdu reports a PDU that was sent or received, and whatever it means for
 // the association and for the DIMSE message it is part of.
 func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
+	o.pduWhy(sent, pdu, raw, nil)
+}
+
+// pduWhy is pdu, with why this side aborted when the PDU is an A-ABORT it
+// sent.
+func (o *observer) pduWhy(sent bool, pdu PDU, raw []byte, local *LocalAbort) {
 	eventType, direction := EVTPDURecv, 1
 	if sent {
 		eventType, direction = EVTPDUSent, 0
@@ -143,8 +149,11 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 		o.events.Emit(with(EVTAssocReleased))
 
 	case *AbortPDU:
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocAborted))
+		for _, t := range []EventType{eventType, EVTAssocAborted} {
+			e := with(t)
+			e.LocalAbort = local
+			o.events.Emit(e)
+		}
 
 	case *PDataTF:
 		o.events.Emit(with(eventType))
