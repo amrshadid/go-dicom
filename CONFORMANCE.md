@@ -266,9 +266,14 @@ These four are the same default pynetdicom uses, and all four are fully
 supported: the data set codec encodes and decodes each, including the byte swap
 for big endian and the deflate stream.
 
-**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns all 37 the
-standard defines; pass it to `SetSupportedTransferSyntaxes` on an SCP, or use it
-when building presentation contexts on an SCU. It is not the default for the
+**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns 37: the
+four above and 33 that carry compressed pixel data. Pass it to
+`SetSupportedTransferSyntaxes` on an SCP, or use it when building presentation
+contexts on an SCU. The three JPEG XL transfer syntaxes (`.110`, `.111`,
+`.112`) are not among the 37, so no server here accepts them unasked. A list
+is used exactly as given, so naming their UIDs in `SCPConfig.TransferSyntaxes`
+or `SetSupportedTransferSyntaxes` beside the others has an SCP accept a JPEG
+XL context, and the instance is then carried as it is, not decoded (§3.2). It is not the default for the
 same reason it is not pynetdicom's: a context list grows with the product of SOP
 classes and transfer syntaxes, and proposing every combination makes an
 association request large enough to matter.
@@ -289,8 +294,8 @@ distribution accept everything:
 
 | Server | Transfer syntaxes |
 |---|---|
-| `go-dicom storescp` | all 37 |
-| `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
+| `go-dicom storescp` | the 37 of `AllTransferSyntaxes()` |
+| `go-dicom qrscp` | the same 37, via `dcmstore.SupportedTransferSyntaxes()` |
 | `go-dicom echoscp` | the default four; verification carries no data set |
 | `go-dicom wlmscp` | the default four; a worklist query and its answers carry no pixel data |
 
@@ -377,7 +382,7 @@ As an origin server (`dicomweb.NewServer`, `qrscp -web`):
 | Service | Supported | Not supported |
 |---------|-----------|---------------|
 | QIDO-RS | `/studies`, `/series`, `/instances` and the same within a study or a series. Matching is the archive's own (section 2.7), so a search matches what a C-FIND does: single value, wildcard, range, list of UID, and `Sequence.Attribute` for an attribute inside a sequence. `includefield`, `limit`, `offset`. Results as DICOM JSON in UTF-8, each with the attributes of PS3.18 10.6.3.3 the archive holds a value for; 204 when nothing matches | XML results. Fuzzy matching: `fuzzymatching=true` is answered by literal matching and a `Warning: 299`. `includefield=all` returns the default attributes |
-| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON. Frames, `…/frames/{list}`: one part a frame, in the order asked; by default, or for `application/octet-stream`, uncompressed in Explicit VR Little Endian, a compressed frame decoded for it; for `application/octet-stream; transfer-syntax=*`, or the frame's own type (`image/jpeg`, `image/jls`, `image/jp2`, `image/jpx`, `image/dicom-rle`, `image/x-dicom-rle` accepted for it), as stored. Each frame read from the file by its position, through the Extended or Basic Offset Table, a frame over several fragments joined. Frames of Float and Double Float Pixel Data, their floats little endian. A frame of a 1-bit image that starts inside a byte (frames are packed with no padding between them, PS3.5 8.1.1) sent as a 1-bit frame on its own is laid out: from the lowest bit of its first byte, zero bits after its last. A frame number not in the image: 404; a list that is not frame numbers counted from 1: 400; a compressed type or syntax the frame is not held in: the frame encoded into it (PS3.18 8.7.3.3.2), into RLE Lossless, JPEG-LS Lossless or Near-Lossless, JPEG Lossless (Process 14 or SV1), JPEG Baseline or Extended, or JPEG 2000 Lossless or lossy; a type named alone is its lossless default of Table 8.7.3-5 (`image/jpeg` JPEG Lossless SV1, `image/jls` JPEG-LS Lossless, `image/jp2` JPEG 2000 Lossless, `image/dicom-rle` RLE), and a lossy syntax is used only when named, at what `dicomweb.WithFrameEncoding` sets (JPEG quality 90, JPEG-LS NEAR 2, JPEG 2000 at 10:1 by default); 406 with the reason for JPEG 2000 Part 2 (`image/jpx`), an image the coder does not take, and a frame held lossy, which is not coded again. Bulk data, `…/instances/{instance}/bulkdata/{tag}[/{item}/{tag}…]`: each value metadata leaves out (binary values over 1 KiB, Pixel Data at any length), read from the file by its position, as `application/octet-stream` in little endian; Pixel Data as its frames are sent, every frame in one part when uncompressed. `/metadata` gives a `BulkDataURI` for each, inside sequences too. The bulk data of a study, a series or an instance, `…/bulkdata` (PS3.18 Table 10.4.1.5-1): every value metadata names, a part each with its `BulkDataURI` as `Content-Location`, instance by instance in the archive's order; Pixel Data uncompressed in one part, or, for `transfer-syntax=*`, compressed frames as stored, a part a frame at its frame resource; only `multipart/related; type="application/octet-stream"` (406 otherwise), 204 when there is no bulk value. Rendered, `…/instances/{instance}/rendered` and `…/frames/{list}/rendered`, and thumbnails of an instance, frames, a series and a study (the first instance with an image, its first frame): `image/jpeg` (the default) or `image/png`, one picture bare, several in `multipart/related`; `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]` and `quality` applied; a thumbnail fitted to 128 pixels when no viewport is given. Refused: a malformed parameter, a flipped viewport region, `iccprofile` other than `no`: 400; another media type: 406; a study or a series rendered whole, an instance with no Pixel Data: 501. `annotation`: the picture, not annotated, and `Warning: 299`. With no `window` and none in the image, a frame is drawn over the range its Bits Stored can hold through its rescale, the identity VOI LUT of PS3.3 C.11.2.1.2.2, the same for every frame (Orthanc 1.13 stretches each frame to its own values); an image whose values fill little of that range, such as 32-bit RT Dose, comes out dark, and `window` draws it otherwise | Frames sent outside a multipart body. A Float or Double Float Pixel Data image rendered (501). |
+| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON. Frames, `…/frames/{list}`: one part a frame, in the order asked; by default, or for `application/octet-stream`, uncompressed in Explicit VR Little Endian, a compressed frame decoded for it; for `application/octet-stream; transfer-syntax=*`, or the frame's own type (`image/jpeg`, `image/jls`, `image/jp2`, `image/jpx`, `image/dicom-rle`, `image/x-dicom-rle` accepted for it), as stored. Each frame read from the file by its position, through the Extended or Basic Offset Table, a frame over several fragments joined. Frames of Float and Double Float Pixel Data, their floats little endian. A frame of a 1-bit image that starts inside a byte (frames are packed with no padding between them, PS3.5 8.1.1) sent as a 1-bit frame on its own is laid out: from the lowest bit of its first byte, zero bits after its last. A frame number not in the image: 404; a list that is not frame numbers counted from 1: 400; a compressed type or syntax the frame is not held in: the frame encoded into it (PS3.18 8.7.3.3.2), into RLE Lossless, JPEG-LS Lossless or Near-Lossless, JPEG Lossless (Process 14 or SV1), JPEG Baseline or Extended, or JPEG 2000 Lossless or lossy; a type named alone is its lossless default of Table 8.7.3-5 (`image/jpeg` JPEG Lossless SV1, `image/jls` JPEG-LS Lossless, `image/jp2` JPEG 2000 Lossless, `image/dicom-rle` RLE), and a lossy syntax is used only when named, at what `dicomweb.WithFrameEncoding` sets (JPEG quality 90, JPEG-LS NEAR 2, JPEG 2000 at 10:1 by default); 406 with the reason for JPEG 2000 Part 2 (`image/jpx`), an image the coder does not take, and a frame held lossy, which is not coded again. Bulk data, `…/instances/{instance}/bulkdata/{tag}[/{item}/{tag}…]`: each value metadata leaves out (binary values over 1 KiB, Pixel Data at any length), read from the file by its position, as `application/octet-stream` in little endian; Pixel Data as its frames are sent, every frame in one part when uncompressed. `/metadata` gives a `BulkDataURI` for each, inside sequences too. The bulk data of a study, a series or an instance, `…/bulkdata` (PS3.18 Table 10.4.1.5-1): every value metadata names, a part each with its `BulkDataURI` as `Content-Location`, instance by instance in the archive's order; Pixel Data uncompressed in one part, or, for `transfer-syntax=*`, compressed frames as stored, a part a frame at its frame resource; only `multipart/related; type="application/octet-stream"` (406 otherwise), 204 when there is no bulk value. Rendered, `…/instances/{instance}/rendered` and `…/frames/{list}/rendered`, and thumbnails of an instance, frames, a series and a study (the first instance with an image, its first frame): `image/jpeg` (the default) or `image/png`, one picture bare, several in `multipart/related`; `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]` and `quality` applied; a thumbnail fitted to 128 pixels when no viewport is given. `iccprofile=yes`: the instance's own ICC profile embedded, the pixels unchanged (PS3.3 C.11.15), with `Warning: 299` when it has none or the picture cannot carry it; no `iccprofile`, or `no`: none. Refused: a malformed parameter, a flipped viewport region, `iccprofile=srgb`, `adobergb`, `rommrgb` or `displayp3`, which ask for the pixels converted: 400; another media type: 406; a study or a series rendered whole, an instance with no Pixel Data: 501. `annotation`: the picture, not annotated, and `Warning: 299`. With no `window` and none in the image, a frame is drawn over the range its Bits Stored can hold through its rescale, the identity VOI LUT of PS3.3 C.11.2.1.2.2, the same for every frame (Orthanc 1.13 stretches each frame to its own values); an image whose values fill little of that range, such as 32-bit RT Dose, comes out dark, and `window` draws it otherwise | Frames sent outside a multipart body. A Float or Double Float Pixel Data image rendered (501). |
 | STOW-RS | `application/dicom` parts in `multipart/related`, to `/studies` or into a study. Each instance kept or refused on its own: 200 when all were kept, 202 when some were, 409 when none was, with Referenced SOP Sequence and Failed SOP Sequence in the answer. Failure reasons: A900H for an instance sent into a study it is not of, 0110H when the archive could not keep it. A compressed instance is kept in the syntax it came in. A request is bounded (4 GiB unless set), 413 beyond | Metadata with separate bulk data (415). A part that is not a DICOM file has no UID to be listed under, and shows in the status alone |
 
 `qrscp -web` serves under `/dicom-web`. A port alone listens on this machine
@@ -422,7 +427,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
 | After an abort | An A-ABORT this side sends is followed by up to one second in which the peer may close the connection, what arrives being read and dropped (PS3.8 9.2, AA-1, AA-6, AA-8); the standard's timer for this is ARTIM, and one second is kept so that a peer that does not close holds only the connection |
-| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
+| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp`, `qrscp` and `wlmscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
 | A failed TLS handshake | Reported to `SCPConfig.Events` as `EVTTLSHandshakeFailed`, with the client's address and a `*TLSHandshakeError` naming the check that failed; nothing of the client's certificate is carried |
@@ -437,7 +442,8 @@ of, and does not name a file it could not read; both are counted as refused.
 | Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
 
 Everything the library reports goes through `config.Logger`, so one call
-redirects or silences all of it. Network messages carry a `component=network`
+redirects or silences all of it, but for a server, a client or a read
+(`filereader.ReadOptions.Logger`) given a logger of its own. Network messages carry a `component=network`
 attribute for filtering, and default to warnings and errors only.
 
 ---
@@ -602,31 +608,6 @@ how decoded samples are shaped and coloured, and the one tolerance.
   OpenJPEG 2.5.4 cannot decode: its packet reader adds them to the cleanup
   segment, where T.814 B.2 makes them a segment of their own. That case is
   checked to decode exactly as the same blocks in one layer
-  (`TestHTRefinementInLaterLayers`). HTJ2K pixel data in a data set is still
-  refused by name; the decoder is reached through `compress/jpeg2000` alone.
-
-  **High-Throughput code-blocks (Part 15, ITU-T T.814) decode too**: the HT
-  cleanup pass with its MEL, VLC and MagSgn streams, the HT SigProp pass
-  (with the vertically causal style) and the HT MagRef pass, the CAP marker
-  that declares Part 15, and HT tile-components beside Part 1 ones. Everything
-  around the code-blocks is the Part 1 decoder above, so HT codestreams have
-  every tiling, precinct, progression, layer and filter it has. The CxtVLC
-  tables of Annex C were read out of the ITU-T text by a script and are checked
-  to be complete prefix codes with consistent patterns
-  (`TestCxtVLCTablesAreCompletePrefixCodes`). The third-party HT codestreams
-  that exist, pydicom-data's two HTJ2K files and openjpeg-data's four HT
-  codestreams, all decode to OpenJPEG 2.5.4's samples, exactly where
-  reversible. None of them has a refinement pass, a second layer, tiles, more
-  than 8 bits or the vertically causal style, and nothing available writes HT
-  (OpenJPEG decodes it and does not encode it), so the tests carry an HT
-  encoder of their own written from T.814 Annex F: every codestream of an
-  `opj_compress` matrix like the one above is transcoded to HT code-blocks,
-  cleanup alone or with refinement passes, and OpenJPEG's decoder is the
-  reference (`TestHTDecodeMatchesOpenJPEG`, 390 codestreams, run in CI).
-  Refinement passes in a later layer than their cleanup pass are the one case
-  OpenJPEG 2.5.4 cannot decode: its packet reader adds them to the cleanup
-  segment, where T.814 B.2 makes them a segment of their own. That case is
-  checked to decode exactly as the same blocks in one layer
   (`TestHTRefinementInLaterLayers`). The three HTJ2K transfer syntaxes,
   `.201`, `.202` and `.203`, decode through this decoder.
 
@@ -650,7 +631,18 @@ how decoded samples are shaped and coloured, and the one tolerance.
   - a region of interest coded by a method other than Maxshift, which Part 2
     defines: `region of interest style N` [A.6.3];
   - packed packet headers: `packed packet headers (PPM/PPT)` [A.7.4, A.7.5];
-  - subsampled components: `component subsampling` [A.5.1, B.2];
+  - a subsampled component in a DICOM frame: `component N subsampled DXxDY
+    in a DICOM frame` [PS3.5 8.2.4]. `jpeg2000.Decode` decodes components
+    with any separation (XRsiz, YRsiz, T.800 A.5.1, B.2), each to a plane of
+    its own size (`Image.ComponentSize`), checked component by component
+    against `opj_decompress` on 54 codestreams `opj_compress` wrote with
+    4:2:0, 4:2:2, 3x2, 1x4 and 4x4 separations (`TestSubsampledMatchesOpenJPEG`)
+    and on imagecodecs' 4:2:2 `ycbc.j2k`. A data set cannot describe such a
+    frame: PS3.5 8.2.4 allows JPEG 2000 with MONOCHROME1 and 2, PALETTE
+    COLOR, YBR_RCT, YBR_ICT, RGB and YBR_FULL, and "no other Standard
+    Photometric Interpretation Values shall be used", every one of them with
+    each sample at every pixel; so the frame is refused rather than
+    resampled into a picture the file does not describe;
   - components deeper than 16 bits: `17-bit components` and so on [A.5.1];
   - the Part 2 wavelets and quantization styles: `wavelet transform N`,
     `quantization style N`.
@@ -754,7 +746,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   Sequence takes the VOI output range as its input range (C.11.4.1); pydicom
   scales by the image's lowest and highest values instead, which agrees when
   the image reaches both ends. It does not apply an ICC Profile (C.11.15):
-  color is not color managed. It refuses 64-bit samples, segmented palettes
+  color is not color managed, since converting through a profile that holds
+  lookup tables takes a color management engine. `go-dicom convert` writes
+  the image's own profile into the PNG (iCCP) or JPEG (APP2), the samples
+  unchanged, so that a viewer that manages color shows them as the image
+  means: ICC Profile (0028,2000), or that of the one optical path with one
+  (`Dataset.ICCProfile`). A grayscale picture takes only a gray profile and a
+  color one only an RGB profile, as PNG requires; otherwise the picture is
+  written without it and a warning says so. pydicom converts only when
+  `apply_icc_profile` is called, through LittleCMS; dcmtk 3.7.0 and Orthanc
+  1.13 neither apply nor embed one. It refuses 64-bit samples, segmented palettes
   and a Presentation LUT Shape other than IDENTITY or INVERSE by name.
   `go-dicom convert --format png|jpeg` is the same rendering, read from the
   file a frame at a time, and a native frame a band of rows at a time
@@ -939,11 +940,19 @@ how decoded samples are shaped and coloured, and the one tolerance.
   quantization with a step for each subband (E.1, expounded), at 1 to 16
   bits, signed or unsigned, so a CT keeps its negative values. The steps are
   one base step over each subband's synthesis norm, measured from this
-  library's own inverse filter, and the rate is met by searching for the
-  base step: the largest whose codestream fits the ratio, or whose decoded
-  image meets the PSNR. That is rate control by quantization, not the
-  pass-by-pass truncation of Annex J.14: one tile, one quality layer, every
-  bit plane of what is left coded. A ratio no codestream of the image can
+  library's own inverse filter. A ratio is met by the rate-distortion
+  optimal truncation of Annex J.14: every code-block is coded once, finely,
+  each coding pass is a truncation point with its bytes and the error it
+  removes, and the blocks are cut where their convex hulls reach one slope,
+  searched until the codestream fits, within half a percent of the ratio.
+  Near lossless, where the decoder's rounding to whole samples decides the
+  error more than the coding does, a search of the step with every pass
+  coded is tried as well and the codestream that decodes nearer the image
+  is kept. `LossyOptions.Layers` writes several quality layers, each half
+  the size of the next, and `LossyOptions.Reversible` the reversible 5/3
+  filter cut short (`.91` allows it, PS3.5 A.4.4); the data set path writes
+  one irreversible layer. A PSNR is met by searching the step until the
+  decoded image meets it. One tile. A ratio no codestream of the image can
   meet, as for a very small image, is refused rather than met with one that
   holds none of the picture, and so is PALETTE COLOR. The data set is marked
   Lossy Image Compression `01` with its ratio and method `ISO_15444_1`, and
@@ -965,12 +974,6 @@ how decoded samples are shaped and coloured, and the one tolerance.
   against 22887 at 39.7. OpenJPEG counts a 12-bit sample as 1.5 bytes where
   this library counts the 2 it is stored in, so `-r 7.5` is its 10:1 here.
   CI runs the `opj_decompress` check at 10:1.
-
-  *Verified:* OpenJPEG, which shares no code with this library, decodes what
-  the encoder writes. `opj_decompress` returns every sample of 360 generated
-  images of each depth, sign and shape, and of every uncompressed image in
-  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
-  receives one over the network with its codestream intact. Both run in CI.
 
   **JPEG Lossless (`.57` and `.70`)** is ITU-T T.81 Process 14, in pure Go:
   one scan with every component interleaved at full resolution, Huffman
@@ -1036,9 +1039,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
 
-  Decoding has no gaps of its own: every compressed syntax in the table above
-  decodes here, so an instance stored under any of them can be transcoded onto
-  whichever context a peer accepts.
+  Decoding has one gap of its own: every compressed syntax in the table of
+  §3.2 but JPEG XL decodes here, so an instance stored under any of the
+  others can be transcoded onto whichever context a peer accepts.
 
 ### 8.3 Writing
 

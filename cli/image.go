@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
+	"github.com/amrshadid/go-dicom/internal/iccembed"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -42,8 +44,9 @@ type imageOptions struct {
 // frame written as PNG costs a band. A file that cannot be read that way
 // is read whole, as before.
 //
-// The files hold pixels and nothing else: neither encoder is given any of
-// the data set's attributes, so no name, date or identifier can ride along.
+// The files hold pixels and, when the image has one, its ICC profile, which
+// describes a device and not a patient: neither encoder is given any other
+// attribute, so no name, date or identifier can ride along.
 func convertToImages(input, output string, opts imageOptions) ([]string, error) {
 	if err := opts.check(); err != nil {
 		return nil, err
@@ -163,6 +166,12 @@ func writeRendered(ds *dataset.Dataset, output string, opts imageOptions, render
 
 	var pending imageFiles
 	defer pending.discard()
+	// The image's ICC profile goes into every picture, unchanged: it says
+	// what color space the samples are in, so a viewer that manages color
+	// shows them as the image means. Nothing is converted (#546).
+	if pending.profile, err = ds.ICCProfile(); err != nil {
+		pending.warn(err)
+	}
 
 	switch opts.frame {
 	case "all":
@@ -211,6 +220,39 @@ func writeRendered(ds *dataset.Dataset, output string, opts imageOptions, render
 // they will have.
 type imageFiles struct {
 	names, temporary []string
+	// profile is the ICC profile each picture carries, nil for none.
+	profile []byte
+	warned  bool
+}
+
+// warn says once that the pictures are written without the image's ICC
+// profile, and why.
+func (p *imageFiles) warn(err error) {
+	if !p.warned {
+		fmt.Fprintf(os.Stderr, "warning: %v; the pictures are written without it\n", err)
+		p.warned = true
+	}
+}
+
+// carrying returns the writer to encode img into: out itself, or one that
+// writes the profile into the PNG or JPEG as it goes.
+func (p *imageFiles) carrying(out io.Writer, img image.Image, format string) io.Writer {
+	if p.profile == nil {
+		return out
+	}
+	if err := iccembed.Fits(p.profile, img, format); err != nil {
+		p.warn(err)
+		return out
+	}
+	if format != "jpeg" {
+		return iccembed.PNG(out, p.profile)
+	}
+	w, err := iccembed.JPEG(out, p.profile)
+	if err != nil {
+		p.warn(err)
+		return out
+	}
+	return w
 }
 
 // write encodes img into a temporary file beside name. frame numbers it in an
@@ -231,10 +273,11 @@ func (p *imageFiles) write(name string, img image.Image, frame int, opts imageOp
 	// A megabyte at a time: the encoders write in small pieces, and a write
 	// to the file for each made a hundred frames take twice as long.
 	out := bufio.NewWriterSize(f, 1<<20)
+	encoder := p.carrying(out, img, opts.format)
 	if opts.format == "jpeg" {
-		err = jpeg.Encode(out, img, &jpeg.Options{Quality: opts.quality})
+		err = jpeg.Encode(encoder, img, &jpeg.Options{Quality: opts.quality})
 	} else {
-		err = png.Encode(out, img)
+		err = png.Encode(encoder, img)
 	}
 	if err != nil {
 		_ = f.Close()

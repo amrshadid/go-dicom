@@ -1,6 +1,10 @@
 package compress_test
 
 import (
+	"errors"
+	"strings"
+
+	"github.com/amrshadid/go-dicom/compress/jpeg2000"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,5 +176,26 @@ func TestRegisteredDecoderTakesPrecedence(t *testing.T) {
 	if len(out) != len(frame) {
 		t.Fatalf("the registered decoder returned %d bytes, not the %d it was given: "+
 			"the bundled decoder answered instead", len(out), len(frame))
+	}
+}
+
+// TestSubsampledJPEG2000FrameIsRefused proves a frame whose chroma is
+// subsampled 4:2:0, which the codec decodes to planes of their own sizes,
+// is refused by name as a DICOM frame: no Photometric Interpretation PS3.5
+// 8.2.4 allows for JPEG 2000 describes components of different sizes, so
+// any interleaved result would describe a picture the file does not hold.
+func TestSubsampledJPEG2000FrameIsRefused(t *testing.T) {
+	frame, err := os.ReadFile(filepath.Join("jpeg2000", "testdata", "opj_sub_420_pcrl_layers.j2k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := compress.NewJPEG2000Decompressor()
+	_, err1 := d.Decompress(frame)
+	_, err2 := d.DecompressFrame(frame, 8, 8, 0)
+	for _, err := range []error{err1, err2} {
+		var unsupported *jpeg2000.ErrUnsupported
+		if !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "component 1 subsampled 2x2") {
+			t.Errorf("a 4:2:0 frame gave %v, want it refused as subsampled", err)
+		}
 	}
 }

@@ -73,4 +73,4 @@ dcmtk's C++ classes and the Go calls that do the same job:
 | `DcmSCU` | `network.NewSCU` |
 | `DcmSCP`, `DcmStorageSCP` | `network.StartServer` with a handler, such as `network.StorageHandler` |
 
-Each is shown, running, in [`examples/commonjobs`](../examples/commonjobs/example_test.go).
+Each is shown, running, in [`examples/commonjobs`](https://github.com/amrshadid/go-dicom/blob/main/examples/commonjobs/example_test.go).

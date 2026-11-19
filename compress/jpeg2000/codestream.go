@@ -124,8 +124,10 @@ type Component struct {
 	Signed bool
 	// Depth is the bit depth, 1 to 38 in the standard and at most 16 here.
 	Depth int
-	// DX and DY are the sample separations. Anything but 1 is subsampling,
-	// which this decoder refuses rather than resample.
+	// DX and DY are the sample separations on the reference grid, XRsiz
+	// and YRsiz (A.5.1): a component with a separation of 2 has a sample at
+	// every other point of the grid, so its plane is half the image's size
+	// in that direction (B.2). 1 is no subsampling.
 	DX, DY int
 }
 
@@ -571,8 +573,10 @@ func parseSIZ(c *Codestream, s []byte) error {
 		if comp.Depth > 16 {
 			return &ErrUnsupported{Feature: fmt.Sprintf("%d-bit components", comp.Depth)}
 		}
-		if comp.DX != 1 || comp.DY != 1 {
-			return &ErrUnsupported{Feature: "component subsampling"}
+		if comp.DX == 0 || comp.DY == 0 {
+			// A.5.1: XRsiz and YRsiz are 1 to 255; a separation of 0 would
+			// divide every coordinate of the component by zero.
+			return fmt.Errorf("jpeg2000: SIZ gives component %d a separation of %dx%d", i, comp.DX, comp.DY)
 		}
 		c.Components[i] = comp
 	}

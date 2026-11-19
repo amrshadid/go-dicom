@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The guides can be published as a site.** `docs/` gains an index page and
+  the configuration GitHub Pages builds from, so the pages for readers coming
+  from pydicom and dcmtk, the examples, and the two written output formats
+  read as one site once Pages is pointed at `docs/` on `main`. Links that left
+  the directory are absolute, so they hold on the site as on GitHub.
+
+- **Lossy JPEG 2000 meets a ratio by rate-distortion optimal truncation, in
+  quality layers, and reversibly when asked** (#552). `EncodeLossy`
+  met a ratio by searching the quantization step, with every pass of every
+  block coded in one layer. It now codes every block once, finely, keeps
+  each coding pass as a truncation point with its bytes and the error it
+  removes, and cuts the blocks where their convex hulls reach one slope
+  (T.800 J.14), within half a percent of the target where the step search
+  stopped within one. Over 21 corpus and generated images at 5, 10, 20 and
+  40:1, 74 codestreams that are not lossless, the PSNR is 0.10 dB higher on
+  average than the step search's (median 0.00, from 0.82 dB lower to 4.4
+  higher) and 0.18 dB higher than `opj_compress -I -r`'s (better in 63 of
+  66). Near lossless, where the decoder's rounding decides more than the
+  coding, the step search is tried as well and the nearer codestream kept.
+  `LossyOptions.Layers` writes up to 32 quality layers, each half the size
+  of the next, and `LossyOptions.Reversible` the 5/3 filter cut short,
+  0.19 dB above `opj_compress -r` on average and never below it on the same
+  images. Every codestream decodes in `opj_decompress` and
+  pylibjpeg-openjpeg. Encoding takes about 1.4 times as long.
+
 - **Which transfer syntax each coder writes is one table** (#534). A send,
   the `compress` command and a frame encoded over DICOMweb each kept their
   own map from a syntax to a `Dataset.Compress…InPlace` method, with which
@@ -71,8 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/events.schema.json` are JSON Schemas for them. The tests check the
   output of every corpus file, and of real associations over TCP, against the
   schemas, and fail on a property the schemas do not describe. Nothing the
-  commands print changed. The `-events` lines carry no `schemaVersion`; the
-  document says so and what a future one would mean.
+  commands print changed by this. The `-events` lines carried no
+  `schemaVersion`; the next entry gives them one.
 
 - **Every `-events` line says `"schemaVersion":1`** (#480). A reader could not
   tell a version 1 line from a later one by anything in the line. The
@@ -105,8 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Procedure Step Sequence among them, with `-modality`, `-date` (a date, a
   range or `today`) and `-station-aet` matched inside it. Naming the model
   by UID now sends the same query. Every `findscu` answer prints its
-  sequences, each item indented under its sequence. There is no command
-  for UPS, for MPPS or for serving a worklist.
+  sequences, each item indented under its sequence. MPPS, UPS and serving
+  a worklist have commands of their own: `mppsscu`, `upsscu` and `wlmscp`,
+  below.
 
 - **`mppsscu` reports a Modality Performed Procedure Step** (#495). The
   library's SCU sends N-CREATE and N-SET, and no command used them, so a
@@ -341,8 +367,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JPEG Baseline, lossy, and refused without `-quality`; its file records the
   loss and is a new instance with a new SOP Instance UID (PS3.3
   C.7.6.1.1.5). A UID works as well as a name. What no coder here writes is
-  refused by name: lossy JPEG 2000, JPEG Lossless, 12-bit JPEG, JPEG-LS
-  Near-Lossless. `decompress` writes native pixel data and keeps the UID and
+  refused by name; lossy JPEG 2000, JPEG Lossless, 12-bit JPEG and JPEG-LS
+  Near-Lossless, refused at first, are written since their coders came
+  (`compress` writes every syntax the library writes, below).
+  `decompress` writes native pixel data and keeps the UID and
   any record of a loss. Over pydicom's corpus, pydicom and dcmtk decode
   every lossless output to the source's samples (RLE 47, JPEG-LS 47, JPEG
   2000 44 by pydicom), and the 16 JPEG outputs to within 2 of each other.
@@ -415,7 +443,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `opj_compress -POC` writes it. Both now decode, and a packet an earlier
   volume carried is not read again. A JP2 box giving its length in 64 bits
   was refused, and is now read. OpenJPEG returns the same samples. Packed
-  packet headers and subsampled components are still refused by name.
+  packet headers are still refused by name.
 
 - **The DICOMweb server serves frames** (#330). `…/instances/{uid}/frames/1`
   answered 404, and a web viewer loads an image by frame, so none could show
@@ -468,7 +496,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as JPEG or PNG by `Accept`, through `Dataset.RenderFrame` on a frame read
   by position. `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]`
   and `quality` are applied. What is not done is refused, not ignored: a
-  flipped region, an ICC profile, a malformed parameter are 400, GIF and the
+  flipped region, a conversion into a named color space (`iccprofile=srgb`
+  and the others; `iccprofile=yes` embeds the image's own profile, #546
+  below), a malformed parameter are 400, GIF and the
   other types 406, a study or series rendered whole, or an instance with no
   image, 501; `annotation` is answered with the picture and a `Warning: 299`
   that says it was not drawn. `RenderOptions.Window` gains `Function`, so a
@@ -530,17 +560,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused by name and a peer that accepted only it could not be sent an
   image. `jpeg2000.EncodeLossy` codes the irreversible 9/7 wavelet, the
   irreversible component transform and a quantization step for each
-  subband, and meets a compression ratio or a PSNR by searching for the
-  step. `Dataset.CompressJPEG2000InPlace` writes a file in it: an RGB image
+  subband, and meets a compression ratio or a PSNR.
+  `Dataset.CompressJPEG2000InPlace` writes a file in it: an RGB image
   becomes `YBR_ICT`, a signed one stays signed, and the data set is marked
   Lossy Image Compression `01` with its ratio and `ISO_15444_1`. A send
   needing `.91` uses `NetworkConfig.JPEG2000Rate` and is refused without
   it. A ratio a small image cannot meet is refused rather than met with an
   empty picture. OpenJPEG and pylibjpeg-openjpeg decode every corpus image
   coded at 10:1 and at 45 dB, and at the same size the PSNR matches
-  OpenJPEG's own encoder or betters it by a few tenths of a decibel. The rate
-  is reached by quantization alone, in one quality layer, not by the
-  pass-by-pass truncation of Annex J.14.
+  OpenJPEG's own encoder or betters it by a few tenths of a decibel. A PSNR
+  is met by searching for the step; a ratio, met the same way at first, is
+  met by the pass-by-pass truncation of Annex J.14 (#552, above).
 
 - **`compress` writes every syntax the library writes.** It offered RLE,
   JPEG-LS Lossless, JPEG 2000 Lossless and JPEG Baseline, and refused the
@@ -741,9 +771,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handler panic, a timeout, a failed TLS handshake, the associations a server
   opens itself, a panic in a handler of its events, and a `Server`'s start-up
   line (`Server.Logger` writes there). Nothing of it reaches the global logger.
-  Nil keeps the global one. Not covered: the validation warnings of the
-  `dataset`, `dataelem` and `charset` packages while a data set is decoded,
-  which still go to `config.Logger` (#503).
+  Nil keeps the global one. The validation warnings of the `dataset`,
+  `dataelem` and `charset` packages while a data set is decoded go there
+  too (#503, under Fixed).
 
 - **The DICOMweb server encodes a frame into the syntax a request names**
   (#474). A frame was sent in a compressed type only when the instance was
@@ -815,13 +845,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   codestreams decode to OpenJPEG 2.5.4's samples, exactly where reversible, and
   so do 390 codestreams transcoded to HT by the tests from `opj_compress`
   output at 8 to 16 bits, signed and unsigned, gray and color. HTJ2K pixel
-  data in a data set is still refused by name until the transfer syntaxes are
-  wired to it. Placeholder passes, more than one HT set, a region of interest
-  on HT blocks, and HT and Part 1 blocks mixed in one tile-component are
+  data in a data set decodes through it (the next entry). Placeholder
+  passes, more than one HT set, a region of interest on HT blocks, and HT and Part 1 blocks mixed in one tile-component are
   refused by name; HTJ2K is not encoded.
 
 - **High-Throughput JPEG 2000 images decode** (#403). Pixel data in
-  `1.2.840.10008.1.2.4.201`, `.202` and `.203` was refused by name since #406:
+  `1.2.840.10008.1.2.4.201`, `.202` and `.203` was refused by name since #404:
   `the pixel data is in High-Throughput JPEG 2000 Image Compression ...,
   which is read and carried and not decoded`. It now decodes through the JPEG
   2000 decoder wherever pixel data is decoded: the samples, rendering,
@@ -861,6 +890,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the context carries (`config.WithLogger`), as the rest of a read does.
   Every corpus file and two made from charset files with a misspelled and
   an unknown term decode with nothing reaching the global logger.
+
+- **JPEG 2000 components with subsampling decode** (#555). A component with
+  a separation other than 1 (XRsiz, YRsiz) was refused by name. Each now
+  decodes to a plane of its own size, `Image.ComponentSize` and
+  `Image.Subsampled` say which, and 54 codestreams `opj_compress` wrote with
+  4:2:0, 4:2:2, 3x2, 1x4 and 4x4 separations, in tiles off the origin, with
+  precincts, layers, every progression and every code-block style, decode
+  component by component to what `opj_decompress -c` returns: exactly with
+  the 5/3 filter, within its tolerance with the 9/7. A DICOM frame with a
+  subsampled component is still refused, now by the data set's rule: PS3.5
+  8.2.4 allows JPEG 2000 with no Photometric Interpretation that describes
+  components of different sizes. Packed packet headers (PPM, PPT) stay
+  refused, since nothing here can write one or decode one for reference
+  (#556).
+
+- **A rendered image carries its ICC profile** (#546). An image's ICC
+  Profile (0028,2000, PS3.3 C.11.15) says what color space its RGB values
+  are in, and every PNG and JPEG made of it dropped the profile, so a viewer
+  that manages color took a Display P3 or Adobe RGB image for sRGB. `convert
+  --format png|jpeg` now writes the profile into the picture as it is, an
+  iCCP chunk in a PNG and APP2 segments in a JPEG, and the DICOMweb rendered
+  frames and thumbnails do for `iccprofile=yes`, which answered 400 before.
+  Nothing is converted, and the pixels are the same, byte for byte; no
+  parameter, or `iccprofile=no`, embeds nothing, as before. Converting into
+  sRGB or another named space (`iccprofile=srgb` and the others) takes a
+  color management engine and is still refused with 400, now saying why. A
+  profile is embedded only where the picture can carry it: a gray profile in
+  a grayscale picture, an RGB one in a color picture, as PNG requires.
+  `Dataset.ICCProfile` returns the profile, from the data set or from the one
+  optical path of a whole-slide image that has one. Checked with Pillow on
+  pydicom-made files carrying macOS's Display P3 and gray gamma 2.2
+  profiles: the profile read back from every PNG and JPEG is the file's,
+  byte for byte, LittleCMS opens it, and the pixels are those written
+  without it. pydicom converts only when `apply_icc_profile` is called;
+  dcmtk 3.7.0 and Orthanc 1.13 neither embed nor apply a profile, and
+  Orthanc ignores `iccprofile`.
 
 ### Changed
 
@@ -937,13 +1002,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes 17 MB. What `info` prints does not change, including the sizes of
   `--stats` and `--verbose`, which count the bytes in the file (#328).
 
-- **`info` prints the frames, and the image's own size and patient.** It read
-  Number of Frames from (0020,1209), so a multi-frame file never got a
-  `Frames:` line. And it took the last match of every key element, items of
-  sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
-  for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
-  its own. Only the data set's own elements are read now (#335).
-
 - **`anonymize` no longer holds the image in memory** (#331). A file was read
   whole, Pixel Data included, to change a few hundred bytes of text, so
   memory followed the size of the image: 220 MB for a 200 MB CT, and a
@@ -963,10 +1021,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte for byte, over every file of pydicom's corpus. The files are written
   under temporary names and take theirs together, so a failure still leaves
   none of them. `Dataset.RenderEachFrame` is the new call that hands frames
-  over one at a time. What is left is the image itself: the whole Pixel Data
-  is read, and one frame of a multi-frame image still costs every frame,
-  since the renderer reads samples from one slice and finds the range of an
-  image with no window across all frames.
+  over one at a time. What this left was the image itself, the whole Pixel
+  Data read so that one frame of a multi-frame image cost every frame; it
+  now stays in the file (#533, above).
 
 - **A store costs the same at the hundred-thousandth instance as at the
   first** (#410). Every store rewrote the archive's whole index, so it took
@@ -1126,7 +1183,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the five progression orders (RPCL, PCRL, CPRL), a region of interest,
   predictable termination, components deeper than 16 bits and a JP2 box with
   a 64-bit length. A reader expecting an RPCL file to decode would have been
-  told nothing. Each is now one line, with the error text a caller sees.
+  told nothing. Each was given one line, with the error text a caller sees.
+  The progression orders, the region of interest, predictable termination
+  and the 64-bit box length decode by now (under Added), and §8.1 lists
+  what is still refused the same way.
 
 - **The irreversible JPEG 2000 tolerance is stated as measured** (#360). The
   statement gave one sample against another decoder. Against OpenJPEG that
@@ -1207,7 +1267,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the network transcoder with the syntax's name, and the six UIDs are
   in the `uid` dictionary. The file is still read, stored, de-identified
   and sent as it is to a peer that accepts its syntax. What exists to
-  decode them against is in #403.
+  decode them against is in #403: HTJ2K decodes by now (under Added), so
+  of the six it is JPEG XL that is refused.
 
 - **A caption over saturated texture no longer takes a third of the scan
   with it** (#367). The text detector found the caption, then grew its
@@ -1280,8 +1341,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversion the writer already used, so reading and writing agree on what an
   element holds. A data set built in memory, one read from a file and one
   decoded from DICOM JSON answer alike. Nothing `show` prints changed.
-  Packages other than `dataset` still assert `[]byte` in places; #420 lists
-  them.
+  Packages other than `dataset` asserted `[]byte` in places too; they are
+  the two #420 entries below.
 
 - **De-identification reads a value held as a list of strings** (#420).
   The UID action knew a value held as `[]byte` or a string, so a UID list
@@ -1577,6 +1638,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   show everything found. In Go, `RedactDetectedText` returns an error
   wrapping `ErrImplausibleRedaction`, and `CheckDetectedShare` applies the
   same bound to a caller's own regions.
+
+- **`info` prints the frames, and the image's own size and patient.** It read
+  Number of Frames from (0020,1209), so a multi-frame file never got a
+  `Frames:` line. And it took the last match of every key element, items of
+  sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
+  for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
+  its own. Only the data set's own elements are read now (#335).
 
 ## [1.10.0] - 2026-11-17
 

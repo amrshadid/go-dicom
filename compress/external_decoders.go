@@ -359,9 +359,9 @@ the 9/7 filter is defined in real arithmetic and ISO 15444-4 grades a decoder on
 how close it comes rather than on equality.
 
 What is refused, rather than guessed at, is a feature no decoder here
-implements: subsampled components, custom precinct sizes, the code-block style
-options (bypass, termall, vertical causal, reset, segmentation marks), packed
-packet headers and progression-order changes. Each is refused by name.
+implements, packed packet headers among them, and a subsampled component in a
+DICOM frame, which no Photometric Interpretation PS3.5 8.2.4 allows describes.
+Each is refused by name.
 
 To substitute your own decoder — OpenJPEG through CGO, or anything else:
 

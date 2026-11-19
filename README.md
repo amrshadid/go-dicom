@@ -26,7 +26,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **5,000+ standard DICOM tags** with O(1) lookup
 - **Private tags typed from GDCM's private dictionary** (8,858 attributes across 423 private creators, see [THIRD_PARTY_NOTICES](./THIRD_PARTY_NOTICES)); one it does not know, or whose value does not fit the listed VR, is kept as UN, byte for byte
 - **De-identification / anonymization** per DICOM PS3.15 Annex E, including blacking out text burned into the pixels, compressed images too
-- **DICOMweb client** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`
+- **DICOMweb, client and server** — search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP, as a package and as `qido`, `wado` and `stow`; `dicomweb.Server`, and `qrscp -web` over the archive, answer the same three, with metadata, frames, rendered images, thumbnails and bulk data
 - **Rendering for display** — a windowed PNG or JPEG of any frame, as a viewer shows it: the modality, VOI and presentation lookup tables or rescale and window, MONOCHROME1, YBR and palette color
 - **Inspection** — `show --json` gives every element with its byte offsets in the file, and `-events` on the network commands logs every PDU, presentation context and DIMSE message of an association as JSON lines. Both formats are written down, each with a JSON Schema: [`show --json`](docs/show-json.md) and [`-events`](docs/events.md)
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
@@ -417,6 +417,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 |---------|-------------|
 | [filebase](./filebase/) | Low-level binary I/O with byte order handling |
 | [filereader](./filereader/) | DICOM file reading (preamble, meta info, dataset) |
+| [filereader/attributes](./filereader/attributes/) | The parser alone, for a program that reads attributes and no pixels: the same elements, without linking the codecs |
 | [filewriter](./filewriter/) | DICOM file writing with validation |
 | [fileutil](./fileutil/) | Byte order detection, padding, caching, codec integration |
 | [fileset](./fileset/) | File-set management and DICOMDIR: reads the record tree from its byte offsets, and generates a conformant index |
@@ -438,13 +439,15 @@ The library is organized into focused packages, each handling a specific DICOM a
 | Package | Description |
 |---------|-------------|
 | [network](./network/) | DICOM networking — SCU/SCP, DIMSE services, PDU encoding, TLS |
+| [dcmstore](./dcmstore/) | An on-disk store of instances with an index that answers C-FIND at every level, and the handler that makes it an archive: C-STORE, C-FIND, C-GET, C-MOVE and storage commitment. `qrscp` is this package behind a command |
 | [matching](./matching/) | C-FIND matching (PS3.4 C.2.2.2) of a query against a data set, sequences item by item, and the answer built from a match; the archive in `dcmstore` matches with it |
 
 #### Encoding and Compression
 | Package | Description |
 |---------|-------------|
 | [charset](./charset/) | 30+ encodings (ISO 2022, Unicode, CJK), applied automatically on read |
-| [compress](./compress/) | Compression/decompression (DEFLATE, RLE, JPEG) |
+| [compress](./compress/) | The pixel data coders, each read and written: DEFLATE, RLE Lossless, JPEG Baseline and Extended, JPEG Lossless, JPEG-LS lossless and near-lossless, and JPEG 2000 through `compress/jpeg2000`; the limits on what a decode may cost, and the registry for a decoder of your own |
+| [compress/jpeg2000](./compress/jpeg2000/) | JPEG 2000 Part 1 codestreams in pure Go, decoded and encoded, lossless and lossy; High-Throughput JPEG 2000 (Part 15) decoded and not encoded |
 | [encaps](./encaps/) | Encapsulated pixel data parsing and frame extraction |
 
 #### Imaging and Clinical
@@ -460,7 +463,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 #### Serialization and Utilities
 | Package | Description |
 |---------|-------------|
-| [dicomweb](./dicomweb/) | DICOMweb client (PS3.18): search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS) over HTTP |
+| [dicomweb](./dicomweb/) | DICOMweb (PS3.18) over HTTP. `Client`: search (QIDO-RS), retrieve (WADO-RS) and store (STOW-RS). `Server`, an `http.Handler` over an archive: the same three, with metadata, frames, rendered images, thumbnails and bulk data |
 | [jsonrep](./jsonrep/) | A flat summary struct of common attributes, for feeding a web API. Not the DICOM JSON Model — see `dataset.ToDICOMJSON` for that |
 | [config](./config/) | Thread-safe global configuration |
 | [errors](./errors/) | DICOM-specific error types |
@@ -701,11 +704,11 @@ which is enough for an archive or a router, and not enough for a viewer.
 | Deflated Explicit VR LE | Read/Write | Yes | Yes |
 | RLE Lossless | Read/Write | **Yes** | Yes |
 | JPEG Baseline (`.50`) | Read/Write | **Yes** | Yes |
-| JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
+| JPEG Extended (`.51`) | Read/Write | **Yes** | Yes |
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
-| HTJ2K (`.201`-`.203`) | Read/Write | **Yes** (not encoded) | As it is |
+| HTJ2K (`.201`-`.203`) | Read/Write | **Yes** (not encoded) | As it is, or decoded for a peer that takes only uncompressed |
 | JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
@@ -722,8 +725,9 @@ number of tiles and quality layers.
 JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
 JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
 in both line- and sample-interleaved modes. A 6 or 7 bit frame that dcmtk coded
-without an LSE segment is refused, as dcmtk refuses this library's: its CharLS
-uses default thresholds there that T.87 does not (CONFORMANCE §8.2).
+without an LSE segment is refused by name: its CharLS uses default thresholds
+there that T.87 does not. This library's own frames carry their thresholds in
+an LSE segment where the two differ, so dcmtk reads them (CONFORMANCE §8.2).
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above
@@ -752,7 +756,7 @@ frame smallest) and `Dataset.CompressJPEGLosslessSV1InPlace` (`.70`) write
 Process 14 at 2 to 16 bits, gray or color. dcmtk's `dcmdjpeg` decodes what they
 write to the samples that went in, which CI checks over pydicom's corpus.
 
-**JPEG 2000 decodes too**, as of this version: `.90` and `.91`, both the 5/3
+**JPEG 2000 decodes too**: `.90` and `.91`, both the 5/3
 reversible and 9/7 irreversible wavelets, with the reversible and irreversible
 component transforms. A reversible codestream matches pydicom sample for sample;
 an irreversible one is held to a tolerance of one up to 12 bits and two at 16,
@@ -760,8 +764,10 @@ because the 9/7 filter is defined in real arithmetic and ISO 15444-4 grades a
 decoder on how close it comes rather than on equality. All five progression
 orders, progression order changes, user-defined precincts, the code-block
 style options and a region of interest decode. Features it does not implement,
-among them packed packet headers and subsampled components, are refused by
-name rather than decoded wrongly.
+among them packed packet headers, are refused by name rather than decoded
+wrongly. Subsampled components decode in the codec, each at its own size; a
+DICOM frame with one is refused, since no Photometric Interpretation PS3.5
+allows for JPEG 2000 describes it.
 [CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data) lists every one.
 
 **Compressed frames can be extracted**, which is the step before decoding. For a
@@ -805,13 +811,13 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 - **Basic Profile** - Standard tag removal/replacement
 - **Clean Descriptors** - Remove text descriptions
 - **Clean Graphics** - Remove overlays and graphic annotations held as attributes
-
-Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. When what it finds covers more than a quarter of the picture, which on the measured scans means it took anatomy for lettering, `-redact auto` refuses by name and writes nothing rather than black out the scan. `share -preview` and `-detect` show what it finds before anything is changed.
 - **Retain Long Full Dates** - Keep dates for longitudinal studies
 - **Retain Patient Characteristics** - Keep age, sex, size, weight
 - **Retain Device Identity** - Keep device information
 - **Retain UIDs** - Keep original UIDs
 - **Retain Safe Private** - Keep safe private tags
+
+Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. When what it finds covers more than a quarter of the picture, which on the measured scans means it took anatomy for lettering, `-redact auto` refuses by name and writes nothing rather than black out the scan. `share -preview` and `-detect` show what it finds before anything is changed.
 
 ## Building
 
@@ -822,7 +828,7 @@ go build ./...
 # Build the CLI tool
 go build -o go-dicom .
 
-# Run all tests (71 network tests + file I/O tests)
+# Run all tests
 go test -race ./...
 
 # Run network tests specifically

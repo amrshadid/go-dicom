@@ -67,7 +67,9 @@ type RenderOptions struct {
 //
 // ApplyWindowing, which this does not replace, reads samples as unsigned and
 // applies no rescale. An ICC Profile (PS3.3 C.11.15) is not applied: color is
-// shown as the samples say, without color management. Samples of 64 bits,
+// shown as the samples say, without color management. ICCProfile returns
+// it, for a PNG or JPEG to carry, so that a viewer that manages color does
+// the managing. Samples of 64 bits,
 // segmented palettes and a Presentation LUT Shape other than IDENTITY or
 // INVERSE are refused.
 func (ds *Dataset) RenderFrame(frame int, opts *RenderOptions) (image.Image, error) {
