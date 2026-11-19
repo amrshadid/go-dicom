@@ -224,6 +224,60 @@ func TestMaxValueLengthWithSkipBulkData(t *testing.T) {
 	}
 }
 
+// A file on disk that really holds 1 GiB of Pixel Data passes every check
+// against its size. With a small maximum it is refused by the sentinel,
+// naming Pixel Data and its length, before the gigabyte is allocated; with
+// SkipBulkData as well its attributes are read and the pixels left where
+// they are. The file is sparse, so the gigabyte costs no disk.
+func TestMaxValueLengthOnAFileHoldingAGigabyteOfPixelData(t *testing.T) {
+	var head bytes.Buffer
+	head.Write([]byte{0x10, 0x00, 0x10, 0x00, 'P', 'N', 4, 0, 'D', 'o', 'e', ' '})
+	head.Write(header(0x7FE0, 0x0010, "OW", oneGiB))
+	data := part10("1.2.840.10008.1.2.1", head.Bytes())
+	path := filepath.Join(t.TempDir(), "large.dcm")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(int64(len(data)) + oneGiB); err != nil {
+		t.Fatal(err)
+	}
+	read := func(options ReadOptions) (df *DICOMFile, allocated uint64, err error) {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		allocated = allocatedBy(func() { df, err = ReadDICOMFileWithOptions(filebase.NewFileReader(f), options) })
+		return df, allocated, err
+	}
+
+	_, n, err := read(ReadOptions{MaxValueLength: 1 << 20})
+	var tooLong *ValueTooLongError
+	if !errors.Is(err, ErrValueTooLong) || !errors.As(err, &tooLong) || tooLong.Tag != pixelDataTag || tooLong.Length != oneGiB {
+		t.Errorf("without SkipBulkData: err = %v", err)
+	}
+	if n > allocationBound {
+		t.Errorf("without SkipBulkData: %d MiB allocated", n>>20)
+	}
+
+	df, n, err := read(ReadOptions{SkipBulkData: true, MaxValueLength: 1 << 20})
+	if err != nil {
+		t.Fatalf("with SkipBulkData: %v", err)
+	}
+	if name := elementAt(df, 0x0010, 0x0010); name == nil || string(name.Value) != "Doe " {
+		t.Errorf("the attributes were not read: %+v", name)
+	}
+	if p := elementAt(df, 0x7FE0, 0x0010); p == nil || !p.ValueSkipped || p.Length != oneGiB {
+		t.Errorf("the pixel data was not left in the file: %+v", p)
+	}
+	if n > allocationBound {
+		t.Errorf("with SkipBulkData: %d MiB allocated", n>>20)
+	}
+}
+
 // Under the Deflated syntax the data set is inflated as it arrives, and then
 // read from memory: a value it states past the maximum is refused there too.
 func TestMaxValueLengthInADeflatedDataSet(t *testing.T) {
