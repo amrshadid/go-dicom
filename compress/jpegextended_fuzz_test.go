@@ -43,11 +43,21 @@ func FuzzJPEGExtendedDecompress(f *testing.F) {
 	f.Add([]byte{0xFF, 0xD8, 0xFF, 0xC1, 0x00, 0x02, 0xFF, 0xDA, 0x00, 0x02})
 
 	decoder := compress.NewJPEGDecompressor()
+	// The decoder a data set gives a color frame, which hands image/jpeg the
+	// stream with a JFIF marker put in front: it must fail exactly where the
+	// guessing decoder fails, and the marker must not make a frame decode
+	// that would not have.
+	stored := compress.NewJPEGDecompressorForPhotometric("RGB")
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_ = decoder.CanDecompress(data)
 		out, err := decoder.Decompress(data)
 		if err == nil && len(out) == 0 {
 			t.Fatal("decoded successfully but produced no pixels")
+		}
+		asStored, storedErr := stored.Decompress(data)
+		if (err == nil) != (storedErr == nil) || len(asStored) != len(out) {
+			t.Fatalf("with a data set's Photometric Interpretation: %d bytes, error %v; without: %d bytes, error %v",
+				len(asStored), storedErr, len(out), err)
 		}
 		checkFrameWidths(t, decoder, data, out, err)
 	})

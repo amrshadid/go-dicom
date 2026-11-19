@@ -31,8 +31,9 @@ func readExtendedFixture(t *testing.T, name string) []byte {
 // The comparison allows a difference of one. Two conforming JPEG decoders need
 // not agree exactly: T.83 specifies the inverse DCT to a tolerance rather than
 // bit-for-bit, and Go's implementation is not libjpeg's. Measured here it is 1
-// on 0.7% of samples, which is that tolerance and not a defect. A real decoding
-// error is not off by one — it is off by a block.
+// on 0.08% of samples, which is that tolerance and not a defect; it was 0.7%
+// while the YCbCr to RGB conversion was image/color's rather than libjpeg's
+// (ycc.go). A real decoding error is not off by one — it is off by a block.
 func TestJPEGExtended8BitDecodes(t *testing.T) {
 	stream := readExtendedFixture(t, "rgb_extended_8bit.jpg")
 	want := readExtendedFixture(t, "rgb_extended_expected.raw")

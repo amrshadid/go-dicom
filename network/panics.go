@@ -70,6 +70,7 @@ func (s *SCP) recoverAssociation(assoc *Association) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+		_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0,
+			abortedBy(AbortCauseHandlerPanic, fmt.Errorf("handler panicked: %v", p)))
 	}
 }
