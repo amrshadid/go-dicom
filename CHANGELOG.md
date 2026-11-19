@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`modify` takes a binary value from a file, and changes or removes an
+  attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
+  (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute
+  the bytes of a file, padded to an even length and checked to be a whole
+  number of words; until now every binary value was refused, so a palette or
+  a private blob could not be set without writing Go. `-set-all` and
+  `-delete-all` (`-ma` and `-ea`) act on an attribute in the data set and in
+  every item of every sequence, to any depth, where a path needed one edit
+  per item and the item counts. Over pydicom's corpus the results match
+  pydicom's element by element, and dcmodify's. No invocation that worked
+  before changes; the refusal of a binary value given as text now names the
+  new flags.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and
