@@ -184,6 +184,11 @@
 // How much error to accept belongs to the caller, so nothing here chooses a
 // NEAR or a quality.
 //
+// JPEG-LS frames are coded and decoded with the default thresholds of T.87
+// C.2.4.1.1, which are CharLS's since 2.1 and libjpeg's. dcmtk bundles an older
+// CharLS whose thresholds differ at 6 and 7 bits, so dcmtk and this package each
+// refuse the other's frames at those precisions; the error here names it.
+//
 // # Type Definitions
 //
 // ## Compression Types

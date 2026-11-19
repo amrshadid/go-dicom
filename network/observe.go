@@ -92,6 +92,27 @@ func (o *observer) event(eventType EventType) *Event {
 	}
 }
 
+// wantsBytes reports whether a received PDU of this type should be kept as
+// it is read, for an event that hands its bytes to a handler.
+//
+// A P-DATA-TF is reported with its bytes on EVTPDURecv and on nothing else:
+// the DIMSE events are read from its PDVs, not from the raw bytes, and
+// EVTDataRecv is not emitted. It carries the data sets, so it is copied only
+// while a handler of EVTPDURecv is registered. Every other PDU is copied as
+// before: each is reported with its bytes on an association event as well
+// (EVTAssocRequested, EVTAssocAccepted and the rest), and each is bounded
+// and small, an A-ASSOCIATE-RQ at most MaxAssociatePDULength.
+//
+// The answer is taken when the PDU begins to arrive. A handler of
+// EVTPDURecv registered while a P-DATA-TF is being read is given that PDU
+// without its bytes, and the next one with them.
+func (o *observer) wantsBytes(pduType byte) bool {
+	if pduType != PDUTypeDataTF {
+		return true
+	}
+	return o.events.HasHandlers(EVTPDURecv)
+}
+
 // pdu reports a PDU that was sent or received, and whatever it means for
 // the association and for the DIMSE message it is part of.
 func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
@@ -147,7 +168,11 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 		o.events.Emit(with(EVTAssocAborted))
 
 	case *PDataTF:
-		o.events.Emit(with(eventType))
+		// Not built for nobody: there is one of these for every few
+		// kilobytes of every instance.
+		if o.events.HasHandlers(eventType) {
+			o.events.Emit(with(eventType))
+		}
 		for _, pdv := range p.PDVItems {
 			if !pdv.IsCommand {
 				continue

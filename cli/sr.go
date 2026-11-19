@@ -569,7 +569,7 @@ func dsBytes(ds *dataset.Dataset, t tag.Tag) []byte {
 	if !ok {
 		return nil
 	}
-	raw, _ := elem.GetValue().([]byte)
+	raw, _ := elem.Bytes()
 	return raw
 }
 

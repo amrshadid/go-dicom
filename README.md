@@ -441,7 +441,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
 | [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. A tree read and written back keeps everything it was read with. `StructuredReport` alongside it is a simpler bespoke model, written as a content tree that dcmtk and pydicom read |
-| [validate](./validate/) | An instance checked against its IOD: modules, attribute Types, value multiplicity, Enumerated Values and Defined Terms, generated from PS3.3; conditions in prose reported as not checked |
+| [validate](./validate/) | An instance checked against its IOD: modules, attribute Types, value multiplicity, Enumerated Values and Defined Terms, generated from PS3.3; conditions in a fixed form evaluated, those in prose reported as not checked |
 | [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities
@@ -469,7 +469,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | C-MOVE (Retrieve) | Yes | Yes | `scu.Move(ctx, ds, dest)`; SCP opens an association to the destination AE and transfers via C-STORE sub-operations |
 | C-GET (Get) | Yes | Yes | `scu.Get(ctx, ds)` with `SCUConfig.OnCStore`; SCP transfers instances via C-STORE sub-operations |
 | N-EVENT-REPORT | Yes | Yes | Full N-DIMSE service support |
-| N-GET | Yes | Yes | |
+| N-GET | Yes | Yes | `scu.NGet` for every attribute, `scu.NGetAttributes` for those named in the Attribute Identifier List; the SCP gives the list to the handler |
 | N-SET | Yes | Yes | |
 | N-ACTION | Yes | Yes | |
 | N-CREATE | Yes | Yes | |
@@ -695,14 +695,18 @@ which is enough for an archive or a router, and not enough for a viewer.
 | HTJ2K (`.201`-`.203`), JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
-`YBR_FULL` instance yields YBR rather than RGB — the same as pydicom. Both planar
-configurations, 1 to 64 bits, and subsampled `YBR_FULL_422` are handled.
+`YBR_FULL` instance yields YBR rather than RGB — the same as pydicom — and a JPEG
+whose attribute says `RGB` is not converted from YCbCr, whatever its stream's markers
+say, as in dcmtk. Both planar configurations, 1 to 64 bits, and subsampled
+`YBR_FULL_422` are handled.
 
 JPEG 2000 decodes both wavelets at 1 to 16 bits, signed or unsigned, with any
 number of tiles and quality layers.
 JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
 JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
-in both line- and sample-interleaved modes.
+in both line- and sample-interleaved modes. A 6 or 7 bit frame that dcmtk coded
+without an LSE segment is refused, as dcmtk refuses this library's: its CharLS
+uses default thresholds there that T.87 does not (CONFORMANCE §8.2).
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above

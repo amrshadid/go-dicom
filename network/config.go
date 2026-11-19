@@ -191,8 +191,10 @@ type SCPConfig struct {
 	// PS3.8 Table 9-21 does not define, which is sent as that refusal
 	// instead. Each refusal is logged at the info level, the AE titles
 	// quoted, and reported to Events as EVTAssocRejected, whose Description
-	// names it; a server that also logs its events (LoggingEventHandlers)
-	// has it in its log twice.
+	// names it. LoggingEventHandlers on the same log leaves out a refusal
+	// the SCP's line has already put there, so it appears once; at the
+	// default warning level, where the SCP's line is not written, theirs is
+	// the one that appears.
 	// Callers turned away by MaxAssociations are refused before it is asked.
 	//
 	// It is called concurrently for different connections and must be safe
