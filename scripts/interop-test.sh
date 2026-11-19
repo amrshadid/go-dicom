@@ -4057,6 +4057,147 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# wlmscp against dcmtk's wlmscpfs, over dcmtk's own sample worklist (#506)
+#
+# Both servers serve the same files, converted from the sample database
+# dcmtk ships for wlmscpfs, and each query is sent to both by pynetdicom and
+# by dcmtk's findscu -W, whose answers pydicom reads back. The answers have
+# to be the same entries, attribute for attribute. A query for a name in
+# another case is left out: wlmscp ignores the case of a person's name, as
+# the archive does, and wlmscpfs does not.
+# ---------------------------------------------------------------------------
+wlistdb=""
+for candidate in "$DCMTK_BIN"/../share/dcmtk*/wlistdb/OFFIS /usr/share/dcmtk*/wlistdb/OFFIS \
+    /usr/share/doc/dcmtk*/examples/wlistdb/OFFIS; do
+  if [ -d "$candidate" ]; then wlistdb=$candidate; break; fi
+done
+if [ -x "$DCMTK_BIN/wlmscpfs" ] && [ -x "$DCMTK_BIN/dump2dcm" ] && [ -n "$wlistdb" ] &&
+    [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "wlmscp against wlmscpfs, over dcmtk's sample worklist"
+  mkdir -p "$WORKDIR/wlistdb/OFFIS"
+  for dump in "$wlistdb"/*.dump; do
+    "$DCMTK_BIN/dump2dcm" -q "$dump" "$WORKDIR/wlistdb/OFFIS/$(basename "$dump" .dump).wl"
+  done
+  touch "$WORKDIR/wlistdb/OFFIS/lockfile"
+  start_server "$WORKDIR" "$WORKDIR/wlmscpfs.log" "$DCMTK_BIN/wlmscpfs" -dfp "$WORKDIR/wlistdb" 11760
+  wlmscpfs_pid=$SERVER_PID
+  start_server "$WORKDIR" "$WORKDIR/wlmscp.log" \
+    "$GODICOM" wlmscp -dir "$WORKDIR/wlistdb/OFFIS" -aet OFFIS -port 11761
+  wlmscp_pid=$SERVER_PID
+  if wait_for_port 11760 && wait_for_port 11761; then
+    if wl_out=$("$PYNETDICOM_BIN/python" - "$DCMTK_BIN/findscu" "$WORKDIR/wl_answers" <<'PY' 2>&1
+import os, subprocess, sys, warnings
+from pydicom import dcmread
+from pydicom.dataset import Dataset
+from pydicom.sequence import Sequence
+from pynetdicom import AE
+from pynetdicom.sop_class import ModalityWorklistInformationFind
+
+warnings.simplefilter("ignore")
+findscu, out = sys.argv[1:3]
+TOP = ["AccessionNumber", "ReferringPhysicianName", "PatientName", "PatientID",
+       "PatientBirthDate", "PatientSex", "MedicalAlerts", "Allergies", "StudyInstanceUID",
+       "RequestingPhysician", "RequestedProcedureDescription", "RequestedProcedureID",
+       "RequestedProcedurePriority"]
+STEP = ["Modality", "RequestedContrastAgent", "ScheduledStationAETitle",
+        "ScheduledProcedureStepStartDate", "ScheduledProcedureStepStartTime",
+        "ScheduledPerformingPhysicianName", "ScheduledProcedureStepDescription",
+        "ScheduledProcedureStepID", "ScheduledStationName", "ScheduledProcedureStepLocation",
+        "PreMedication", "CommentsOnTheScheduledProcedureStep"]
+QUERIES = [
+    ("modality CT", {}, {"Modality": "CT"}),
+    ("date", {}, {"ScheduledProcedureStepStartDate": "19960406"}),
+    ("date range", {}, {"ScheduledProcedureStepStartDate": "19960101-19960630"}),
+    ("open date range", {}, {"ScheduledProcedureStepStartDate": "-19951231"}),
+    ("time range", {}, {"ScheduledProcedureStepStartTime": "080000-140000"}),
+    ("station AE, one of several", {}, {"ScheduledStationAETitle": "AA32"}),
+    ("patient name VIVALDI*", {"PatientName": "VIVALDI*"}, {}),
+    ("patient name H?YDN*", {"PatientName": "H?YDN*"}, {}),
+    ("universal", {}, {}),
+    ("nothing matches", {}, {"Modality": "XX"}),
+]
+
+def norm(ds):
+    def value(e):
+        if e.VR == "SQ":
+            return tuple(sorted(norm(i) for i in e.value))
+        v = e.value
+        if isinstance(v, (list, tuple)) or type(v).__name__ == "MultiValue":
+            return tuple(str(x).strip() for x in v)
+        return "" if v is None else str(v).rstrip(" \x00")
+    return tuple(sorted((str(e.tag), e.VR, repr(value(e))) for e in ds))
+
+def pynet(port, top, step):
+    q = Dataset()
+    for k in TOP:
+        setattr(q, k, top.get(k, ""))
+    item = Dataset()
+    for k in STEP:
+        setattr(item, k, step.get(k, ""))
+    q.ScheduledProcedureStepSequence = Sequence([item])
+    ae = AE(ae_title="PYNET")
+    ae.add_requested_context(ModalityWorklistInformationFind)
+    assoc = ae.associate("127.0.0.1", port, ae_title="OFFIS")
+    if not assoc.is_established:
+        sys.exit("no association on port %d" % port)
+    answers = [i for s, i in assoc.send_c_find(q, ModalityWorklistInformationFind)
+               if s and s.Status in (0xFF00, 0xFF01) and i is not None]
+    assoc.release()
+    return sorted(map(norm, answers))
+
+def dcmtk(port, top, step):
+    d = os.path.join(out, str(port))
+    os.makedirs(d, exist_ok=True)
+    for f in os.listdir(d):
+        os.remove(os.path.join(d, f))
+    args = [findscu, "-W", "-aec", "OFFIS", "-X", "-od", d]
+    args += sum((["-k", "%s=%s" % (k, top.get(k, ""))] for k in TOP), [])
+    args += sum((["-k", "ScheduledProcedureStepSequence[0].%s=%s" % (k, step.get(k, ""))] for k in STEP), [])
+    subprocess.run(args + ["127.0.0.1", str(port)], check=True, capture_output=True)
+    return sorted(norm(dcmread(os.path.join(d, f))) for f in os.listdir(d))
+
+bad = 0
+for name, top, step in QUERIES:
+    ref, new = pynet(11760, top, step), pynet(11761, top, step)
+    ref_d, new_d = dcmtk(11760, top, step), dcmtk(11761, top, step)
+    same = ref == new and ref_d == new_d
+    bad += not same
+    print("%s %s: %d entries from wlmscpfs, %d from wlmscp" % ("same" if same else "DIFF", name, len(ref), len(new)))
+if bad:
+    sys.exit("%d of %d queries answered differently" % (bad, len(QUERIES)))
+PY
+    ); then
+      pass "pynetdicom and findscu -W get the same answers from both: $(echo "$wl_out" | tr '\n' ';')"
+    else
+      fail "wlmscp and wlmscpfs answer differently: $(echo "$wl_out" | tr '\n' ';')"
+    fi
+    # go-dicom's own findscu -worklist against both, results compared as sets.
+    wl_blocks() {
+      awk '/^--- Result/{if (b) print b; b=""; next} /^Found/{if (b) print b; b=""; print; next}
+           /^Querying/{next} {b = b "|" $0} END{if (b) print b}' | sort
+    }
+    wl_ok=1
+    for wl_query in "-modality CT" "-date 19960101-19960630" "-station-aet AA32" "-patient-name VIVALDI*" "-modality XX"; do
+      read -r -a wl_args <<< "$wl_query"
+      ref=$("$GODICOM" findscu -aec OFFIS -timeout 10 -worklist "${wl_args[@]}" 127.0.0.1:11760 2>&1 | wl_blocks)
+      new=$("$GODICOM" findscu -aec OFFIS -timeout 10 -worklist "${wl_args[@]}" 127.0.0.1:11761 2>&1 | wl_blocks)
+      [ "$ref" = "$new" ] || { wl_ok=0; echo "   findscu -worklist $wl_query differs"; }
+    done
+    if [ "$wl_ok" -eq 1 ]; then
+      pass "findscu -worklist prints the same results from both"
+    else
+      fail "findscu -worklist prints different results from wlmscp and wlmscpfs"
+    fi
+  else
+    fail "wlmscpfs or wlmscp did not start: $(tail -3 "$WORKDIR/wlmscp.log")"
+  fi
+  stop_server "$wlmscp_pid"
+  stop_server "$wlmscpfs_pid"
+else
+  skip "wlmscp against wlmscpfs needs dcmtk's wlmscpfs, dump2dcm and sample worklist, and pynetdicom"
+fi
+
+# ---------------------------------------------------------------------------
 # show --json: where each element sits in the file (#259)
 #
 # pydicom records where it found every value it read (file_tell). The

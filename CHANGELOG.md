@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`wlmscp` serves a Modality Worklist from a directory of files** (#506).
+  The command line could ask a worklist (`findscu -worklist`) and not answer
+  one, so a modality, or `findscu -worklist` itself, could not be tested
+  against this tool alone. `wlmscp -dir` serves the worklist files of a
+  directory, one entry per file, with File Meta Information or without, as
+  dcmtk's `wlmscpfs` does. It reads the directory again at every query, so
+  a file added, changed or removed while it runs is served as it is; a file
+  that is not a worklist entry, not DICOM or with no Scheduled Procedure Step
+  Sequence, is not served and is reported once. It answers Modality Worklist
+  C-FIND by package `matching`, the step matched item by item and each
+  answer holding the keys asked for, answers C-ECHO, refuses every other SOP
+  class, and takes `-tls`, `-events` and `-allow`. Over dcmtk's sample
+  worklist database, dcmtk's `findscu -W` and pynetdicom get the same
+  entries, attribute for attribute, from `wlmscp` as from `wlmscpfs`, for 14
+  queries by modality, date, date range, time range, station, patient name
+  with wildcards, universal matching and one that matches nothing; so does
+  `go-dicom findscu -worklist`. They differ on a name in another case:
+  `wlmscp` finds VIVALDI^ANTONIO for `vivaldi*`, as the archive does, and
+  `wlmscpfs` does not.
+
 - **A query can be matched against a data set** (#515). C-FIND matching
   lived only inside `dcmstore`, unexported and written against its index, so
   a program with entries of its own, a worklist for one, had nothing to call:
