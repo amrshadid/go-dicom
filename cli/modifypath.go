@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
@@ -32,22 +33,20 @@ const (
 	editDelete
 )
 
-func (k editKind) flag() string {
-	switch k {
-	case editSet:
-		return "-set"
-	case editInsert:
-		return "-insert"
-	}
-	return "-delete"
-}
-
 // edit is one -set, -insert or -delete as given on the command line.
 type edit struct {
 	kind  editKind
 	given string
 	path  []pathStep
 	value string
+
+	// flagName is the flag the edit came from, for the messages. fromFile
+	// says value is the name of a file whose bytes are the value, and
+	// everywhere that the attribute is looked for in the data set and in
+	// every item of every sequence in it, as dcmodify's -ma and -ea do.
+	flagName   string
+	fromFile   bool
+	everywhere bool
 }
 
 // pathStep is one component of a path: an attribute, and for a sequence the
@@ -305,10 +304,68 @@ func splitOutsideQuotes(s string, sep byte) []string {
 	return append(parts, s[start:])
 }
 
+// checkMode holds an edit to what its flag allows once its path is parsed.
+func (e edit) checkMode() error {
+	if e.everywhere && (len(e.path) != 1 || e.path[0].hasItem()) {
+		return fmt.Errorf("%s names one attribute, not a path: it is looked for in every item already", e.flagName)
+	}
+	if e.fromFile && strings.TrimSpace(e.value) == "" {
+		return errors.New("expected path=file, and the file name is empty")
+	}
+	return nil
+}
+
 // apply makes the edit in root and returns how many attributes or items it
 // changed.
 func (e edit) apply(root *dataset.Dataset) (int, error) {
+	if e.everywhere {
+		n, err := e.applyEverywhere(root, nil)
+		if err == nil && n == 0 {
+			return 0, fmt.Errorf("%s: %w", e.path[0].tag, errMissing)
+		}
+		return n, err
+	}
 	return e.applyIn(root, nil, e.path)
+}
+
+// applyEverywhere makes the edit in ds, wherever its attribute is, and in
+// every item of every sequence under it, to any depth. A data set that does
+// not have the attribute is passed over, not refused: that is the point of
+// asking for every occurrence. The attribute is dealt with before the items
+// of the sequences are entered, so a deleted sequence is not walked.
+func (e edit) applyEverywhere(ds *dataset.Dataset, enclosing []*dataset.Dataset) (int, error) {
+	changed := 0
+	t, err := e.locate(ds, e.path[0])
+	switch {
+	case errors.Is(err, errMissing):
+	case err != nil:
+		return 0, err
+	case ds.Contains(t):
+		n, err := e.applyIn(ds, enclosing, e.path)
+		if err != nil {
+			return changed, err
+		}
+		changed += n
+	}
+	inner := append([]*dataset.Dataset{ds}, enclosing...)
+	for _, elem := range ds.GetAll() {
+		seq, ok := elem.GetValue().(*sequence.Sequence)
+		if !ok {
+			continue
+		}
+		for _, raw := range seq.Items() {
+			item, ok := raw.(*dataset.Dataset)
+			if !ok {
+				continue
+			}
+			n, err := e.applyEverywhere(item, inner)
+			if err != nil {
+				return changed, err
+			}
+			changed += n
+		}
+	}
+	return changed, nil
 }
 
 // applyIn makes the rest of the edit in ds, an item of enclosing (nearest
@@ -381,7 +438,12 @@ func (e edit) applyIn(ds *dataset.Dataset, enclosing []*dataset.Dataset, steps [
 		_, err := ds.CreateSequence(t)
 		return 1, err
 	}
-	value, err := encodeValue(t, vr, e.value, characterSetOf(ds, enclosing))
+	var value []byte
+	if e.fromFile {
+		value, err = encodeFileValue(vr, e.value)
+	} else {
+		value, err = encodeValue(t, vr, e.value, characterSetOf(ds, enclosing))
+	}
 	if err != nil {
 		return 0, fmt.Errorf("%s %s: %w", t, vr, err)
 	}
@@ -507,12 +569,57 @@ var singleValueVRs = map[dataelem.VR]bool{
 	dataelem.LT: true, dataelem.ST: true, dataelem.UT: true, dataelem.UR: true,
 }
 
+// binaryWordSize is the size in bytes of what each binary VR holds, which
+// the length of its value is a multiple of (PS3.5 6.2).
+var binaryWordSize = map[dataelem.VR]int{
+	dataelem.OB: 1, dataelem.UN: 1, dataelem.OW: 2, dataelem.OF: 4,
+	dataelem.OL: 4, dataelem.OD: 8, dataelem.OV: 8,
+}
+
+// maxValueLength is the longest value an element of these VRs can hold: the
+// length field is 32 bits and 0xFFFFFFFF means undefined (PS3.5 7.1.2).
+const maxValueLength = 0xFFFFFFFE
+
+// encodeFileValue reads the bytes of a binary attribute from a file. They
+// are the value as the data set holds it, which is little endian: the writer
+// swaps the words of a big endian file. The VR is the attribute's own; a
+// value from a file is for the binary VRs, and text is given with -set.
+func encodeFileValue(vr dataelem.VR, name string) ([]byte, error) {
+	size, ok := binaryWordSize[vr]
+	if !ok {
+		return nil, fmt.Errorf("VR %s is not binary; a value from a file is for OB, OW, OF, OD, OL, OV and UN, and text is given with -set or -insert", vr)
+	}
+	info, err := os.Stat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("%s is a directory, not a file", name)
+	}
+	if info.Size() > maxValueLength-1 {
+		return nil, fmt.Errorf("%s is %d bytes, more than one value can hold", name, info.Size())
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	if len(data)%size != 0 {
+		return nil, fmt.Errorf("%s is %d bytes, and a value of VR %s is a whole number of %d-byte words", name, len(data), vr, size)
+	}
+	// PS3.5 7.1.1: a value has an even length, and OB and UN are padded
+	// with a NUL.
+	if len(data)%2 == 1 {
+		data = append(data, 0)
+	}
+	return data, nil
+}
+
 // encodeValue turns text from the command line into the value bytes of vr,
 // refusing what the VR does not allow.
 func encodeValue(t tag.Tag, vr dataelem.VR, text string, characterSet []string) ([]byte, error) {
 	switch vr {
 	case dataelem.OB, dataelem.OW, dataelem.OF, dataelem.OD, dataelem.OL, dataelem.OV, dataelem.UN:
-		return nil, fmt.Errorf("a value of VR %s is binary and is not given on the command line", vr)
+		return nil, fmt.Errorf("a value of VR %s is binary and is not given as text; use -set-file or -insert-file with a file of its bytes", vr)
 	}
 	if text == "" {
 		return []byte{}, nil
