@@ -126,6 +126,41 @@ func FuzzDecodeHTBlock(f *testing.F) {
 	})
 }
 
+// FuzzDecodeHTCodestream runs the parser, the packet reader and the decoder on
+// mutations of the committed HT codestreams: the CAP segment, the HT
+// code-block styles, HT segments in packet headers and the blocks they
+// deliver. FuzzParseCodestream covers the same path from every fixture; this
+// one starts only from HT ones and skips an image of more than a million
+// samples, so the fuzzer spends its time on HT parsing rather than on images
+// whose size alone makes a decode slow. Any error is fine; a panic, or an
+// image that is not the size it claims, is not.
+func FuzzDecodeHTCodestream(f *testing.F) {
+	paths, _ := filepath.Glob("testdata/ht_*.j2k")
+	for _, path := range paths {
+		if data, err := os.ReadFile(path); err == nil {
+			f.Add(data)
+		}
+	}
+	f.Fuzz(func(t *testing.T, data []byte) {
+		c, err := jpeg2000.ParseCodestream(data)
+		if err != nil {
+			return
+		}
+		if uint64(c.Width-c.XOffset)*uint64(c.Height-c.YOffset) > 1<<20 {
+			return
+		}
+		img, err := jpeg2000.Decode(c)
+		if err != nil {
+			return
+		}
+		for i, plane := range img.Components {
+			if len(plane) != img.Width*img.Height {
+				t.Fatalf("component %d has %d samples for a %dx%d image", i, len(plane), img.Width, img.Height)
+			}
+		}
+	})
+}
+
 // FuzzParseCodestream runs the parser against arbitrary bytes. Every length in
 // a codestream comes from the file, and this file came from a peer: a segment
 // length, a component count, a tile index or a Psot can each point past the end
