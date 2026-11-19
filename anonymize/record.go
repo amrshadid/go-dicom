@@ -123,13 +123,11 @@ func textOf(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	switch v := elem.GetValue().(type) {
-	case []byte:
-		return strings.TrimRight(string(v), " \x00")
-	case string:
-		return strings.TrimRight(v, " \x00")
+	raw, ok := elem.Bytes()
+	if !ok {
+		return ""
 	}
-	return ""
+	return strings.TrimRight(string(raw), " \x00")
 }
 
 // RemapUID returns the UID that Anonymize put, or would put, in place of
