@@ -497,4 +497,3 @@ func TestAValueLeftInTheFileIsJudgedByItsLength(t *testing.T) {
 		t.Errorf("Modality of no bytes left in the file: %q; want it empty", got)
 	}
 }
-
