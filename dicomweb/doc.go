@@ -95,6 +95,10 @@
 // endian. A frame of a 1-bit image that starts inside a byte is sent from
 // the lowest bit of its first byte, as a 1-bit image of one frame is laid
 // out.
+// A compressed type or syntax the frame is not held in is encoded on
+// request with the library's coders, a type named alone into its lossless
+// default; a lossy syntax only when named, losing what [WithFrameEncoding]
+// sets. A frame held lossy is not coded again.
 //
 // Metadata gives a BulkDataURI for each value it leaves out, and
 // …/instances/{instance}/bulkdata/{tag}, with /{item}/{tag} for each level
