@@ -851,6 +851,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second font at three sizes, four kinds of blur, over six real scans of the
   corpus (51 of 164 lines found, from 50, and no more of any scan marked).
 
+- **The text of a file read for its attributes is decoded to the read's
+  logger** (#539). `attributes.TextEncodings` and `DecodeText` take no
+  logger, so what decoding logs, a misspelled Specific Character Set read
+  as the term it means, an unknown one read as the default repertoire, a
+  value that does not decode, went to `config.Logger` even for a read
+  given a logger of its own (`ReadOptions.Logger`).
+  `TextEncodingsWithContext` and `DecodeTextWithContext` log to the logger
+  the context carries (`config.WithLogger`), as the rest of a read does.
+  Every corpus file and two made from charset files with a misspelled and
+  an unknown term decode with nothing reaching the global logger.
+
 ### Changed
 
 - **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk
