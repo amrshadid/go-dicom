@@ -280,6 +280,16 @@ func (f *frameSource) read(frame int) ([]byte, error) {
 	return out, nil
 }
 
+// frame returns frame n, counted from 1, as read, or decoded when decode
+// is set.
+func (f *frameSource) frame(n int, decode bool) ([]byte, error) {
+	data, err := f.read(n - 1)
+	if err != nil || !decode {
+		return data, err
+	}
+	return f.attributes.DecodeFrame(data)
+}
+
 // choose picks the first form the request accepts that this instance can
 // be sent in: its media type and transfer syntax, and whether the frames
 // are to be decoded for it. It reports false when there is none.
@@ -364,13 +374,7 @@ func (s *Server) sendFrames(w http.ResponseWriter, r *http.Request, source *fram
 
 	// The first frame is made ready before anything is written, so a frame
 	// that cannot be read or decoded can still be answered with a status.
-	frame := func(n int) ([]byte, error) {
-		data, err := source.read(n - 1)
-		if err != nil || !decode {
-			return data, err
-		}
-		return source.attributes.DecodeFrame(data)
-	}
+	frame := func(n int) ([]byte, error) { return source.frame(n, decode) }
 	first, err := frame(numbers[0])
 	if err != nil {
 		s.fail(w, err)

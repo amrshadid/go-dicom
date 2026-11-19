@@ -142,7 +142,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The studies resource and a study are where instances are stored to
 	// as well as searched for and retrieved from.
 	storesTo := (!isRetrieve && searched.level == levelStudy) ||
-		(isRetrieve && retrieved.series == "" && !retrieved.metadata && retrieved.render == "")
+		(isRetrieve && retrieved.series == "" && !retrieved.metadata && retrieved.render == "" && !retrieved.allBulk)
 	switch {
 	case r.Method == http.MethodPost && storesTo:
 		s.store(w, r, retrieved.study)
@@ -163,6 +163,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.frames(w, r, retrieved)
 	case retrieved.bulkdata != nil:
 		s.bulkdata(w, r, retrieved)
+	case retrieved.allBulk:
+		s.allBulkData(w, r, retrieved)
 	default:
 		s.retrieve(w, r, retrieved)
 	}

@@ -362,6 +362,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Across pydicom's corpus, all 61 URIs that metadata gives serve the bytes
   pydicom reads at that place in the file.
 
+- **The DICOMweb server serves the bulk data of a study, a series or an
+  instance in one answer** (#454). `/studies/{uid}/bulkdata`, the series'
+  and the instance's answered 404, so a client that held a series' metadata
+  asked for each value on its own. They are served now (PS3.18 Table
+  10.4.1.5-1): every value metadata names, a part each, with the
+  `BulkDataURI` metadata gives it as the part's `Content-Location` (PS3.18
+  8.6.1.2), one instance open at a time and each value read from the file
+  by where it lies. Pixel Data is uncompressed in one part, or, for
+  `transfer-syntax=*`, compressed frames as stored, a part a frame at the
+  frame's resource. Another type than
+  `multipart/related; type="application/octet-stream"` is 406, and a
+  resource with no bulk value 204. Across pydicom's corpus, each of the 56
+  instances' bulk data holds exactly the values its metadata names, at
+  those URIs, with the bytes pydicom reads. Orthanc 1.13 answers 404.
+
 - **The DICOMweb server renders images and thumbnails** (#382).
   `…/rendered` and `…/thumbnail` answered 404. They are served now for an
   instance and for frames, and the thumbnail for a series and a study too,

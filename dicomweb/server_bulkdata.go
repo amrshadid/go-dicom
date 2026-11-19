@@ -159,35 +159,10 @@ func (s *Server) bulkdata(w http.ResponseWriter, r *http.Request, target retriev
 		s.fail(w, refuse(http.StatusNotFound, "the instance has no bulk value at %s", path))
 		return
 	}
-	value := element.Value
-	switch {
-	case element.ValueSkipped && parsed.Deflated:
-		// Positions count in the inflated data set, which is not on disk.
-		// It is all inflated to be read at all, so it is read whole.
-		if _, err = file.Seek(0, io.SeekStart); err == nil {
-			parsed, err = filereader.ReadDICOMFile(filebase.NewFileReader(file))
-		}
-		if err != nil {
-			s.fail(w, err)
-			return
-		}
-		inflated := path.find(parsed.DataElements)
-		if inflated == nil {
-			s.fail(w, fmt.Errorf("%s is not where it was when the file was read in full", path))
-			return
-		}
-		value = inflated.Value
-	case element.ValueSkipped:
-		value = make([]byte, element.Length)
-		if _, err := readerAtOf(file).ReadAt(value, element.Position.ValueOffset); err != nil {
-			s.fail(w, err)
-			return
-		}
-		// A value read here is as the file has it; one the reader read it
-		// has already put in little endian.
-		if !parsed.IsLittleEndian {
-			dataelem.SwapByteOrder(dataelem.VR(element.VR), value)
-		}
+	value, err := bulkValue(file, parsed, path, element)
+	if err != nil {
+		s.fail(w, err)
+		return
 	}
 
 	body := multipart.NewWriter(w)
@@ -207,6 +182,41 @@ func (s *Server) bulkdata(w http.ResponseWriter, r *http.Request, target retriev
 	}
 }
 
+// bulkValue reads the value of element, found at path in parsed, which was
+// read from file with its bulk data skipped, and returns it little endian.
+func bulkValue(file io.ReadSeeker, parsed *filereader.DICOMFile, path bulkPath,
+	element *filereader.DataElementValue) ([]byte, error) {
+	switch {
+	case element.ValueSkipped && parsed.Deflated:
+		// Positions count in the inflated data set, which is not on disk.
+		// It is all inflated to be read at all, so it is read whole.
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		whole, err := filereader.ReadDICOMFile(filebase.NewFileReader(file))
+		if err != nil {
+			return nil, err
+		}
+		inflated := path.find(whole.DataElements)
+		if inflated == nil {
+			return nil, fmt.Errorf("%s is not where it was when the file was read in full", path)
+		}
+		return inflated.Value, nil
+	case element.ValueSkipped:
+		value := make([]byte, element.Length)
+		if _, err := readerAtOf(file).ReadAt(value, element.Position.ValueOffset); err != nil {
+			return nil, err
+		}
+		// A value read here is as the file has it; one the reader read it
+		// has already put in little endian.
+		if !parsed.IsLittleEndian {
+			dataelem.SwapByteOrder(dataelem.VR(element.VR), value)
+		}
+		return value, nil
+	}
+	return element.Value, nil
+}
+
 // readerAtOf reads a file by offset, by its own ReadAt when it has one.
 func readerAtOf(file io.ReadSeeker) io.ReaderAt {
 	if at, ok := file.(io.ReaderAt); ok {
@@ -217,9 +227,12 @@ func readerAtOf(file io.ReadSeeker) io.ReaderAt {
 
 // bulkDataURIs puts a BulkDataURI in metadata where each value was left in
 // the file (PS3.18 F.2.6): elements are the file's, read with its bulk data
-// skipped, and described is the DICOM JSON made of them.
+// skipped, and described is the DICOM JSON made of them. It returns the
+// paths it named, in the order of the data set, which is the order the bulk
+// data of a study, a series or an instance sends them in.
 func bulkDataURIs(described map[string]dataset.DICOMJSONElement, elements []*filereader.DataElementValue,
-	base string, path bulkPath) {
+	base string, path bulkPath) []bulkPath {
+	var named []bulkPath
 	for _, element := range elements {
 		key := fmt.Sprintf("%04X%04X", element.Tag.Group(), element.Tag.Element())
 		entry, ok := described[key]
@@ -233,6 +246,7 @@ func bulkDataURIs(described map[string]dataset.DICOMJSONElement, elements []*fil
 		if element.ValueSkipped && !nestedFragments {
 			entry.BulkDataURI = base + "/bulkdata/" + at.String()
 			described[key] = entry
+			named = append(named, at)
 			continue
 		}
 		for i, item := range element.Items {
@@ -243,10 +257,11 @@ func bulkDataURIs(described map[string]dataset.DICOMJSONElement, elements []*fil
 			if !ok {
 				continue
 			}
-			bulkDataURIs(nested, item.Elements, base, bulkPath{
+			named = append(named, bulkDataURIs(nested, item.Elements, base, bulkPath{
 				tags:  at.tags,
 				items: append(append([]int{}, path.items...), i),
-			})
+			})...)
 		}
 	}
+	return named
 }
