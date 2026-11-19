@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -102,8 +103,15 @@ func (s *SCP) idleReadContext(ctx context.Context) (context.Context, context.Can
 func (s *SCP) abortStopping(assoc *Association) {
 	ctx, cancel := context.WithTimeout(context.Background(), stopAbortTimeout)
 	defer cancel()
-	_ = assoc.Abort(ctx, AbortSourceServiceUser, 0)
+	// Told to events as the server stopping, which is what a listener has
+	// to tell from a timeout or a fault: Abort alone reports only that the
+	// application asked for it.
+	_ = assoc.abortWhy(ctx, AbortSourceServiceUser, 0,
+		abortedBy(AbortCauseStopping, errServerStopping))
 }
+
+// errServerStopping is the error an abort carries when Shutdown sent it.
+var errServerStopping = errors.New("the server is stopping")
 
 // abortLeft aborts every connection still being served, each at once and
 // each within stopAbortTimeout, and returns how many of them were
