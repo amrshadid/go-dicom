@@ -77,6 +77,7 @@ func main() {
 	dicomCLI.RegisterCommand(&cli.StoreSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.StoreSCPCommand{})
 	dicomCLI.RegisterCommand(&cli.CommitSCUCommand{})
+	dicomCLI.RegisterCommand(&cli.UPSSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.FindSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.MoveSCUCommand{})
 	dicomCLI.RegisterCommand(&cli.GetSCUCommand{})

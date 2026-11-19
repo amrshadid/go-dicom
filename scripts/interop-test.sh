@@ -1436,6 +1436,190 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# upsscu against pynetdicom's UPS SOP classes (#500)
+#
+# One step through its life against a pynetdicom SCP that keeps the state
+# and the Transaction UID lock: created SCHEDULED on Push, found by C-FIND on
+# Query, claimed on Pull with a Transaction UID, updated with it, read back
+# with N-GET, refused completion under another Transaction UID, completed
+# under its own, and a request to cancel it refused once it is final.
+# pynetdicom records each request and the SOP class it came on, and pydicom
+# reads the data sets back.
+# ---------------------------------------------------------------------------
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "upsscu against pynetdicom's UPS Push, Pull and Query"
+  ups_scp_py="$WORKDIR/ups_scp.py"
+  cat > "$ups_scp_py" <<'PYEOF'
+import json, sys
+from pydicom.dataset import Dataset
+from pynetdicom import AE, evt
+from pynetdicom.sop_class import (UnifiedProcedureStepPush, UnifiedProcedureStepPull,
+                                  UnifiedProcedureStepQuery)
+
+port, log = int(sys.argv[1]), sys.argv[2]
+steps = {}
+
+def record(op, context, uid, ds, status):
+    with open(log, "a") as f:
+        f.write(json.dumps({"op": op, "on": context.abstract_syntax, "uid": uid, "status": status,
+                            "ds": ds.to_json_dict() if ds is not None else None}) + "\n")
+
+def on_create(event):
+    uid, ds = event.request.AffectedSOPInstanceUID, event.attribute_list
+    status = 0x0111 if uid in steps else (0 if ds.get("ProcedureStepState") == "SCHEDULED" else 0xC309)
+    if status == 0:
+        ds.SOPInstanceUID = uid
+        steps[uid] = ds
+    record("N-CREATE", event.context, uid, ds, status)
+    return status, None
+
+def on_get(event):
+    uid = event.request.RequestedSOPInstanceUID
+    status = 0 if uid in steps else 0xC307
+    record("N-GET", event.context, uid, None, status)
+    return status, steps.get(uid)
+
+def on_set(event):
+    uid, mod = event.request.RequestedSOPInstanceUID, event.modification_list
+    step = steps.get(uid)
+    if step is None:
+        status = 0xC307
+    elif step.ProcedureStepState != "IN PROGRESS":
+        status = 0xC310  # not IN PROGRESS
+    elif mod.get("TransactionUID") != step.get("TransactionUID"):
+        status = 0xC301  # the Transaction UID is not the lock's
+    else:
+        status = 0
+        for element in mod:
+            if element.keyword != "TransactionUID":
+                step[element.tag] = element
+    record("N-SET", event.context, uid, mod, status)
+    return status, None
+
+def on_action(event):
+    uid, action = event.request.RequestedSOPInstanceUID, event.request.ActionTypeID
+    info = event.action_information
+    step = steps.get(uid)
+    status = 0
+    if step is None:
+        status = 0xC307
+    elif action == 1:
+        want, presented = info.ProcedureStepState, info.get("TransactionUID")
+        have = step.ProcedureStepState
+        if have == "SCHEDULED" and want == "IN PROGRESS":
+            step.TransactionUID = presented
+        elif have == "IN PROGRESS" and want in ("COMPLETED", "CANCELED"):
+            if presented != step.TransactionUID:
+                status = 0xC301
+            else:
+                del step.TransactionUID
+        else:
+            status = 0xC303 if have == "COMPLETED" else 0xC311
+        if status == 0:
+            step.ProcedureStepState = want
+    elif action == 2:
+        status = 0 if step.ProcedureStepState in ("SCHEDULED", "IN PROGRESS") else 0xC311
+    else:
+        status = 0x0123
+    record("N-ACTION-%d" % action, event.context, uid, info, status)
+    return status, None
+
+def on_find(event):
+    query = event.identifier
+    record("C-FIND", event.context, None, query, 0)
+    for uid, step in steps.items():
+        if query.get("PatientID") and step.get("PatientID") != query.PatientID:
+            continue
+        if query.get("ProcedureStepState") and step.get("ProcedureStepState") != query.ProcedureStepState:
+            continue
+        answer = Dataset()
+        for element in query:
+            answer[element.tag] = step[element.tag] if element.tag in step else element
+        yield 0xFF00, answer
+
+ae = AE(ae_title="PYUPS")
+for sop_class in (UnifiedProcedureStepPush, UnifiedProcedureStepPull, UnifiedProcedureStepQuery):
+    ae.add_supported_context(sop_class)
+ae.start_server(("127.0.0.1", port), evt_handlers=[
+    (evt.EVT_N_CREATE, on_create), (evt.EVT_N_GET, on_get), (evt.EVT_N_SET, on_set),
+    (evt.EVT_N_ACTION, on_action), (evt.EVT_C_FIND, on_find)])
+PYEOF
+  ups_port=11705
+  ups_log="$WORKDIR/ups_received.jsonl"
+  rm -f "$ups_log"
+  "$PYNETDICOM_BIN/python" "$ups_scp_py" "$ups_port" "$ups_log" > "$WORKDIR/ups_scp.log" 2>&1 &
+  ups_pid=$!
+  if wait_for_port "$ups_port"; then
+    step=1.2.826.0.1.3680043.8.498.5000001
+    lock=1.2.826.0.1.3680043.8.498.5000099
+    ups_out="$WORKDIR/upsscu.log"
+    ups_set="$WORKDIR/ups_set.json"
+    printf '%s' '{"00741216": {"vr": "SQ", "Value": [{"00404050": {"vr": "DT", "Value": ["20261119120000"]}, "00404051": {"vr": "DT", "Value": ["20261119121500"]}}]}}' > "$ups_set"
+    : > "$ups_out"
+    ups() { "$GODICOM" upsscu -aec PYUPS -timeout 10 "$@" "127.0.0.1:$ups_port" >> "$ups_out" 2>&1; }
+    ok=1
+    ups -create -uid "$step" -patient-id P1 -patient-name "DOE^JOHN" -label Planning -priority HIGH || ok=0
+    ups -query -patient-id P1 -state SCHEDULED || ok=0
+    ups -claim "$step" -transaction "$lock" || ok=0
+    ups -set "$step" -transaction "$lock" -json "$ups_set" || ok=0
+    ups -get "$step" || ok=0
+    ups -complete "$step" -transaction 1.2.826.0.1.3680043.8.498.5000098 && ok=0
+    ups -complete "$step" -transaction "$lock" || ok=0
+    ups -request-cancel "$step" -reason "too late" && ok=0
+    if [ "$ok" = 1 ] && checked=$(python3 - "$ups_log" "$ups_out" "$step" "$lock" <<'PY'
+import json, sys
+from pydicom.dataset import Dataset
+log, out, step, lock = sys.argv[1:5]
+PUSH, PULL, QUERY = "1.2.840.10008.5.1.4.34.6.1", "1.2.840.10008.5.1.4.34.6.3", "1.2.840.10008.5.1.4.34.6.5"
+records = [json.loads(line) for line in open(log)]
+got = [(r["op"], r["on"], r["status"]) for r in records]
+want = [("N-CREATE", PUSH, 0), ("C-FIND", QUERY, 0), ("N-ACTION-1", PULL, 0), ("N-SET", PULL, 0),
+        ("N-GET", PULL, 0), ("N-ACTION-1", PULL, 0xC301), ("N-ACTION-1", PULL, 0), ("N-ACTION-2", PUSH, 0xC311)]
+if got != want:
+    sys.exit("pynetdicom saw %s, want %s" % (got, want))
+created = Dataset.from_json(records[0]["ds"])
+for keyword, expected in (("ProcedureStepState", "SCHEDULED"), ("PatientID", "P1"), ("PatientName", "DOE^JOHN"),
+                          ("ProcedureStepLabel", "Planning"), ("ScheduledProcedureStepPriority", "HIGH"),
+                          ("InputReadinessState", "READY")):
+    if str(created.get(keyword, "")) != expected:
+        sys.exit("created %s is %r, want %r" % (keyword, created.get(keyword), expected))
+for keyword in ("ScheduledProcedureStepStartDateTime", "ScheduledWorkitemCodeSequence", "InputInformationSequence"):
+    if keyword not in created:
+        sys.exit("created lacks %s" % keyword)
+query = Dataset.from_json(records[1]["ds"])
+if query.PatientID != "P1" or query.ProcedureStepState != "SCHEDULED" or "SOPInstanceUID" not in query:
+    sys.exit("the query is not what was asked: %s" % query)
+claim = Dataset.from_json(records[2]["ds"])
+if claim.ProcedureStepState != "IN PROGRESS" or claim.TransactionUID != lock:
+    sys.exit("the claim is not IN PROGRESS under the lock: %s" % claim)
+update = Dataset.from_json(records[3]["ds"])
+if update.TransactionUID != lock or update.UnifiedProcedureStepPerformedProcedureSequence[0].PerformedProcedureStepStartDateTime != "20261119120000":
+    sys.exit("the update is not what -json gave: %s" % update)
+if Dataset.from_json(records[6]["ds"]).ProcedureStepState != "COMPLETED":
+    sys.exit("the step was not completed")
+text = open(out).read()
+for line in ("Found 1 procedure step(s)", "Transaction UID %s: give it to -set" % lock,
+             "Performed Procedure Step Start DateTime  20261119120000",
+             "N-ACTION Failure (status 0xC301)", "is COMPLETED", "N-ACTION Failure (status 0xC311)"):
+    if line not in text:
+        sys.exit("upsscu did not print %r" % line)
+print("one step created, found, claimed, updated, read and completed, each on its SOP class; "
+      "a completion under another Transaction UID (C301) and a cancellation of a final step (C311) refused")
+PY
+    ); then
+      pass "upsscu — $checked"
+      RAN_ANY=1
+    else
+      fail "upsscu against pynetdicom: ${checked:-a command failed}"
+      sed -n '1,60p' "$ups_out" >&2
+    fi
+  else
+    fail "the pynetdicom UPS SCP did not start listening"
+  fi
+  stop_server "$ups_pid"
+fi
+
+# ---------------------------------------------------------------------------
 # Media Creation Management and the two event logging classes (#370).
 #
 # They are N-CREATE, N-ACTION and N-GET against pynetdicom, in both directions,

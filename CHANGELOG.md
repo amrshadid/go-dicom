@@ -66,6 +66,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequences, each item indented under its sequence. There is no command
   for UPS, for MPPS or for serving a worklist.
 
+- **`upsscu` works Unified Procedure Steps** (#500). The library serves UPS,
+  but its SCU has no UPS call, and no command sent one, so a performer or a
+  test of a UPS SCP had to be written in code. `upsscu` builds each
+  operation from the SCU's N-DIMSE primitives and C-FIND, on the SOP class
+  PS3.4 CC.2 defines it on:
+  - `-create` (N-CREATE SCHEDULED, Push);
+  - `-query` (C-FIND, Query, answers with their sequences);
+  - `-get` (N-GET, Pull);
+  - `-claim` (Change State to IN PROGRESS with a Transaction UID it prints);
+  - `-set` (N-SET with that Transaction UID);
+  - `-complete` and `-cancel` (Change State with it);
+  - `-request-cancel` (Push).
+
+  `-json` adds a DICOM JSON object to what is sent. A refusal prints its
+  status and exits nonzero. Watch is left out, since no command receives
+  the event reports. Run against pynetdicom's UPS SOP classes in
+  `scripts/interop-test.sh`: one step's whole life, each request on its SOP
+  class, and a completion under another Transaction UID (C301H) and a
+  cancellation of a final step (C311H) refused.
+
 - **A rendered image goes through its lookup tables** (#334). `RenderFrame`,
   and so `convert --format png|jpeg`, `share` and the burned-in text
   detector, applied Rescale Slope and Intercept and a window and nothing

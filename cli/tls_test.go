@@ -26,7 +26,7 @@ import (
 func TestNetworkCommandsRefuseTLSOptionsWithoutTLS(t *testing.T) {
 	binary := buildCLI(t)
 	for _, command := range []string{
-		"echoscu", "storescu", "findscu", "movescu", "getscu", "commitscu",
+		"echoscu", "storescu", "findscu", "movescu", "getscu", "commitscu", "upsscu",
 		"echoscp", "storescp", "qrscp",
 	} {
 		t.Run(command, func(t *testing.T) {

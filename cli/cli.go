@@ -71,7 +71,7 @@ func NewCLI(name, version string) *CLI {
 // reports it, and a user simply never learns the command is there.
 var netCommands = []string{
 	"echoscu", "echoscp", "storescu", "storescp",
-	"findscu", "movescu", "getscu", "commitscu", "qrscp",
+	"findscu", "movescu", "getscu", "commitscu", "upsscu", "qrscp",
 }
 
 var netDescriptions = map[string]string{
@@ -83,6 +83,7 @@ var netDescriptions = map[string]string{
 	"movescu":   "DICOM Move SCU — retrieve studies to a destination",
 	"getscu":    "DICOM Get SCU — retrieve on same association",
 	"commitscu": "DICOM Storage Commitment SCU — ask a peer to take responsibility",
+	"upsscu":    "DICOM UPS SCU — create, query, claim, update and finish unified procedure steps",
 	"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
 }
 

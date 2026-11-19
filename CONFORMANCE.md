@@ -936,6 +936,15 @@ keep leaves the requestor waiting for reports that cannot arrive.
 The workflow is exercised against pynetdicom in `network/interop_ndimse_test.go`,
 and the event path end to end in `network/upswatch_test.go`.
 
+As an SCU, the library has no UPS call of its own; `upsscu` builds the
+operations from the generic N-DIMSE primitives and C-FIND, each on the SOP
+class PS3.4 CC.2 defines it on: N-CREATE (SCHEDULED) and Request Cancel on
+Push; N-GET, N-SET and Change State (claim with a Transaction UID, complete,
+cancel) on Pull; C-FIND on Query. N-GET asks for every attribute, since
+`SCU.NGet` sends no Attribute Identifier List. Watch is not offered from the
+command line: no command receives the event reports a subscription brings.
+`scripts/interop-test.sh` runs a step's life against pynetdicom.
+
 **Reachable through the N-DIMSE primitives.** MPPS and Basic Grayscale Print
 Management have no dedicated abstraction, but they are built entirely from
 N-CREATE, N-SET, N-ACTION and N-DELETE, all of which are implemented in both
