@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,13 +18,15 @@ import (
 	"github.com/amrshadid/go-dicom/valuerep"
 )
 
-// CreateCommand makes a DICOM file from DICOM JSON, a picture or a PDF.
+// CreateCommand makes a DICOM file from DICOM JSON, a picture or a PDF, or
+// one file for each object of an array of DICOM JSON.
 type CreateCommand struct {
 	from     string
 	syntax   string
 	template string
 	burnedIn string
 	title    string
+	bulkDir  string
 	help     bool
 
 	// Patient and study attributes, each a tag, VR and value given by a flag.
@@ -88,6 +91,7 @@ func (cc *CreateCommand) AddFlags(fs *flag.FlagSet) {
 	fs.StringVar(&cc.from, "from", "", "What the source is: json, picture or pdf (default: from its extension)")
 	fs.StringVar(&cc.syntax, "syntax", "", "For json: the transfer syntax its pixel data is in (default: Explicit VR Little Endian)")
 	fs.StringVar(&cc.template, "template", "", "A DICOM file whose patient and study the new instance joins")
+	fs.StringVar(&cc.bulkDir, "bulk-dir", "", "For json: the directory a BulkDataURI may name a file in (default: the JSON file's)")
 	fs.StringVar(&cc.burnedIn, "burned-in", "yes", "For pdf: whether the document names the patient, yes or no")
 	fs.StringVar(&cc.title, "title", "", "For pdf: Document Title (default: the file's name)")
 	cc.values = make(map[string]*string, len(createFields))
@@ -123,6 +127,9 @@ func (cc *CreateCommand) Execute(args []string) error {
 	if cc.syntax != "" && kind != "json" {
 		return fmt.Errorf("create: -syntax is for json; a %s is written in the syntax it needs", kind)
 	}
+	if cc.bulkDir != "" && kind != "json" {
+		return fmt.Errorf("create: -bulk-dir is for json")
+	}
 	if kind != "pdf" && (cc.title != "" || cc.burnedIn != "yes") {
 		return fmt.Errorf("create: -title and -burned-in are for pdf")
 	}
@@ -134,24 +141,89 @@ func (cc *CreateCommand) Execute(args []string) error {
 		return fmt.Errorf("create: %w", err)
 	}
 
-	var made *created
+	var all []*created
 	switch kind {
 	case "json":
-		made, err = createFromJSON(source, cc.syntax)
+		all, err = createFromJSON(source, cc.syntax, cc.bulkDir)
 	case "picture":
+		var made *created
 		made, err = createFromPicture(source)
+		all = []*created{made}
 	case "pdf":
+		var made *created
 		made, err = createFromPDF(source, cc.title, cc.burnedIn)
+		all = []*created{made}
 	}
 	if err != nil {
 		return fmt.Errorf("create: %s: %w", source, err)
 	}
-	ds := made.ds
 
-	// What the template and the flags say about the patient and the study
-	// replaces what the source said; a JSON source keeps what they leave.
+	// Every object is made ready, and every name settled, before the first
+	// file is written, so a refused one leaves nothing behind.
+	many := len(all) > 1
+	files := make([]outputFile, len(all))
+	for i, made := range all {
+		meta, err := finishInstance(made, kind, source, patient, objectLabel(i, many))
+		if err != nil {
+			return fmt.Errorf("create: %w", err)
+		}
+		files[i] = outputFile{path: output, meta: meta, made: made}
+	}
+	if many {
+		if info, err := os.Stat(output); err == nil && !info.IsDir() {
+			return fmt.Errorf("create: %s holds %d objects, one file each, so the output is a directory and %s is a file", source, len(all), output)
+		}
+		seen := make(map[string]int, len(files))
+		for i := range files {
+			name := files[i].meta.MediaStorageSOPInstanceUID
+			// The UID is the file's name, so it is held to the form of a UID
+			// first: a value with a slash in it is a path.
+			if err := valuerep.ValidateUID(name); err != nil {
+				return fmt.Errorf("create: object %d has the SOP Instance UID %q, which is not a UID and cannot name a file", i+1, name)
+			}
+			if first, ok := seen[name]; ok {
+				return fmt.Errorf("create: objects %d and %d have the same SOP Instance UID %s, so they would be one file", first, i+1, name)
+			}
+			seen[name] = i + 1
+			files[i].path = filepath.Join(output, name+".dcm")
+		}
+	}
+	for _, f := range files {
+		if err := writeDICOMInstance(f.path, f.meta, f.made.ds); err != nil {
+			return fmt.Errorf("create: %w", err)
+		}
+		fmt.Printf("Wrote %s: %s, %s\n", f.path, f.made.what, f.meta.TransferSyntaxUID)
+	}
+	if many {
+		fmt.Printf("Wrote %d files to %s\n", len(files), output)
+	}
+	return nil
+}
+
+// outputFile is one file create is about to write.
+type outputFile struct {
+	path string
+	meta *filewriter.FileMetaInfo
+	made *created
+}
+
+// objectLabel names an object of an array in a message, or nothing when the
+// source made only one.
+func objectLabel(i int, many bool) string {
+	if !many {
+		return ""
+	}
+	return fmt.Sprintf("object %d: ", i+1)
+}
+
+// finishInstance gives a made data set what the write needs and returns its
+// file meta: the patient and study the template and the flags say, which
+// replace what the source said (a JSON source keeps what they leave), the
+// identifiers a picture or a PDF is new in, and the UTF-8 declaration.
+func finishInstance(made *created, kind, source string, patient *dataset.Dataset, label string) (*filewriter.FileMetaInfo, error) {
+	ds := made.ds
 	for _, elem := range patient.GetAll() {
-		_ = ds.Add(elem)
+		_ = ds.Add(cloneElement(elem))
 	}
 	if kind != "json" {
 		fillNewInstance(ds, made.modality)
@@ -159,25 +231,19 @@ func (cc *CreateCommand) Execute(args []string) error {
 	if !ds.Contains(sopInstanceUIDTag) {
 		u, err := newInstanceUID(ds)
 		if err != nil {
-			return fmt.Errorf("create: %w", err)
+			return nil, fmt.Errorf("%s%w", label, err)
 		}
-		fmt.Printf("  the source has no SOP Instance UID; it is given %s\n", u)
+		fmt.Printf("  %sthe source has no SOP Instance UID; it is given %s\n", label, u)
 	}
 	if datasetText(ds, sopClassUIDTag) == "" {
-		return fmt.Errorf("create: %s has no SOP Class UID, so it is no kind of instance", source)
+		return nil, fmt.Errorf("%s%s has no SOP Class UID, so it is no kind of instance", label, source)
 	}
 	declareUTF8IfNeeded(ds)
-
-	meta := &filewriter.FileMetaInfo{
+	return &filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    datasetText(ds, sopClassUIDTag),
 		MediaStorageSOPInstanceUID: datasetText(ds, sopInstanceUIDTag),
 		TransferSyntaxUID:          made.syntax,
-	}
-	if err := writeDICOMInstance(output, meta, ds); err != nil {
-		return fmt.Errorf("create: %w", err)
-	}
-	fmt.Printf("Wrote %s: %s, %s\n", output, made.what, meta.TransferSyntaxUID)
-	return nil
+	}, nil
 }
 
 // created is what a source made: the data set, the syntax it is written in,
@@ -362,17 +428,31 @@ func (cc *CreateCommand) showHelp() {
 
 USAGE:
   go-dicom create [options] <source> <output>
+  go-dicom create [options] <array.json> <directory>
 
   What the source is comes from its extension (.json, .png, .jpg, .jpeg,
   .pdf), or from -from.
 
 SOURCES:
-  json      A DICOM JSON object (PS3.18 Annex F), or an array holding one, as
-            a DICOMweb metadata response or 'convert --format dicom-json'
-            writes it. Binary values come from InlineBinary; a BulkDataURI is
-            not fetched and is refused. The JSON has no transfer syntax, so
-            its pixel data is taken as native unless -syntax names another.
-            A missing SOP Instance UID is made; everything else is the JSON's.
+  json      A DICOM JSON object (PS3.18 Annex F), or an array of them, as a
+            DICOMweb metadata response or 'convert --format dicom-json'
+            writes it. An array of one object makes <output>, as an object
+            does. An array of more makes one file for each, in the directory
+            <output> (made if it is not there), named <SOP Instance UID>.dcm
+            as 'wado' names them; two objects with one UID, or an object that
+            is refused, make no file at all. Binary values come from
+            InlineBinary, or from a BulkDataURI that is a file: URI or a path
+            (relative to -bulk-dir, by default the JSON file's directory):
+            the whole file is the value, in the little endian a data set
+            holds it, and for encapsulated Pixel Data it holds the fragments
+            with their item headers. A BulkDataURI is read only for a binary
+            VR, and only from inside -bulk-dir, links followed. A http: or
+            https: BulkDataURI is refused and not fetched: a command that
+            makes a file does not reach the network unasked. Fetch it first
+            (curl) and name the file. The JSON has no transfer syntax,
+            so its pixel data is taken as native unless -syntax names another
+            (one for every object). A missing SOP Instance UID is made;
+            everything else is the JSON's.
   picture   A Secondary Capture image (PS3.3 A.8.1). A PNG is decoded: gray
             at 8 or 16 bits is MONOCHROME2, color and palette images RGB, and
             an image that is not fully opaque is refused, since DICOM has no
@@ -389,6 +469,8 @@ OPTIONS:
                            Patient module (group 0010) and its General Study
                            attributes are copied.
   -syntax <uid>            For json: the transfer syntax of its pixel data.
+  -bulk-dir <dir>          For json: the directory a BulkDataURI may name a
+                           file in (default: the JSON file's directory).
   -title <text>            For pdf: Document Title (default: the file's name).
   -burned-in yes|no        For pdf: whether the document identifies the patient
                            (Burned In Annotation, Type 1; default yes).
@@ -408,6 +490,8 @@ PATIENT AND STUDY (each replaces the template's or the JSON's value):
 EXAMPLES:
   go-dicom convert scan.dcm scan.json --format dicom-json
   go-dicom create scan.json copy.dcm
+  go-dicom wado -study 1.2.840.1 -metadata <url> > study.json
+  go-dicom create study.json instances/        # one file for each instance
   go-dicom create -template ct.dcm screenshot.png sc.dcm
   go-dicom create -patient-name 'Doe^Jane' -patient-id 12345 photo.jpg sc.dcm
   go-dicom create -template ct.dcm -title 'Radiology report' report.pdf report.dcm
