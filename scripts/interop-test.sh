@@ -3262,7 +3262,10 @@ for kind, ts in (("FloatPixelData", "1.2.840.10008.1.2.1"), ("DoubleFloatPixelDa
     ds.is_little_endian, ds.is_implicit_VR = ts != "1.2.840.10008.1.2.2", False
     ds.SamplesPerPixel, ds.PhotometricInterpretation = 1, "MONOCHROME2"
     if kind == "PixelData":
-        from pydicom.pixel_data_handlers.numpy_handler import pack_bits
+        try:
+            from pydicom.pixels import pack_bits  # pydicom 3
+        except ImportError:
+            from pydicom.pixel_data_handlers.numpy_handler import pack_bits
         ds.Rows, ds.Columns, ds.NumberOfFrames = 5, 5, 3
         ds.BitsAllocated = ds.BitsStored = 1
         ds.HighBit = ds.PixelRepresentation = 0
