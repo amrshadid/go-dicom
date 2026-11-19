@@ -271,6 +271,20 @@
 //		DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
 //	}
 //
+// A decoder that also satisfies FrameHeaderReader reads the size of a frame's
+// image from its header without decoding it, and a data set's pixel path
+// refuses a frame whose columns, rows or components are not its Columns, Rows
+// and Samples per Pixel before decoding it (FrameHeader.Check, wrapping
+// ErrFrameMismatch). Every decoder here with a size in its header does; RLE,
+// which has none, is held to Rows times Columns by DecompressFrameOfSize. A
+// frame of any other length than the data set's is refused after the decode
+// whatever the decoder.
+//
+//	type FrameHeaderReader interface {
+//		Decompressor
+//		FrameHeader(data []byte) (FrameHeader, error)
+//	}
+//
 // ## Compressor Interface
 //
 // Implement this interface to create custom compressors:

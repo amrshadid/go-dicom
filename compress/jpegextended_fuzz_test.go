@@ -60,5 +60,6 @@ func FuzzJPEGExtendedDecompress(f *testing.F) {
 				len(asStored), storedErr, len(out), err)
 		}
 		checkFrameWidths(t, decoder, data, out, err)
+		checkFrameHeaderAgrees(t, decoder, data, out, err)
 	})
 }

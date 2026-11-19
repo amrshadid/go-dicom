@@ -1,6 +1,7 @@
 package compress_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 
@@ -40,8 +41,29 @@ func FuzzRLEDecompress(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if pixel := int(samples) * int(bits) / 8; len(out)%pixel != 0 {
+		pixel := int(samples) * int(bits) / 8
+		if len(out)%pixel != 0 {
 			t.Fatalf("decoded %d bytes, not a whole number of %d-byte pixels", len(out), pixel)
+		}
+
+		// Held to the number of pixels it decoded to, the frame decodes the
+		// same; held to one fewer or more, it is refused, except one fewer of
+		// an odd number, the pad byte a segment may decode to.
+		pixels := len(out) / pixel
+		if pixels == 0 {
+			return
+		}
+		if sized, err := decoder.DecompressFrameOfSize(data, int(samples), int(bits), pixels); err != nil ||
+			!bytes.Equal(sized, out) {
+			t.Fatalf("held to its own %d pixels: %v", pixels, err)
+		}
+		if _, err := decoder.DecompressFrameOfSize(data, int(samples), int(bits), pixels+1); err == nil {
+			t.Fatalf("held to %d pixels, a frame of %d decoded", pixels+1, pixels)
+		}
+		if pixels > 1 && (pixels-1)%2 == 0 {
+			if _, err := decoder.DecompressFrameOfSize(data, int(samples), int(bits), pixels-1); err == nil {
+				t.Fatalf("held to %d pixels, a frame of %d decoded", pixels-1, pixels)
+			}
 		}
 	})
 }

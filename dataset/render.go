@@ -550,9 +550,6 @@ func (r *renderer) load(f, y0, y1 int) error {
 		// Decoded as pixelBytesForDecoding decodes each frame, and refused
 		// in its words.
 		decoded, err := decompressPixelFrame(r.compression, data, info)
-		if err == nil {
-			err = checkFrameSize(decoded, info)
-		}
 		if err != nil {
 			return fmt.Errorf("render: failed to decode %s frame %d: %w", r.compression, f, err)
 		}

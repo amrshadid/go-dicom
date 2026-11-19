@@ -48,7 +48,8 @@
 // sample allocated in all, four of them the decoded planes and the rest the
 // coefficients of a tile while it is rebuilt. A caller that knows the size it
 // expects, as a DICOM reader knows Rows and Columns, can compare it with the
-// header ParseCodestream returns before calling Decode.
+// header ParseCodestream returns before calling Decode. The data set's pixel
+// path does (compress.FrameHeaderReader).
 package jpeg2000
 
 import (
