@@ -7,8 +7,8 @@ of items a sequence holds.
 
 The rules are generated from the standard (`scripts/iod-tables.py`, from the
 DocBook XML of PS3.3 and PS3.4), not written by hand. `Edition()` names the
-edition: 153 IODs and 528 module and macro tables, for 164 Storage SOP
-classes.
+edition: 153 IODs, 29 Functional Group Macros tables of enhanced IODs, and
+633 module and macro tables, for 164 Storage SOP classes.
 
 ## Quick Start
 
@@ -59,8 +59,9 @@ prose. The numbers, from the tables generated from PS3.3 2026d:
 
 | | Conditions | IsPresent | IsAbsent | HasValue | IsPresentWithValue | Prose |
 |---|---|---|---|---|---|---|
-| Type 1C and 2C attributes | 1681 | 99 | 67 | 402 | 12 | 1101 |
+| Type 1C and 2C attributes | 1867 | 104 | 73 | 455 | 13 | 1222 |
 | Conditional modules | 316 | 0 | 0 | 23 | 2 | 291 |
+| Conditional Functional Group Macros | 171 | 2 | 0 | 43 | 0 | 126 |
 
 `scripts/iod-tables.py` prints them on standard error, with why each prose
 condition was not read.
@@ -90,7 +91,8 @@ type Finding struct {
 func Edition() string
 func IODForSOPClass(sopClassUID string) (*IOD, bool)
 func LookupTable(label string) (*Table, bool)
-type IOD struct { Name, Section, Table string; Modules []ModuleUsage }
+type IOD struct { Name, Section, Table string; Modules []ModuleUsage; FunctionalGroupsTable string; FunctionalGroups []FunctionalGroup }
+type FunctionalGroup struct { Macro, Table string; Usage Usage; Condition string; When *Condition; Placement Placement }
 type ModuleUsage struct { Module, Table string; Usage Usage; Condition string; When *Condition }
 type Table struct { Name, Section string; Rows []Row }
 type Row struct { Depth int; Include string; Tag, Mask uint32; Name string; Type AttributeType; Condition string; When *Condition; ... }
@@ -104,9 +106,28 @@ Type 1C or 2C attribute whose condition is prose, and a macro included under
 a condition, are each reported as `NotChecked`, with the condition, never
 passed. So is a condition in a sequence item that names an attribute outside
 the item, and one testing "a Value" of an attribute holding several. Also
-reported as not checked: repeating groups such as (60xx,eeee), the Functional
-Group Macros of the enhanced IODs, and SR content nested deeper than twelve
-levels. Not checked at all: context groups (PS3.16), rules between
+reported as not checked: repeating groups such as (60xx,eeee), the functional
+groups of Enhanced MR Color Image, whose Functional Group Macros table is
+another IOD's, and SR content nested deeper than twelve levels.
+
+## Functional groups
+
+An enhanced multi-frame IOD's Functional Group Macros table (29 of them, A.38-2
+for Enhanced CT) is generated with each macro's usage, condition and where it
+may be (`SharedOrPerFrame`, `SharedOnly`, `PerFrameOnly`, from "May not be used
+as a Shared Functional Group"). The Shared and Per-Frame Functional Groups
+Sequences are checked against it:
+
+- a macro the IOD requires is in the shared item or in the item of every frame;
+- none is in both (Table C.7.6.16-1), nor where the table says it may not be;
+- the Per-Frame sequence holds one item for each frame;
+- each macro that is there is checked attribute by attribute, and what is
+  wrong in many frames is one finding saying in how many.
+
+```
+$ go-dicom validate no_plane_position_f2.dcm
+  error       Plane Position (Patient) (functional group): Usage M: absent from 1 of the 2 per-frame items (frame 2 first) and from the shared item; the macro is required [...; PS3.3 A.38.1 Table A.38-2]
+``` Not checked at all: context groups (PS3.16), rules between
 attributes, the form of values (see `valuerep`), and attributes the IOD does
 not name.
 

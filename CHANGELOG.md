@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`validate` checks the functional groups of an enhanced multi-frame
+  image** (#463). The IOD's Functional Group Macros table was not read, so
+  an Enhanced CT with Pixel Measures removed, with Frame Content moved into
+  the shared item, or with a frame missing its Plane Position, passed with
+  no error. The generator now reads the 29 Functional Group Macros tables of
+  the enhanced Storage IODs (437 rows), with each macro's usage, condition
+  and where it may be ("May not be used as a Shared Functional Group"), and
+  the 105 macro tables they name. A macro the IOD requires must be in the
+  shared item or in every frame's, none may be in both or where the table
+  forbids it, the per-frame sequence holds one item for each frame, and
+  each macro present is checked attribute by attribute, a fault found in
+  many frames being one finding that says in how many. Reading those tables
+  also reads 65 more Type 1C and 2C conditions as data, among them the
+  "..., may be present otherwise." form many of them use.
+
 - **`validate` evaluates the conditions PS3.3 states in a fixed form**
   (#449). Every Type 1C and 2C attribute and every Conditional module was
   reported "not checked", so a CT image with no Pixel Data and no Pixel Data
