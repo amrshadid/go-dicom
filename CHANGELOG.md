@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`-allow` pairs a title with an address, and its list can be read from a
+  file** (#462). `-allow` kept titles and addresses as two lists a caller had
+  to match both of, so "PRISMA1 only from 10.0.0.5" could not be said:
+  `PRISMA1@10.0.0.5` was read as an AE title that nobody has, and the server
+  refused its own scanner. `TITLE@ADDRESS` (an address or a CIDR range) now
+  admits that title from there and from nowhere else; each pair is a way in of
+  its own beside the titles and addresses given together, whose rule is as it
+  was. An @ in a title that is not followed by an address stays a title, and
+  one followed by something that reads as an address and is not (`CT@10.0.0`)
+  is an error. `-allow-file` reads entries from a file, one to a line, with `#`
+  comments on a line of their own or after a space, and is joined with `-allow`;
+  a file with no entry, or none that is there, stops the server, since an empty
+  list admits every caller. A listed title calling from an address it is not
+  admitted from is refused with no reason given, as an unlisted address is,
+  since "not recognized" would be untrue of it, and the server prints which.
+  Checked with dcmtk's `echoscu` and pynetdicom against `storescp` and
+  `qrscp`: admitted and refused callers, and the reason each is shown, match.
+  Admission by TLS client certificate is not part of `-allow`: it names a
+  certificate by subject, SAN or fingerprint, a third kind of entry, and would
+  be a flag of its own.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and

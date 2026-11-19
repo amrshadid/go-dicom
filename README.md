@@ -376,6 +376,9 @@ DICOMWEB_TOKEN=... ./go-dicom qrscp -output ./archive/ -web 0.0.0.0:8080
 # Admit only the callers listed: these AE titles, from these addresses. Any
 # other is refused before anything is negotiated
 ./go-dicom qrscp -port 11112 -output ./archive/ -allow PRISMA1,CT_2,10.20.0.0/16
+# A title admitted only from its own address, and the list kept in a file
+# (one entry to a line, # for comments)
+./go-dicom qrscp -port 11112 -output ./archive/ -allow PRISMA1@10.20.1.5 -allow-file modalities.txt
 
 # Any network command over TLS. With -tls-ca a server requires a client
 # certificate from that CA and a client verifies the server against it

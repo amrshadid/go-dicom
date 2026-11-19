@@ -58,6 +58,7 @@ go-dicom tag-doc -keyword PatientName        # Tag documentation
 go-dicom qido -match "PatientName=Doe*" https://pacs.example.org/dicom-web   # Search a DICOMweb service
 go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # Download a study
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
+go-dicom storescp -allow PRISMA1@10.0.0.5 -allow-file modalities.txt         # Admit a title only from its address; a list in a file
 ```
 
 ## The library's log
