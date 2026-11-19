@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands print changed. The `-events` lines carry no `schemaVersion`; the
   document says so and what a future one would mean.
 
+- **Every `-events` line says `"schemaVersion":1`** (#480). A reader could not
+  tell a version 1 line from a later one by anything in the line. The
+  property is on every line, so a reader that starts following the file
+  midway, or reads a file two processes append to, can check each line, and
+  it is the last property: a line is the line 1.10.0 wrote with
+  `,"schemaVersion":1` before the closing brace, every other property in its
+  place, byte for byte. A line without one, as 1.10.0 wrote, is version 1;
+  the schema does not require it.
+
 - **Media Creation Management and the two event logging classes are
   verified against a peer** (#370). CONFORMANCE §8.5 said they "still have
   no test against a peer": they had UID constants and presentation context
