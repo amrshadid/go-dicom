@@ -604,6 +604,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way (5.67 MB against 5.91 MB). What it saves depends on what else a
   program calls, since the linker drops unreachable code.
 
+- **What a server accepts can be set before it listens** (#468). The abstract
+  and transfer syntaxes could only be set by method, and a `Server` exists only
+  once `StartServer` has started accepting, so a peer that connected in the
+  gap negotiated with the defaults: a storage archive accepted Study Root FIND
+  and MOVE from it. `SCPConfig.AbstractSyntaxes` and
+  `SCPConfig.TransferSyntaxes` are read before the listener opens. Nil keeps
+  the defaults; a non-nil list is used exactly as given, so an empty one
+  accepts nothing. `StorageAndVerificationSyntaxes()` returns Verification and
+  every storage class. The setters still work.
+
 ### Changed
 
 - **Events no longer copy every received byte** (#469). A received PDU was

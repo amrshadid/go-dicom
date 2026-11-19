@@ -55,6 +55,15 @@ func NewSCP(config SCPConfig) *SCP {
 	if config.MaxAssociations > 0 {
 		scp.assocSlots = make(chan struct{}, config.MaxAssociations)
 	}
+	// Taken here, before any listener exists, so the first association is
+	// negotiated with them. Nil keeps the defaults; an empty list is a
+	// choice, and is kept.
+	if config.AbstractSyntaxes != nil {
+		scp.supportedAbstractSyntaxes = syntaxSet(config.AbstractSyntaxes)
+	}
+	if config.TransferSyntaxes != nil {
+		scp.supportedTransferSyntaxes = syntaxSet(config.TransferSyntaxes)
+	}
 	return scp
 }
 
@@ -65,24 +74,32 @@ func (s *SCP) SetHandler(handler Handler) {
 	s.handler = handler
 }
 
-// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports.
+// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.AbstractSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedAbstractSyntaxes = make(map[string]bool, len(syntaxes))
-	for _, syn := range syntaxes {
-		s.supportedAbstractSyntaxes[syn] = true
-	}
+	s.supportedAbstractSyntaxes = syntaxSet(syntaxes)
 }
 
-// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports.
+// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.TransferSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedTransferSyntaxes = make(map[string]bool, len(syntaxes))
+	s.supportedTransferSyntaxes = syntaxSet(syntaxes)
+}
+
+// syntaxSet is a list of UIDs as the set negotiation looks them up in. It is
+// a copy, so a caller changing its slice later changes nothing.
+func syntaxSet(syntaxes []string) map[string]bool {
+	set := make(map[string]bool, len(syntaxes))
 	for _, syn := range syntaxes {
-		s.supportedTransferSyntaxes[syn] = true
+		set[syn] = true
 	}
+	return set
 }
 
 // ListenAndServe starts the SCP server, listening for incoming associations.

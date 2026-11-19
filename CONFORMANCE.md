@@ -393,8 +393,8 @@ of, and does not name a file it could not read; both are counted as refused.
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
-| Supported SOP classes | `SetSupportedAbstractSyntaxes` |
-| Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
+| Supported SOP classes | `SCPConfig.AbstractSyntaxes`, read before the listener opens (nil keeps the defaults, which include query and retrieve; a non-nil list is used as given, so an empty one accepts nothing; `StorageAndVerificationSyntaxes()` is the storage-only list), or `SetSupportedAbstractSyntaxes` for associations from then on |
+| Supported transfer syntaxes | `SCPConfig.TransferSyntaxes`, the same way, or `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
 | Logging destination and format | `config.SetLogger`, for the whole library |

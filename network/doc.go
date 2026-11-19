@@ -115,6 +115,12 @@
 //
 //	log.Fatal(scp.ListenAndServe(ctx))
 //
+// The SOP classes and transfer syntaxes an SCP accepts are
+// SCPConfig.AbstractSyntaxes and SCPConfig.TransferSyntaxes, read before it
+// listens. Nil keeps the defaults, which include query and retrieve; a non-nil
+// list is used exactly as given, so an empty one accepts nothing.
+// [StorageAndVerificationSyntaxes] is the list for a storage-only archive.
+//
 // The handler runs on the association's goroutine, so a slow handler holds that
 // association open; hand long work to a queue. Handlers may be called
 // concurrently for different associations and must be safe for concurrent use.
