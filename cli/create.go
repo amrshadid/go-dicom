@@ -449,7 +449,7 @@ SOURCES:
             VR, and only from inside -bulk-dir, links followed. A http: or
             https: BulkDataURI is refused and not fetched: a command that
             makes a file does not reach the network unasked. Fetch it first
-            ('wado', curl) and name the file. The JSON has no transfer syntax,
+            (curl) and name the file. The JSON has no transfer syntax,
             so its pixel data is taken as native unless -syntax names another
             (one for every object). A missing SOP Instance UID is made;
             everything else is the JSON's.

@@ -192,7 +192,7 @@ func readBulkFile(uri, bulkDir string) ([]byte, error) {
 	case "", "file":
 	case "http", "https":
 		return nil, errors.New("it is at a network address, and create does not fetch: a command that makes a file does not reach the network unasked; " +
-			"fetch it first (go-dicom wado, or curl) and name the file in the BulkDataURI")
+			"fetch it first, with curl for one, and name the file in the BulkDataURI")
 	default:
 		return nil, fmt.Errorf("a %s: URI is not read; only a file: URI or a path is", u.Scheme)
 	}
