@@ -39,7 +39,14 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 type ReadOptions struct {
     SkipBulkData      bool
     BulkDataThreshold uint32 // the longest binary value still read
+    Logger            *slog.Logger // where this read logs; nil is config.Logger
 }
+
+// A silent read:
+//   filereader.ReadOptions{Logger: slog.New(slog.DiscardHandler)}
+// With a logger given, nothing the read does reaches config.Logger, the
+// validation GetDataset runs and the character set decisions included. A
+// line names tags, VRs, lengths and offsets, never a value's text.
 
 // A file read that way as a data set whose skipped values say where they
 // are (dataelem.ValueInFile), for filewriter to copy them from the file

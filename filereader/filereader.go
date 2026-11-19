@@ -3,10 +3,12 @@ package filereader
 import (
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 
@@ -76,6 +78,11 @@ type DCMFileReader struct {
 
 	// options are those the file is being read with.
 	options ReadOptions
+
+	// ctx carries options.Logger (config.WithLogger) to everything the
+	// read calls that logs. It is nil for a reader made by
+	// NewDCMFileReader, which logs to config.Logger.
+	ctx context.Context
 }
 
 // ReadOptions choose how ReadDICOMFileWithOptions reads a file.
@@ -99,6 +106,37 @@ type ReadOptions struct {
 	// when SkipBulkData is set. Zero reads none of them. Pixel Data is
 	// skipped whatever its length.
 	BulkDataThreshold uint32
+
+	// Logger is where the read logs, and everything it calls: the
+	// character set decisions and the validation run as GetDataset builds
+	// the data set, later, for the DICOMFile it returns. Nothing the read
+	// does then reaches config.Logger. Nil is config.Logger, as before.
+	//
+	// To read silently, give it a logger that discards:
+	//
+	//	filereader.ReadOptions{Logger: slog.New(slog.DiscardHandler)}
+	//
+	// What is logged names tags, VRs, lengths and offsets, never a value's
+	// bytes or text: a file from an untrusted source writes what it likes
+	// in its values. What a program should act on is in DICOMFile.Warnings
+	// as well; the log is for someone watching the read.
+	Logger *slog.Logger
+}
+
+// logger is where this reader logs: its read's logger, or config.Logger.
+func (dfr *DCMFileReader) logger() *slog.Logger {
+	return config.LoggerFromContext(dfr.ctx)
+}
+
+// context carries the logger the file was read with, for what it does
+// afterwards on the read's behalf: GetDataset and the character set
+// methods. A DICOMFile not made by a read has none, and logs to
+// config.Logger.
+func (df *DICOMFile) context() context.Context {
+	if df.ctx == nil {
+		return context.Background()
+	}
+	return df.ctx
 }
 
 // NewDCMFileReader creates a new DICOM file reader.
@@ -310,7 +348,7 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 			// Handle read error gracefully - file meta info might be incomplete/corrupted.
 			// Log a warning but continue with what we have so far; the rest of the
 			// file may still be readable.
-			config.Logger.Warn("filereader: skipping file meta element",
+			dfr.logger().Warn("filereader: skipping file meta element",
 				"tag", tagValue.String(), "expectedBytes", valueLength, "err", err)
 			dfr.metaWarnings = append(dfr.metaWarnings,
 				fmt.Sprintf("skipped file meta element %s (expected %d bytes): %v",
@@ -551,7 +589,7 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 				}
 				dfr.implicitElements++
 			}
-			config.Logger.Debug("filereader: element is implicitly encoded in an explicit VR data set",
+			dfr.logger().Debug("filereader: element is implicitly encoded in an explicit VR data set",
 				"tag", element.Tag.String(), "vr", element.VR)
 
 			// An element encoded this way sits in a data set the writer was
@@ -1262,6 +1300,9 @@ type DICOMFile struct {
 	// retired tags, VR mismatches, truncated meta elements). Parsing continues
 	// past these; inspect the slice to surface them.
 	Warnings []string
+
+	// ctx carries the logger the file was read with; see context.
+	ctx context.Context
 }
 
 // GetDataset converts the parsed file into a Dataset, recursively materializing
@@ -1292,13 +1333,13 @@ func (df *DICOMFile) dataset(inFile bool) *dataset.Dataset {
 	// Character set decisions are recorded on the file, not only logged: a
 	// caller writing the data set back is the one who needs to know a guess was
 	// made. GetDataset may be called more than once, so each is recorded once.
-	ds := elementsToDataset(df.DataElements, nil, inFile, func(warning string) {
+	ds := elementsToDataset(df.context(), df.DataElements, nil, inFile, func(warning string) {
 		for _, existing := range df.Warnings {
 			if existing == warning {
 				return
 			}
 		}
-		config.Logger.Warn("filereader: " + warning)
+		config.LoggerFromContext(df.context()).Warn("filereader: " + warning)
 		df.Warnings = append(df.Warnings, warning)
 	})
 
@@ -1321,10 +1362,10 @@ func (df *DICOMFile) dataset(inFile bool) *dataset.Dataset {
 //
 // inFile keeps a skipped value as a dataelem.ValueInFile. warn records a
 // decision the caller should know about; it may be nil.
-func elementsToDataset(elements []*DataElementValue, inherited []string, inFile bool, warn func(string)) *dataset.Dataset {
+func elementsToDataset(ctx context.Context, elements []*DataElementValue, inherited []string, inFile bool, warn func(string)) *dataset.Dataset {
 	ds := dataset.NewDataset()
 
-	encodings, fellBack := encodingsFor(elements, inherited)
+	encodings, fellBack := encodingsFor(ctx, elements, inherited)
 
 	// Decode first, decide afterwards. Whether this data set may declare UTF-8
 	// depends on how the values came out, and the declaration has to be written
@@ -1340,7 +1381,7 @@ func elementsToDataset(elements []*DataElementValue, inherited []string, inFile 
 			decoded = append(decoded, decodedElement{elem, elem.Value})
 			continue
 		}
-		value := decodeTextValue(dataelem.VR(elem.VR), elem.Value, encodings)
+		value := decodeTextValue(ctx, dataelem.VR(elem.VR), elem.Value, encodings)
 		if dataelem.IsTextVR(dataelem.VR(elem.VR)) {
 			if fellBack && !isASCII(elem.Value) {
 				// Latin-1 is a guess: the file did not say, or named something
@@ -1376,7 +1417,7 @@ func elementsToDataset(elements []*DataElementValue, inherited []string, inFile 
 
 	for _, d := range decoded {
 		if addDeclaration && d.elem.Tag > specificCharacterSetTag {
-			_ = ds.Add(dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
+			_ = ds.AddWithContext(ctx, dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
 				[]byte(utf8CharacterSet)))
 			addDeclaration = false
 		}
@@ -1384,14 +1425,14 @@ func elementsToDataset(elements []*DataElementValue, inherited []string, inFile 
 		if d.elem.Items != nil || isSequenceVR(d.elem.VR) {
 			seq := sequence.New()
 			for _, item := range d.elem.Items {
-				_ = seq.Append(elementsToDataset(item.Elements, encodings, inFile, warn))
+				_ = seq.Append(elementsToDataset(ctx, item.Elements, encodings, inFile, warn))
 			}
-			_ = ds.AddSequence(d.elem.Tag, seq)
+			_ = ds.AddSequenceWithContext(ctx, d.elem.Tag, seq)
 			continue
 		}
 
 		if inFile && d.elem.ValueSkipped {
-			_ = ds.Add(dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), valueInFile(d.elem)))
+			_ = ds.AddWithContext(ctx, dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), valueInFile(d.elem)))
 			continue
 		}
 
@@ -1404,10 +1445,10 @@ func elementsToDataset(elements []*DataElementValue, inherited []string, inFile 
 			// not decode was labeled ISO_IR 192 over the bytes it came with.
 			value = []byte(utf8CharacterSet)
 		}
-		_ = ds.Add(dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), value))
+		_ = ds.AddWithContext(ctx, dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), value))
 	}
 	if addDeclaration {
-		_ = ds.Add(dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
+		_ = ds.AddWithContext(ctx, dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
 			[]byte(utf8CharacterSet)))
 	}
 
@@ -1467,7 +1508,7 @@ func hasSpecificCharacterSet(elements []*DataElementValue) bool {
 // the file. GetDataset applies the same rules and returns text already
 // decoded.
 func TextEncodings(elements []*DataElementValue, inherited []string) []string {
-	encodings, _ := encodingsFor(elements, inherited)
+	encodings, _ := encodingsFor(context.Background(), elements, inherited)
 	return encodings
 }
 
@@ -1477,7 +1518,7 @@ func TextEncodings(elements []*DataElementValue, inherited []string) []string {
 // whatever the data set declares. A value that does not decode is returned
 // as it is.
 func DecodeText(vr string, value []byte, encodings []string) string {
-	return string(decodeTextValue(dataelem.VR(vr), value, encodings))
+	return string(decodeTextValue(context.Background(), dataelem.VR(vr), value, encodings))
 }
 
 // encodingsFor settles the character set for a data set, and reports whether it
@@ -1489,7 +1530,7 @@ func DecodeText(vr string, value []byte, encodings []string) string {
 // warns. Doing the same rescues the names; leaving the bytes alone and then
 // declaring ISO_IR 192 over them, which is what happened before, destroyed them
 // on the next write.
-func encodingsFor(elements []*DataElementValue, inherited []string) (encodings []string, fellBack bool) {
+func encodingsFor(ctx context.Context, elements []*DataElementValue, inherited []string) (encodings []string, fellBack bool) {
 	for _, elem := range elements {
 		if elem.Tag != specificCharacterSetTag {
 			continue
@@ -1498,7 +1539,7 @@ func encodingsFor(elements []*DataElementValue, inherited []string) (encodings [
 		if len(declared) == 0 {
 			return []string{charset.DefaultEncoding}, true
 		}
-		converted, err := charset.ConvertEncodings(declared)
+		converted, err := charset.ConvertEncodingsWithContext(ctx, declared)
 		if err != nil || len(converted) == 0 {
 			return []string{charset.DefaultEncoding}, true
 		}
@@ -1535,7 +1576,7 @@ func isFallbackEncoding(declared, converted []string) bool {
 // as mojibake unless the caller knows to reach for the decoding API. That is
 // most of the world, and it is not something a caller can be expected to
 // discover from a wrong-looking string.
-func decodeTextValue(vr dataelem.VR, value []byte, encodings []string) []byte {
+func decodeTextValue(ctx context.Context, vr dataelem.VR, value []byte, encodings []string) []byte {
 	if len(value) == 0 || len(encodings) == 0 || !dataelem.IsTextVR(vr) {
 		return value
 	}
@@ -1552,7 +1593,7 @@ func decodeTextValue(vr dataelem.VR, value []byte, encodings []string) []byte {
 		encodings = []string{charset.DefaultEncoding}
 	}
 
-	decoded, err := charset.DecodeBytes(value, encodings, delimiters)
+	decoded, err := charset.DecodeBytesWithContext(ctx, value, encodings, delimiters)
 	if err != nil {
 		// A value that will not decode is left as it was found. Dropping it
 		// would lose data that is merely in an encoding this build does not
@@ -1572,9 +1613,13 @@ func ReadDICOMFile(reader filebase.Reader) (*DICOMFile, error) {
 func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DICOMFile, error) {
 	dfr := NewDCMFileReader(reader)
 	dfr.options = options
+	// The logger travels in a context rather than through a global, so two
+	// reads at once each log where they were told to (config.WithLogger).
+	dfr.ctx = config.WithLogger(context.Background(), options.Logger)
 
 	dicomFile := &DICOMFile{
 		DataElements: make([]*DataElementValue, 0),
+		ctx:          dfr.ctx,
 	}
 	// Whether the encoding has to be worked out from the data set itself.
 	sniffed := false
@@ -1712,7 +1757,7 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 			// warning.
 			if strings.Contains(errMsg, "claimed") && strings.Contains(errMsg, "bytes") ||
 				strings.Contains(errMsg, "exceeds") {
-				config.Logger.Warn("filereader: file is truncated; dropping the incomplete element",
+				dfr.logger().Warn("filereader: file is truncated; dropping the incomplete element",
 					"position", dfr.position, "err", err)
 				dicomFile.Warnings = append(dicomFile.Warnings,
 					fmt.Sprintf("file is truncated at position %d; the incomplete element was "+
@@ -1756,7 +1801,7 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 		warning := fmt.Sprintf("%d element(s) are written without a VR in a data set that declares "+
 			"explicit VR, the first at %s; each was read as implicit VR, with its VR from the dictionary",
 			dfr.implicitElements, dfr.firstImplicit)
-		config.Logger.Warn("filereader: " + warning)
+		dfr.logger().Warn("filereader: " + warning)
 		dfr.warn("%s", warning)
 	}
 
@@ -2054,7 +2099,7 @@ func (dfr *DCMFileReader) tryReadMetaGroupLength() (uint32, bool, error) {
 			return 0, false, seekErr
 		}
 		dfr.position = start
-		config.Logger.Warn("filereader: file meta header has no group length element",
+		dfr.logger().Warn("filereader: file meta header has no group length element",
 			"firstTag", tagValue.String())
 		return 0, false, nil
 	}

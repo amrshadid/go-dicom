@@ -239,6 +239,23 @@
 // byte for byte as if it had been read whole. A deflated file is refused,
 // since its values are not in the file.
 //
+// ReadOptions.Logger is where the read logs. Everything the read does logs
+// there: the reader itself, the character set decisions, and the validation
+// GetDataset runs as it builds the data set, later, for the file the read
+// returned. None of it reaches config.Logger, so two reads at once can log to
+// two loggers, or one of them to none. Nil is config.Logger, as before. To
+// read silently:
+//
+//	dicom, err := filereader.ReadDICOMFileWithOptions(reader,
+//		filereader.ReadOptions{Logger: slog.New(slog.DiscardHandler)})
+//
+// The logger travels in a context.Context (config.WithLogger), the way the
+// reading validation mode does, through charset's WithContext functions and
+// dataset's AddWithContext; no global is changed. A line names tags, VRs,
+// lengths and offsets, and never a value's bytes or text, since a file from
+// an untrusted source writes what it likes there. What a program should act
+// on is in DICOMFile.Warnings as well.
+//
 // ### DICOMFile.FrameRanges
 //
 //	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
