@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Which transfer syntax each coder writes is one table** (#534). A send,
+  the `compress` command and a frame encoded over DICOMweb each kept their
+  own map from a syntax to a `Dataset.Compress…InPlace` method, with which
+  of them lose detail and what each takes, so a coder added to one was
+  missing from the other two. `dataset.PixelEncoders` and
+  `PixelEncoderFor` are that table, with each syntax's name, whether it is
+  lossy and its parameter (JPEG quality, JPEG-LS NEAR, a JPEG 2000 rate),
+  and all three read it. Nothing they accept, refuse or write changed: for
+  every transfer syntax in the dictionary, each of the three gives the same
+  answer, message and bytes as before.
+
 - **A query can be matched against a data set** (#515). C-FIND matching
   lived only inside `dcmstore`, unexported and written against its index, so
   a program with entries of its own, a worklist for one, had nothing to call:
@@ -820,6 +831,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.202` file exists, so a generated RPCL one, wrapped by pydicom 3, is in the
   tests with two others, and all three decode to pydicom's samples. Nothing is
   encoded into HTJ2K. JPEG XL stays refused by name.
+
+- **The text detector finds a clock and short labels in a small fixed-pitch
+  font** (#535). On the ultrasound screen in pydicom's corpus,
+  `examples_rgb_color.dcm`, the clock and the `PWR` labels beside the color
+  bars were not found: their glyphs are 4 by 6 pixels with soft edges, and
+  measured one by one a soft glyph is drawn like a blob (a `W` fills its
+  box, a `0` has a stroke 4 pixels wide), so what was left of each label was
+  two shapes. A screen's character generator puts every glyph in a cell of
+  one size, so its glyphs have identical boxes a whole number of cells apart
+  however soft their strokes; the detector now looks for three or more on
+  such a grid, on a plain ground, and adds what it finds where nothing else
+  was. On that screen 15 of 17 lines are covered whole, from 11; the fourth
+  `PWR` touches its color bar and is still missed. Every other region over
+  the 79 files of the corpus, and on every picture the tests draw, is
+  unchanged. Lettering blurred until its characters run together is still
+  not found (the 7 drawn known misses), and `auto` stays not the default.
+  A new test measures the detector on lettering it was not shaped by: a
+  second font at three sizes, four kinds of blur, over six real scans of the
+  corpus (51 of 164 lines found, from 50, and no more of any scan marked).
 
 ### Changed
 
