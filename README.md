@@ -32,7 +32,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 31 commands: file inspection and conversion (`show`, `info`, `validate`, `diff`, `sr`, `convert`, `codify`, `tag-doc`), making and editing a file (`create`, `modify`), transfer syntax (`compress`, `decompress`), media (`dicomdir`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `mppsscu`, `upsscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
+- **CLI tools** — 32 commands: file inspection and conversion (`show`, `info`, `validate`, `diff`, `sr`, `convert`, `codify`, `tag-doc`), making and editing a file (`create`, `modify`), transfer syntax (`compress`, `decompress`), media (`dicomdir`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `mppsscu`, `upsscu`, `qrscp`, `wlmscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -342,6 +342,9 @@ go build -o go-dicom .
 # Ask the worklist what is scheduled for this MR today, steps included
 ./go-dicom findscu -worklist -modality MR -date today -aec RIS ris:104
 
+# Serve a worklist: one file per scheduled exam, read again at every query
+./go-dicom wlmscp -dir ./worklist -aet RIS -port 104
+
 # Retrieve studies to a destination
 ./go-dicom movescu -dest MY_SCP -study 1.2.3.4 pacs:11112
 
@@ -435,6 +438,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | Package | Description |
 |---------|-------------|
 | [network](./network/) | DICOM networking — SCU/SCP, DIMSE services, PDU encoding, TLS |
+| [matching](./matching/) | C-FIND matching (PS3.4 C.2.2.2) of a query against a data set, sequences item by item, and the answer built from a match; the archive in `dcmstore` matches with it |
 
 #### Encoding and Compression
 | Package | Description |
@@ -494,12 +498,12 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Transfer Syntax Support | 37 | 37 | 4 negotiated by default, all via `AllTransferSyntaxes()` |
 | Storage Commitment | Yes | Yes | N-ACTION request, N-EVENT-REPORT result |
 | Query/Retrieve Models | 2 | 4 | Patient Root, Study Root, Patient/Study Only, Modality Worklist |
-| Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler |
+| Modality Worklist | Yes | Yes | MWL SOP Class with WorklistHandler, matched by package `matching`; `wlmscp` serves a directory of worklist files |
 | MPPS | Yes | Yes | N-CREATE/N-SET both directions, verified against pynetdicom |
 | Print Management | Yes | Yes | Film session, film box, image box, print action |
 | Unified Procedure Step | Yes | Yes | Push and Watch: state machine and Transaction UID enforced by `UPSHandler`, subscriptions and N-EVENT-REPORT fan-out by `UPSSubscriptionStore` |
 | Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
-| CLI Tools | 8 | 11 | All 8 of pynetdicom's, plus `commitscu`, `mppsscu` and `upsscu` |
+| CLI Tools | 8 | 12 | All 8 of pynetdicom's, plus `commitscu`, `mppsscu`, `upsscu` and `wlmscp` |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
 | Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
 

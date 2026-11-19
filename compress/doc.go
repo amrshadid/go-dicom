@@ -152,7 +152,8 @@
 //   - RLE: Run-Length Encoding (lossless, suitable for simple patterns)
 //   - JPEG: JPEG baseline and extended (lossy, for photographic images)
 //   - JPEG_LOSSLESS: JPEG Lossless, .57 and .70, every predictor
-//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless
+//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless, with or
+//     without restart intervals
 //   - JPEG_2000: JPEG 2000, .90 and .91, both wavelets, tiled and layered
 //
 // ## Substituting your own decoder
@@ -186,8 +187,11 @@
 //
 // JPEG-LS frames are coded and decoded with the default thresholds of T.87
 // C.2.4.1.1, which are CharLS's since 2.1 and libjpeg's. dcmtk bundles an older
-// CharLS whose thresholds differ at 6 and 7 bits, so dcmtk and this package each
-// refuse the other's frames at those precisions; the error here names it.
+// CharLS whose defaults differ below 8 bits (losslessly at 6 and 7 bits, and at
+// most NEAR values from 2 to 7 bits), so where they differ the encoder writes
+// the thresholds in an LSE segment and dcmtk reads the frame. dcmtk's own frames
+// at 6 and 7 bits are coded with its thresholds and refused here; the error
+// names it.
 //
 // # Type Definitions
 //

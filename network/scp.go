@@ -256,6 +256,7 @@ func (s *SCP) Close() error {
 func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 
 	// Only an A-ASSOCIATE-RQ can be answered with an A-ASSOCIATE-RJ; anything
 	// else gets the connection closed.
@@ -295,6 +296,7 @@ func (s *SCP) rejectAndAwaitClose(ctx context.Context, assoc *Association, trans
 		return
 	}
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 	_, _ = transport.ReadPDU(ctx)
 }
 
@@ -304,6 +306,11 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	assoc := NewAssociation(transport)
 	defer s.track(transport, assoc)()
 	assoc.logger = s.ownLog
+	// Every handler of this association is given the server's logger in its
+	// context, so that what it builds with dataset.AddWithContext, or anything
+	// else that asks config.LoggerFromContext, logs where the server does. The
+	// built-in UPS handler applies the attributes of an N-SET this way.
+	ctx = assoc.logContext(ctx)
 	// A panic below, which is to say in a handler, ends this association and
 	// nothing else. Deferred after Close so that it runs first, while there
 	// is still a connection to send the A-ABORT on.
@@ -312,6 +319,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
 	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 	// The only PDU due is an A-ASSOCIATE-RQ, which has its own bound. A
 	// P-DATA-TF sent in its place is not read past the Maximum Length this
 	// SCP will advertise: without a limit set yet it was read up to
@@ -451,7 +459,7 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			continue
 		}
 
-		cmdDS, err := DecodeCommandDataset(cmdData)
+		cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 		if err != nil {
 			s.log().Error("failed to decode command: %v", err)
 			return
@@ -584,7 +592,7 @@ func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Hand
 		s.log().Warn("expected data, got command during C-STORE")
 		return
 	}
-	ds, err := DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+	ds, err := decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 	if err != nil {
 		s.refuse(ctx, assoc, ctxID, "C-STORE", err,
 			BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
@@ -648,7 +656,7 @@ func (s *SCP) handleCFind(ctx context.Context, assoc *Association, handler Handl
 			s.log().Warn("expected data, got command during C-FIND")
 			return
 		}
-		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		queryDS, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			s.refuse(ctx, assoc, ctxID, "C-FIND", err,
 				BuildCFindRSP(messageID, sopClassUID, StatusUnableToProcess, false))
@@ -724,7 +732,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 		if isCmd {
 			return
 		}
-		queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		queryDS, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			s.refuse(ctx, assoc, ctxID, "C-MOVE", err,
 				BuildCMoveRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0))
@@ -933,7 +941,7 @@ func (s *SCP) handleCGet(ctx context.Context, assoc *Association, handler Handle
 		if isCmd {
 			return
 		}
-		if queryDS, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); err != nil {
+		if queryDS, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); err != nil {
 			s.refuse(ctx, assoc, ctxID, "C-GET", err,
 				BuildCGetRSP(messageID, sopClassUID, StatusUnableToProcess, 0, 0, 0, 0))
 			return
@@ -1042,13 +1050,17 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 	if err != nil {
 		return fmt.Errorf("encode C-STORE-RQ: %w", err)
 	}
-	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
-		return fmt.Errorf("send C-STORE-RQ: %w", err)
-	}
-
+	// The instance is encoded before anything is sent. The C-STORE-RQ says a
+	// data set follows, and an instance that cannot be put in the negotiated
+	// syntax was found out only after it had gone: the requestor, owed a data
+	// set, read the next sub-operation's C-STORE-RQ in its place and the
+	// whole retrieve ended there (#518). SCU.Store has always encoded first.
 	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(ctxID), s.config.Network)
 	if err != nil {
 		return fmt.Errorf("encode instance: %w", err)
+	}
+	if err := assoc.SendPData(ctx, ctxID, cmdBytes, true); err != nil {
+		return fmt.Errorf("send C-STORE-RQ: %w", err)
 	}
 	if err := assoc.SendPData(ctx, ctxID, dataBytes, false); err != nil {
 		return fmt.Errorf("send instance: %w", err)
@@ -1073,7 +1085,7 @@ func (s *SCP) sendCStoreSubOperation(ctx context.Context, assoc *Association, ct
 			return fmt.Errorf("expected C-STORE-RSP command, got a data set")
 		}
 
-		decoded, err := DecodeCommandDataset(respData)
+		decoded, err := decodeCommandDataset(assoc.logContext(ctx), respData)
 		if err != nil {
 			return fmt.Errorf("decode C-STORE-RSP: %w", err)
 		}
@@ -1170,7 +1182,7 @@ func (s *SCP) handleNEventReport(ctx context.Context, assoc *Association, handle
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-EVENT-REPORT", decodeErr,
 				BuildNEventReportRSP(messageID, sopClassUID, sopInstanceUID, eventTypeID, StatusProcessingFailure))
 			return
@@ -1277,7 +1289,7 @@ func (s *SCP) handleNSet(ctx context.Context, assoc *Association, handler Handle
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-SET", decodeErr,
 				BuildNSetRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure))
 			return
@@ -1319,7 +1331,7 @@ func (s *SCP) handleNAction(ctx context.Context, assoc *Association, handler Han
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-ACTION", decodeErr,
 				BuildNActionRSP(messageID, sopClassUID, sopInstanceUID, actionTypeID, StatusProcessingFailure))
 			return
@@ -1462,7 +1474,7 @@ func (s *SCP) sendCommitmentReport(ctx context.Context, assoc *Association, ctxI
 	if err != nil {
 		return err
 	}
-	respDS, err := DecodeCommandDataset(respData)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), respData)
 	if err != nil {
 		return err
 	}
@@ -1486,7 +1498,7 @@ func (s *SCP) handleNCreate(ctx context.Context, assoc *Association, handler Han
 			return
 		}
 		var decodeErr error
-		if ds, decodeErr = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
+		if ds, decodeErr = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID)); decodeErr != nil {
 			s.refuse(ctx, assoc, ctxID, "N-CREATE", decodeErr,
 				BuildNCreateRSP(messageID, sopClassUID, sopInstanceUID, StatusProcessingFailure))
 			return

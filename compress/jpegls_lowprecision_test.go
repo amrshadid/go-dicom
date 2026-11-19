@@ -81,9 +81,10 @@ func TestJPEGLSLowPrecisionDecodesAsCharLS(t *testing.T) {
 }
 
 // TestJPEGLSLowPrecisionEncodesAsCharLS proves this package codes the source at
-// 2 to 8 bits to a frame that decodes to the samples CharLS's frame decodes to,
-// and losslessly to the very bytes CharLS writes: JPEG-LS leaves an encoder no
-// choice once the thresholds are fixed, so equal bytes mean equal thresholds.
+// 2 to 8 bits, lossless and near-lossless, to the very bytes CharLS writes, and
+// to a frame that decodes to the samples CharLS's frame decodes to. JPEG-LS
+// leaves an encoder no choice once the thresholds are fixed, so equal bytes
+// mean equal thresholds and the same coding of every run (T.87 A.7.1.2).
 func TestJPEGLSLowPrecisionEncodesAsCharLS(t *testing.T) {
 	for _, tc := range lowBitsCases() {
 		source := readLowBits(t, fmt.Sprintf("source_p%d.raw", tc.bits))
@@ -91,9 +92,10 @@ func TestJPEGLSLowPrecisionEncodesAsCharLS(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%d bits, NEAR %d: %v", tc.bits, tc.near, err)
 		}
-		charls := readLowBits(t, fmt.Sprintf("charls_p%d_near%d.jls", tc.bits, tc.near))
-		if tc.near == 0 && !bytes.Equal(stream, charls) {
-			t.Errorf("%d bits lossless: %d bytes, CharLS writes a different %d", tc.bits, len(stream), len(charls))
+		charls := charlsWithStatedThresholds(readLowBits(t, fmt.Sprintf("charls_p%d_near%d.jls", tc.bits, tc.near)), tc.bits, tc.near)
+		if !bytes.Equal(stream, charls) {
+			t.Errorf("%d bits, NEAR %d: %d bytes, CharLS writes a different %d",
+				tc.bits, tc.near, len(stream), len(charls))
 		}
 		got, err := compress.NewJPEGLSDecompressor().Decompress(stream)
 		if err != nil {
@@ -104,6 +106,31 @@ func TestJPEGLSLowPrecisionEncodesAsCharLS(t *testing.T) {
 				tc.bits, tc.near, worstError(got, want, tc.bits))
 		}
 	}
+}
+
+// statedThresholds lists, for the NEAR values of lowBitsCases, the precisions
+// and NEAR values where CharLS before 2.1 (and so dcmtk 3.7.0) computes other
+// default thresholds than T.87, with T.87's: there this package writes them in
+// an LSE segment. Worked from T.87 C.2.4.1.1.1 and dcmtk's ComputeDefault.
+var statedThresholds = map[[2]int][3]uint16{
+	{2, 1}: {3, 3, 3},
+	{3, 1}: {3, 5, 7}, {3, 2}: {6, 6, 6},
+	{4, 1}: {3, 5, 8}, {4, 2}: {6, 10, 15}, // NEAR 7 agrees: 8, 8, 8 both ways
+	{5, 1}: {3, 5, 9}, {5, 2}: {6, 10, 16},
+	{6, 0}: {2, 3, 5}, {6, 1}: {3, 6, 12}, {6, 2}: {6, 11, 19},
+	{7, 0}: {2, 3, 10}, {7, 1}: {4, 8, 17}, {7, 2}: {7, 13, 24},
+}
+
+// charlsWithStatedThresholds is what CharLS 2.2 writes when it is given the
+// coding parameters explicitly: its frame with the LSE segment inserted after
+// the frame header, the entropy-coded data unchanged since the thresholds are
+// the same. Elsewhere the frame is returned as it is.
+func charlsWithStatedThresholds(stream []byte, bits, near int) []byte {
+	ts, ok := statedThresholds[[2]int{bits, near}]
+	if !ok {
+		return stream
+	}
+	return withLSE(stream, uint16(1<<bits-1), ts[0], ts[1], ts[2], 64)
 }
 
 // TestJPEGLSLowPrecisionIsReadByLibjpeg proves libjpeg, through

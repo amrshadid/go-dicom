@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -243,7 +244,7 @@ func (o *observer) negotiated(ac *AssociateAC) []NegotiatedContext {
 // dimse reports a complete command set, and the service event of a request
 // that was received.
 func (o *observer) dimse(sent bool, contextID byte, commandSet []byte) {
-	ds, err := DecodeCommandDataset(commandSet)
+	ds, err := decodeCommandDataset(o.log.carriedBy(context.Background()), commandSet)
 	if err != nil {
 		return
 	}

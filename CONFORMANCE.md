@@ -115,7 +115,7 @@ part and a peer may limit how many it accepts.
 | Patient Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.1.{1,2,3}` | |
 | Study Root Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.2.{1,2,3}` | |
 | Patient/Study Only Q/R — FIND, MOVE, GET | `1.2.840.10008.5.1.4.1.2.3.{1,2,3}` | Retired; offered because archives still expose it |
-| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level |
+| Modality Worklist — FIND | `1.2.840.10008.5.1.4.31` | Not proposed by default; pass `BasicWorklistPresentationContexts()`. On the command line, `findscu -worklist` sends the keys of PS3.4 Table K.6-1 with the Scheduled Procedure Step Sequence, and no Query/Retrieve Level; `wlmscp` answers them |
 | Storage Commitment Push Model | `1.2.840.10008.1.20.1` | N-ACTION out, N-EVENT-REPORT in |
 
 `SCU.Find` chooses an information model from what the peer accepted, in the order
@@ -147,7 +147,24 @@ Negotiated by default:
 Modality Worklist (`1.2.840.10008.5.1.4.31`) is served by `WorklistHandler` but
 is **not** in the default set, since an SCP that accepts worklist queries without
 a worklist to answer them from is worse than one that declines. Add it with
-`SetSupportedAbstractSyntaxes`.
+`SetSupportedAbstractSyntaxes`. `WorklistHandler` does no matching of its
+own; package `matching` matches a query against an entry and builds the
+answer (section 2.7).
+
+`go-dicom wlmscp` is a worklist SCP over a directory of worklist files, one
+entry per file, as dcmtk's `wlmscpfs` is. It accepts Verification and
+Modality Worklist FIND and refuses every other SOP class. The directory is
+read again at every query; a file that is not DICOM, or holds no Scheduled
+Procedure Step Sequence, is not served and is reported once. A query's
+Query/Retrieve Level, which Basic Worklist does not have, is neither matched
+nor returned; every other key is matched by section 2.7 and returned, so
+the answers carry status FF00, never FF01. Over dcmtk's sample worklist
+database, dcmtk's `findscu -W` and pynetdicom get the same entries,
+attribute for attribute, from `wlmscp` as from `wlmscpfs` for queries by
+modality, date and date range, time range, station AE title, patient name
+with wildcards, universal matching and one that matches nothing. They
+differ on a person's name in another case: `wlmscp` matches `vivaldi*` to
+VIVALDI^ANTONIO and `wlmscpfs` does not.
 
 Any other SOP class may be added with `SetSupportedAbstractSyntaxes`. The
 dictionary holds UID constants for far more classes than this list; a constant is
@@ -214,8 +231,11 @@ missing), the Failure Reasons of PS3.3 C.14.1.1.
 ### 2.7 Matching in the archive
 
 `dcmstore`, and so `qrscp`, matches by the rules of PS3.4 C.2.2: universal,
-single value, list of UID, wildcard, range and sequence matching. Where the
-standard leaves the choice to the SCP:
+single value, list of UID, wildcard, range, sequence, empty value (`""`) and
+multiple value matching. The rules are package `matching`'s, which matches a
+query against any data set, and the store runs them against its index, so
+the two answer a query alike. Where the standard leaves the choice to the
+SCP:
 
 | Choice | What the archive does |
 |---|---|
@@ -225,7 +245,8 @@ standard leaves the choice to the SCP:
 | Character set of a query | The query is read in the Specific Character Set it declares, and the index is UTF-8, so a name matches however the query and the instance were each written. |
 | Character set of an answer | `ISO_IR 192` when the answer holds anything outside ASCII; none when it does not (C.4.1.1.3.2). |
 | A date or time in its ACR-NEMA form | `1997.04.24` and `09:30:00` are read as `19970424` and `093000`, in a stored value and in a query. The stored value is returned as it is. |
-| An attribute with no value in an instance | Matches universal matching only. A range does not match a study with no date. |
+| An attribute with no value in an instance | Matches universal matching, `*` and `""` only. A range does not match a study with no date. |
+| A key of more than one value (C.2.2.2.8) | Matches an instance that matches any one of its values. A key of LT, ST, UT or UR is one value: a backslash in it is text. |
 | A key the index does not hold | Not matched on, and returned with no value (C.2.2.1.2). |
 
 ---
@@ -271,6 +292,7 @@ distribution accept everything:
 | `go-dicom storescp` | all 37 |
 | `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
 | `go-dicom echoscp` | the default four; verification carries no data set |
+| `go-dicom wlmscp` | the default four; a worklist query and its answers carry no pixel data |
 
 Before this, a modality that stores JPEG-LS or JPEG 2000 natively — most modern
 equipment — could not store to either server: every compressed context was
@@ -389,6 +411,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
+| After an abort | An A-ABORT this side sends is followed by up to one second in which the peer may close the connection, what arrives being read and dropped (PS3.8 9.2, AA-1, AA-6, AA-8); the standard's timer for this is ARTIM, and one second is kept so that a peer that does not close holds only the connection |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
@@ -400,7 +423,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Supported transfer syntaxes | `SCPConfig.TransferSyntaxes`, the same way, or `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
-| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, apart from the data set validation warnings of #503 |
+| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, the validation warnings of the data sets it decodes included |
 | Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
 
 Everything the library reports goes through `config.Logger`, so one call
@@ -489,7 +512,7 @@ than none.
 
 RLE, JPEG Baseline, JPEG Lossless (`.57` and `.70`, every prediction selection
 value) and JPEG-LS (`.80` and `.81`, lossless and near-lossless, both interleave
-modes) all decode in pure Go, single or multi component,
+modes, with or without restart intervals) all decode in pure Go, single or multi component,
 at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded. A frame coded at fewer bits
 than Bits Allocated, such as a JPEG-LS frame of 8 bits in an image of 16 bits
@@ -753,28 +776,64 @@ how decoded samples are shaped and coloured, and the one tolerance.
   (128, 128, 128 at 8 bits and NEAR 127). Both rules are followed when coding
   and decoding, and an LSE segment that leaves a threshold at zero has that
   one defaulted on its own. CharLS before 2.1 used the 8-bit formula at every
-  precision (CharLS issue 51), giving 2, 3, 4 at 6 and 7 bits; at every other
-  precision the two agree. dcmtk 3.7.0 still bundles that CharLS, so between
-  dcmtk and every current decoder a 6 or 7 bit frame without an LSE segment is
-  read with the wrong thresholds: dcmtk refuses this library's frames ("Too
-  much compressed data" or "Invalid compressed image data"), and this library
-  refuses dcmtk's, with an error that names the cause and both sets of
-  thresholds. Decoding them with the old thresholds is not offered, because a
-  stream does not say which it was coded with. A 7-bit dcmtk frame used to
-  decode here without an error to an image up to 127 levels off: a scan whose
-  samples are all decoded with more than a byte of its data unread is now
-  refused, as CharLS and dcmtk refuse it. `dcmcjpls +t1 2 +t2 3 +t3 5` (or
-  `+t3 10` at 7 bits) writes the thresholds into an LSE segment, and that
-  frame decodes the same everywhere.
+  precision (CharLS issue 51). Losslessly that gives other thresholds at 6
+  and 7 bits only (2, 3, 4); near-lossless it differs at most NEAR values
+  from 2 to 7 bits: at NEAR 1 at 2 bits, 1 and 2 at 3 bits, 1 to 5 at 4 bits,
+  1 to 10 at 5 bits, 22 of the 32 values at 6 bits and 43 of the 64 at 7.
+  From 8 bits up the two agree. dcmtk 3.7.0 still bundles that CharLS.
+  **Where the two differ, this library's encoder writes T.87's thresholds in
+  an LSE segment** (T.87 C.2.4.1.1: MAXVAL, T1, T2, T3 and RESET, as CharLS
+  writes one when given them), so dcmtk reads the frame with the right ones;
+  everywhere else it writes none, and the frame is CharLS 2.2's. Without the
+  segment dcmtk refused most of those frames ("Too much compressed data" or
+  "Invalid compressed image data") and decoded the odd one to a slightly
+  different image without an error. dcmtk's own frames at 6 and 7 bits carry
+  no thresholds and are coded with the old ones, so this library refuses
+  them, with an error that names the cause and both sets of thresholds.
+  Decoding them with the old thresholds is not offered, because a stream does
+  not say which it was coded with. A 7-bit dcmtk frame used to decode here
+  without an error to an image up to 127 levels off: a scan whose samples are
+  all decoded with more than a byte of its data unread is now refused, as
+  CharLS and dcmtk refuse it. `dcmcjpls +t1 2 +t2 3 +t3 5` (or `+t3 10` at 7
+  bits) writes the thresholds into an LSE segment, and that frame decodes the
+  same everywhere.
 
   *Verified:* a 41 by 37 image at every precision from 2 to 8, coded at NEAR 0,
-  1, 2 and the largest NEAR allowed: this library's lossless frames are byte
-  for byte CharLS 2.2's, and every frame either of them codes decodes to the
-  same samples in this library, CharLS 2.2 and libjpeg (pylibjpeg-libjpeg).
-  dcmtk 3.7.0 agrees with them at 8 bits and at the largest NEAR, where the
-  clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
-  refuses to code below 6 bits. With the thresholds given explicitly all four
-  decode dcmtk's 6 and 7 bit frames exactly.
+  1, 2 and the largest NEAR allowed: this library's frames, lossless and
+  near-lossless, are byte for byte CharLS 2.2's, and every frame either of
+  them codes decodes to the same samples in this library, CharLS 2.2 and
+  libjpeg (pylibjpeg-libjpeg). The same holds from 9 to 16 bits, and for the
+  corpus's JPEG-LS images coded again with their own NEAR, except that above
+  12 bits CharLS writes an LSE segment that repeats the default parameters.
+  A run that reaches the end of a line is a single 1 bit (T.87 A.7.1.2); the
+  0 and a length that 1.10.0 wrote there still decode.
+  dcmtk 3.7.0's `dcmdjpls` decodes this library's frames at 6 and 7 bits, at
+  every NEAR (96 frames, and 224 three-component ones from 6 to 8 bits), to
+  the same samples as CharLS 2.2 and libjpeg; before the LSE segment it
+  refused 52 of the 65 whose thresholds differ and decoded one differently.
+  dcmcjpls and dcmdjpls refuse below 6 bits. With the thresholds given
+  explicitly all four decode dcmtk's 6 and 7 bit frames exactly.
+
+  **JPEG-LS restart intervals are decoded.** A DRI segment gives Ri in 16, 24
+  or 32 bits (T.87 C.2.5), counted in lines: one line of the component in a
+  non-interleaved scan, of every component in a line-interleaved one. At each
+  RSTm marker the decoder starts again as at the top of the scan, with the
+  contexts and run index initialized, the line above taken as zeros and the
+  bits read from the byte after the marker; fill bytes before a marker are
+  skipped. A marker missing, out of order or at another line than Ri puts it,
+  or an interval with data left over, is refused, where libjpeg decodes on.
+  The encoder writes no restart intervals.
+
+  *Verified:* CharLS's restart test files (`test8_ilv_none_rm_7.jls`,
+  `test8_ilv_line_rm_7.jls`, `test8_ilv_sample_rm_7.jls`, `test16_rm_5.jls`),
+  which were refused as corrupt, decode to the T.87 test images exactly, as
+  libjpeg decodes them; CharLS 2.2 refuses them. 1237 more frames, at every
+  precision from 2 to 16, in all three interleave modes, at NEAR 0, 2 and the
+  largest, with Ri of 1, 2, 3, 7 and around the height, decode here and in
+  libjpeg to the same samples. CharLS 2.2 cannot write restart intervals, so
+  these were made from its coding of each interval as an image of its own,
+  joined with the markers; made that way from the T.87 test images, CharLS's
+  restart test files come out byte for byte.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
