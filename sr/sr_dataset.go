@@ -255,31 +255,20 @@ func extractStringValue(elem *dataelem.DataElement) (string, error) {
 		return "", fmt.Errorf("element is nil")
 	}
 
-	// Get the value from the element
-	values := elem.GetValue()
-	if values == nil {
-		return "", fmt.Errorf("element value is nil")
+	// Through Bytes, whatever the value is held as. A switch here read []byte
+	// (what a file holds) whole and trimmed, a string untrimmed, and a
+	// []string as its first value only, so one report read three ways (#420).
+	raw, ok := elem.Bytes()
+	if ok {
+		return strings.TrimRight(string(raw), " \x00"), nil
 	}
-
-	// Handle different value types
-	switch v := values.(type) {
-	case []byte:
-		// What a data set read from a file holds. Without this case nothing
-		// was extracted from one, and ReadSRFile returned an empty report.
-		return strings.TrimRight(string(v), " \x00"), nil
-	case string:
-		return v, nil
-	case []interface{}:
-		if len(v) > 0 {
-			if str, ok := v[0].(string); ok {
-				return str, nil
-			}
-		}
-	case []string:
-		if len(v) > 0 {
-			return v[0], nil
+	// A []interface{} of strings is not a value the writer can write, so Bytes
+	// refuses it, but this package has always read its first string, and
+	// reports built that way still read.
+	if values, isList := elem.GetValue().([]interface{}); isList && len(values) > 0 {
+		if s, isString := values[0].(string); isString {
+			return s, nil
 		}
 	}
-
-	return "", fmt.Errorf("unable to extract string value from element")
+	return "", fmt.Errorf("unable to extract string value from element: it holds %T", elem.GetValue())
 }

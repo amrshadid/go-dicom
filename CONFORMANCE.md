@@ -995,14 +995,31 @@ of its SOP class, with tables generated from PS3.3 and PS3.4 (the edition is
 printed): module usage, attribute Types 1, 2 and the value of a present 1C,
 value multiplicity from PS3.6, Enumerated Values and Defined Terms where the
 tables list them, and item counts where a sequence's description states them.
-It does not evaluate conditions, which PS3.3 writes as prose: a Conditional
-module, an absent Type 1C or 2C attribute and a macro included under a
-condition are reported as not checked. Repeating groups (60xx), the
-Functional Group Macros of enhanced IODs, context groups (PS3.16), rules
-between attributes and attributes the IOD does not name are not checked. No
-other validator was available to compare it with (`dciodvfy` is not
-installed where it was built); its findings for five corpus files were
-compared with the standard by hand.
+A condition PS3.3 states in one of a few fixed sentence forms naming one
+attribute by its tag ("... is present", "... is not present", "... has a
+Value of X", "... Value 1 is X or Y", "... is present and has a Value of X",
+with or without "May be present otherwise") is evaluated: 645 of the 1867
+Type 1C and 2C attributes, 25 of the 316 Conditional modules and 45 of the
+171 Conditional Functional Group Macros of 2026d. The Shared and Per-Frame
+Functional Groups of the 29 enhanced IODs with a Functional Group Macros
+table are checked against it: usage, where a macro may be, one per-frame
+item for each frame, and each macro's attributes.
+Any other condition is prose, and a Conditional module, an absent Type 1C or
+2C attribute and a macro included under a condition whose condition is prose
+are reported as not checked. Repeating groups (60xx), context groups (PS3.16), rules
+between attributes and attributes the IOD does not name are not checked.
+
+It has not been compared with another validator: neither `dciodvfy`
+(dicom3tools) nor the Python `dicom-validator` was available where it was
+built. Its findings were compared with PS3.3 by hand instead, for fifteen
+corpus files of thirteen IODs: CT Image, MR Image, Secondary Capture Image,
+RT Dose and MR Image with an overlay when it was written (#408), and RT
+Structure Set, RT Plan, RT Ion Plan, Segmentation, Ultrasound Multi-frame
+Image, Ultrasound Image, Basic Text SR, Comprehensive SR, 12-Lead ECG and
+Secondary Capture Image again once conditions and functional groups were
+checked (#482). Every error it reported in those files is a real defect of
+the file, and no Type 1 or Type 2 attribute of a Mandatory module that a
+second reading of the tables found missing went unreported.
 
 ---
 
