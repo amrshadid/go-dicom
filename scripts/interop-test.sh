@@ -1436,6 +1436,137 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
+# mppsscu against pynetdicom's MPPS SCP (#495)
+#
+# A step is created IN PROGRESS and completed with a series and its images;
+# a second is discontinued; a step the SCP does not know, and one already
+# completed, are refused. pynetdicom writes each data set it is given as
+# DICOM JSON, and pydicom reads them back: the attributes have to be the
+# ones the flags named, in the places PS3.4 Table F.7.2-1 puts them.
+# dcmtk ships no MPPS tool to hold it against.
+# ---------------------------------------------------------------------------
+if [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "mppsscu against pynetdicom's MPPS SCP"
+  mpps_scp_py="$WORKDIR/mpps_scp.py"
+  cat > "$mpps_scp_py" <<'PYEOF'
+import json, sys
+from pynetdicom import AE, evt
+from pynetdicom.sop_class import ModalityPerformedProcedureStep
+
+port, log = int(sys.argv[1]), sys.argv[2]
+managed = {}
+
+def record(kind, uid, ds, status):
+    with open(log, "a") as f:
+        f.write(json.dumps({"op": kind, "uid": uid, "status": status,
+                            "ds": ds.to_json_dict() if ds is not None else None}) + "\n")
+
+def on_create(event):
+    uid, ds = event.request.AffectedSOPInstanceUID, event.attribute_list
+    status = 0x0111 if uid in managed else (0 if ds.get("PerformedProcedureStepStatus") == "IN PROGRESS" else 0x0106)
+    if status == 0:
+        managed[uid] = ds
+    record("N-CREATE", uid, ds, status)
+    return status, ds if status == 0 else None
+
+def on_set(event):
+    uid, mod = event.request.RequestedSOPInstanceUID, event.modification_list
+    if uid not in managed:
+        status = 0x0112  # No Such Object Instance
+    elif managed[uid].PerformedProcedureStepStatus != "IN PROGRESS":
+        status = 0x0110  # Processing Failure: a final step is not changed
+    else:
+        status = 0
+        managed[uid].update(mod)
+    record("N-SET", uid, mod, status)
+    return status, managed[uid] if status == 0 else None
+
+ae = AE(ae_title="PYMPPS")
+ae.add_supported_context(ModalityPerformedProcedureStep)
+ae.start_server(("127.0.0.1", port), evt_handlers=[(evt.EVT_N_CREATE, on_create), (evt.EVT_N_SET, on_set)])
+PYEOF
+  mpps_port=11704
+  mpps_log="$WORKDIR/mpps_received.jsonl"
+  rm -f "$mpps_log"
+  "$PYNETDICOM_BIN/python" "$mpps_scp_py" "$mpps_port" "$mpps_log" > "$WORKDIR/mpps_scp.log" 2>&1 &
+  mpps_pid=$!
+  if wait_for_port "$mpps_port"; then
+    step1=1.2.826.0.1.3680043.8.498.4950001
+    step2=1.2.826.0.1.3680043.8.498.4950002
+    mpps_out="$WORKDIR/mppsscu.log"
+    : > "$mpps_out"
+    mpps() { "$GODICOM" mppsscu -aec PYMPPS -timeout 10 "$@" "127.0.0.1:$mpps_port" >> "$mpps_out" 2>&1; }
+    ok=1
+    mpps -uid "$step1" -patient-name "DOE^JANE" -patient-id P123 -birth-date 19700101 -sex F \
+      -accession A42 -requested-procedure-id RP1 -scheduled-step-id SPS1 -modality MR \
+      -description "Brain MR" -station-aet MRI01 || ok=0
+    mpps -complete "$step1" -series 1.2.826.0.1.3680043.8.498.4950010 -protocol "T1 AX" \
+      -instance 1.2.840.10008.5.1.4.1.1.4:1.2.826.0.1.3680043.8.498.4950011 \
+      -instance 1.2.840.10008.5.1.4.1.1.4:1.2.826.0.1.3680043.8.498.4950012 || ok=0
+    mpps -uid "$step2" -patient-id P124 -modality CT || ok=0
+    mpps -discontinue "$step2" || ok=0
+    # Refused: a step already final, and one the SCP never created.
+    mpps -discontinue "$step1" && ok=0
+    mpps -complete 1.2.826.0.1.3680043.8.498.4950099 && ok=0
+    if [ "$ok" = 1 ] && checked=$(python3 - "$mpps_log" "$mpps_out" "$step1" "$step2" <<'PY'
+import json, sys
+from pydicom.dataset import Dataset
+log, out, step1, step2 = sys.argv[1:5]
+records = [json.loads(line) for line in open(log)]
+got = [(r["op"], r["uid"], r["status"]) for r in records]
+want = [("N-CREATE", step1, 0), ("N-SET", step1, 0), ("N-CREATE", step2, 0), ("N-SET", step2, 0),
+        ("N-SET", step1, 0x0110), ("N-SET", "1.2.826.0.1.3680043.8.498.4950099", 0x0112)]
+if got != want:
+    sys.exit("pynetdicom saw %s, want %s" % (got, want))
+created = Dataset.from_json(records[0]["ds"])
+scheduled = created.ScheduledStepAttributesSequence[0]
+for name, value, expected in (
+        ("Patient's Name", str(created.PatientName), "DOE^JANE"), ("Patient ID", created.PatientID, "P123"),
+        ("Birth Date", created.PatientBirthDate, "19700101"), ("Sex", created.PatientSex, "F"),
+        ("Modality", created.Modality, "MR"), ("Status", created.PerformedProcedureStepStatus, "IN PROGRESS"),
+        ("Station AE", created.PerformedStationAETitle, "MRI01"),
+        ("Description", created.PerformedProcedureStepDescription, "Brain MR"),
+        ("Accession", scheduled.AccessionNumber, "A42"), ("Requested Procedure ID", scheduled.RequestedProcedureID, "RP1"),
+        ("Scheduled Step ID", scheduled.ScheduledProcedureStepID, "SPS1")):
+    if value != expected:
+        sys.exit("created %s is %r, want %r" % (name, value, expected))
+for keyword in ("PerformedProcedureStepEndDate", "PerformedProcedureStepEndTime", "PerformedSeriesSequence",
+                "ProcedureCodeSequence", "ReferencedPatientSequence", "StudyID"):
+    if keyword not in created:
+        sys.exit("created lacks %s, which N-CREATE has to carry, empty" % keyword)
+if not scheduled.StudyInstanceUID or len(created.PerformedProcedureStepStartDate) != 8:
+    sys.exit("created has no study or no start date")
+completed = Dataset.from_json(records[1]["ds"])
+series = completed.PerformedSeriesSequence[0]
+images = [i.ReferencedSOPInstanceUID for i in series.ReferencedImageSequence]
+if (completed.PerformedProcedureStepStatus != "COMPLETED" or len(completed.PerformedProcedureStepEndDate) != 8
+        or series.SeriesInstanceUID != "1.2.826.0.1.3680043.8.498.4950010" or series.ProtocolName != "T1 AX"
+        or images != ["1.2.826.0.1.3680043.8.498.4950011", "1.2.826.0.1.3680043.8.498.4950012"]):
+    sys.exit("the completion is not what was sent: %s" % completed)
+if Dataset.from_json(records[3]["ds"]).PerformedProcedureStepStatus != "DISCONTINUED":
+    sys.exit("the second step was not discontinued")
+text = open(out).read()
+for line in ("N-SET Failure (status 0x0110)", "N-SET Failure (status 0x0112)",
+             "Performed Procedure Step %s is COMPLETED" % step1, "Performed Procedure Step %s is DISCONTINUED" % step2):
+    if line not in text:
+        sys.exit("mppsscu did not print %r" % line)
+print("two steps created and ended, %d attributes of the creation and the completion read back by pydicom; "
+      "a final step and an unknown one refused (0110, 0112)" % (len(created) + len(completed)))
+PY
+    ); then
+      pass "mppsscu — $checked"
+      RAN_ANY=1
+    else
+      fail "mppsscu against pynetdicom: ${checked:-a command failed}"
+      sed -n '1,40p' "$mpps_out" >&2
+    fi
+  else
+    fail "the pynetdicom MPPS SCP did not start listening"
+  fi
+  stop_server "$mpps_pid"
+fi
+
+# ---------------------------------------------------------------------------
 # Media Creation Management and the two event logging classes (#370).
 #
 # They are N-CREATE, N-ACTION and N-GET against pynetdicom, in both directions,

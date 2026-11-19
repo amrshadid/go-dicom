@@ -939,7 +939,13 @@ N-CREATE, N-SET, N-ACTION and N-DELETE, all of which are implemented in both
 directions. A caller adds the SOP class with `SetSupportedAbstractSyntaxes` and
 implements `HandleNCreate`/`HandleNSet`; this is also how pynetdicom serves them.
 Both workflows are exercised against pynetdicom — MPPS in both directions, print
-management as film session, film box, image box and print action.
+management as film session, film box, image box and print action. The
+`mppsscu` command reports a step as an SCU: an N-CREATE IN PROGRESS with every
+attribute PS3.4 Table F.7.2-1 requires at creation, Type 2 ones empty when no
+flag gives them, then an N-SET to COMPLETED or DISCONTINUED with the end date
+and time and a Performed Series Sequence; a DICOM JSON object adds what the
+flags do not cover. `scripts/interop-test.sh` runs it against pynetdicom's
+MPPS SCP. dcmtk has no MPPS tool to compare with.
 
 Relevant Patient Information Query, Display System, Media Creation Management
 and the two event logging classes are the same shape: C-FIND or a single

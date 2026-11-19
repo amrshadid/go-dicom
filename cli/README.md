@@ -61,6 +61,8 @@ go-dicom tag-doc -keyword PatientName        # Tag documentation
 go-dicom qido -match "PatientName=Doe*" https://pacs.example.org/dicom-web   # Search a DICOMweb service
 go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # Download a study
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
+go-dicom mppsscu -aec RIS -patient-id P123 -accession A42 -modality MR ris:104   # A step IN PROGRESS; prints its UID
+go-dicom mppsscu -aec RIS -complete <uid> -series <uid> -protocol "T1 AX" ris:104   # ...and COMPLETED
 go-dicom storescp -allow PRISMA1@10.0.0.5 -allow-file modalities.txt         # Admit a title only from its address; a list in a file
 ```
 
@@ -77,7 +79,7 @@ GODICOM_LOG=warn go-dicom show odd.dcm      # or info, or debug
 ## The event log
 
 Every network command (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`,
-`movescu`, `getscu`, `commitscu`, `qrscp`) takes `-events <file>`, or `-events -`
+`movescu`, `getscu`, `commitscu`, `mppsscu`, `qrscp`) takes `-events <file>`, or `-events -`
 for standard output. It appends one JSON object per line as things happen, so
 the file can be followed while the command runs:
 
