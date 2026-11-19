@@ -39,6 +39,18 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 type ReadOptions struct {
     SkipBulkData      bool
     BulkDataThreshold uint32 // the longest binary value still read
+    MaxValueLength    uint32 // the longest value held; zero is no maximum
+}
+
+// A value longer than MaxValueLength ends the read before it is allocated,
+// with an error naming the element. A value SkipBulkData leaves in the file
+// is not held, so it is not refused.
+var ErrValueTooLong error
+type ValueTooLongError struct {
+    Tag    tag.Tag
+    Length uint64
+    Max    uint32
+    Offset int64
 }
 
 // A file read that way as a data set whose skipped values say where they

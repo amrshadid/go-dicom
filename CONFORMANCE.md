@@ -465,7 +465,8 @@ advisory.
 | `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
 | `valuerep.MaxUIDLength` | 64 characters | A UID longer than PS3.5 §9.1 permits |
-| Element length verification | every element | An element declaring more bytes than the stream holds |
+| Element length verification | every element | An element declaring more bytes than the stream holds; from a stream of unknown size, each value is allocated as its bytes arrive |
+| `filereader.ReadOptions.MaxValueLength` | no limit unless set | A value longer than the reader will hold, refused by tag and length before it is allocated |
 
 The parsers that consume untrusted input — PDU decoding, data set decoding, DIMSE
 command decoding, and file reading — have fuzz targets that run in continuous

@@ -239,6 +239,33 @@
 // byte for byte as if it had been read whole. A deflated file is refused,
 // since its values are not in the file.
 //
+// ReadOptions.MaxValueLength is the longest value the read holds in memory.
+// A longer one ends the read with a *ValueTooLongError naming its attribute,
+// tag, offset and stated length, before any of it is allocated, from a file
+// or from a stream whose size is unknown; errors.Is(err, ErrValueTooLong)
+// tells it from a file that is merely broken. It bounds element values, File
+// Meta elements and encapsulated Pixel Data as a whole. Sequences and items
+// are read element by element and are not values, so their lengths are not
+// bounded by it. Zero is no maximum, as before.
+//
+// The two options combine as a server reading what it is sent wants them
+// to: SkipBulkData passes over Pixel Data and long binary values, which are
+// not held and so not refused, and MaxValueLength holds everything that is
+// read, text and short binary values, to the maximum.
+//
+//	dicom, err := filereader.ReadDICOMFileWithOptions(reader, filereader.ReadOptions{
+//		SkipBulkData:   true,
+//		MaxValueLength: 1 << 20,
+//	})
+//	if errors.Is(err, filereader.ErrValueTooLong) {
+//		// refused by policy: err names the element and its length
+//	}
+//
+// Whatever the options, a source that cannot seek, such as a socket, has
+// each value read as its bytes arrive, so what a read holds follows what was
+// sent and not the length a header states. A source whose size is known
+// holds every length to the bytes left in it.
+//
 // ### DICOMFile.FrameRanges
 //
 //	func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
