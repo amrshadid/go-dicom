@@ -234,8 +234,11 @@ IMAGES (--format png or jpeg):
 
   The image is what a viewer shows: through the file's lookup tables or its
   rescale and window, inverted where MONOCHROME1 or Presentation LUT Shape
-  says, and color converted to RGB, at 8 bits. It holds pixels only, so none of the
-  file's attributes are in it. Text burned into the picture itself still is.
+  says, and color converted to RGB, at 8 bits. An image's ICC profile goes
+  into the PNG or JPEG as it is, so a viewer that manages color shows it as
+  the image means; the samples are not converted. Apart from that profile,
+  which describes a device, it holds pixels only, so none of the file's
+  attributes are in it. Text burned into the picture itself still is.
 
 EXAMPLES:
   go-dicom convert patient.dcm output.json

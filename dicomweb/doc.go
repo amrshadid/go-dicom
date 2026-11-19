@@ -115,9 +115,12 @@
 // …/rendered and …/thumbnail, of an instance or of frames, and the
 // thumbnail of a series or a study, draw a frame with Dataset.RenderFrame,
 // as image/jpeg or image/png. The window, viewport and quality query
-// parameters are applied; what is not done, a flipped viewport region or an
-// ICC profile, is refused with 400, and a study or a series rendered whole
-// with 501. With no window given and none in the image, a frame is drawn
+// parameters are applied. iccprofile=yes embeds the instance's own ICC
+// profile (Dataset.ICCProfile) in the PNG or JPEG, the pixels unchanged,
+// and a Warning says so when there is none to embed; no, or no parameter,
+// embeds none. What is not done, a flipped viewport region or a picture
+// converted into a named color space (iccprofile=srgb and the others), is
+// refused with 400, and a study or a series rendered whole with 501. With no window given and none in the image, a frame is drawn
 // over the range its Bits Stored can hold, the identity VOI LUT of PS3.3
 // C.11.2.1.2.2, so every frame of an image is on one scale.
 //

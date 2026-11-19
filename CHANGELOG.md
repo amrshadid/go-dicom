@@ -901,6 +901,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused, since nothing here can write one or decode one for reference
   (#556).
 
+- **A rendered image carries its ICC profile** (#546). An image's ICC
+  Profile (0028,2000, PS3.3 C.11.15) says what color space its RGB values
+  are in, and every PNG and JPEG made of it dropped the profile, so a viewer
+  that manages color took a Display P3 or Adobe RGB image for sRGB. `convert
+  --format png|jpeg` now writes the profile into the picture as it is, an
+  iCCP chunk in a PNG and APP2 segments in a JPEG, and the DICOMweb rendered
+  frames and thumbnails do for `iccprofile=yes`, which answered 400 before.
+  Nothing is converted, and the pixels are the same, byte for byte; no
+  parameter, or `iccprofile=no`, embeds nothing, as before. Converting into
+  sRGB or another named space (`iccprofile=srgb` and the others) takes a
+  color management engine and is still refused with 400, now saying why. A
+  profile is embedded only where the picture can carry it: a gray profile in
+  a grayscale picture, an RGB one in a color picture, as PNG requires.
+  `Dataset.ICCProfile` returns the profile, from the data set or from the one
+  optical path of a whole-slide image that has one. Checked with Pillow on
+  pydicom-made files carrying macOS's Display P3 and gray gamma 2.2
+  profiles: the profile read back from every PNG and JPEG is the file's,
+  byte for byte, LittleCMS opens it, and the pixels are those written
+  without it. pydicom converts only when `apply_icc_profile` is called;
+  dcmtk 3.7.0 and Orthanc 1.13 neither embed nor apply a profile, and
+  Orthanc ignores `iccprofile`.
+
 ### Changed
 
 - **`convert --format png` and `jpeg` read the frame asked for, not the
