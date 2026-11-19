@@ -74,7 +74,7 @@ func (ds *Dataset) findPrivateCreator(group uint16, creator string) (uint8, bool
 	for elem := uint16(0x0010); elem <= 0x00FF; elem++ {
 		t := tag.New(group, elem)
 		if element, exists := ds.elements[uint32(t)]; exists {
-			if b, ok := valueBytes(element); ok {
+			if b, ok := element.Bytes(); ok {
 				// Trim null padding and whitespace
 				existingCreator := strings.TrimRight(string(b), "\x00 ")
 				if existingCreator == creator {
@@ -210,7 +210,7 @@ func (ds *Dataset) GetPrivateValue(group uint16, offset uint8, creator string) (
 		return nil, err
 	}
 
-	if b, ok := valueBytes(elem); ok {
+	if b, ok := elem.Bytes(); ok {
 		return b, nil
 	}
 
@@ -235,7 +235,7 @@ func (ds *Dataset) GetAllPrivateCreators() map[uint16][]string {
 		t := tag.FromInt(tagVal)
 		if t.IsPrivateCreator() {
 			group := t.Group()
-			if b, ok := valueBytes(elem); ok {
+			if b, ok := elem.Bytes(); ok {
 				creator := strings.TrimRight(string(b), "\x00 ")
 				if creator != "" {
 					creators[group] = append(creators[group], creator)

@@ -57,6 +57,9 @@ func elementText(elem *dataelem.DataElement, vr dataelem.VR, encodings []string)
 	if width := binaryNumberWidth(vr); width > 0 {
 		return numberText(elem, vr, width)
 	}
+	// The []byte assertion is meant: it picks what to decode, not whether there
+	// is a value. Anything else is read through elementString, which uses
+	// DataElement.Bytes (#420).
 	raw, ok := elem.GetValue().([]byte)
 	if !ok || !dataelem.IsCharacterSetVR(vr) {
 		return elementString(elem)
