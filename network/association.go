@@ -41,7 +41,9 @@ func (s AssociationState) String() string {
 type Association struct {
 	mu sync.RWMutex
 
-	// logger is the SCU's or SCP's own, nil for DefaultLogger.
+	// logger is the SCU's or SCP's own, nil for DefaultLogger. A data set
+	// decoded on this association is built under logContext, so its
+	// validation warnings go there too.
 	logger *Logger
 
 	state     AssociationState
@@ -164,6 +166,17 @@ func NewAssociation(transport *Transport) *Association {
 		transport:        transport,
 		acceptedContexts: make(map[byte]*PresentationContext),
 	}
+}
+
+// logContext is ctx carrying the logger of the SCU or SCP this association
+// belongs to, for decoding what arrives on it: a command set or a data set
+// built here logs its validation warnings where the rest of the server's or
+// client's lines go. With no logger given, ctx is returned as it is.
+func (a *Association) logContext(ctx context.Context) context.Context {
+	if a == nil {
+		return ctx
+	}
+	return a.logger.carriedBy(ctx)
 }
 
 // State returns the current association state.
@@ -593,7 +606,8 @@ func (a *Association) abortWhy(ctx context.Context, source, reason byte, local *
 	a.mu.Lock()
 	a.state = StateIdle
 	a.mu.Unlock()
-	return a.transport.Close()
+	// The connection is the peer's to close now, for a moment.
+	return a.transport.closeAfterPeer(ctx)
 }
 
 // SendPData sends data as P-DATA-TF PDUs, fragmenting if necessary.

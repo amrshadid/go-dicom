@@ -3888,8 +3888,8 @@ if python3 -c "import pydicom, numpy, PIL" >/dev/null 2>&1; then
   WEBRENDER_PID=$SERVER_PID
   if wait_for_port 18744; then
     corpus=$(python3 -c "import os, pydicom.data; print(os.path.join(os.path.dirname(pydicom.data.__file__), 'test_files'))")
-    if rendered=$(python3 -W ignore - "http://127.0.0.1:18744/dicom-web" "$corpus" <<'PY'
-import io, os, sys, urllib.error, urllib.request
+    if rendered=$(python3 -W ignore - "http://127.0.0.1:18744/dicom-web" "$corpus" "$DCMTK_BIN" <<'PY'
+import io, os, subprocess, sys, tempfile, urllib.error, urllib.request
 import numpy
 import pydicom
 from PIL import Image
@@ -3902,6 +3902,26 @@ except ImportError:
     ALREADY_RGB = False
 
 ours, corpus = sys.argv[1], sys.argv[2]
+dcmdjpeg = os.path.join(sys.argv[3], "dcmdjpeg")
+JPEG = ("1.2.840.10008.1.2.4.50", "1.2.840.10008.1.2.4.51")
+
+def dcmtk_rgb(path):
+    """The frame as dcmtk decodes it, as RGB, or None when dcmtk is not here
+    or does not read the file."""
+    if not os.access(dcmdjpeg, os.X_OK):
+        return None
+    with tempfile.TemporaryDirectory() as tmp:
+        out = os.path.join(tmp, "decoded.dcm")
+        if subprocess.run([dcmdjpeg, path, out], capture_output=True).returncode != 0:
+            return None
+        decoded = pydicom.dcmread(out)
+        frame = decoded.pixel_array
+        if int(decoded.get("NumberOfFrames", 1) or 1) > 1:
+            frame = frame[0]
+        # pydicom 3 hands native YBR_FULL back as stored; pydicom 2 too.
+        if decoded.PhotometricInterpretation in ("YBR_FULL", "YBR_FULL_422"):
+            frame = convert_color_space(frame, "YBR_FULL", "RGB")
+        return frame.astype(numpy.int16)
 
 def request(url, accept=None, data=None, content_type=None):
     headers = {k: v for k, v in (("Accept", accept), ("Content-Type", content_type)) if v}
@@ -3932,7 +3952,7 @@ def guessed_ycbcr(ds):
         i += 2 + length
     return True
 
-gray = color = 0
+gray = color = dcmtk_held = 0
 guessed = []
 for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
     try:
@@ -3993,8 +4013,27 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         rgb = frame
         if photometric in ("YBR_FULL", "YBR_FULL_422") and not ALREADY_RGB:
             rgb = convert_color_space(frame, "YBR_FULL", "RGB")
+        # A lossy JPEG is held to dcmtk, within two levels. The two convert
+        # color with libjpeg's arithmetic and differ only by the inverse DCT,
+        # one level in a Y, Cb or Cr plane; that is one level in RGB for
+        # twelve of the corpus's thirteen color JPEGs and two for
+        # examples_ybr_color.dcm, where Cb, off by one, is multiplied by 1.772.
+        # It is held to pydicom within three and not two, because pydicom 3
+        # is itself two levels from dcmtk on the frames coded without
+        # subsampling (SC_rgb_dcmtk_+eb+cy+n1 and +np) while this library is
+        # one, and held to two those frames failed with nothing wrong in what
+        # was rendered (#514).
+        limit = 2
+        if ds.file_meta.TransferSyntaxUID in JPEG:
+            limit = 3
+            reference = dcmtk_rgb(os.path.join(corpus, name))
+            if reference is not None and reference.shape == mine.shape:
+                against = numpy.abs(mine - reference).max()
+                if against > 2:
+                    sys.exit("%s: the rendered frame differs from dcmtk's pixels by up to %d" % (name, against))
+                dcmtk_held += 1
         diff = numpy.abs(mine - rgb.astype(numpy.int16))
-        if mine.shape != rgb.shape or diff.max() > 2:
+        if mine.shape != rgb.shape or diff.max() > limit:
             sys.exit("%s: the rendered frame differs from pydicom's pixels by up to %d" % (name, diff.max()))
         color += 1
 if gray < 10 or color < 10:
@@ -4039,9 +4078,10 @@ for number in (1, 2, 3):
     if numpy.abs(mine - want).max() > 1:
         sys.exit("the windowless image's frame %d is not drawn over its stored range: it reaches %d, want %d"
                  % (number, mine.max(), want.max()))
-print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels; "
+print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels "
+      "(three for a lossy JPEG), %d lossy JPEGs within two levels of dcmtk's; "
       "three frames with no window drawn over their stored range, one gray one value%s"
-      % (gray, color, "; not compared, as pydicom 2 guesses YCbCr for an RGB JPEG: " + ", ".join(guessed) if guessed else ""))
+      % (gray, color, dcmtk_held, "; not compared, as pydicom 2 guesses YCbCr for an RGB JPEG: " + ", ".join(guessed) if guessed else ""))
 PY
     ); then
       pass "qrscp -web rendered — $rendered"
@@ -4054,6 +4094,147 @@ PY
   stop_server "$WEBRENDER_PID"
 else
   skip "rendered frames over DICOMweb need pydicom, numpy and Pillow"
+fi
+
+# ---------------------------------------------------------------------------
+# wlmscp against dcmtk's wlmscpfs, over dcmtk's own sample worklist (#506)
+#
+# Both servers serve the same files, converted from the sample database
+# dcmtk ships for wlmscpfs, and each query is sent to both by pynetdicom and
+# by dcmtk's findscu -W, whose answers pydicom reads back. The answers have
+# to be the same entries, attribute for attribute. A query for a name in
+# another case is left out: wlmscp ignores the case of a person's name, as
+# the archive does, and wlmscpfs does not.
+# ---------------------------------------------------------------------------
+wlistdb=""
+for candidate in "$DCMTK_BIN"/../share/dcmtk*/wlistdb/OFFIS /usr/share/dcmtk*/wlistdb/OFFIS \
+    /usr/share/doc/dcmtk*/examples/wlistdb/OFFIS; do
+  if [ -d "$candidate" ]; then wlistdb=$candidate; break; fi
+done
+if [ -x "$DCMTK_BIN/wlmscpfs" ] && [ -x "$DCMTK_BIN/dump2dcm" ] && [ -n "$wlistdb" ] &&
+    [ -n "$PYNETDICOM_BIN" ] && [ -x "$PYNETDICOM_BIN/python" ]; then
+  note "wlmscp against wlmscpfs, over dcmtk's sample worklist"
+  mkdir -p "$WORKDIR/wlistdb/OFFIS"
+  for dump in "$wlistdb"/*.dump; do
+    "$DCMTK_BIN/dump2dcm" -q "$dump" "$WORKDIR/wlistdb/OFFIS/$(basename "$dump" .dump).wl"
+  done
+  touch "$WORKDIR/wlistdb/OFFIS/lockfile"
+  start_server "$WORKDIR" "$WORKDIR/wlmscpfs.log" "$DCMTK_BIN/wlmscpfs" -dfp "$WORKDIR/wlistdb" 11760
+  wlmscpfs_pid=$SERVER_PID
+  start_server "$WORKDIR" "$WORKDIR/wlmscp.log" \
+    "$GODICOM" wlmscp -dir "$WORKDIR/wlistdb/OFFIS" -aet OFFIS -port 11761
+  wlmscp_pid=$SERVER_PID
+  if wait_for_port 11760 && wait_for_port 11761; then
+    if wl_out=$("$PYNETDICOM_BIN/python" - "$DCMTK_BIN/findscu" "$WORKDIR/wl_answers" <<'PY' 2>&1
+import os, subprocess, sys, warnings
+from pydicom import dcmread
+from pydicom.dataset import Dataset
+from pydicom.sequence import Sequence
+from pynetdicom import AE
+from pynetdicom.sop_class import ModalityWorklistInformationFind
+
+warnings.simplefilter("ignore")
+findscu, out = sys.argv[1:3]
+TOP = ["AccessionNumber", "ReferringPhysicianName", "PatientName", "PatientID",
+       "PatientBirthDate", "PatientSex", "MedicalAlerts", "Allergies", "StudyInstanceUID",
+       "RequestingPhysician", "RequestedProcedureDescription", "RequestedProcedureID",
+       "RequestedProcedurePriority"]
+STEP = ["Modality", "RequestedContrastAgent", "ScheduledStationAETitle",
+        "ScheduledProcedureStepStartDate", "ScheduledProcedureStepStartTime",
+        "ScheduledPerformingPhysicianName", "ScheduledProcedureStepDescription",
+        "ScheduledProcedureStepID", "ScheduledStationName", "ScheduledProcedureStepLocation",
+        "PreMedication", "CommentsOnTheScheduledProcedureStep"]
+QUERIES = [
+    ("modality CT", {}, {"Modality": "CT"}),
+    ("date", {}, {"ScheduledProcedureStepStartDate": "19960406"}),
+    ("date range", {}, {"ScheduledProcedureStepStartDate": "19960101-19960630"}),
+    ("open date range", {}, {"ScheduledProcedureStepStartDate": "-19951231"}),
+    ("time range", {}, {"ScheduledProcedureStepStartTime": "080000-140000"}),
+    ("station AE, one of several", {}, {"ScheduledStationAETitle": "AA32"}),
+    ("patient name VIVALDI*", {"PatientName": "VIVALDI*"}, {}),
+    ("patient name H?YDN*", {"PatientName": "H?YDN*"}, {}),
+    ("universal", {}, {}),
+    ("nothing matches", {}, {"Modality": "XX"}),
+]
+
+def norm(ds):
+    def value(e):
+        if e.VR == "SQ":
+            return tuple(sorted(norm(i) for i in e.value))
+        v = e.value
+        if isinstance(v, (list, tuple)) or type(v).__name__ == "MultiValue":
+            return tuple(str(x).strip() for x in v)
+        return "" if v is None else str(v).rstrip(" \x00")
+    return tuple(sorted((str(e.tag), e.VR, repr(value(e))) for e in ds))
+
+def pynet(port, top, step):
+    q = Dataset()
+    for k in TOP:
+        setattr(q, k, top.get(k, ""))
+    item = Dataset()
+    for k in STEP:
+        setattr(item, k, step.get(k, ""))
+    q.ScheduledProcedureStepSequence = Sequence([item])
+    ae = AE(ae_title="PYNET")
+    ae.add_requested_context(ModalityWorklistInformationFind)
+    assoc = ae.associate("127.0.0.1", port, ae_title="OFFIS")
+    if not assoc.is_established:
+        sys.exit("no association on port %d" % port)
+    answers = [i for s, i in assoc.send_c_find(q, ModalityWorklistInformationFind)
+               if s and s.Status in (0xFF00, 0xFF01) and i is not None]
+    assoc.release()
+    return sorted(map(norm, answers))
+
+def dcmtk(port, top, step):
+    d = os.path.join(out, str(port))
+    os.makedirs(d, exist_ok=True)
+    for f in os.listdir(d):
+        os.remove(os.path.join(d, f))
+    args = [findscu, "-W", "-aec", "OFFIS", "-X", "-od", d]
+    args += sum((["-k", "%s=%s" % (k, top.get(k, ""))] for k in TOP), [])
+    args += sum((["-k", "ScheduledProcedureStepSequence[0].%s=%s" % (k, step.get(k, ""))] for k in STEP), [])
+    subprocess.run(args + ["127.0.0.1", str(port)], check=True, capture_output=True)
+    return sorted(norm(dcmread(os.path.join(d, f))) for f in os.listdir(d))
+
+bad = 0
+for name, top, step in QUERIES:
+    ref, new = pynet(11760, top, step), pynet(11761, top, step)
+    ref_d, new_d = dcmtk(11760, top, step), dcmtk(11761, top, step)
+    same = ref == new and ref_d == new_d
+    bad += not same
+    print("%s %s: %d entries from wlmscpfs, %d from wlmscp" % ("same" if same else "DIFF", name, len(ref), len(new)))
+if bad:
+    sys.exit("%d of %d queries answered differently" % (bad, len(QUERIES)))
+PY
+    ); then
+      pass "pynetdicom and findscu -W get the same answers from both: $(echo "$wl_out" | tr '\n' ';')"
+    else
+      fail "wlmscp and wlmscpfs answer differently: $(echo "$wl_out" | tr '\n' ';')"
+    fi
+    # go-dicom's own findscu -worklist against both, results compared as sets.
+    wl_blocks() {
+      awk '/^--- Result/{if (b) print b; b=""; next} /^Found/{if (b) print b; b=""; print; next}
+           /^Querying/{next} {b = b "|" $0} END{if (b) print b}' | sort
+    }
+    wl_ok=1
+    for wl_query in "-modality CT" "-date 19960101-19960630" "-station-aet AA32" "-patient-name VIVALDI*" "-modality XX"; do
+      read -r -a wl_args <<< "$wl_query"
+      ref=$("$GODICOM" findscu -aec OFFIS -timeout 10 -worklist "${wl_args[@]}" 127.0.0.1:11760 2>&1 | wl_blocks)
+      new=$("$GODICOM" findscu -aec OFFIS -timeout 10 -worklist "${wl_args[@]}" 127.0.0.1:11761 2>&1 | wl_blocks)
+      [ "$ref" = "$new" ] || { wl_ok=0; echo "   findscu -worklist $wl_query differs"; }
+    done
+    if [ "$wl_ok" -eq 1 ]; then
+      pass "findscu -worklist prints the same results from both"
+    else
+      fail "findscu -worklist prints different results from wlmscp and wlmscpfs"
+    fi
+  else
+    fail "wlmscpfs or wlmscp did not start: $(tail -3 "$WORKDIR/wlmscp.log")"
+  fi
+  stop_server "$wlmscp_pid"
+  stop_server "$wlmscpfs_pid"
+else
+  skip "wlmscp against wlmscpfs needs dcmtk's wlmscpfs, dump2dcm and sample worklist, and pynetdicom"
 fi
 
 # ---------------------------------------------------------------------------
