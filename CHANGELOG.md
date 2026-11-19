@@ -1002,6 +1002,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DataElement.Bytes`. Files read from disk hold `[]byte` and read as
   before; `show --json` is unchanged.
 
+- **A refusal is logged once** (#476). An SCP logs each refusal of
+  `SCPConfig.Admit` at the info level, and `LoggingEventHandlers` logged its
+  `EVTAssocRejected` again, so a server logging its events had every refusal
+  twice. Making the SCP give way cannot work, because a `Server` always has
+  an `EventManager`. So the event handler gives way, and only when the
+  SCP's line went to the same log: at the default warning level, where the
+  SCP's line is not written, the handler's line is still the one report. An
+  SCP with no admission function now logs its refusal of a called AE title
+  that is not its own, which before only the event handler reported.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
