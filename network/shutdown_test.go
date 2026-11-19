@@ -194,6 +194,24 @@ func TestShutdownRefusesNewAssociations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer early.Close()
+	// Dial returns when the kernel has the connection, which is before the
+	// server has accepted it. One still waiting to be accepted when Shutdown
+	// closes the listener is dropped with it, and this test, which is about a
+	// connection the server is already serving, then failed on its write with
+	// a broken pipe (#525). So it waits until the server serves two: the
+	// SCU's and this one.
+	served := func() int {
+		d := server.scp.drain()
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return len(d.conns)
+	}
+	for accepted := time.Now().Add(5 * time.Second); served() < 2; {
+		if time.Now().After(accepted) {
+			t.Fatalf("the server serves %d connections, want the SCU's and the early one", served())
+		}
+		time.Sleep(time.Millisecond)
+	}
 	// A store in flight keeps the server draining while the two are tried.
 	stored := make(chan error, 1)
 	go func() { stored <- scu.Store(context.Background(), corpusInstance(t)) }()
