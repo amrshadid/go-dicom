@@ -55,7 +55,8 @@ them as a Part 10 file with File Meta Information built from the command (PS3.10
 handler's read with an error that is never `io.EOF`, and no response is sent; one
 the handler stops reading early is read to its end and discarded before the
 handler's status is sent. A C-STORE-RQ that states no data set follows is
-refused with C000H without the handler being called (PS3.7 9.3.1.1).
+refused with C000H without the handler being called, whether it streams or is
+given the decoded data set (PS3.7 9.3.1.1).
 
 `WriteCStoreFile` checks the command's Affected SOP Class UID and Affected SOP
 Instance UID, and the transfer syntax, against PS3.5 9.1 before it writes

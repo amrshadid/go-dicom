@@ -124,7 +124,9 @@ type CStoreRequest struct {
 	MoveOriginatorAE    string
 	MoveOriginatorMsgID uint16
 	// DataSet is nil for a handler that takes the data set as a stream
-	// (CStoreStreamer).
+	// (CStoreStreamer), and never nil for one given the decoded data set:
+	// a C-STORE-RQ that says no data set follows is refused before any
+	// handler is called (PS3.7 9.3.1.1).
 	DataSet *dataset.Dataset
 }
 
