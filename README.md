@@ -32,7 +32,7 @@ go-dicom is designed for healthcare IT systems, medical imaging applications, PA
 - **Pixel data extraction** with multi-frame and multi-bit-depth support
 - **30+ international character encodings** (Japanese, Chinese, Korean, Arabic, etc.)
 - **TLS support** for encrypted DICOM communication (HIPAA compliance)
-- **CLI tools** — 30 commands: file inspection and conversion (`show`, `info`, `validate`, `diff`, `sr`, `convert`, `codify`, `tag-doc`), making and editing a file (`create`, `modify`), transfer syntax (`compress`, `decompress`), media (`dicomdir`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `mppsscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
+- **CLI tools** — 31 commands: file inspection and conversion (`show`, `info`, `validate`, `diff`, `sr`, `convert`, `codify`, `tag-doc`), making and editing a file (`create`, `modify`), transfer syntax (`compress`, `decompress`), media (`dicomdir`), de-identification and sharing (`anonymize`, `share`), the full network set (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`, `movescu`, `getscu`, `commitscu`, `mppsscu`, `upsscu`, `qrscp`), and DICOMweb (`qido`, `wado`, `stow`)
 
 ## Quick Start
 
@@ -355,6 +355,11 @@ go build -o go-dicom .
 ./go-dicom mppsscu -aec RIS -patient-id P123 -accession A42 -modality MR ris:104
 ./go-dicom mppsscu -aec RIS -complete <step uid> -series <series uid> -protocol "T1 AX" ris:104
 
+# Find unified procedure steps waiting, take one, and finish it (UPS)
+./go-dicom upsscu -aec TPS -query -state SCHEDULED tps:104
+./go-dicom upsscu -aec TPS -claim <step uid> tps:104
+./go-dicom upsscu -aec TPS -complete <step uid> -transaction <uid from -claim> tps:104
+
 # Log what happens on the association as JSON lines: every PDU with its bytes,
 # the presentation contexts as proposed and answered, every DIMSE message
 ./go-dicom storescu -aec PACS -events trace.jsonl pacs:11112 study/*.dcm
@@ -494,7 +499,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | Print Management | Yes | Yes | Film session, film box, image box, print action |
 | Unified Procedure Step | Yes | Yes | Push and Watch: state machine and Transaction UID enforced by `UPSHandler`, subscriptions and N-EVENT-REPORT fan-out by `UPSSubscriptionStore` |
 | Handler Interface | evt_handlers | Handler interface | Go-idiomatic with BaseHandler embedding |
-| CLI Tools | 8 | 10 | All 8 of pynetdicom's, plus `commitscu` and `mppsscu` |
+| CLI Tools | 8 | 11 | All 8 of pynetdicom's, plus `commitscu`, `mppsscu` and `upsscu` |
 | Async Operations | Thread pool | Goroutines | Native Go concurrency |
 | Context/Cancellation | N/A | context.Context | Timeouts, graceful shutdown |
 

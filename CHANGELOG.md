@@ -733,6 +733,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stored pixels, JPEG-LS near-lossless within 2, and JPEG and lossy JPEG 2000
   at 38 dB or better. The interop job installs pylibjpeg for this step.
 
+- **`upsscu` works Unified Procedure Steps** (#500). The library serves UPS,
+  but its SCU has no UPS call, and no command sent one, so a performer or a
+  test of a UPS SCP had to be written in code. `upsscu` builds each
+  operation from the SCU's N-DIMSE primitives and C-FIND, on the SOP class
+  PS3.4 CC.2 defines it on:
+  - `-create` (N-CREATE SCHEDULED, Push);
+  - `-query` (C-FIND, Query, answers with their sequences);
+  - `-get` (N-GET, Pull);
+  - `-claim` (Change State to IN PROGRESS with a Transaction UID it prints);
+  - `-set` (N-SET with that Transaction UID);
+  - `-complete` and `-cancel` (Change State with it);
+  - `-request-cancel` (Push).
+
+  `-json` adds a DICOM JSON object to what is sent. A refusal prints its
+  status and exits nonzero. Watch is left out, since no command receives
+  the event reports. Run against pynetdicom's UPS SOP classes in
+  `scripts/interop-test.sh`: one step's whole life, each request on its SOP
+  class, and a completion under another Transaction UID (C301H) and a
+  cancellation of a final step (C311H) refused.
+
 ### Changed
 
 - **Events no longer copy every received byte** (#469). A received PDU was
