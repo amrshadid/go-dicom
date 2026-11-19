@@ -1065,6 +1065,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A validation finding names an attribute without invisible characters**
+  (#564). The standard's XML puts zero-width spaces into 27 names of the
+  camera and GPS attributes of group 0016, and the tables `validate` is
+  generated from kept them: a finding printed "GPS Latitude" followed by a
+  character nobody can see, which is not "GPS Latitude" to a program reading
+  the report. The generator leaves them out, and a test holds the tables to
+  it.
+
 - **A frame that is not the image its data set describes is refused**
   (#548). Nothing compared a compressed frame's own size with Rows, Columns
   and Samples per Pixel; only a frame shorter than the image was refused. A

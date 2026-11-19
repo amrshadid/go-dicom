@@ -41,8 +41,14 @@ D = "{http://docbook.org/ns/docbook}"
 XID = "{http://www.w3.org/XML/1998/namespace}id"
 
 
+# The standard's XML puts zero-width spaces and joiners into some names (the
+# camera and GPS attributes of group 0016), where a browser may break a line.
+# They are not part of a name, and nobody can see them in a message.
+INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
+
+
 def text(e):
-    return " ".join("".join(e.itertext()).split()) if e is not None else ""
+    return " ".join("".join(e.itertext()).translate(INVISIBLE).split()) if e is not None else ""
 
 
 def load(path):
