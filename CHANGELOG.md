@@ -1058,6 +1058,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dcmcjpls codes a frame everyone reads. Lossless frames from 2 to 8 bits
   are byte for byte CharLS 2.2's; CONFORMANCE §8.2 has the comparison.
 
+- **A JPEG decoded to RGB is converted as libjpeg converts it** (#497). The
+  conversion was image/color's, which scales Y with the products and
+  truncates, so a frame decoded straight to RGB differed from dcmtk and
+  Pillow by up to two levels where their inverse DCT agreed with this one,
+  and three on pydicom's corpus. It now rounds as libjpeg's `jdcolor.c`
+  does: on a frame of flat blocks every sample equals Pillow's and dcmtk's,
+  where one in six differed, and every color JPEG in the corpus is within
+  one level of both except `examples_ybr_color.dcm`, at two, from the
+  inverse DCT.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

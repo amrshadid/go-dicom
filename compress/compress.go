@@ -1197,21 +1197,22 @@ func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 						out = append(out, c.Y, c.Cb, c.Cr)
 						continue
 					}
-					r, g, b, _ := c.RGBA()
-					out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+					r, g, b := yccToRGB(c.Y, c.Cb, c.Cr)
+					out = append(out, r, g, b)
 				}
 			}
 			return out
 		}
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				c := src.YCbCrAt(x, y)
 				if keepYCbCr {
-					c := src.YCbCrAt(x, y)
 					out = append(out, c.Y, c.Cb, c.Cr)
 					continue
 				}
-				r, g, b, _ := src.At(x, y).RGBA()
-				out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+				// Converted as libjpeg converts, not by image/color; see ycc.go.
+				r, g, b := yccToRGB(c.Y, c.Cb, c.Cr)
+				out = append(out, r, g, b)
 			}
 		}
 		return out
