@@ -100,10 +100,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
+      # The binaries carry the standard library they are built with, so they
+      # are built with a supported Go that has every security patch. go.mod
+      # still says go 1.25.0: that is the oldest Go a program using the module
+      # may build it with, not the Go the release is built with.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: '1.25'
+          go-version: '1.26.11'
 
       - name: Download dependencies
         run: go mod download
