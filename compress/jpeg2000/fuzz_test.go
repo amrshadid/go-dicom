@@ -154,7 +154,7 @@ func FuzzDecodeHTCodestream(f *testing.F) {
 			return
 		}
 		for i, plane := range img.Components {
-			if len(plane) != img.Width*img.Height {
+			if w, h := img.ComponentSize(i); len(plane) != w*h || w > img.Width || h > img.Height {
 				t.Fatalf("component %d has %d samples for a %dx%d image", i, len(plane), img.Width, img.Height)
 			}
 		}
@@ -213,7 +213,7 @@ func FuzzParseCodestream(f *testing.F) {
 				t.Fatalf("decoded an image of %dx%d", img.Width, img.Height)
 			}
 			for i, plane := range img.Components {
-				if len(plane) != img.Width*img.Height {
+				if w, h := img.ComponentSize(i); len(plane) != w*h || w > img.Width || h > img.Height {
 					t.Fatalf("component %d has %d samples for a %dx%d image",
 						i, len(plane), img.Width, img.Height)
 				}

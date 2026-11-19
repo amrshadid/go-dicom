@@ -106,9 +106,8 @@ func (c *Codestream) TileComponentFor(tile, component int) (TileComponent, error
 	tc := TileComponent{
 		Tile:      tile,
 		Component: component,
-		// B.3: the component's own grid, after any subsampling. This decoder
-		// refuses subsampling, so the divisors are 1 and these are the tile's
-		// own coordinates.
+		// B.3: the component's own grid, the tile's corners divided by the
+		// component's separations and rounded up.
 		X0: ceilDivInt(tx0, comp.DX), Y0: ceilDivInt(ty0, comp.DY),
 		X1: ceilDivInt(tx1, comp.DX), Y1: ceilDivInt(ty1, comp.DY),
 	}

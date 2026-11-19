@@ -21,10 +21,43 @@ import (
 type Image struct {
 	Width, Height int
 	// Components holds one plane per component, in raster order, each already
-	// level shifted and clamped to the component's declared depth.
+	// level shifted and clamped to the component's declared depth. A plane is
+	// Width by Height samples unless its component is subsampled.
 	Components [][]int32
 	Depths     []int
 	Signed     []bool
+
+	// ComponentWidths and ComponentHeights give each plane's size when a
+	// component is subsampled (B.2): the samples it has on the reference
+	// grid, ceil(Xsiz/XRsiz) - ceil(XOsiz/XRsiz) across. Nil means every
+	// plane is the image's size, which is all an encoder here takes.
+	ComponentWidths, ComponentHeights []int
+}
+
+// ComponentSize is the width and height of a component's plane.
+func (img *Image) ComponentSize(c int) (width, height int) {
+	if c < len(img.ComponentWidths) && c < len(img.ComponentHeights) {
+		return img.ComponentWidths[c], img.ComponentHeights[c]
+	}
+	return img.Width, img.Height
+}
+
+// Subsampled reports whether any component's plane is smaller than the image.
+func (img *Image) Subsampled() bool {
+	for c := range img.Components {
+		if w, h := img.ComponentSize(c); w != img.Width || h != img.Height {
+			return true
+		}
+	}
+	return false
+}
+
+// componentBounds is where a component's samples lie on its own grid (B.2):
+// the image's rectangle divided by its separation, rounded up at both ends.
+func (c *Codestream) componentBounds(comp int) (x0, y0, x1, y1 int) {
+	dx, dy := c.Components[comp].DX, c.Components[comp].DY
+	return ceilDivInt(int(c.XOffset), dx), ceilDivInt(int(c.YOffset), dy),
+		ceilDivInt(int(c.Width), dx), ceilDivInt(int(c.Height), dy)
 }
 
 // Decode decodes a whole codestream to samples.
@@ -43,8 +76,19 @@ func Decode(c *Codestream) (*Image, error) {
 	height := int(c.Height) - int(c.YOffset)
 
 	img := &Image{Width: width, Height: height}
+	subsampled := false
 	for _, comp := range c.Components {
-		img.Components = append(img.Components, make([]int32, width*height))
+		subsampled = subsampled || comp.DX != 1 || comp.DY != 1
+	}
+	for i, comp := range c.Components {
+		w, h := width, height
+		if subsampled {
+			x0, y0, x1, y1 := c.componentBounds(i)
+			w, h = x1-x0, y1-y0
+			img.ComponentWidths = append(img.ComponentWidths, w)
+			img.ComponentHeights = append(img.ComponentHeights, h)
+		}
+		img.Components = append(img.Components, make([]int32, w*h))
 		img.Depths = append(img.Depths, comp.Depth)
 		img.Signed = append(img.Signed, comp.Signed)
 	}
@@ -116,18 +160,22 @@ func (c *Codestream) decodeTile(tile int, img *Image) error {
 		}
 		lo, hi := sampleRange(c.Components[comp])
 
+		// The tile-component is on the component's own grid, and so is its
+		// plane, which starts where the image does on that grid (B.2).
+		ox, oy, _, _ := c.componentBounds(comp)
+		pw, ph := img.ComponentSize(comp)
 		for y := tc.Y0; y < tc.Y1; y++ {
-			row := y - int(c.YOffset)
-			if row < 0 || row >= img.Height {
+			row := y - oy
+			if row < 0 || row >= ph {
 				continue
 			}
 			for x := tc.X0; x < tc.X1; x++ {
-				col := x - int(c.XOffset)
-				if col < 0 || col >= img.Width {
+				col := x - ox
+				if col < 0 || col >= pw {
 					continue
 				}
 				v := int32(roundSample(plane[(y-tc.Y0)*tc.Width()+(x-tc.X0)])) + shift
-				img.Components[comp][row*img.Width+col] = clampInt32(v, lo, hi)
+				img.Components[comp][row*pw+col] = clampInt32(v, lo, hi)
 			}
 		}
 	}

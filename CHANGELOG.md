@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **JPEG 2000 components with subsampling decode** (#555). A component with
+  a separation other than 1 (XRsiz, YRsiz) was refused by name. Each now
+  decodes to a plane of its own size, `Image.ComponentSize` and
+  `Image.Subsampled` say which, and 54 codestreams `opj_compress` wrote with
+  4:2:0, 4:2:2, 3x2, 1x4 and 4x4 separations, in tiles off the origin, with
+  precincts, layers, every progression and every code-block style, decode
+  component by component to what `opj_decompress -c` returns: exactly with
+  the 5/3 filter, within its tolerance with the 9/7. A DICOM frame with a
+  subsampled component is still refused, now by the data set's rule: PS3.5
+  8.2.4 allows JPEG 2000 with no Photometric Interpretation that describes
+  components of different sizes. Packed packet headers (PPM, PPT) stay
+  refused, since nothing here can write one or decode one for reference
+  (#556).
+
 - **Which transfer syntax each coder writes is one table** (#534). A send,
   the `compress` command and a frame encoded over DICOMweb each kept their
   own map from a syntax to a `Dataset.Compress…InPlace` method, with which
