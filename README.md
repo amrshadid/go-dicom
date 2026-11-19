@@ -760,8 +760,10 @@ because the 9/7 filter is defined in real arithmetic and ISO 15444-4 grades a
 decoder on how close it comes rather than on equality. All five progression
 orders, progression order changes, user-defined precincts, the code-block
 style options and a region of interest decode. Features it does not implement,
-among them packed packet headers and subsampled components, are refused by
-name rather than decoded wrongly.
+among them packed packet headers, are refused by name rather than decoded
+wrongly. Subsampled components decode in the codec, each at its own size; a
+DICOM frame with one is refused, since no Photometric Interpretation PS3.5
+allows for JPEG 2000 describes it.
 [CONFORMANCE.md §8.1](./CONFORMANCE.md#81-pixel-data) lists every one.
 
 **Compressed frames can be extracted**, which is the step before decoding. For a

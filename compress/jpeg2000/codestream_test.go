@@ -169,7 +169,6 @@ func TestParseCodestreamRefusesWhatItCannotDecode(t *testing.T) {
 		// CPRL (4) is the last order Table A.16 defines.
 		"progression": {func(cod, _ []byte) { cod[5] = 5 }, "progression order"},
 		"wavelet":     {func(cod, _ []byte) { cod[13] = 9 }, "wavelet"},
-		"subsampling": {func(_, siz []byte) { siz[41] = 2 }, "subsampling"},
 		"bit depth":   {func(_, siz []byte) { siz[40] = 0x80 | 31 }, "32-bit"},
 	}
 	for name, tc := range tests {
