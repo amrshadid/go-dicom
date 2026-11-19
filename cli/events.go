@@ -113,7 +113,21 @@ type eventRecord struct {
 
 	Description string `json:"description,omitempty"`
 	Error       string `json:"error,omitempty"`
+
+	// SchemaVersion is the version of the line's format, on every line, and
+	// last, so that a line is the one go-dicom 1.10.0 wrote with this property
+	// added before the closing brace (docs/events.md). On every line rather
+	// than in an opening record: a reader that starts following the file
+	// midway, or reads a file several processes append to, never sees an
+	// opening record, and a line without event and time is not a line of this
+	// log.
+	SchemaVersion int `json:"schemaVersion"`
 }
+
+// eventsSchemaVersion is the version of the -events line format that
+// docs/events.md and docs/events.schema.json describe. A line of go-dicom
+// 1.10.0, which had no schemaVersion, is version 1 too.
+const eventsSchemaVersion = 1
 
 type pduRecord struct {
 	// Type is the PDU's name, such as A-ASSOCIATE-RQ, and TypeCode its
@@ -206,6 +220,7 @@ type storedRecord struct {
 func eventTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05.000000Z07:00") }
 
 func (w *eventWriter) write(record eventRecord) {
+	record.SchemaVersion = eventsSchemaVersion
 	line, err := json.Marshal(record)
 	if err != nil {
 		return

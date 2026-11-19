@@ -22,24 +22,39 @@ go-dicom qrscp -events - -output received          # to standard output
 
 ## What version 1 means
 
-The `-events` lines carry **no** `schemaVersion`: this log has not needed one
-yet, and adding a property to it would change what it prints, which this
-document does not do. What this page and the schema describe is version 1, the
-format go-dicom 1.10.0 writes. Version 1 means:
+Every line ends with `"schemaVersion":1`, the version of the format this page
+and the schema describe:
+
+```
+{"event":"EVT_C_ECHO","time":"2026-11-18T19:14:07.082782Z",...,"schemaVersion":1}
+```
+
+It is on **every line**, not in a record at the start of the file: a reader
+that starts following a file midway, or reads one that a client and a server
+append to, can check each line it reads, and every line keeps the `event` and
+`time` a line of this log has. It is the **last** property, so a line is
+exactly the line go-dicom 1.10.0 wrote with `,"schemaVersion":1` before the
+closing brace. go-dicom 1.10.0 wrote no `schemaVersion`; a line without one is
+version 1.
+
+Version 1 means:
 
 - **A property or an event name added later does not make a new version.** A
-  reader ignores properties and events it does not know.
+  reader ignores properties and events it does not know. `schemaVersion`
+  itself was added this way.
 - **A property that is documented here keeps its name, its type and its
   meaning.** Renaming or removing one, or changing what it means, would be a
-  new version, and a log that has one would say so with a `schemaVersion`
-  property on every line. A reader can therefore treat a line with a
-  `schemaVersion` it does not know as one it cannot read.
+  new version, with a new number on every line. A reader treats a line with a
+  `schemaVersion` it does not know as one it cannot read, and a line with
+  none, or with 1, as version 1.
 - What is not part of the contract: the order of properties inside a line, and
-  the text of `description` and `error`, which are for a person.
+  the text of `description` and `error`, which are for a person. (go-dicom
+  writes `schemaVersion` last all the same, and keeps it there.)
 
 ## A line
 
-Every line has `event` and `time`. The rest is present when it is known.
+Every line has `event`, `time` and `schemaVersion`. The rest is present when it
+is known.
 
 | Property | Type | Meaning |
 |---|---|---|
@@ -54,6 +69,7 @@ Every line has `event` and `time`. The rest is present when it is known.
 | `dimse` | object | A DIMSE message, on a line about one (see below). |
 | `stored` | object | On a `STORED` line. |
 | `description`, `error` | string | Free text, and the error that failed or ended what the line reports. |
+| `schemaVersion` | integer | 1, the version of the format; the last property of every line. |
 
 `EVT_CONN_OPEN` comes before the association is negotiated, so it has the
 addresses and no role or AE titles.

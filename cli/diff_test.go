@@ -446,6 +446,41 @@ func TestDiffCorpusCopiesInOtherTransferSyntaxes(t *testing.T) {
 	}
 }
 
+// TestDiffBigEndianPixelDataIsSwappedAtTheSampleWidth: pydicom's
+// rtdose_expb.dcm is rtdose.dcm in Explicit VR Big Endian, with 32-bit
+// samples, and pydicom reads the same pixels from both. diff reversed the
+// big endian Pixel Data in two-byte words, OW's width, so each sample's halves
+// were transposed and every pixel differed (#426). A sample that does differ
+// is still found, at its own byte.
+func TestDiffBigEndianPixelDataIsSwappedAtTheSampleWidth(t *testing.T) {
+	dir := os.Getenv("GODICOM_PYDICOM_DATA")
+	if dir == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	big, little := filepath.Join(dir, "rtdose_expb.dcm"), filepath.Join(dir, "rtdose.dcm")
+	out, _ := runDiff(t, "--json", big, little)
+	if pixels := decodeDiff(t, out).find("(7FE0,0010)"); pixels != nil {
+		t.Fatalf("the same 32-bit pixels in two byte orders are reported as different: %+v", pixels)
+	}
+
+	// The last value of rtdose.dcm is its 6000 bytes of Pixel Data. One byte
+	// of the third sample changed is a difference at byte 9 of the value.
+	raw, err := os.ReadFile(little)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[len(raw)-6000+9] ^= 0xFF
+	changed := filepath.Join(t.TempDir(), "rtdose-changed.dcm")
+	if err := os.WriteFile(changed, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = runDiff(t, "--json", big, changed)
+	pixels := decodeDiff(t, out).find("(7FE0,0010)")
+	if pixels == nil || pixels.FirstDifference == nil || *pixels.FirstDifference != 9 {
+		t.Errorf("one changed byte of a 32-bit sample: %+v; want a difference at byte 9", pixels)
+	}
+}
+
 // A file against its anonymized copy: what the profile changes is what is
 // reported, the file meta group included, and what it keeps is not.
 func TestDiffACorpusFileAgainstItsAnonymizedCopy(t *testing.T) {

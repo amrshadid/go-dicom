@@ -595,17 +595,49 @@ func TestStreamedStoreIsInvalidAfterReturn(t *testing.T) {
 // SCP refuses it, 0xC000, without calling the handler; a data set the peer
 // sends anyway is not taken for the next message.
 func TestStreamedStoreWithoutDataSet(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	var called []string
 	var mu sync.Mutex
-	_, scu := streamServer(t, ctx, NetworkConfig{}, &streamHandler{fn: func(_ context.Context, req *CStoreRequest, _ string, data io.Reader) (*CStoreResponse, error) {
+	storeWithoutDataSet(t, &streamHandler{fn: func(_ context.Context, req *CStoreRequest, _ string, data io.Reader) (*CStoreResponse, error) {
 		_, err := io.Copy(io.Discard, data)
 		mu.Lock()
 		called = append(called, req.AffectedSOPInstance)
 		mu.Unlock()
 		return &CStoreResponse{Status: StatusSuccess}, err
-	}})
+	}}, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return fmt.Sprint(called)
+	})
+}
+
+// TestStoreWithoutDataSet is the same C-STORE-RQ sent to a handler that is
+// given the decoded data set. It was called with a nil data set and its
+// answer sent, so a StorageHandler that writes files answered for an
+// instance it never had, while the streamed path refused the same request.
+// Both paths now refuse it, 0xC000, without calling the handler.
+func TestStoreWithoutDataSet(t *testing.T) {
+	var called []string
+	var mu sync.Mutex
+	storeWithoutDataSet(t, &StorageHandler{OnStore: func(_ context.Context, _, instance string, _ *dataset.Dataset) uint16 {
+		mu.Lock()
+		called = append(called, instance)
+		mu.Unlock()
+		return StatusSuccess
+	}}, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return fmt.Sprint(called)
+	})
+}
+
+// storeWithoutDataSet sends a C-STORE-RQ that says no data set follows, then
+// a data set anyway, then an ordinary C-STORE, and checks the first is
+// refused with 0xC000 and only the second reaches the handler.
+func storeWithoutDataSet(t *testing.T, handler Handler, called func() string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, scu := streamServer(t, ctx, NetworkConfig{}, handler)
 	cmd := BuildCStoreRQ(1, CTImageStorageUID, "1.2.3.20", PriorityMedium)
 	addUSElement(cmd, tagCommandDataSetType, CommandDataSetTypeNull)
 	encoded, err := EncodeCommandDataset(cmd)
@@ -620,14 +652,18 @@ func TestStreamedStoreWithoutDataSet(t *testing.T) {
 	if status, answers := responseStatus(ctx, t, scu); status != StatusUnableToProcess || answers != 1 {
 		t.Fatalf("status 0x%04X answering %d, want 0xC000 answering 1", status, answers)
 	}
-	sendStore(ctx, t, scu, ctxImplicit, 2, "1.2.3.21", make([]byte, 30), 16000, 1)
+	// A data set both kinds of handler can take: the decoding one is given
+	// it parsed.
+	instance, err := EncodeDataset(syntheticInstance(t, "1.2.3.21", 10), ImplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sendStore(ctx, t, scu, ctxImplicit, 2, "1.2.3.21", instance, 16000, 1)
 	if status, answers := responseStatus(ctx, t, scu); status != StatusSuccess || answers != 2 {
 		t.Fatalf("status 0x%04X answering %d", status, answers)
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if fmt.Sprint(called) != "[1.2.3.21]" {
-		t.Fatalf("the handler was called for %v, want only [1.2.3.21]", called)
+	if got := called(); got != "[1.2.3.21]" {
+		t.Fatalf("the handler was called for %v, want only [1.2.3.21]", got)
 	}
 }
 

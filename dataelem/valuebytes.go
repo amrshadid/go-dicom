@@ -82,6 +82,35 @@ func ValueBytes(vr VR, value any) ([]byte, error) {
 	return nil, fmt.Errorf("a %T cannot be written as %s: it holds no numbers", value, vr)
 }
 
+// Bytes returns the bytes the element's value stands for, whatever Go type it
+// is held as, and false when it holds no bytes: a sequence, a value still in a
+// file, a type its VR cannot hold, or a nil element. A nil value is zero bytes
+// and true, as an empty element read from a file is.
+//
+// This is the one way to read a value as bytes. An element read from a file
+// holds []byte, but NewDataElement takes any value, and the library builds
+// string-held elements itself (de-identification records Patient Identity
+// Removed as "YES"). Code that asserted GetValue().([]byte) read every one of
+// those as absent: the same attribute answered differently depending on how
+// the data set was built, and a de-identifier that read a UID held as
+// []string as absent left it in (#420). Bytes uses ValueBytes, the conversion
+// the file writer and the network encoder use, so what is read is what would
+// be written. The slice is the element's own when the value is held as
+// []byte; do not modify it.
+func (de *DataElement) Bytes() ([]byte, bool) {
+	if de == nil {
+		return nil, false
+	}
+	de.mu.RLock()
+	vr, value := de.VR, de.Value
+	de.mu.RUnlock()
+	b, err := ValueBytes(vr, value)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
+}
+
 // number is one Go numeric value, kept in whichever form holds it exactly.
 type number struct {
 	isFloat bool
