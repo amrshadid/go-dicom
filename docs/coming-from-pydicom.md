@@ -2,7 +2,7 @@
 
 The calls you know from pydicom and pynetdicom, and what does the same job
 here. Each row links to a runnable example in
-[`examples/commonjobs`](../examples/commonjobs/example_test.go) where there is
+[`examples/commonjobs`](https://github.com/amrshadid/go-dicom/blob/main/examples/commonjobs/example_test.go) where there is
 one; [Examples](examples.md) shows the same jobs in full, with the command
 line beside them.
 
