@@ -1,0 +1,13 @@
+# The documentation site, built by GitHub Pages from this directory.
+# Nothing here is needed to read the pages on GitHub itself.
+title: go-dicom
+description: A DICOM library and command line in Go
+theme: jekyll-theme-primer
+markdown: kramdown
+kramdown:
+  input: GFM
+plugins:
+  - jekyll-relative-links
+relative_links:
+  enabled: true
+  collections: false

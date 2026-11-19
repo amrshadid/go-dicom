@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The guides can be published as a site.** `docs/` gains an index page and
+  the configuration GitHub Pages builds from, so the pages for readers coming
+  from pydicom and dcmtk, the examples, and the two written output formats
+  read as one site once Pages is pointed at `docs/` on `main`. Links that left
+  the directory are absolute, so they hold on the site as on GitHub.
+
 - **Lossy JPEG 2000 meets a ratio by rate-distortion optimal truncation, in
   quality layers, and reversibly when asked** (#552). `EncodeLossy`
   met a ratio by searching the quantization step, with every pass of every
