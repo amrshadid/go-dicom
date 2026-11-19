@@ -27,6 +27,9 @@ var mediaDefault = map[string]string{
 	"image/jls":  compress.JPEGLSLossless,
 	"image/jp2":  compress.JPEG2000Lossless,
 	"image/jpx":  "1.2.840.10008.1.2.4.92",
+	// HTJ2K is decoded and not encoded, so a frame not already held in it
+	// is refused as image/jpx is.
+	"image/jphc": compress.HTJ2KLossless,
 	mediaRLE:     compress.RLELossless,
 }
 
@@ -38,6 +41,7 @@ var lossySyntaxes = map[string]bool{
 	compress.JPEGExtended:       true,
 	compress.JPEGLSNearLossless: true,
 	compress.JPEG2000Lossy:      true,
+	compress.HTJ2K:              true,
 	"1.2.840.10008.1.2.4.93":    true,
 }
 

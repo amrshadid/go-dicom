@@ -9,19 +9,16 @@ import (
 	"github.com/amrshadid/go-dicom/tag"
 )
 
-// A file in High-Throughput JPEG 2000 or JPEG XL is read and carried, and its
-// pixel data is not decoded. It used to be taken for native: the fragments
-// were read as samples, and every refusal was a count of bytes ("the pixel
-// data holds 4330 bytes and the image needs 8192") that named neither the
-// syntax nor the reason. pydicom 3 decodes HTJ2K through OpenJPEG; nothing
-// here does yet.
+// A file in JPEG XL is read and carried, and its pixel data is not decoded. It
+// used to be taken for native: the fragments were read as samples, and every
+// refusal was a count of bytes ("the pixel data holds 4330 bytes and the image
+// needs 8192") that named neither the syntax nor the reason. High-Throughput
+// JPEG 2000 was refused the same way until it had a decoder; see
+// htj2k_test.go.
 
 // undecodedSyntaxes are the transfer syntaxes with encapsulated pixel data and
 // no decoder here, by the name the refusal has to give.
 var undecodedSyntaxes = map[string]string{
-	"1.2.840.10008.1.2.4.201": "High-Throughput JPEG 2000 Image Compression (Lossless Only)",
-	"1.2.840.10008.1.2.4.202": "High-Throughput JPEG 2000 with RPCL Options Image Compression (Lossless Only)",
-	"1.2.840.10008.1.2.4.203": "High-Throughput JPEG 2000 Image Compression",
 	"1.2.840.10008.1.2.4.110": "JPEG XL Lossless",
 	"1.2.840.10008.1.2.4.111": "JPEG XL JPEG Recompression",
 	"1.2.840.10008.1.2.4.112": "JPEG XL",
@@ -43,7 +40,7 @@ func encapsulatedImage(syntax string) *dataset.Dataset {
 }
 
 // TestUndecodedSyntaxIsRefusedByName: rendering, reading the samples,
-// decompressing and redacting each refuse an HTJ2K or JPEG XL image with the
+// decompressing and redacting each refuse a JPEG XL image with the
 // syntax's name and UID, and the data set is left as it was.
 func TestUndecodedSyntaxIsRefusedByName(t *testing.T) {
 	for syntax, name := range undecodedSyntaxes {
@@ -79,7 +76,7 @@ func TestUndecodedSyntaxIsRefusedByName(t *testing.T) {
 // pixel data that is fragments is refused.
 func TestUnknownSyntaxWithNativePixelsStillDecodes(t *testing.T) {
 	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME2", px: []byte{0, 85, 170, 255}}.dataset()
-	ds.SetTransferSyntaxUID("1.2.840.10008.1.2.4.201")
+	ds.SetTransferSyntaxUID("1.2.840.10008.1.2.4.110")
 	if got := grays(t, ds, nil); !sameLevels(got, []uint8{0, 85, 170, 255}) {
 		t.Errorf("levels %v", got)
 	}
