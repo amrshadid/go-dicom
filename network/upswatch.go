@@ -437,6 +437,7 @@ func (s *SCP) ReportUPSEvent(ctx context.Context, receivingAE string, event *UPS
 	}
 
 	subscriber := NewSCU(SCUConfig{
+		Logger:    s.config.Logger,
 		CallingAE: s.config.AETitle,
 		CalledAE:  receivingAE,
 		Address:   address,

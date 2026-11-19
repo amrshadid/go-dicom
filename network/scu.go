@@ -37,7 +37,9 @@ import (
 // [SCU.Abort] must not wait behind a [SCU.Find] whose results have not been
 // drained.
 type SCU struct {
-	config      SCUConfig
+	config SCUConfig
+	// ownLog is SCUConfig.Logger as a Logger, nil for DefaultLogger.
+	ownLog      *Logger
 	association *Association
 	messageID   atomic.Uint32
 	mu          sync.Mutex
@@ -128,7 +130,7 @@ func (s *SCU) beginExclusiveOperation(ctx context.Context) (func(), error) {
 // NewSCU creates a new SCU with the given configuration.
 func NewSCU(config SCUConfig) *SCU {
 	config.applyDefaults()
-	return &SCU{config: config}
+	return &SCU{config: config, ownLog: loggerFor(config.Logger)}
 }
 
 // nextMessageID returns the next message ID.
@@ -177,8 +179,9 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 	// long as it ran, forever with context.Background (#206): the response to
 	// the request has ARTIM, and each PDU after it DIMSETimeout.
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
-	transport.observe(s.config.Events)
+	transport.observe(s.config.Events, s.ownLog)
 	s.association = NewAssociation(transport)
+	s.association.logger = s.ownLog
 
 	if contexts == nil {
 		contexts = s.defaultContexts()
@@ -910,8 +913,22 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 	}, nil
 }
 
-// NGet sends an N-GET-RQ.
+// NGet sends an N-GET-RQ for every attribute of the instance: the request
+// carries no Attribute Identifier List. NGetAttributes asks for some.
 func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NGetResponse, error) {
+	return s.NGetAttributes(ctx, sopClassUID, sopInstanceUID, nil)
+}
+
+// NGetAttributes sends an N-GET-RQ whose Attribute Identifier List (0000,1005)
+// names the attributes wanted, in the order given (PS3.7 10.1.2.1.4); the SCP
+// returns those it has. An empty or nil list sends none, which asks for every
+// attribute, as NGet does.
+//
+// It is a method of its own rather than a list added to NGet: a variadic
+// parameter would keep NGet's call sites compiling, but not a method value or
+// an interface written against NGet's signature, such as a test double.
+func (s *SCU) NGetAttributes(ctx context.Context, sopClassUID, sopInstanceUID string,
+	attributes []tag.Tag) (*NGetResponse, error) {
 	release, err := s.beginOperation(ctx)
 	if err != nil {
 		return nil, err
@@ -930,7 +947,13 @@ func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NG
 
 	messageID := s.nextMessageID()
 	cmdDS := BuildNGetRQ(messageID, sopClassUID, sopInstanceUID)
-	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := addAttributeIdentifierList(cmdDS, attributes); err != nil {
+		return nil, fmt.Errorf("N-GET-RQ: %w", err)
+	}
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode N-GET-RQ: %w", err)
+	}
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
 	}

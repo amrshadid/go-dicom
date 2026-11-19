@@ -258,14 +258,14 @@ func (s *SOPClassExtendedNegotiation) Encode() []byte {
 // Unlimited is not something this implementation can honor — every outstanding
 // operation holds a goroutine waiting on a response — so it is reported rather
 // than accepted silently.
-func truthfulAsyncWindow(proposed *AsynchronousOperationsWindow) *AsynchronousOperationsWindow {
+func truthfulAsyncWindow(proposed *AsynchronousOperationsWindow, log *Logger) *AsynchronousOperationsWindow {
 	if proposed == nil {
 		return nil
 	}
 
 	invoked := proposed.MaxOperationsInvoked
 	if invoked == 0 {
-		DefaultLogger.Warn("asynchronous operations: an unlimited window of operations " +
+		log.Warn("asynchronous operations: an unlimited window of operations " +
 			"invoked was requested; proposing 1 instead, because unlimited is not a " +
 			"bound this implementation can hold to")
 		invoked = 1

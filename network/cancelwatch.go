@@ -206,13 +206,13 @@ func (s *SCP) streamCFindResponses(ctx context.Context, assoc *Association, stre
 			continue
 		}
 		if err := s.sendCFindPending(ctx, assoc, ctxID, messageID, sopClassUID, resp); err != nil {
-			DefaultLogger.Error("failed to send C-FIND match: %v", err)
+			s.log().Error("failed to send C-FIND match: %v", err)
 			break
 		}
 	}
 
 	if err := awaitHandler(handlerDone); err != nil && !watcher.wasCanceled() {
-		DefaultLogger.Error("streaming C-FIND handler failed: %v", err)
+		s.log().Error("streaming C-FIND handler failed: %v", err)
 		return StatusUnableToProcess
 	}
 

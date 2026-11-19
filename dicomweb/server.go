@@ -85,6 +85,9 @@ type Backend interface {
 type Server struct {
 	backend  Backend
 	maxStore int64
+	// encoding is how much a frame encoded on request into a lossy syntax
+	// may lose.
+	encoding FrameEncoding
 }
 
 // ServerOption configures a Server.
@@ -102,7 +105,7 @@ func WithMaxStoreBytes(n int64) ServerOption {
 
 // NewServer returns a server over backend.
 func NewServer(backend Backend, options ...ServerOption) *Server {
-	server := &Server{backend: backend, maxStore: DefaultMaxStoreBytes}
+	server := &Server{backend: backend, maxStore: DefaultMaxStoreBytes, encoding: DefaultFrameEncoding}
 	for _, option := range options {
 		option(server)
 	}
@@ -142,7 +145,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The studies resource and a study are where instances are stored to
 	// as well as searched for and retrieved from.
 	storesTo := (!isRetrieve && searched.level == levelStudy) ||
-		(isRetrieve && retrieved.series == "" && !retrieved.metadata && retrieved.render == "")
+		(isRetrieve && retrieved.series == "" && !retrieved.metadata && retrieved.render == "" && !retrieved.allBulk)
 	switch {
 	case r.Method == http.MethodPost && storesTo:
 		s.store(w, r, retrieved.study)
@@ -163,6 +166,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.frames(w, r, retrieved)
 	case retrieved.bulkdata != nil:
 		s.bulkdata(w, r, retrieved)
+	case retrieved.allBulk:
+		s.allBulkData(w, r, retrieved)
 	default:
 		s.retrieve(w, r, retrieved)
 	}

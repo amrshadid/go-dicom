@@ -328,9 +328,17 @@ func (s *Server) rendered(w http.ResponseWriter, r *http.Request, target retriev
 	}
 }
 
+// errFloatNotRendered is an image of Float or Double Float Pixel Data, whose
+// values the renderer does not draw: RenderFrame reads integer samples. Its
+// frames are served; a picture of it is a function this server lacks (PS3.18
+// 8.5).
+var errFloatNotRendered = refuse(http.StatusNotImplemented,
+	"the instance holds Float or Double Float Pixel Data, which this server does not render")
+
 // representative opens the instance a rendered or thumbnail resource is
 // drawn from: the one named, or, for the thumbnail of a study or a series,
-// the first of its instances, in the archive's order, that has frames.
+// the first of its instances, in the archive's order, that has frames it
+// can draw.
 func (s *Server) representative(r *http.Request, target retrieveTarget) (io.ReadSeekCloser, *frameSource, error) {
 	if target.instance != "" {
 		file, err := s.openInstance(r, target)
@@ -348,6 +356,10 @@ func (s *Server) representative(r *http.Request, target retrieveTarget) (io.Read
 			}
 			return nil, nil, err
 		}
+		if source.float {
+			_ = file.Close()
+			return nil, nil, errFloatNotRendered
+		}
 		return file, source, nil
 	}
 	uids, err := s.backend.Locate(r.Context(), target.study, target.series, "")
@@ -360,18 +372,18 @@ func (s *Server) representative(r *http.Request, target retrieveTarget) (io.Read
 			return nil, nil, err
 		}
 		source, err := openFrames(file)
-		if err == nil {
+		if err == nil && !source.float {
 			return file, source, nil
 		}
 		_ = file.Close()
-		if !errors.Is(err, errNoFrames) {
+		if err != nil && !errors.Is(err, errNoFrames) {
 			return nil, nil, err
 		}
 	}
 	if len(uids) == 0 {
 		return nil, nil, refuse(http.StatusNotFound, "the archive holds no such instances")
 	}
-	return nil, nil, refuse(http.StatusNotImplemented, "none of the instances has Pixel Data, so there is nothing to draw")
+	return nil, nil, refuse(http.StatusNotImplemented, "none of the instances has Pixel Data this server draws, so there is nothing to draw")
 }
 
 // picture renders one frame, counted from 1, and writes it as the request
@@ -381,10 +393,12 @@ func (s *Server) picture(source *frameSource, n int, want *renderTarget) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	var options *dataset.RenderOptions
-	if want.window != nil {
-		options = &dataset.RenderOptions{Window: want.window}
-	}
+	// With no window asked for and none in the image, the VOI LUT stage is
+	// the identity (PS3.3 C.11.2.1.2.2), and the picture spans the range the
+	// stored bits can hold. The data set holds this frame alone, so the
+	// range of its values would be this frame's, and each frame of an image
+	// would be stretched to its own: the same gray a different value in each.
+	options := &dataset.RenderOptions{Window: want.window, StoredRange: true}
 	img, err := ds.RenderFrame(0, options)
 	if err != nil {
 		return nil, err
@@ -436,8 +450,9 @@ var (
 // image, that frame's functional group alone, so RenderFrame takes its
 // rescale and window from it.
 //
-// Without a window the picture spans the frame's own range of values,
-// where RenderFrame over the whole image would span every frame's.
+// The range of the values it holds is this frame's alone, which is why a
+// picture of it without a window is drawn over the stored range instead
+// (RenderOptions.StoredRange).
 func (f *frameSource) alone(n int) (*dataset.Dataset, error) {
 	data, err := f.read(n - 1)
 	if err != nil {

@@ -89,6 +89,7 @@ addresses and no role or AE titles.
 | `EVT_DIMSE_SENT`, `EVT_DIMSE_RECV` | Every DIMSE message, either way. |
 | `EVT_C_ECHO`, `EVT_C_STORE`, `EVT_C_FIND`, `EVT_C_MOVE`, `EVT_C_GET` | A request of that service was received (an SCP's line). |
 | `EVT_N_EVENT_REPORT`, `EVT_N_GET`, `EVT_N_SET`, `EVT_N_ACTION`, `EVT_N_CREATE`, `EVT_N_DELETE` | A request of that service was received. |
+| `EVT_TLS_HANDSHAKE_FAILED` | A server started with `-tls` turned a client away during the TLS handshake, before any association. `error` names the check that failed (`not-tls`, `no-client-certificate`, `unknown-authority`, `certificate-invalid`, `peer-alert`, `protocol`, `connection`) and quotes nothing of a certificate. Only TLS servers write it. |
 | `STORED` | Not a network event: the command's own line for an instance it kept, with `stored`. It carries the association's identity when it came on one. |
 
 The pynetdicom names that go-dicom declares and does not emit
