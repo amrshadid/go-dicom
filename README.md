@@ -441,7 +441,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | [overlays](./overlays/) | Overlay groups, ROI analysis, graphics |
 | [waveforms](./waveforms/) | Physiological signals (ECG, EEG) with QRS detection |
 | [sr](./sr/) | Structured reports: the PS3.3 C.17 content tree, read and written, including by-reference relationships. A tree read and written back keeps everything it was read with. `StructuredReport` alongside it is a simpler bespoke model, written as a content tree that dcmtk and pydicom read |
-| [validate](./validate/) | An instance checked against its IOD: modules, attribute Types, value multiplicity, Enumerated Values and Defined Terms, generated from PS3.3; conditions in prose reported as not checked |
+| [validate](./validate/) | An instance checked against its IOD: modules, attribute Types, value multiplicity, Enumerated Values and Defined Terms, generated from PS3.3; conditions in a fixed form evaluated, those in prose reported as not checked |
 | [anonymize](./anonymize/) | De-identification per DICOM PS3.15 Annex E — the whole of Table E.1-1, sequences and repeating groups included |
 
 #### Serialization and Utilities

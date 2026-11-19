@@ -45,7 +45,7 @@ func attributeIdentifierList(cmd *dataset.Dataset) ([]tag.Tag, error) {
 	if !ok {
 		return nil, nil
 	}
-	data, ok := elem.GetValue().([]byte)
+	data, ok := elem.Bytes()
 	if !ok {
 		return nil, NewPDUErrorf("N-GET", "Attribute Identifier List holds %T, not bytes", elem.GetValue())
 	}

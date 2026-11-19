@@ -43,6 +43,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands print changed. The `-events` lines carry no `schemaVersion`; the
   document says so and what a future one would mean.
 
+- **Every `-events` line says `"schemaVersion":1`** (#480). A reader could not
+  tell a version 1 line from a later one by anything in the line. The
+  property is on every line, so a reader that starts following the file
+  midway, or reads a file two processes append to, can check each line, and
+  it is the last property: a line is the line 1.10.0 wrote with
+  `,"schemaVersion":1` before the closing brace, every other property in its
+  place, byte for byte. A line without one, as 1.10.0 wrote, is version 1;
+  the schema does not require it.
+
 - **Media Creation Management and the two event logging classes are
   verified against a peer** (#370). CONFORMANCE §8.5 said they "still have
   no test against a peer": they had UID constants and presentation context
@@ -104,7 +113,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not be made. Bulk values are read from the two files in chunks and never
   held whole, and report the byte they first differ at; a value is compared
   as what it means, so padding, a character set and the byte order of a number
-  or of pixel words do not make files differ. `--ignore` (a tag or keyword,
+  or of pixel samples do not make files differ. Big endian Pixel Data is
+  reversed at the sample width Bits Allocated gives, as the reader does: in
+  OW's two-byte words, a 32-bit RT Dose and its correct little endian copy
+  differed from the first byte (#426). `--ignore` (a tag or keyword,
   at every depth), `--ignore-meta` and `--ignore-private` leave elements out.
   `cli.ExitError` lets a command choose its exit status; the others still end
   with 1.
@@ -517,7 +529,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificate by subject, SAN or fingerprint, a third kind of entry, and would
   be a flag of its own.
 
+- **`validate` evaluates the conditions PS3.3 states in a fixed form**
+  (#449). Every Type 1C and 2C attribute and every Conditional module was
+  reported "not checked", so a CT image with no Pixel Data and no Pixel Data
+  Provider URL passed with exit status 0. The generator now reads a
+  condition as data when the whole of what PS3.3 says about presence is one
+  sentence of a few forms naming one attribute by its tag ("Required if
+  Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES", "Image Type (0008,0008) Value 1 is ORIGINAL or
+  MIXED", "... is present and has a Value of X"), with "May be present
+  otherwise" when it is said. Of 1681 Type 1C and 2C attributes in the tables
+  of PS3.3 2026d, 580 are read so, and 25 of 316 Conditional modules; the
+  rest, and any sentence matching a form only in part, stay prose and are
+  still reported as not checked with their text. An attribute or module
+  absent where its condition holds is an error, and so is one present where
+  it does not hold unless PS3.3 allows it otherwise (PS3.5 7.4.2, 7.4.4;
+  PS3.3 A.1.3.2). Over pydicom's corpus, seven findings are new, each
+  checked against the file with pydicom, and 524 fewer are not checked.
+  Exit statuses and `--json` are as they were.
+
+- **`validate` checks the functional groups of an enhanced multi-frame
+  image** (#463). The IOD's Functional Group Macros table was not read, so
+  an Enhanced CT with Pixel Measures removed, with Frame Content moved into
+  the shared item, or with a frame missing its Plane Position, passed with
+  no error. The generator now reads the 29 Functional Group Macros tables of
+  the enhanced Storage IODs (437 rows), with each macro's usage, condition
+  and where it may be ("May not be used as a Shared Functional Group"), and
+  the 105 macro tables they name. A macro the IOD requires must be in the
+  shared item or in every frame's, none may be in both or where the table
+  forbids it, the per-frame sequence holds one item for each frame, and
+  each macro present is checked attribute by attribute, a fault found in
+  many frames being one finding that says in how many. Reading those tables
+  also reads 65 more Type 1C and 2C conditions as data, among them the
+  "..., may be present otherwise." form many of them use.
+
+- **`validate`'s findings are compared with the standard on ten more IODs**
+  (#482). No other IOD validator can be run where it is built (`dciodvfy`
+  and the Python `dicom-validator` are not installed), and CONFORMANCE said
+  so without saying what had been compared instead. Ten corpus files of ten
+  IODs (RT Structure Set, RT Plan, RT Ion Plan, Segmentation, both
+  Ultrasound IODs, Basic Text and Comprehensive SR, 12-Lead ECG, Secondary
+  Capture) were compared with PS3.3 by hand: each of their ten errors is a
+  real defect of the file, and a second reading of the tables found no
+  missing Type 1 or Type 2 attribute of a Mandatory module that it had not
+  reported. CONFORMANCE §8.6 says what was compared, and what was not.
+
 ### Changed
+
+- **`validate` no longer holds the image to check the attributes** (#440).
+  It read every value of the file, Pixel Data included, though the checker
+  needs only a value's presence and length: a 200 MB CT took 240 MB of
+  memory. Pixel Data and binary values longer than 1 KB now stay in the file,
+  and the same file takes 28 MB. The findings are the same, text, `--json`
+  and exit status, for every file of pydicom's corpus. A deflated file is
+  still read whole, as its values are not in the file as written.
 
 - **A subsampled color JPEG decodes to the picture libjpeg gives** (#398).
   The decoder repeated each chroma sample of a 4:2:2 or 4:2:0 frame, where
@@ -587,6 +652,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than read without its log.
 
 ### Fixed
+
+- **A C-STORE with no data set is refused whatever the handler** (#457). A
+  C-STORE-RQ whose Command Data Set Type says no data set follows was
+  refused with C000H by a handler that streams, but a handler given the
+  decoded data set was called with a nil one and its status sent:
+  pynetdicom's request got Success from `storescp`, which wrote a 316-byte
+  file with an empty data set. PS3.7 9.3.1.1 requires the data set. The
+  check now comes before either kind of handler is chosen, so both answer
+  C000H without being called, and `CStoreRequest.DataSet` is never nil for
+  a handler given the decoded data set.
 
 - **A refused caller is left to close the connection** (#430). An SCP sent
   its A-ASSOCIATE-RJ and closed the connection behind it. PS3.8 9.2 has the
@@ -785,6 +860,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Packages other than `dataset` still assert `[]byte` in places; #420 lists
   them.
 
+- **De-identification reads a value held as a list of strings** (#420).
+  The UID action knew a value held as `[]byte` or a string, so a UID list
+  built in memory as a `[]string`, such as Failed SOP Instance UID List, was
+  taken for no UID and kept its original values, which link the result back
+  to the source instances; the same list read from a file was replaced.
+  Retain Safe Private read a private creator held as a string as no creator
+  and dropped the safe attributes it owned, and a De-identification Method
+  held as a list lost the automatic redaction note on a second pass. Every
+  read now goes through the new `DataElement.Bytes`, the conversion the file
+  writer uses, and `dataset` uses it in place of its own helper. A test runs
+  every profile over pydicom's corpus twice, once as read and once rebuilt
+  with string values, and requires the same result.
+
 - **`GetPixelDataInfo` holds the rescale** (#378). `PixelDataInfo` has
   `RescaleSlope` and `RescaleIntercept`, and nothing ever set them, so both
   were 0 for every image: a CT with intercept -1024 read `0 0`, and
@@ -841,8 +929,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back in its own syntax and in Implicit VR reads in pydicom to the elements
   of the original, the three files with private sequences included,
   except two truncated files whose cut-off element this library does not
-  read. The network codec has the same defect, and refuses such a sequence
-  on receipt (#424).
+  read. The network codec had the same defect (#424, below).
+
+- **A private sequence crosses an association as a sequence** (#424). The
+  network codec sent every sequence with its byte count, so in Implicit VR a
+  vendor's private sequence reached the peer as one opaque value: dcmtk's
+  `storescp +B` stored `nested_priv_SQ.dcm`'s `(0001,0001)` as
+  `?? fe\ff\00\e0...`, 66 bytes. On receipt it read an undefined-length
+  element the dictionary does not call a sequence as encapsulated pixel data,
+  so the same instance from pynetdicom's `storescu` was refused with 0110
+  ("a pixel data fragment declares 4294967295 bytes but only 179 remain"), on
+  every path that hands a handler the decoded data set: `storescp`, `qrscp`,
+  queries and storage commitment. Inside an item such an element silently
+  ended the item. Sending now follows the file writer's rule, undefined
+  length and a delimiter for a sequence the dictionary does not know in
+  Implicit VR, and receiving follows the file reader's: undefined length on
+  anything but pixel data is a sequence, and a UN element's items are
+  Implicit VR Little Endian (PS3.5 6.2.2). Both writers and both readers ask
+  `tag.Tag` the same two questions, `SequenceNeedsUndefinedLength` and
+  `IsPixelData`. `nested_priv_SQ.dcm` and `UN_sequence.dcm` now cross in
+  Implicit VR from pynetdicom to `storescp`, and from `storescu` to dcmtk's
+  `storescp` and to pynetdicom, and read in pydicom element for element like
+  the original. dcmtk's own `storescu` still sends a private sequence with its
+  byte count, which no receiver can tell from a value; dcmtk's `storescp`
+  stores it so too.
 
 - **A file-set does not take in a data set with no File Meta Information**
   (#394). `FileSet.AddFile` and `ScanDirectory` accepted a bare data set,
@@ -889,6 +999,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it two bytes a sample or, for JPEG 2000, keeping its low bits. A decoded
   frame shorter than the image is now an error from `DecodedPixelData` too,
   as it already was from `DecompressInPlace`.
+
+- **A value held as a Go string or number is read in every package**
+  (#420). `validate`, `fileset`, `network`, `sr`, `dcmstore` and the
+  commands read a value only when it was held as `[]byte`, so a data set
+  built in memory read differently from the same data set read from a file:
+  a file-set of such data sets could not be indexed (its UIDs read as
+  absent), a storage commitment report read as no instances, a UPS state
+  as none, a command set built with numbers could not be encoded, a SOP
+  Instance UID held as a `[]string` was sent as `[1.2.3]`, an SR lost its
+  text and its by-reference items, and the store indexed a person name with
+  its other groups as the alphabetic group alone. Each now reads through
+  `DataElement.Bytes`. Files read from disk hold `[]byte` and read as
+  before; `show --json` is unchanged.
+
+- **A refusal is logged once** (#476). An SCP logs each refusal of
+  `SCPConfig.Admit` at the info level, and `LoggingEventHandlers` logged its
+  `EVTAssocRejected` again, so a server logging its events had every refusal
+  twice. Making the SCP give way cannot work, because a `Server` always has
+  an `EventManager`. So the event handler gives way, and only when the
+  SCP's line went to the same log: at the default warning level, where the
+  SCP's line is not written, the handler's line is still the one report. An
+  SCP with no admission function now logs its refusal of a called AE title
+  that is not its own, which before only the event handler reported.
 
 ## [1.10.0] - 2026-11-17
 

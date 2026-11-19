@@ -674,7 +674,7 @@ func printWebDataset(out io.Writer, ds *dataset.Dataset, depth int) {
 
 // webValue is an element's value as text.
 func webValue(elem *dataelem.DataElement) string {
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok {
 		return fmt.Sprint(elem.GetValue())
 	}
