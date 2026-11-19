@@ -1308,6 +1308,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dcmcjpls codes a frame everyone reads. Lossless frames from 2 to 8 bits
   are byte for byte CharLS 2.2's; CONFORMANCE §8.2 has the comparison.
 
+- **A JPEG-LS run that reaches the end of a line is coded as T.87 codes it**
+  (#453). When the line ended partway through a block, the encoder wrote a 0
+  bit and the length left, as for a run that a sample interrupts, where T.87
+  A.7.1.2 writes a single 1 bit. Every decoder read both to the same
+  samples, so no image was wrong, but such a line cost up to 15 bits more
+  and the output could not be compared with CharLS's byte for byte. Frames
+  are now byte for byte CharLS 2.2's at every precision from 2 to 16,
+  lossless and near-lossless (above 12 bits CharLS adds an LSE segment
+  repeating the default parameters). Frames written by 1.10.0 still decode.
+
 - **A JPEG decoded to RGB is converted as libjpeg converts it** (#497). The
   conversion was image/color's, which scales Y with the products and
   truncates, so a frame decoded straight to RGB differed from dcmtk and

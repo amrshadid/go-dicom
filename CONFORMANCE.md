@@ -758,9 +758,14 @@ how decoded samples are shaped and coloured, and the one tolerance.
   frame decodes the same everywhere.
 
   *Verified:* a 41 by 37 image at every precision from 2 to 8, coded at NEAR 0,
-  1, 2 and the largest NEAR allowed: this library's lossless frames are byte
-  for byte CharLS 2.2's, and every frame either of them codes decodes to the
-  same samples in this library, CharLS 2.2 and libjpeg (pylibjpeg-libjpeg).
+  1, 2 and the largest NEAR allowed: this library's frames, lossless and
+  near-lossless, are byte for byte CharLS 2.2's, and every frame either of
+  them codes decodes to the same samples in this library, CharLS 2.2 and
+  libjpeg (pylibjpeg-libjpeg). The same holds from 9 to 16 bits, and for the
+  corpus's JPEG-LS images coded again with their own NEAR, except that above
+  12 bits CharLS writes an LSE segment that repeats the default parameters.
+  A run that reaches the end of a line is a single 1 bit (T.87 A.7.1.2); the
+  0 and a length that 1.10.0 wrote there still decode.
   dcmtk 3.7.0 agrees with them at 8 bits and at the largest NEAR, where the
   clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
   refuses to code below 6 bits. With the thresholds given explicitly all four

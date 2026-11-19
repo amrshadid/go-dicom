@@ -81,9 +81,10 @@ func TestJPEGLSLowPrecisionDecodesAsCharLS(t *testing.T) {
 }
 
 // TestJPEGLSLowPrecisionEncodesAsCharLS proves this package codes the source at
-// 2 to 8 bits to a frame that decodes to the samples CharLS's frame decodes to,
-// and losslessly to the very bytes CharLS writes: JPEG-LS leaves an encoder no
-// choice once the thresholds are fixed, so equal bytes mean equal thresholds.
+// 2 to 8 bits, lossless and near-lossless, to the very bytes CharLS writes, and
+// to a frame that decodes to the samples CharLS's frame decodes to. JPEG-LS
+// leaves an encoder no choice once the thresholds are fixed, so equal bytes
+// mean equal thresholds and the same coding of every run (T.87 A.7.1.2).
 func TestJPEGLSLowPrecisionEncodesAsCharLS(t *testing.T) {
 	for _, tc := range lowBitsCases() {
 		source := readLowBits(t, fmt.Sprintf("source_p%d.raw", tc.bits))
@@ -92,8 +93,9 @@ func TestJPEGLSLowPrecisionEncodesAsCharLS(t *testing.T) {
 			t.Fatalf("%d bits, NEAR %d: %v", tc.bits, tc.near, err)
 		}
 		charls := readLowBits(t, fmt.Sprintf("charls_p%d_near%d.jls", tc.bits, tc.near))
-		if tc.near == 0 && !bytes.Equal(stream, charls) {
-			t.Errorf("%d bits lossless: %d bytes, CharLS writes a different %d", tc.bits, len(stream), len(charls))
+		if !bytes.Equal(stream, charls) {
+			t.Errorf("%d bits, NEAR %d: %d bytes, CharLS writes a different %d",
+				tc.bits, tc.near, len(stream), len(charls))
 		}
 		got, err := compress.NewJPEGLSDecompressor().Decompress(stream)
 		if err != nil {
