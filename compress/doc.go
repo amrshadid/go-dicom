@@ -152,7 +152,8 @@
 //   - RLE: Run-Length Encoding (lossless, suitable for simple patterns)
 //   - JPEG: JPEG baseline and extended (lossy, for photographic images)
 //   - JPEG_LOSSLESS: JPEG Lossless, .57 and .70, every predictor
-//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless
+//   - JPEG_LS: JPEG-LS, .80 and .81, lossless and near-lossless, with or
+//     without restart intervals
 //   - JPEG_2000: JPEG 2000, .90 and .91, both wavelets, tiled and layered
 //
 // ## Substituting your own decoder

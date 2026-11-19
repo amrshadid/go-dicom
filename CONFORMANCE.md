@@ -489,7 +489,7 @@ than none.
 
 RLE, JPEG Baseline, JPEG Lossless (`.57` and `.70`, every prediction selection
 value) and JPEG-LS (`.80` and `.81`, lossless and near-lossless, both interleave
-modes) all decode in pure Go, single or multi component,
+modes, with or without restart intervals) all decode in pure Go, single or multi component,
 at 1, 8, 16, 32 and 64 bits, in either planar configuration, and with
 horizontally subsampled `YBR_FULL_422` expanded. A frame coded at fewer bits
 than Bits Allocated, such as a JPEG-LS frame of 8 bits in an image of 16 bits
@@ -742,6 +742,27 @@ how decoded samples are shaped and coloured, and the one tolerance.
   clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
   refuses to code below 6 bits. With the thresholds given explicitly all four
   decode dcmtk's 6 and 7 bit frames exactly.
+
+  **JPEG-LS restart intervals are decoded.** A DRI segment gives Ri in 16, 24
+  or 32 bits (T.87 C.2.5), counted in lines: one line of the component in a
+  non-interleaved scan, of every component in a line-interleaved one. At each
+  RSTm marker the decoder starts again as at the top of the scan, with the
+  contexts and run index initialized, the line above taken as zeros and the
+  bits read from the byte after the marker; fill bytes before a marker are
+  skipped. A marker missing, out of order or at another line than Ri puts it,
+  or an interval with data left over, is refused, where libjpeg decodes on.
+  The encoder writes no restart intervals.
+
+  *Verified:* CharLS's restart test files (`test8_ilv_none_rm_7.jls`,
+  `test8_ilv_line_rm_7.jls`, `test8_ilv_sample_rm_7.jls`, `test16_rm_5.jls`),
+  which were refused as corrupt, decode to the T.87 test images exactly, as
+  libjpeg decodes them; CharLS 2.2 refuses them. 1237 more frames, at every
+  precision from 2 to 16, in all three interleave modes, at NEAR 0, 2 and the
+  largest, with Ri of 1, 2, 3, 7 and around the height, decode here and in
+  libjpeg to the same samples. CharLS 2.2 cannot write restart intervals, so
+  these were made from its coding of each interval as an image of its own,
+  joined with the markers; made that way from the T.87 test images, CharLS's
+  restart test files come out byte for byte.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes

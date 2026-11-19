@@ -1256,6 +1256,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dcmcjpls codes a frame everyone reads. Lossless frames from 2 to 8 bits
   are byte for byte CharLS 2.2's; CONFORMANCE §8.2 has the comparison.
 
+- **A JPEG-LS frame with restart markers decodes** (#452). A frame coded with
+  a restart interval, a DRI segment and an RSTm marker every so many lines
+  as T.87 allows, was refused as corrupt at the first marker: the scan was
+  read straight through it, without starting the decoder again or moving to
+  the byte after it. A frame whose only marker came near the end could
+  decode with no error to a wrong last few lines. CharLS's restart test
+  files now decode to the T.87 test images, as libjpeg decodes them, and
+  1237 generated frames at 2 to 16 bits in all three interleave modes decode
+  as libjpeg decodes them. A marker missing, out of order or where the DRI
+  does not put it is refused with an error saying so.
+
 - **A JPEG decoded to RGB is converted as libjpeg converts it** (#497). The
   conversion was image/color's, which scales Y with the products and
   truncates, so a frame decoded straight to RGB differed from dcmtk and
