@@ -65,6 +65,7 @@ go-dicom mppsscu -aec RIS -patient-id P123 -accession A42 -modality MR ris:104  
 go-dicom mppsscu -aec RIS -complete <uid> -series <uid> -protocol "T1 AX" ris:104   # ...and COMPLETED
 go-dicom upsscu -aec TPS -claim <step uid> tps:104                            # Take a unified procedure step; prints its Transaction UID
 go-dicom upsscu -aec TPS -complete <step uid> -transaction <uid> tps:104      # ...and finish it
+go-dicom wlmscp -dir ./worklist -aet RIS -port 104                          # Serve the worklist files of a directory to modalities
 go-dicom storescp -allow PRISMA1@10.0.0.5 -allow-file modalities.txt         # Admit a title only from its address; a list in a file
 ```
 
@@ -81,7 +82,7 @@ GODICOM_LOG=warn go-dicom show odd.dcm      # or info, or debug
 ## The event log
 
 Every network command (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`,
-`movescu`, `getscu`, `commitscu`, `mppsscu`, `upsscu`, `qrscp`) takes `-events <file>`, or `-events -`
+`movescu`, `getscu`, `commitscu`, `mppsscu`, `upsscu`, `qrscp`, `wlmscp`) takes `-events <file>`, or `-events -`
 for standard output. It appends one JSON object per line as things happen, so
 the file can be followed while the command runs:
 
@@ -104,6 +105,38 @@ within a run; `qrscp` logs the association a C-MOVE opens to its destination
 under its own. Two commands' logs are paired by their addresses. A PDU's bytes
 are cut at `-events-pdu-bytes` (65536 by default, 0 for all), and
 `bytesTruncated` says when.
+
+## Serving a worklist
+
+`wlmscp` is a Modality Worklist SCP over a directory, as dcmtk's `wlmscpfs`
+is: each file is one worklist entry, with File Meta Information or without,
+whatever its name. It answers Modality Worklist C-FIND and C-ECHO and refuses
+every other SOP class at negotiation.
+
+- The directory is read again at every query, so a file added, changed or
+  removed while the server runs is served as it is then. A file is parsed
+  again only when its size or modification time changes.
+- A file that is not a worklist entry (not DICOM, or a data set with no
+  Scheduled Procedure Step Sequence, such as an image or `wlmscpfs`'s empty
+  `lockfile`) is not served, and is reported once on the server's output,
+  and again only if it changes. Names starting with a dot and
+  subdirectories are passed over.
+- Matching is package `matching`'s, the archive's own rules (PS3.4 C.2.2.2):
+  the Scheduled Procedure Step Sequence item by item, and each answer holds
+  the keys asked for, the step cut to the keys asked for in it. A Query/Retrieve
+  Level in a query is neither matched nor returned.
+- `wlmscpfs` serves one subdirectory per called AE title; `wlmscp` serves one
+  directory under its own `-aet`. To serve dcmtk's sample database, convert
+  its `.dump` files with `dump2dcm`, as its README says, and point `-dir` at
+  the `OFFIS` directory. A person's name is matched whatever its case
+  (`vivaldi*` finds VIVALDI^ANTONIO), which `wlmscpfs` does not do.
+
+```bash
+for f in wlistdb/OFFIS/*.dump; do dump2dcm "$f" "worklist/$(basename "$f" .dump).wl"; done
+go-dicom wlmscp -dir worklist -aet OFFIS -port 11112
+findscu -W -aec OFFIS -k "ScheduledProcedureStepSequence[0].Modality=CT" localhost 11112   # dcmtk's
+go-dicom findscu -worklist -modality CT -aec OFFIS localhost:11112
+```
 
 ## API Reference
 

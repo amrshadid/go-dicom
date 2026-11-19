@@ -17,6 +17,7 @@ import (
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/fileutil"
 	"github.com/amrshadid/go-dicom/filewriter"
+	"github.com/amrshadid/go-dicom/internal/attrmatch"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -618,17 +619,8 @@ func stringValue(ds *dataset.Dataset, t tag.Tag) string {
 // Values reach a data set as []byte from a reader and as string, or a converted
 // type, from code that built one by hand. Both have to read the same way here, or
 // an instance stored from the network would index differently from the same
-// instance read off disk.
+// instance read off disk. The conversion is internal/attrmatch's, which
+// matching a data set directly uses too.
 func elementString(elem *dataelem.DataElement) string {
-	if elem == nil {
-		return ""
-	}
-	// Through Bytes, the conversion the writer uses: a PersonName printed with
-	// %v gave its alphabetic group alone, and was indexed as a different name
-	// from the one written to the file (#420). What Bytes cannot render, a
-	// value whose VR does not say how, is still printed rather than lost.
-	if raw, ok := elem.Bytes(); ok {
-		return trimPadding(string(raw))
-	}
-	return trimPadding(fmt.Sprintf("%v", elem.GetValue()))
+	return attrmatch.ElementString(elem)
 }

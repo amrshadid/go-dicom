@@ -243,3 +243,59 @@ func TestCGetReportsFailedSubOperations(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 }
+
+// TestCGetGoesOnPastAnInstanceItCannotEncode: a C-GET sub-operation sent its
+// C-STORE-RQ, which says a data set follows, and encoded the instance only
+// then. When the encoding failed nothing followed, the requestor read the next
+// C-STORE-RQ where it was owed a data set, and the whole retrieve ended with
+// "expected a data set for the C-STORE sub-operation, got a command" (#518).
+//
+// The first instance here cannot be encoded: one of its values was left in a
+// file by a reader and there is no file. The second can. The retrieve must
+// deliver the second and count the first as failed, which Get reports as a
+// partial completion and not as an error.
+func TestCGetGoesOnPastAnInstanceItCannotEncode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	unencodable := makeInstance(CTImageStorageUID, "1.2.3.4.5.518.1", "Cannot^Encode")
+	_ = unencodable.Add(dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OW,
+		dataelem.ValueInFile{Offset: 0, Length: 1024}))
+	server, err := StartServer(ctx, SCPConfig{
+		AETitle: "GET_ENCODE", Port: 0, BindAddress: "127.0.0.1",
+	}, &QueryRetrieveHandler{
+		OnGet: func(_ context.Context, _ string, _ *dataset.Dataset) ([]*dataset.Dataset, error) {
+			return []*dataset.Dataset{
+				unencodable,
+				makeInstance(CTImageStorageUID, "1.2.3.4.5.518.2", "Can^Encode"),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartServer: %v", err)
+	}
+	defer server.Stop()
+	server.SetSupportedAbstractSyntaxes([]string{
+		VerificationSOPClassUID, PatientRootQueryRetrieveGet, CTImageStorageUID,
+	})
+
+	var received []string
+	scu := NewSCU(SCUConfig{
+		CallingAE: "GET_SCU", CalledAE: "GET_ENCODE", Address: server.Addr(),
+		OnCStore: func(_ context.Context, _, sopInstanceUID string, _ *dataset.Dataset) uint16 {
+			received = append(received, sopInstanceUID)
+			return StatusSuccess
+		},
+	})
+	if err := scu.Associate(ctx, nil); err != nil {
+		t.Fatalf("Associate: %v", err)
+	}
+	defer func() { _ = scu.Release(ctx) }()
+
+	if err := scu.Get(ctx, dataset.NewDataset()); err != nil {
+		t.Fatalf("Get ended with %v; one instance that cannot be encoded is one failed sub-operation", err)
+	}
+	if len(received) != 1 || received[0] != "1.2.3.4.5.518.2" {
+		t.Errorf("received %v, want the one instance that can be encoded", received)
+	}
+}

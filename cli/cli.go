@@ -71,7 +71,7 @@ func NewCLI(name, version string) *CLI {
 // reports it, and a user simply never learns the command is there.
 var netCommands = []string{
 	"echoscu", "echoscp", "storescu", "storescp",
-	"findscu", "movescu", "getscu", "commitscu", "mppsscu", "upsscu", "qrscp",
+	"findscu", "movescu", "getscu", "commitscu", "mppsscu", "upsscu", "qrscp", "wlmscp",
 }
 
 var netDescriptions = map[string]string{
@@ -86,6 +86,7 @@ var netDescriptions = map[string]string{
 	"mppsscu":   "DICOM MPPS SCU — report a performed procedure step started, completed or discontinued",
 	"upsscu":    "DICOM UPS SCU — create, query, claim, update and finish unified procedure steps",
 	"qrscp":     "DICOM Q/R SCP — combined store + query/retrieve server",
+	"wlmscp":    "DICOM Modality Worklist SCP — serve the worklist files of a directory",
 }
 
 // webCommands and webDescriptions are the same for the DICOMweb commands.
