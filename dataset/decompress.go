@@ -100,13 +100,10 @@ func (ds *Dataset) DecodeFrame(codestream []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decode frame: transfer syntax %q does not compress frames", ds.TransferSyntaxUID())
 	}
 	samples, err := decompressPixelFrame(compression, codestream, info)
-	if err == nil {
-		err = checkFrameSize(samples, info)
-	}
 	if err != nil {
 		return nil, fmt.Errorf("decode frame: %w", err)
 	}
-	return samples[:info.BytesPerFrame], nil
+	return samples, nil
 }
 
 // replaceElement sets an attribute, whether or not the data set had it.

@@ -111,6 +111,12 @@ func decodeSequentialJPEG(data []byte) (*losslessImage, error) {
 
 		switch marker {
 		case markerSOF0, markerSOF1:
+			// One frame header to an image that is not hierarchical (T.81
+			// B.2). A second would size the image again after its size was
+			// held to the data set's (see jpegFrameHeader).
+			if d.width != 0 {
+				return nil, errors.New("jpegextended: a second frame header")
+			}
 			if err := d.parseFrameHeader(body); err != nil {
 				return nil, err
 			}

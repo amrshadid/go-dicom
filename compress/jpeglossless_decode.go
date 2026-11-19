@@ -74,6 +74,12 @@ func decodeLosslessJPEG(data []byte) (*losslessImage, error) {
 
 		switch marker {
 		case markerSOF3:
+			// One frame header to an image that is not hierarchical (T.81
+			// B.2). A second would size the image again after its size was
+			// held to the data set's (see jpegFrameHeader).
+			if img != nil {
+				return nil, fmt.Errorf("jpeglossless: a second frame header")
+			}
 			var err error
 			if img, err = parseLosslessFrameHeader(body); err != nil {
 				return nil, err

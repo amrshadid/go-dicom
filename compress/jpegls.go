@@ -127,6 +127,19 @@ func (d *JPEGLSDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsSto
 	return samples, nil
 }
 
+// FrameHeader reads the frame's size from its SOF55 segment without decoding
+// it; see FrameHeaderReader.
+func (d *JPEGLSDecompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	header, marker, err := jpegFrameHeader(data)
+	if err != nil {
+		return FrameHeader{}, fmt.Errorf("jpegls: %w", err)
+	}
+	if marker != markerSOF55 {
+		return FrameHeader{}, fmt.Errorf("%w: frame marker 0x%02X is not JPEG-LS (SOF55)", errNotJPEGLS, marker)
+	}
+	return header, nil
+}
+
 // jpeglsImage is a decoded frame. Components are stored as separate planes and
 // interleaved on the way out.
 type jpeglsImage struct {

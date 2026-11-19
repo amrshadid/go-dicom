@@ -506,6 +506,7 @@ advisory.
 | `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
 | `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
+| A compressed frame's size | the data set's Rows, Columns and Samples per Pixel, compared before decoding | A small codestream describing a large image in a small data set (§8.1) |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
 | `valuerep.MaxUIDLength` | 64 characters | A UID longer than PS3.5 §9.1 permits |
 | Element length verification | every element | An element declaring more bytes than the stream holds; from a stream of unknown size, each value is allocated as its bytes arrive |
@@ -663,6 +664,22 @@ how decoded samples are shaped and coloured, and the one tolerance.
   Representation, and real files do: the data set is the authority, so an
   unsigned sample in a data set that calls it signed is read back as two's
   complement of Bits Stored.
+
+- **A frame is held to the image the data set describes.** PS3.5 8.2 has
+  the Image Pixel Module describe the decompressed image and agree with the
+  compressed stream. A frame whose columns, rows or components are not
+  Columns, Rows and Samples per Pixel, or whose samples are coded wider than
+  Bits Allocated, is refused with both sets of numbers, on every path that
+  decodes a frame. Where the codestream's header states its size, JPEG 2000's
+  SIZ, JPEG's frame header and JPEG-LS's SOF55, it is read and compared
+  before the frame is decoded, so a small file whose codestream describes a
+  large image costs the image its data set declares. RLE states no size: each
+  segment must decode to Rows times Columns bytes (one more is taken for the
+  pad of an odd count, as pydicom does), and a frame of the right length in
+  another shape cannot be detected. Of the other tools, dcmdjpls refuses
+  every such JPEG-LS frame; dcmdjpeg refuses a JPEG frame larger than the
+  image and decodes a reshaped one; pydicom compares only the length, after
+  decoding at the codestream's size.
 
 - **`PixelArray` flattens color samples into the column dimension**, so a
   100×100 RGB frame is returned as 100 rows of 300 values. The values and their

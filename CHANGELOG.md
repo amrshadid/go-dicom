@@ -1044,19 +1044,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A lone 9/7 sample at an odd coordinate is no longer halved twice**
-  (#549). Where a tile is too narrow for its decomposition levels, a
-  resolution can be one sample at an odd coordinate. The JPEG 2000 decoder
-  halved it, which the 5/3 filter must do, also for the 9/7, whose
-  coefficients here (as in OpenJPEG) carry that factor of two already: a
-  flat tile of 200 written by `opj_compress -I -t 48,40 -n 6` came back as
-  146 where OpenJPEG and Apple's ImageIO, an independent decoder, both give
-  164, and the narrow edge tiles of a color image came back tens of levels
-  away from OpenJPEG's (115 for 145 at the first such sample). It is now
-  left as it is, and the encoder no longer doubles it, which it never had
-  occasion to. Those codestreams now decode to OpenJPEG's samples within
-  the 9/7 tolerance, and every other one as before. (164 and not 200 is
-  `opj_compress`, which writes that sample at half; every decoder agrees.)
+- **A frame that is not the image its data set describes is refused**
+  (#548). Nothing compared a compressed frame's own size with Rows, Columns
+  and Samples per Pixel; only a frame shorter than the image was refused. A
+  1888-byte file of a 64x64 image holding a 4096x4096 JPEG 2000 frame was
+  decoded at 4096x4096 (300 MB resident) and `decompress` wrote its 32 MiB
+  out under Rows and Columns of 64, and a frame of the right length in
+  another shape, 64x64 read as 32x128 or a color frame as one sample a pixel,
+  decoded as a picture it is not. Every codec had the gap. PS3.5 8.2 has the
+  data set describe the decompressed image and agree with the compressed
+  stream, so a frame whose columns, rows or components differ is now refused
+  with both sets of numbers, before it is decoded where its header states
+  them: JPEG 2000's SIZ, JPEG's frame header, JPEG-LS's SOF55. The 1888-byte
+  file is refused with under a megabyte allocated. An RLE frame has no size
+  of its own; each segment must decode to Rows times Columns bytes and is
+  refused as soon as it passes that, so a 4096x4096 frame in a 64x64 data set
+  costs the 64x64; a reshaped RLE frame of the right length cannot be told
+  from the right one. Every path that decodes a frame has the rule: decoded
+  pixel data, `decompress`, rendering and `convert`, DICOMweb frames and
+  rendered, redaction and a send that transcodes. Any frame longer than the
+  image is refused too, as a shorter one was, and the JPEG decoders refuse a
+  second frame header. `compress.FrameHeaderReader` and `ErrFrameMismatch`
+  let a decoder of the caller's take part. Every file of pydicom's corpus,
+  and dcmtk's encodings of nine of them, decodes to the same samples as
+  before.
 
 - **A refusal is logged once where a server has its own logger** (#537).
   `LoggingEventHandlers` leaves out a refusal the SCP has already logged to
@@ -1634,6 +1645,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sequences included: `examples_overlay.dcm` printed the 64x64 of its icon
   for an image of 300x484, and `CT_small.dcm` the ID of an "other patient" for
   its own. Only the data set's own elements are read now (#335).
+
+- **A lone 9/7 sample at an odd coordinate is no longer halved twice**
+  (#549). Where a tile is too narrow for its decomposition levels, a
+  resolution can be one sample at an odd coordinate. The JPEG 2000 decoder
+  halved it, which the 5/3 filter must do, also for the 9/7, whose
+  coefficients here (as in OpenJPEG) carry that factor of two already: a
+  flat tile of 200 written by `opj_compress -I -t 48,40 -n 6` came back as
+  146 where OpenJPEG and Apple's ImageIO, an independent decoder, both give
+  164, and the narrow edge tiles of a color image came back tens of levels
+  away from OpenJPEG's (115 for 145 at the first such sample). It is now
+  left as it is, and the encoder no longer doubles it, which it never had
+  occasion to. Those codestreams now decode to OpenJPEG's samples within
+  the 9/7 tolerance, and every other one as before. (164 and not 200 is
+  `opj_compress`, which writes that sample at half; every decoder agrees.)
 
 ## [1.10.0] - 2026-11-17
 
