@@ -476,3 +476,23 @@ func TestUIDTableNamesWhatTheStandardRegisters(t *testing.T) {
 		t.Errorf("EnhancedCTImageStorage() = %s, want 1.2.840.10008.5.1.4.1.1.2.1", got)
 	}
 }
+
+// TestHTJ2KAndJPEGXLAreNamedTransferSyntaxes: the six syntaxes that are read
+// and carried and not decoded are in the dictionary, by pydicom's names, so a
+// refusal can say which one a file is in. They were missing, and neither
+// IsTransferSyntax nor a name knew them.
+func TestHTJ2KAndJPEGXLAreNamedTransferSyntaxes(t *testing.T) {
+	for u, name := range map[string]string{
+		"1.2.840.10008.1.2.4.110": "JPEG XL Lossless",
+		"1.2.840.10008.1.2.4.111": "JPEG XL JPEG Recompression",
+		"1.2.840.10008.1.2.4.112": "JPEG XL",
+		"1.2.840.10008.1.2.4.201": "High-Throughput JPEG 2000 Image Compression (Lossless Only)",
+		"1.2.840.10008.1.2.4.202": "High-Throughput JPEG 2000 with RPCL Options Image Compression (Lossless Only)",
+		"1.2.840.10008.1.2.4.203": "High-Throughput JPEG 2000 Image Compression",
+	} {
+		info := uid.GetUIDInfo(u)
+		if info == nil || info.Name != name || !uid.IsTransferSyntax(u) {
+			t.Errorf("%s: %+v, want the transfer syntax %q", u, info, name)
+		}
+	}
+}

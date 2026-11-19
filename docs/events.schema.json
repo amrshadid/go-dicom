@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "go-dicom -events log, one line, version 1",
+  "description": "One line of the log that the network commands append to with -events: a JSON object. The schema is for a line, not for the file. Readers ignore properties this schema does not name; a property added later does not make it a different version. Every line go-dicom writes now says schemaVersion 1; a line without one, as go-dicom 1.10.0 wrote, is version 1 too. See events.md.",
+  "type": "object",
+  "required": ["event", "time"],
+  "properties": {
+    "event": {
+      "type": "string",
+      "pattern": "^(EVT_[A-Z0-9_]+|STORED)$",
+      "description": "What happened: the name of a network event, or STORED, the command's own line for an instance it kept."
+    },
+    "time": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{6}Z$",
+      "description": "When, in UTC, to the microsecond."
+    },
+    "associationId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The association the line belongs to. Numbered from 1 in each process, so two processes writing to one file reuse the numbers. Absent from a line outside an association."
+    },
+    "role": {
+      "enum": ["SCU", "SCP"],
+      "description": "SCU on the side that requested the association, SCP on the side that accepted it."
+    },
+    "localAE": { "type": "string", "description": "The AE title of this side." },
+    "remoteAE": { "type": "string", "description": "The AE title of the other side." },
+    "localAddr": { "type": "string", "description": "This side's address, host:port." },
+    "remoteAddr": { "type": "string", "description": "The other side's address, host:port." },
+    "pdu": { "$ref": "#/$defs/pdu" },
+    "presentationContexts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/presentationContext" },
+      "description": "The presentation contexts as proposed and as answered, on the lines that state the outcome of the negotiation."
+    },
+    "dimse": { "$ref": "#/$defs/dimse" },
+    "stored": { "$ref": "#/$defs/stored" },
+    "description": { "type": "string" },
+    "error": { "type": "string", "description": "The error that ended or failed what the line reports." },
+    "schemaVersion": {
+      "const": 1,
+      "description": "The version of this line's format: 1, the one this schema describes. Written on every line, as the last property. Absent from a line of go-dicom 1.10.0, which is version 1. A reader treats a line with a version it does not know as one it cannot read."
+    }
+  },
+  "$defs": {
+    "pdu": {
+      "type": "object",
+      "description": "A PDU as it crossed the connection. Which of the other properties are present depends on type.",
+      "required": ["type", "typeCode", "length", "bytes"],
+      "properties": {
+        "type": {
+          "enum": ["A-ASSOCIATE-RQ", "A-ASSOCIATE-AC", "A-ASSOCIATE-RJ", "P-DATA-TF", "A-RELEASE-RQ", "A-RELEASE-RP", "A-ABORT", "UNKNOWN"]
+        },
+        "typeCode": { "type": "integer", "minimum": 0, "maximum": 255, "description": "The first byte of the PDU (PS3.8 section 9.3)." },
+        "length": { "type": "integer", "minimum": 0, "description": "The PDU's own length field: the bytes after its 6-byte header." },
+        "bytes": {
+          "type": "string",
+          "pattern": "^([0-9a-f]{2})*$",
+          "description": "The PDU as it crossed the connection, in lower-case hexadecimal. When it was longer than -events-pdu-bytes, the start of it."
+        },
+        "bytesTruncated": { "const": true, "description": "Present, and true, when bytes is only the start of the PDU." },
+        "callingAE": { "type": "string" },
+        "calledAE": { "type": "string" },
+        "maxPDULength": { "type": "integer", "minimum": 1, "description": "The largest PDU the sender of an A-ASSOCIATE-RQ or A-ASSOCIATE-AC will receive." },
+        "implementationClassUID": { "type": "string" },
+        "implementationVersion": { "type": "string" },
+        "proposedContexts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/proposed" },
+          "description": "The presentation contexts of an A-ASSOCIATE-RQ."
+        },
+        "answeredContexts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/answered" },
+          "description": "The presentation contexts of an A-ASSOCIATE-AC."
+        },
+        "result": { "type": "integer", "description": "Result of an A-ASSOCIATE-RJ (PS3.8 Table 9-21)." },
+        "source": { "type": "integer", "description": "Source of an A-ASSOCIATE-RJ or A-ABORT." },
+        "reason": { "type": "integer", "description": "Reason of an A-ASSOCIATE-RJ or A-ABORT." },
+        "pdvs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/pdv" },
+          "description": "The presentation data values of a P-DATA-TF."
+        }
+      }
+    },
+    "proposed": {
+      "type": "object",
+      "required": ["id", "abstractSyntax", "transferSyntaxes"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 255 },
+        "abstractSyntax": { "type": "string" },
+        "transferSyntaxes": { "type": ["array", "null"], "items": { "type": "string" } }
+      }
+    },
+    "answered": {
+      "type": "object",
+      "required": ["id", "result", "resultText"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 255 },
+        "result": { "type": "integer", "description": "PS3.8 Table 9-18: 0 acceptance, 1 user-rejection, 2 no-reason, 3 abstract-syntax-not-supported, 4 transfer-syntaxes-not-supported." },
+        "resultText": { "type": "string" },
+        "transferSyntax": { "type": "string", "description": "Present for an accepted context." }
+      }
+    },
+    "pdv": {
+      "type": "object",
+      "required": ["contextId", "command", "last", "length"],
+      "properties": {
+        "contextId": { "type": "integer", "minimum": 1, "maximum": 255 },
+        "command": { "type": "boolean", "description": "True for a fragment of a command, false for one of a data set." },
+        "last": { "type": "boolean", "description": "True for the last fragment of its message." },
+        "length": { "type": "integer", "minimum": 0, "description": "The bytes of the fragment, not counting its 2-byte header." }
+      }
+    },
+    "presentationContext": {
+      "type": "object",
+      "required": ["id", "abstractSyntax", "transferSyntaxes", "result", "resultText"],
+      "properties": {
+        "id": { "type": "integer", "minimum": 1, "maximum": 255 },
+        "abstractSyntax": { "type": "string" },
+        "transferSyntaxes": { "type": ["array", "null"], "items": { "type": "string" }, "description": "The transfer syntaxes proposed." },
+        "result": { "type": "integer" },
+        "resultText": { "type": "string" },
+        "transferSyntax": { "type": "string", "description": "The transfer syntax accepted, when the context was." }
+      }
+    },
+    "dimse": {
+      "type": "object",
+      "description": "A DIMSE message, from its command set.",
+      "required": ["command", "commandField", "contextId", "hasDataSet"],
+      "properties": {
+        "command": { "type": "string", "description": "The command's name, such as C-STORE-RQ." },
+        "commandField": { "type": "integer", "minimum": 0, "description": "Command Field (0000,0100)." },
+        "contextId": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "messageId": { "type": "integer", "minimum": 0, "description": "Message ID (0000,0110), on a request." },
+        "messageIdBeingRespondedTo": { "type": "integer", "minimum": 0, "description": "Message ID Being Responded To (0000,0120), on a response." },
+        "affectedSOPClassUID": { "type": "string" },
+        "affectedSOPInstanceUID": { "type": "string" },
+        "requestedSOPClassUID": { "type": "string" },
+        "requestedSOPInstanceUID": { "type": "string" },
+        "moveDestination": { "type": "string" },
+        "hasDataSet": { "type": "boolean", "description": "Whether a data set follows the command." },
+        "status": { "type": "integer", "minimum": 0, "description": "Status (0000,0900), on a response." },
+        "remaining": { "type": "integer", "minimum": 0 },
+        "completed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "stored": {
+      "type": "object",
+      "description": "On a STORED line: an instance the command kept.",
+      "required": ["sopClassUID", "sopInstanceUID", "path"],
+      "properties": {
+        "sopClassUID": { "type": "string" },
+        "sopInstanceUID": { "type": "string" },
+        "path": { "type": "string", "description": "Where it was written." }
+      }
+    }
+  }
+}

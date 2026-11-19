@@ -9,6 +9,8 @@ import (
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/matching"
+	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -181,24 +183,24 @@ func QueryLevel(query *dataset.Dataset) (Level, error) {
 // Query answers a C-FIND, returning one data set per matching entity at the
 // level the query names.
 //
-// Matching follows PS3.4 C.2.2: every attribute the query carries a value for
-// must match, and an attribute with a zero-length value matches anything and is
-// returned. Attributes this store does not index are treated as unsupported
-// optional keys — returned with a zero-length value, as C.2.2.1.2 allows — rather
-// than matched, since matching on an attribute that was never indexed would
-// silently return nothing.
+// Matching follows PS3.4 C.2.2, by package matching: every attribute the query
+// carries a value for must match, and an attribute with a zero-length value
+// matches anything and is returned. Attributes this store does not index are
+// treated as unsupported optional keys — returned with a zero-length value, as
+// C.2.2.1.2 allows — rather than matched, since matching on an attribute that
+// was never indexed would silently return nothing.
 func (s *Store) Query(ctx context.Context, query *dataset.Dataset) ([]*dataset.Dataset, error) {
 	level, err := QueryLevel(query)
 	if err != nil {
 		return nil, err
 	}
 
-	matched, err := s.matchInstances(ctx, query, level)
+	matched, id, err := s.match(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	return s.buildResponses(query, level, matched), nil
+	return s.buildResponses(query, level, matched, id), nil
 }
 
 // MatchingInstances answers a C-GET or C-MOVE: the instances to transfer, rather
@@ -215,19 +217,22 @@ func (s *Store) MatchingInstances(ctx context.Context, query *dataset.Dataset) (
 }
 
 // matchInstances returns the instances satisfying a query.
-func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, level Level) ([]*Instance, error) {
-	if query == nil {
-		return nil, fmt.Errorf("the query is nil")
-	}
+func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, _ Level) ([]*Instance, error) {
+	matched, _, err := s.match(ctx, query)
+	return matched, err
+}
 
-	// The keys to match on: every attribute in the query except the level itself,
-	// the computed counts, and anything not indexed.
-	type criterion struct {
-		vr    dataelem.VR
-		tag   tag.Tag
-		value string
+// match returns the instances satisfying a query, and the query as matching
+// read it, which the answers choose their sequence items by.
+//
+// The matching is package matching's, run against the index through
+// instanceAttributes, so the archive answers a query as anything else built on
+// that package does. What is this store's is which keys it can match on:
+// skipUnindexed passes over the rest.
+func (s *Store) match(ctx context.Context, query *dataset.Dataset) ([]*Instance, *matching.Identifier, error) {
+	if query == nil {
+		return nil, nil, fmt.Errorf("the query is nil")
 	}
-	var criteria []criterion
 
 	// Modalities in Study is computed, so no instance carries it to compare,
 	// but it is still a matching key (PS3.4 C.6.2.1): a study matches when any
@@ -241,51 +246,11 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 		}
 	}
 
-	// Sequence keys are matched separately: the criteria live inside an item
-	// rather than in a value, so they cannot be reduced to a string comparison.
-	var sequenceKeys []*dataelem.DataElement
-
-	// The query's text is in the character set the query declares, which
+	// The query's text is read in the character set the query declares, which
 	// need not be the one any instance arrived in.
-	encodings := textEncodings(query, nil)
-
-	for _, elem := range query.GetAll() {
-		t, ok := elem.Tag()
-		if !ok || t == tagQueryRetrieveLevel || computedKeys[t] {
-			continue
-		}
-
-		// PS3.4 C.2.2.2.6. Only the sequences this store indexes can be matched
-		// on; any other is an unsupported optional key like a flat one.
-		if elem.GetVR() == dataelem.SQ {
-			if isIndexedSequence(t) {
-				sequenceKeys = append(sequenceKeys, elem)
-			} else {
-				storeLogger.Debug("dcmstore: ignoring the sequence %s in a query; it is not indexed",
-					t.String())
-			}
-			continue
-		}
-
-		if trimPadding(elementString(elem)) == "" {
-			// Universal matching: it selects nothing and is returned in the
-			// response, which buildResponses handles.
-			continue
-		}
-
-		vr, indexed := indexedTags[t]
-		if !indexed {
-			// An unsupported optional key. Matching on it would return nothing at
-			// all, which is a worse answer than ignoring it — C.2.2.1.2 permits an
-			// SCP to ignore optional keys it does not support.
-			storeLogger.Debug("dcmstore: ignoring %s in a query; it is not indexed", t.String())
-			continue
-		}
-		if elemVR := elem.GetVR(); elemVR != "" && dataelem.IsValidVR(elemVR) {
-			vr = elemVR
-		}
-
-		criteria = append(criteria, criterion{vr: vr, tag: t, value: elementText(elem, vr, encodings)})
+	id, err := matching.Compile(query, matching.Options{Skip: skipUnindexed})
+	if err != nil {
+		return nil, nil, err
 	}
 
 	s.mu.RLock()
@@ -308,33 +273,14 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 	var matched []*Instance
 	for _, inst := range candidates {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		keep := len(modalitiesWanted) == 0 ||
-			studyHoldsAny(studyModalities[inst.value(tagStudyInstanceUID)], modalitiesWanted)
-		for _, c := range criteria {
-			if !keep {
-				break
-			}
-			if !matchValue(c.vr, c.value, inst.value(c.tag)) {
-				keep = false
-				break
-			}
+		if len(modalitiesWanted) > 0 &&
+			!studyHoldsAny(studyModalities[inst.value(tagStudyInstanceUID)], modalitiesWanted) {
+			continue
 		}
-		if keep {
-			for _, seqElem := range sequenceKeys {
-				seqTag, ok := seqElem.Tag()
-				if !ok {
-					continue
-				}
-				if !matchSequence(seqElem, inst, seqTag, encodings) {
-					keep = false
-					break
-				}
-			}
-		}
-		if keep {
+		if id.Match(instanceAttributes{inst}) {
 			matched = append(matched, inst)
 		}
 	}
@@ -345,8 +291,68 @@ func (s *Store) matchInstances(ctx context.Context, query *dataset.Dataset, leve
 		return instanceOrder(matched[i]) < instanceOrder(matched[j])
 	})
 
-	_ = level
-	return matched, nil
+	return matched, id, nil
+}
+
+// skipUnindexed is this store's matching.Options.Skip: the elements of a
+// query it does not match on.
+//
+// QueryRetrieveLevel says what to return, not what to match. The computed
+// keys are counted rather than stored, and Modalities in Study is matched by
+// match itself. An attribute the index does not hold is an unsupported
+// optional key: matching on it would return nothing at all, which is a worse
+// answer than ignoring it — C.2.2.1.2 permits an SCP to ignore optional keys
+// it does not support. A key with no value is kept whatever it is: it selects
+// nothing, and says only that the attribute is to be returned.
+func skipUnindexed(parent tag.Tag, elem *dataelem.DataElement) bool {
+	t, ok := elem.Tag()
+	if !ok {
+		return true
+	}
+
+	if parent != 0 {
+		// Inside a sequence item: the attributes indexed for that sequence.
+		if trimPadding(elementString(elem)) == "" {
+			return false
+		}
+		if _, indexed := indexedSequences[parent][t]; !indexed {
+			storeLogger.Debug("dcmstore: ignoring %s inside %s in a query; it is not indexed",
+				t.String(), parent.String())
+			return true
+		}
+		return false
+	}
+
+	if t == tagQueryRetrieveLevel || computedKeys[t] {
+		return true
+	}
+
+	// PS3.4 C.2.2.2.6. Only the sequences this store indexes can be matched
+	// on; any other is an unsupported optional key like a flat one.
+	if elem.GetVR() == dataelem.SQ {
+		if !isIndexedSequence(t) {
+			storeLogger.Debug("dcmstore: ignoring the sequence %s in a query; it is not indexed",
+				t.String())
+			return true
+		}
+		if seq, ok := elem.GetValue().(*sequence.Sequence); ok && seq != nil && seq.Length() > 1 {
+			// The first is used, since refusing the query outright would answer
+			// a peer's minor error with no results at all.
+			storeLogger.Warn("dcmstore: the query sequence %s carries %d items and "+
+				"PS3.4 C.2.2.2.6 allows one; matching on the first",
+				t.String(), seq.Length())
+		}
+		return false
+	}
+
+	if trimPadding(elementString(elem)) == "" {
+		return false
+	}
+	if _, indexed := indexedTags[t]; !indexed {
+		storeLogger.Debug("dcmstore: ignoring %s in a query; it is not indexed", t.String())
+		return true
+	}
+	return false
 }
 
 // studyHoldsAny reports whether any modality asked for, which may carry
@@ -394,7 +400,8 @@ func padNumeric(value string) string {
 
 // buildResponses groups matched instances by the level's unique key and builds one
 // response data set for each.
-func (s *Store) buildResponses(query *dataset.Dataset, level Level, matched []*Instance) []*dataset.Dataset {
+func (s *Store) buildResponses(query *dataset.Dataset, level Level, matched []*Instance,
+	identifier *matching.Identifier) []*dataset.Dataset {
 	unique := uniqueKey[level]
 
 	// Group, preserving the order matched arrived in so responses stay stable.
@@ -408,10 +415,9 @@ func (s *Store) buildResponses(query *dataset.Dataset, level Level, matched []*I
 		groups[id] = append(groups[id], inst)
 	}
 
-	encodings := textEncodings(query, nil)
 	responses := make([]*dataset.Dataset, 0, len(order))
 	for _, id := range order {
-		response := s.buildResponse(query, level, groups[id], encodings)
+		response := s.buildResponse(query, level, groups[id], identifier)
 		declareCharacterSet(response)
 		responses = append(responses, response)
 	}
@@ -422,15 +428,15 @@ func (s *Store) buildResponses(query *dataset.Dataset, level Level, matched []*I
 //
 // It carries QueryRetrieveLevel, the unique key of every level down to this one —
 // which is what lets the requestor use the result as the query for the next level
-// down — and every attribute the query asked for. The query's encodings are
-// what the criteria inside its sequences are read with.
+// down — and every attribute the query asked for. matched is the query as
+// matching read it, which picks the sequence item to answer with.
 //
 // Specific Character Set is not among them: in a query it says how the query
 // is written, and the answer's own is declareCharacterSet's to give. Treated
 // as a key it came back empty, which tells a peer there is a character set to
 // apply and does not name it.
 func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Instance,
-	encodings []string) *dataset.Dataset {
+	matched *matching.Identifier) *dataset.Dataset {
 	response := dataset.NewDataset()
 	representative := group[0]
 
@@ -467,7 +473,7 @@ func (s *Store) buildResponse(query *dataset.Dataset, level Level, group []*Inst
 		// response describes the step the query was about rather than whichever
 		// item happened to be first.
 		if elem.GetVR() == dataelem.SQ && isIndexedSequence(t) {
-			_ = response.Add(buildSequenceResponse(elem, representative, t, encodings))
+			_ = response.Add(buildSequenceResponse(matched.Item(t), representative, t))
 			continue
 		}
 

@@ -27,6 +27,12 @@ func FuzzJPEGExtendedDecompress(f *testing.F) {
 			f.Add(data)
 		}
 	}
+	// Subsampled color, which goes through the chroma filter.
+	for _, name := range []string{"422_9x7.jpg", "420_9x7.jpg", "420_4x9.jpg"} {
+		if data, err := os.ReadFile("testdata/upsample/" + name); err == nil {
+			f.Add(data)
+		}
+	}
 
 	// A 12-bit frame header claiming a size nothing backs, so the router sends
 	// it here and the decoder meets an empty scan.
@@ -37,10 +43,23 @@ func FuzzJPEGExtendedDecompress(f *testing.F) {
 	f.Add([]byte{0xFF, 0xD8, 0xFF, 0xC1, 0x00, 0x02, 0xFF, 0xDA, 0x00, 0x02})
 
 	decoder := compress.NewJPEGDecompressor()
+	// The decoder a data set gives a color frame, which hands image/jpeg the
+	// stream with a JFIF marker put in front: it must fail exactly where the
+	// guessing decoder fails, and the marker must not make a frame decode
+	// that would not have.
+	stored := compress.NewJPEGDecompressorForPhotometric("RGB")
 	f.Fuzz(func(t *testing.T, data []byte) {
 		_ = decoder.CanDecompress(data)
-		if out, err := decoder.Decompress(data); err == nil && len(out) == 0 {
+		out, err := decoder.Decompress(data)
+		if err == nil && len(out) == 0 {
 			t.Fatal("decoded successfully but produced no pixels")
 		}
+		asStored, storedErr := stored.Decompress(data)
+		if (err == nil) != (storedErr == nil) || len(asStored) != len(out) {
+			t.Fatalf("with a data set's Photometric Interpretation: %d bytes, error %v; without: %d bytes, error %v",
+				len(asStored), storedErr, len(out), err)
+		}
+		checkFrameWidths(t, decoder, data, out, err)
+		checkFrameHeaderAgrees(t, decoder, data, out, err)
 	})
 }

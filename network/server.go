@@ -58,6 +58,9 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 		Events: NewEventManager(),
 		Logger: NewLogger(LogLevelInfo, nil),
 	}
+	if l := loggerFor(config.Logger); l != nil {
+		s.Logger = l
+	}
 	if config.Events != nil {
 		s.Events = config.Events
 	}
@@ -76,7 +79,7 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 	scp.mu.Unlock()
 
 	s.Logger.Info("Server %s started on %s", config.AETitle, ln.Addr().String())
-	s.Events.Emit(&Event{Type: EVTConnOpen, Description: "server started", RemoteAddr: ln.Addr().String()})
+	s.Events.emit(&Event{Type: EVTConnOpen, Description: "server started", RemoteAddr: ln.Addr().String()}, scp.ownLog)
 
 	// Run accept loop in background
 	s.wg.Add(1)
@@ -110,6 +113,9 @@ func StartServerTLS(ctx context.Context, config SCPConfig, handler Handler, tlsC
 		cancel: cancel,
 		Events: NewEventManager(),
 		Logger: NewLogger(LogLevelInfo, nil),
+	}
+	if l := loggerFor(config.Logger); l != nil {
+		s.Logger = l
 	}
 	if config.Events != nil {
 		s.Events = config.Events
@@ -167,7 +173,10 @@ func (s *Server) SetHandler(handler Handler) {
 	s.scp.SetHandler(handler)
 }
 
-// SetSupportedAbstractSyntaxes configures which SOP Classes this server accepts.
+// SetSupportedAbstractSyntaxes configures which SOP Classes this server
+// accepts, for associations negotiated from then on. The accept loop is
+// already running when StartServer returns, so SCPConfig.AbstractSyntaxes is
+// the way to set them before the first.
 func (s *Server) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedAbstractSyntaxes(syntaxes)
 }
@@ -190,7 +199,9 @@ func (s *Server) ReportUPSEvent(ctx context.Context, receivingAE string, event *
 	return s.scp.ReportUPSEvent(ctx, receivingAE, event)
 }
 
-// SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server accepts.
+// SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server
+// accepts, for associations negotiated from then on; SCPConfig.TransferSyntaxes
+// sets them before the first.
 func (s *Server) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedTransferSyntaxes(syntaxes)
 }

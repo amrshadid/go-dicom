@@ -3,6 +3,7 @@ package network_test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,28 +138,47 @@ func TestCompressedInstanceIsRecodedForAnRLEContext(t *testing.T) {
 }
 
 // TestUnencodableCompressedTargetIsRefused checks the syntaxes this library
-// cannot encode still fail rather than sending something mislabeled.
+// does not encode, for a sender that has not asked for them, still fail
+// rather than sending something mislabeled.
 func TestUnencodableCompressedTargetIsRefused(t *testing.T) {
 	ds := corpusFile(t, "CT_small.dcm")
 
-	// JPEG-LS Lossless is no longer here: there is an encoder for it now. What
-	// remains has none, and a send that cannot be satisfied has to fail rather
-	// than put bytes on the wire described as something they are not — which the
-	// receiver could not detect.
+	// A send that cannot be satisfied has to fail rather than put bytes on the
+	// wire described as something they are not, which the receiver could not
+	// detect. The list is what is true now. It went stale when the JPEG 2000
+	// Lossless encoder arrived (#327), because it is edited by hand: every
+	// compressed syntax a data set is written in has an encoder (RLE, JPEG-LS
+	// Lossless and Near-Lossless, JPEG 2000 Lossless and lossy, JPEG Lossless
+	// in both forms, JPEG Baseline and Extended). What stays refused here is
+	// the lossy ones that EncodeDataset, which states no loss accepted, cannot
+	// be asked for:
 	//
-	// JPEG-LS *Near*-Lossless stays refused although the same encoder could
-	// produce it: it is lossy, and how much error to accept is the caller's
-	// decision rather than one to make silently while transcoding.
+	//   - JPEG Baseline and JPEG Extended need NetworkConfig.JPEGQuality;
+	//   - lossy JPEG 2000 (.91) needs NetworkConfig.JPEG2000Rate.
+	//
+	// The sender who has said how much loss it accepts is tested with those.
+	// JPEG-LS Near-Lossless is not here: with no error allowed it is coded
+	// losslessly, which that syntax includes (#337).
 	for _, target := range []string{
 		network.JPEGBaselineUID,
-		network.JPEG2000LosslessUID,
-		network.JPEGLSNearLosslessUID,
+		network.JPEGExtendedUID,
+		network.JPEG2000UID,
 	} {
 		t.Run(target, func(t *testing.T) {
-			if _, err := network.EncodeDataset(ds, target); err == nil {
-				t.Errorf("a native instance encoded for %s; there is no encoder for it", target)
+			_, err := network.EncodeDataset(ds, target)
+			if err == nil {
+				t.Fatalf("a native instance encoded for %s with no loss accepted", target)
+			}
+			if !strings.Contains(err.Error(), target) {
+				t.Errorf("the refusal does not name %s: %v", target, err)
 			}
 		})
+	}
+
+	// And the one that was in the list is encoded: a refusal here would be as
+	// wrong as the silence above.
+	if _, err := network.EncodeDataset(ds, network.JPEG2000LosslessUID); err != nil {
+		t.Errorf("JPEG 2000 Lossless has an encoder and a native instance is refused for it: %v", err)
 	}
 }
 

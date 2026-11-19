@@ -366,16 +366,15 @@ func (a *Anonymizer) applyAction(ds *dataset.Dataset, t tag.Tag, action Action) 
 		if !exists {
 			return nil
 		}
-		value := elem.GetValue()
-		var originalUID string
-		switch v := value.(type) {
-		case []byte:
-			originalUID = strings.TrimRight(string(v), "\x00 ")
-		case string:
-			originalUID = strings.TrimRight(v, "\x00 ")
-		default:
+		// Read through Bytes, as the file writer will. A switch here knew []byte
+		// and string, so a UID list held as []string was taken for no UID and
+		// kept its original values (#420); the same list read from a file was
+		// replaced.
+		raw, ok := elem.Bytes()
+		if !ok {
 			return nil
 		}
+		originalUID := strings.TrimRight(string(raw), "\x00 ")
 		if originalUID == "" {
 			return nil
 		}

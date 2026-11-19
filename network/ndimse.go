@@ -1,6 +1,9 @@
 package network
 
 import (
+	"encoding/binary"
+
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -23,9 +26,56 @@ const (
 
 // Additional command tag constants for N-DIMSE.
 var (
-	tagEventTypeID  = tag.New(0x0000, 0x1002)
-	tagActionTypeID = tag.New(0x0000, 0x1008)
+	tagEventTypeID             = tag.New(0x0000, 0x1002)
+	tagAttributeIdentifierList = tag.New(0x0000, 0x1005)
+	tagActionTypeID            = tag.New(0x0000, 0x1008)
 )
+
+// attributeIdentifierList reads an N-GET-RQ's Attribute Identifier List
+// (0000,1005), the attributes the requester asked for (PS3.7 10.1.2.1.4). An
+// absent or empty list means every attribute, and is returned as nil.
+//
+// The value is AT, VM 1-n: each tag a group then an element, two bytes each,
+// little endian, since a command set is always Implicit VR Little Endian
+// (PS3.5 6.2, PS3.7 6.3.1). A length that is not a multiple of four is not a
+// list of tags; reading what fits would hand the handler a list the requester
+// did not send, so it is an error.
+func attributeIdentifierList(cmd *dataset.Dataset) ([]tag.Tag, error) {
+	elem, ok := cmd.Get(tagAttributeIdentifierList)
+	if !ok {
+		return nil, nil
+	}
+	data, ok := elem.Bytes()
+	if !ok {
+		return nil, NewPDUErrorf("N-GET", "Attribute Identifier List holds %T, not bytes", elem.GetValue())
+	}
+	if len(data)%4 != 0 {
+		return nil, NewPDUErrorf("N-GET",
+			"Attribute Identifier List is %d bytes, not a whole number of tags", len(data))
+	}
+	var tags []tag.Tag
+	for i := 0; i < len(data); i += 4 {
+		tags = append(tags, tag.New(binary.LittleEndian.Uint16(data[i:]), binary.LittleEndian.Uint16(data[i+2:])))
+	}
+	return tags, nil
+}
+
+// addAttributeIdentifierList writes an N-GET-RQ's Attribute Identifier List
+// (0000,1005), the inverse of attributeIdentifierList: each tag a group then
+// an element, little endian. An empty list is not written, since its absence
+// already means every attribute (PS3.7 10.1.2.1.4) and an AT value of VM 1-n
+// holds at least one tag.
+func addAttributeIdentifierList(cmd *dataset.Dataset, attributes []tag.Tag) error {
+	if len(attributes) == 0 {
+		return nil
+	}
+	data := make([]byte, 0, 4*len(attributes))
+	for _, t := range attributes {
+		data = binary.LittleEndian.AppendUint16(data, t.Group())
+		data = binary.LittleEndian.AppendUint16(data, t.Element())
+	}
+	return cmd.Add(dataelem.NewDataElement(tagAttributeIdentifierList, dataelem.AT, data))
+}
 
 // NEventReportRequest represents an N-EVENT-REPORT-RQ message.
 type NEventReportRequest struct {
@@ -36,7 +86,9 @@ type NEventReportRequest struct {
 	DataSet             *dataset.Dataset
 }
 
-// NEventReportResponse represents an N-EVENT-REPORT-RSP message.
+// NEventReportResponse represents an N-EVENT-REPORT-RSP message. DataSet is
+// the event reply: one a handler returns is sent after the response, and the
+// SCU fills it when the peer sent one (PS3.7 10.1.1).
 type NEventReportResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -46,7 +98,9 @@ type NEventReportResponse struct {
 	DataSet              *dataset.Dataset
 }
 
-// NGetRequest represents an N-GET-RQ message.
+// NGetRequest represents an N-GET-RQ message. AttributeList is the Attribute
+// Identifier List (0000,1005) the requester sent, in its order; nil means it
+// asked for every attribute (PS3.7 10.1.2.1.4).
 type NGetRequest struct {
 	MessageID            uint16
 	RequestedSOPClass    string
@@ -54,7 +108,9 @@ type NGetRequest struct {
 	AttributeList        []tag.Tag
 }
 
-// NGetResponse represents an N-GET-RSP message.
+// NGetResponse represents an N-GET-RSP message. DataSet is the attribute list:
+// one a handler returns is sent after the response, and the SCU fills it when
+// the peer sent one (PS3.7 10.1.2).
 type NGetResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -71,7 +127,9 @@ type NSetRequest struct {
 	DataSet              *dataset.Dataset
 }
 
-// NSetResponse represents an N-SET-RSP message.
+// NSetResponse represents an N-SET-RSP message. DataSet is the attribute list:
+// one a handler returns is sent after the response, and the SCU fills it when
+// the peer sent one (PS3.7 10.1.3).
 type NSetResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -89,7 +147,9 @@ type NActionRequest struct {
 	DataSet              *dataset.Dataset
 }
 
-// NActionResponse represents an N-ACTION-RSP message.
+// NActionResponse represents an N-ACTION-RSP message. DataSet is the action
+// reply: one a handler returns is sent after the response, and the SCU fills
+// it when the peer sent one (PS3.7 10.1.4).
 type NActionResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string
@@ -107,7 +167,9 @@ type NCreateRequest struct {
 	DataSet             *dataset.Dataset
 }
 
-// NCreateResponse represents an N-CREATE-RSP message.
+// NCreateResponse represents an N-CREATE-RSP message. DataSet is the attribute
+// list of the created instance: one a handler returns is sent after the
+// response, and the SCU fills it when the peer sent one (PS3.7 10.1.5).
 type NCreateResponse struct {
 	MessageIDRespondedTo uint16
 	AffectedSOPClass     string

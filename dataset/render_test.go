@@ -2,6 +2,8 @@ package dataset_test
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"strconv"
@@ -172,6 +174,44 @@ func TestRenderWithoutAWindowUsesTheDataRange(t *testing.T) {
 	}
 }
 
+// TestRenderStoredRange checks RenderOptions.StoredRange, the identity VOI
+// LUT of PS3.3 C.11.2.1.2.2: an image with no window spans what its Bits
+// Stored can hold, through its rescale, not the values it holds. 12 bits
+// unsigned is 0 to 4095; signed, -2048 to 2047; with slope 2 and intercept
+// -1024 that becomes -5120 to 3070, where stored 512 is 0, at 159 of 255.
+// A window in the image wins.
+func TestRenderStoredRange(t *testing.T) {
+	stored := &dataset.RenderOptions{StoredRange: true}
+	for _, c := range []struct {
+		name string
+		p    picture
+		want []uint8
+	}{
+		{"unsigned", picture{allocated: 16, stored: 12, photometric: "MONOCHROME2",
+			px: words(0, 1000, 4095)}, []uint8{0, 62, 255}},
+		{"signed", picture{allocated: 16, stored: 12, signed: true, photometric: "MONOCHROME2",
+			px: words(0x0800, 0, 0x07FF)}, []uint8{0, 128, 255}},
+		{"rescaled", picture{allocated: 16, stored: 12, signed: true, photometric: "MONOCHROME2",
+			px: words(0x0800, 0x0200, 0x07FF), text: map[tag.Tag]string{tagSlope: "2", tagIntercept: "-1024"}},
+			[]uint8{0, 159, 255}},
+		{"a window of its own", picture{allocated: 16, stored: 12, photometric: "MONOCHROME2",
+			px: words(0, 1000, 4095), text: map[tag.Tag]string{tagWindowCenter: "1000", tagWindowWidth: "2"}},
+			[]uint8{0, 255, 255}},
+	} {
+		if got := grays(t, c.p.dataset(), stored); !sameLevels(got, c.want) {
+			t.Errorf("%s: levels %v, want %v", c.name, got, c.want)
+		}
+	}
+	// The values alone, without the option: the same three span 0 to 255.
+	ramp := picture{allocated: 16, stored: 12, photometric: "MONOCHROME2", px: words(100, 200, 300)}.dataset()
+	if got := grays(t, ramp, stored); !sameLevels(got, []uint8{6, 12, 19}) {
+		t.Errorf("stored range: %v", got)
+	}
+	if got := grays(t, ramp, nil); !sameLevels(got, []uint8{0, 128, 255}) {
+		t.Errorf("values' range: %v", got)
+	}
+}
+
 // TestRenderInvertsMonochrome1: high values are dark there.
 func TestRenderInvertsMonochrome1(t *testing.T) {
 	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME1", px: []byte{10, 20, 30}}.dataset()
@@ -211,6 +251,31 @@ func TestRenderVOIFunctions(t *testing.T) {
 		if got := grays(t, ds, nil); !sameLevels(got, want) {
 			t.Errorf("%s: levels %v, want %v", function, got, want)
 		}
+	}
+}
+
+// TestRenderWindowOptionFunction: a window given as an option is applied by
+// the function it names, in either case, as the data set's own is, and a
+// function the standard does not have is refused.
+func TestRenderWindowOptionFunction(t *testing.T) {
+	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME2", px: []byte{10, 20, 30}}.dataset()
+	for function, want := range map[string][]uint8{
+		"":             {6, 134, 255},
+		"linear":       {6, 134, 255},
+		"LINEAR_EXACT": {0, 128, 255},
+		"sigmoid":      {30, 128, 225},
+	} {
+		width := 20.0
+		if function == "" || function == "linear" {
+			width = 21
+		}
+		opts := &dataset.RenderOptions{Window: &dataset.Window{Center: 20, Width: width, Function: function}}
+		if got := grays(t, ds, opts); !sameLevels(got, want) {
+			t.Errorf("%q: levels %v, want %v", function, got, want)
+		}
+	}
+	if _, err := ds.RenderFrame(0, &dataset.RenderOptions{Window: &dataset.Window{Center: 20, Width: 20, Function: "GAMMA"}}); err == nil {
+		t.Error("a VOI LUT Function the standard does not have was accepted")
 	}
 }
 
@@ -316,6 +381,38 @@ func TestRenderFrames(t *testing.T) {
 	}
 	if _, err := dataset.NewDataset().RenderFrame(0, nil); err == nil {
 		t.Error("a data set with no image was rendered")
+	}
+}
+
+// TestRenderEachFrame: each frame is handed over in order, the same image
+// RenderFrames gives, and an error from the caller stops it and comes back.
+func TestRenderEachFrame(t *testing.T) {
+	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME2", frames: 3, px: []byte{0, 255, 255, 0, 9, 9},
+		text: map[tag.Tag]string{tagWindowCenter: "128", tagWindowWidth: "256"}}.dataset()
+	all, err := ds.RenderFrames(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen []int
+	err = ds.RenderEachFrame(nil, func(f int, img image.Image) error {
+		seen = append(seen, f)
+		if !sameLevels(img.(*image.Gray).Pix, all[f].(*image.Gray).Pix) {
+			t.Errorf("frame %d differs from RenderFrames'", f)
+		}
+		return nil
+	})
+	if err != nil || fmt.Sprint(seen) != "[0 1 2]" {
+		t.Errorf("frames %v handed over, %v", seen, err)
+	}
+
+	stop := errors.New("disk full")
+	seen = nil
+	err = ds.RenderEachFrame(nil, func(f int, _ image.Image) error {
+		seen = append(seen, f)
+		return stop
+	})
+	if !errors.Is(err, stop) || len(seen) != 1 {
+		t.Errorf("after an error: frames %v, %v", seen, err)
 	}
 }
 

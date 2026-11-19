@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,6 +21,9 @@ var associationIDs atomic.Uint64
 // can happen without being seen, and neither has to remember to say so.
 type observer struct {
 	events *EventManager
+	// log is where a panic in an event handler is reported: the SCU's or
+	// SCP's own logger, nil for DefaultLogger.
+	log    *Logger
 	id     uint64
 	local  string
 	remote string
@@ -34,15 +38,30 @@ type observer struct {
 	// The command set being assembled from PDVs, each way: [0] sent, [1]
 	// received.
 	command [2]bytes.Buffer
+	// refusal is the line the SCP logged for the refusal it is about to
+	// send, carried to that refusal's EVTAssocRejected.
+	refusal *refusalLine
+}
+
+// loggedRefusal records that the SCP logged the refusal it is about to send
+// on this transport with log, at level.
+func (t *Transport) loggedRefusal(log *Logger, level LogLevel) {
+	o := t.observed()
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	o.refusal = &refusalLine{log: log, level: level}
+	o.mu.Unlock()
 }
 
 // observe makes the transport report to events. Nil stops nothing and costs
 // nothing.
-func (t *Transport) observe(events *EventManager) {
+func (t *Transport) observe(events *EventManager, log *Logger) {
 	if events == nil {
 		return
 	}
-	o := &observer{events: events, id: associationIDs.Add(1)}
+	o := &observer{events: events, log: log, id: associationIDs.Add(1)}
 	if addr := t.LocalAddr(); addr != nil {
 		o.local = addr.String()
 	}
@@ -52,7 +71,7 @@ func (t *Transport) observe(events *EventManager) {
 	t.mu.Lock()
 	t.obs = o
 	t.mu.Unlock()
-	o.events.Emit(o.event(EVTConnOpen))
+	o.emit(o.event(EVTConnOpen))
 }
 
 // observed returns the transport's observer, nil when it has none.
@@ -61,6 +80,10 @@ func (t *Transport) observed() *observer {
 	defer t.mu.Unlock()
 	return t.obs
 }
+
+// emit reports an event of this connection, a panic in a handler going to
+// the connection's own logger.
+func (o *observer) emit(e *Event) { o.events.emit(e, o.log) }
 
 // associationID is the number this connection's events carry, 0 when it
 // reports none.
@@ -75,7 +98,7 @@ func (t *Transport) associationID() uint64 {
 // closing.
 func (t *Transport) emit(eventType EventType) {
 	if o := t.observed(); o != nil {
-		o.events.Emit(o.event(eventType))
+		o.emit(o.event(eventType))
 	}
 }
 
@@ -92,9 +115,36 @@ func (o *observer) event(eventType EventType) *Event {
 	}
 }
 
+// wantsBytes reports whether a received PDU of this type should be kept as
+// it is read, for an event that hands its bytes to a handler.
+//
+// A P-DATA-TF is reported with its bytes on EVTPDURecv and on nothing else:
+// the DIMSE events are read from its PDVs, not from the raw bytes, and
+// EVTDataRecv is not emitted. It carries the data sets, so it is copied only
+// while a handler of EVTPDURecv is registered. Every other PDU is copied as
+// before: each is reported with its bytes on an association event as well
+// (EVTAssocRequested, EVTAssocAccepted and the rest), and each is bounded
+// and small, an A-ASSOCIATE-RQ at most MaxAssociatePDULength.
+//
+// The answer is taken when the PDU begins to arrive. A handler of
+// EVTPDURecv registered while a P-DATA-TF is being read is given that PDU
+// without its bytes, and the next one with them.
+func (o *observer) wantsBytes(pduType byte) bool {
+	if pduType != PDUTypeDataTF {
+		return true
+	}
+	return o.events.HasHandlers(EVTPDURecv)
+}
+
 // pdu reports a PDU that was sent or received, and whatever it means for
 // the association and for the DIMSE message it is part of.
 func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
+	o.pduWhy(sent, pdu, raw, nil)
+}
+
+// pduWhy is pdu, with why this side aborted when the PDU is an A-ABORT it
+// sent.
+func (o *observer) pduWhy(sent bool, pdu PDU, raw []byte, local *LocalAbort) {
 	eventType, direction := EVTPDURecv, 1
 	if sent {
 		eventType, direction = EVTPDUSent, 0
@@ -118,32 +168,48 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 			o.role, o.localAE, o.remoteAE = "SCP", p.CalledAE, p.CallingAE
 		}
 		o.mu.Unlock()
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocRequested))
+		o.emit(with(eventType))
+		o.emit(with(EVTAssocRequested))
 
 	case *AssociateAC:
-		o.events.Emit(with(eventType))
+		o.emit(with(eventType))
 		contexts := o.negotiated(p)
 		for _, t := range []EventType{EVTAssocAccepted, EVTAssocEstablished} {
 			e := with(t)
 			e.Detail.PresentationContexts = contexts
-			o.events.Emit(e)
+			o.emit(e)
 		}
 
 	case *AssociateRJ:
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocRejected))
+		o.emit(with(eventType))
+		e := with(EVTAssocRejected)
+		// The refusal in words, so a log of events says why without the
+		// reader decoding Table 9-21 from the PDU.
+		e.Description = AssociationRejection{p.Result, p.Source, p.Reason}.String()
+		if sent {
+			o.mu.Lock()
+			e.refusal = o.refusal
+			o.mu.Unlock()
+		}
+		o.emit(e)
 
 	case *ReleaseRP:
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocReleased))
+		o.emit(with(eventType))
+		o.emit(with(EVTAssocReleased))
 
 	case *AbortPDU:
-		o.events.Emit(with(eventType))
-		o.events.Emit(with(EVTAssocAborted))
+		for _, t := range []EventType{eventType, EVTAssocAborted} {
+			e := with(t)
+			e.LocalAbort = local
+			o.emit(e)
+		}
 
 	case *PDataTF:
-		o.events.Emit(with(eventType))
+		// Not built for nobody: there is one of these for every few
+		// kilobytes of every instance.
+		if o.events.HasHandlers(eventType) {
+			o.emit(with(eventType))
+		}
 		for _, pdv := range p.PDVItems {
 			if !pdv.IsCommand {
 				continue
@@ -167,7 +233,7 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 		}
 
 	default:
-		o.events.Emit(with(eventType))
+		o.emit(with(eventType))
 	}
 }
 
@@ -198,7 +264,7 @@ func (o *observer) negotiated(ac *AssociateAC) []NegotiatedContext {
 // dimse reports a complete command set, and the service event of a request
 // that was received.
 func (o *observer) dimse(sent bool, contextID byte, commandSet []byte) {
-	ds, err := DecodeCommandDataset(commandSet)
+	ds, err := decodeCommandDataset(o.log.carriedBy(context.Background()), commandSet)
 	if err != nil {
 		return
 	}
@@ -239,13 +305,13 @@ func (o *observer) dimse(sent bool, contextID byte, commandSet []byte) {
 	}
 	e := o.event(eventType)
 	e.Command, e.CommandType = command, field
-	o.events.Emit(e)
+	o.emit(e)
 
 	// The service events are of a request arriving, as pynetdicom's are.
 	if service, ok := serviceEvents[field]; ok && !sent {
 		e := o.event(service)
 		e.Command, e.CommandType = command, field
-		o.events.Emit(e)
+		o.emit(e)
 	}
 }
 

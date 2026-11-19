@@ -5,12 +5,16 @@ import (
 	"compress/flate"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"io"
 	"strings"
 	"sync"
+
+	"github.com/amrshadid/go-dicom/internal/inflate"
 )
 
 // Parsing Encapsulated Data
@@ -854,7 +858,32 @@ func (d *RLEDecompressor) Decompress(data []byte) ([]byte, error) {
 // for multi-byte samples the least significant byte comes first. RLE stores the
 // opposite of both — one planar segment per byte position, most significant
 // first — so the reassembly reverses the byte order within each sample.
+//
+// The frame is as many pixels as its segments hold; DecompressFrameOfSize
+// holds it to the number of pixels a data set says it has.
 func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllocated int) ([]byte, error) {
+	return d.DecompressFrameOfSize(data, samplesPerPixel, bitsAllocated, 0)
+}
+
+// DecompressFrameOfSize is DecompressFrame for a frame of a known number of
+// pixels, Rows times Columns. A pixels of 0 or less is not known.
+//
+// An RLE frame states no size of its own (PS3.5 G.3): its header says only how
+// many segments follow, which DecompressFrame already holds to the samples and
+// bytes of a pixel. What says the size is each segment's length, one byte for
+// every pixel, so each must decode to exactly pixels bytes; one that decodes to
+// more is refused when it passes the number, without decoding the rest of it,
+// which bounds what a frame costs by the image the data set describes and not
+// by what its runs expand to. The refusal wraps ErrFrameMismatch.
+//
+// One byte more is accepted when pixels is odd, and dropped. G.3.1 pads each
+// segment to an even length, and an encoder that pads with a literal run rather
+// than after the last one leaves a segment that decodes one byte long; pydicom
+// accepts it with a warning.
+//
+// A frame of the right number of pixels in another shape (64x64 for 32x128)
+// cannot be told from the right one: nothing in RLE says where a row ends.
+func (d *RLEDecompressor) DecompressFrameOfSize(data []byte, samplesPerPixel, bitsAllocated, pixels int) ([]byte, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -881,6 +910,10 @@ func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllo
 	// for every pixel, so they must all be the same length.
 	segments := make([][]byte, len(offsets))
 	pixelCount := -1
+	limit := 0
+	if pixels > 0 {
+		limit = pixels + pixels%2
+	}
 	for i, off := range offsets {
 		// The offsets are 32 bits of the file's choosing. Compared as ints
 		// they are negative on a 32-bit platform once past 2^31, and a
@@ -894,9 +927,20 @@ func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllo
 				i, start, end, len(data))
 		}
 
-		segment, err := decodeRLESegment(data[start:end])
+		segment, err := decodeRLESegment(data[start:end], limit)
+		if errors.Is(err, errRLESegmentTooLong) {
+			return nil, fmt.Errorf("%w: its RLE segment %d holds more than %d bytes, one a pixel, "+
+				"and Rows times Columns is %d", ErrFrameMismatch, i, limit, pixels)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("rle: segment %d: %w", i, err)
+		}
+		if pixels > 0 {
+			if len(segment) < pixels {
+				return nil, fmt.Errorf("%w: its RLE segment %d holds %d bytes, one a pixel, "+
+					"and Rows times Columns is %d", ErrFrameMismatch, i, len(segment), pixels)
+			}
+			segment = segment[:pixels]
 		}
 		if pixelCount == -1 {
 			pixelCount = len(segment)
@@ -977,8 +1021,15 @@ func parseRLEHeader(data []byte) ([]uint32, error) {
 // Genuine corruption is still caught, by the caller: every segment carries one
 // byte per pixel, so DecompressFrame requires them all to decode to the same
 // length. A segment truncated anywhere but the pad byte comes out short.
-func decodeRLESegment(data []byte) ([]byte, error) {
+//
+// A limit above 0 is the most bytes the segment may decode to: past it the
+// decode stops with errRLESegmentTooLong, and the output is allocated at the
+// limit, which a segment of the right size fills exactly.
+func decodeRLESegment(data []byte, limit int) ([]byte, error) {
 	var result []byte
+	if limit > 0 {
+		result = make([]byte, 0, limit)
+	}
 
 	for i := 0; i < len(data); {
 		control := data[i]
@@ -1006,10 +1057,17 @@ func decodeRLESegment(data []byte) ([]byte, error) {
 			}
 			i++
 		}
+		if limit > 0 && len(result) > limit {
+			return nil, errRLESegmentTooLong
+		}
 	}
 
 	return result, nil
 }
+
+// errRLESegmentTooLong is decodeRLESegment's refusal of a segment that decodes
+// to more bytes than its limit.
+var errRLESegmentTooLong = errors.New("rle: the segment decodes to more bytes than the frame has pixels")
 
 // CanDecompress reports whether data begins with a plausible RLE segment
 // header.
@@ -1027,9 +1085,15 @@ func (d *RLEDecompressor) CanDecompress(data []byte) bool {
 type JPEGDecompressor struct {
 	mu sync.RWMutex
 
-	// KeepYCbCr leaves a color-transformed JPEG in its own color space rather
-	// than converting to RGB. Set it when the instance's Photometric
-	// Interpretation is one of the YBR forms.
+	// KeepYCbCr returns the three components of a color frame as the stream
+	// stores them, with no YCbCr to RGB conversion. Without it the decoder
+	// guesses the color space from the stream the way libjpeg does (a JFIF or
+	// Adobe marker, else the component identifiers) and converts a frame it
+	// takes for YCbCr.
+	//
+	// The name is older than the rule: NewJPEGDecompressorForPhotometric sets
+	// it for RGB as well as for the YBR forms, because once a data set says
+	// what the components are, the stream is not asked.
 	KeepYCbCr bool
 }
 
@@ -1038,24 +1102,91 @@ func NewJPEGDecompressor() *JPEGDecompressor {
 	return &JPEGDecompressor{}
 }
 
-// NewJPEGDecompressorForPhotometric returns a decompressor that leaves the
-// samples in the color space the Photometric Interpretation names.
+// NewJPEGDecompressorForPhotometric returns a decompressor whose color frames
+// come back in the color space the Photometric Interpretation names: the
+// components as stored, never converted.
 //
-// A JPEG carrying YCbCr is normally converted to RGB on decode. That is right
-// for an instance whose attribute says RGB and wrong for one that says
-// YBR_FULL, where the attribute describes the samples as stored and a reader
-// will convert them itself.
+// The JPEG Interchange Format does not say what color space its components
+// are in, and PS3.5 8.2.1 has the data set say it instead: RGB means no color
+// transform was applied when the frame was compressed, YBR_FULL and
+// YBR_FULL_422 that one was. A JFIF or Adobe marker, or component identifiers
+// spelling R, G, B, are what a JPEG decoder without a data set guesses from;
+// with one they do not overrule it. Guessing made a JPEG whose attribute says
+// RGB, and whose stream carries no marker, come out as if it were YCbCr: a
+// gray picture turned magenta. dcmtk decodes by the same rule by default. A
+// YBR frame stays YBR, described as such, for the reader to convert.
+//
+// Any other value, MONOCHROME2 or none, leaves the guess to the stream, as
+// NewJPEGDecompressor does.
 func NewJPEGDecompressorForPhotometric(photometric string) *JPEGDecompressor {
-	return &JPEGDecompressor{KeepYCbCr: strings.HasPrefix(photometric, "YBR")}
+	return &JPEGDecompressor{KeepYCbCr: photometric == "RGB" || strings.HasPrefix(photometric, "YBR")}
 }
 
-// Decompress decompresses JPEG data and returns raw pixel data.
+// Decompress decompresses JPEG data and returns raw pixel data, one byte a
+// sample for an 8-bit frame and two for a 12-bit one.
 func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
+	samples, _, err := d.decode(data)
+	return samples, err
+}
+
+// DecompressFrame decodes one JPEG frame to samples bitsAllocated bits wide,
+// the layout a data set describes; see FrameDecompressor.
+//
+// An 8-bit frame in an image of 16 bits allocated is legal and comes back two
+// bytes a sample; a 12-bit frame in an image of 8 bits allocated is refused.
+// bitsStored and pixelRepresentation are not needed.
+func (d *JPEGDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsStored,
+	pixelRepresentation int) ([]byte, error) {
+
+	samples, precision, err := d.decode(data)
+	if err != nil {
+		return nil, err
+	}
+	samples, err = atBitsAllocated(samples, precision, bitsAllocated)
+	if err != nil {
+		return nil, fmt.Errorf("jpeg: %w", err)
+	}
+	return samples, nil
+}
+
+// FrameHeader reads the frame's size from its frame header without decoding
+// it; see FrameHeaderReader. The components are those the frame is coded in:
+// one or three, whatever the subsampling, and four for a CMYK frame, which a
+// decode hands back as three.
+//
+// It reads the header as the decoder that will decode the frame does: a
+// 12-bit frame as the decoder here, and an 8-bit one with image/jpeg, whose
+// reading of the bytes ahead of the frame header is its own (it takes FF 00
+// for padding, where the decoders here take it for a segment).
+func (d *JPEGDecompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	if sequentialJPEGPrecision(data) == 12 {
+		header, _, err := jpegFrameHeader(data)
+		if err != nil {
+			return FrameHeader{}, fmt.Errorf("jpeg: %w", err)
+		}
+		return header, nil
+	}
+	config, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return FrameHeader{}, fmt.Errorf("failed to decode JPEG: %w", err)
+	}
+	components := 3
+	switch config.ColorModel {
+	case color.GrayModel:
+		components = 1
+	case color.CMYKModel:
+		components = 4
+	}
+	return FrameHeader{Columns: config.Width, Rows: config.Height, Components: components, Precision: 8}, nil
+}
+
+// decode decodes one frame at its own width and reports its precision.
+func (d *JPEGDecompressor) decode(data []byte) ([]byte, int, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
 	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data for JPEG decompression")
+		return nil, 0, fmt.Errorf("empty data for JPEG decompression")
 	}
 
 	// The standard library covers 8-bit frames, baseline and progressive alike,
@@ -1065,24 +1196,49 @@ func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
 	if sequentialJPEGPrecision(data) == 12 {
 		img, err := decodeSequentialJPEG(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode 12-bit JPEG: %w", err)
+			return nil, 0, fmt.Errorf("failed to decode 12-bit JPEG: %w", err)
 		}
-		return img.pack(), nil
+		return img.pack(), img.precision, nil
 	}
 
+	if d.KeepYCbCr {
+		data = withJFIFMarker(data)
+	}
 	reader := bytes.NewReader(data)
 	img, err := jpeg.Decode(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode JPEG: %w", err)
+		return nil, 0, fmt.Errorf("failed to decode JPEG: %w", err)
 	}
 	// image/jpeg returns an empty image, not an error, for a frame of zero
 	// columns, or of zero rows with the count in a DNL marker it does not read.
 	if bounds := img.Bounds(); bounds.Empty() {
-		return nil, fmt.Errorf("failed to decode JPEG: the frame is %dx%d",
+		return nil, 0, fmt.Errorf("failed to decode JPEG: the frame is %dx%d",
 			bounds.Dx(), bounds.Dy())
 	}
 
-	return samplesFromImage(img, d.KeepYCbCr), nil
+	return samplesFromImage(img, d.KeepYCbCr), 8, nil
+}
+
+// withJFIFMarker returns data with a JFIF APP0 segment after its SOI.
+//
+// image/jpeg makes the color decision itself: an Adobe marker with transform 0,
+// or component identifiers R, G, B, give an RGBA image of the components as
+// stored, and anything else a YCbCr image converted on the way out. Where the
+// data set has already said what the components are, a JFIF marker is how to
+// tell image/jpeg not to decide: it rules out RGB before the other two are
+// looked at, so the frame always comes back as its three stored planes, and
+// subsampled chroma is upsampled the one way samplesFromImage does it, not by
+// image/jpeg's RGB path, which repeats it along a row and not at all down a
+// column. The marker carries nothing else the decoder uses.
+func withJFIFMarker(data []byte) []byte {
+	if len(data) < 2 {
+		return data
+	}
+	jfif := []byte{0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00}
+	out := make([]byte, 0, len(data)+len(jfif))
+	out = append(out, data[:2]...)
+	out = append(out, jfif...)
+	return append(out, data[2:]...)
 }
 
 // samplesFromImage flattens a decoded JPEG to DICOM pixel data.
@@ -1094,10 +1250,11 @@ func (d *JPEGDecompressor) Decompress(data []byte) ([]byte, error) {
 // third of the rows, each pixel smeared across three, and nothing reported a
 // problem.
 //
-// keepYCbCr leaves a color-transformed JPEG in its own color space. A DICOM
+// keepYCbCr returns the components of a color frame as stored. A DICOM
 // instance whose Photometric Interpretation is YBR_FULL describes the samples
 // as stored, and converting them to RGB while the attribute still says YBR
-// leaves a reader to apply the conversion a second time.
+// leaves a reader to apply the conversion a second time; one that says RGB
+// was never transformed, and converting it invents a transform.
 func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 	bounds := img.Bounds()
 	width := bounds.Dx()
@@ -1115,15 +1272,35 @@ func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 
 	case *image.YCbCr:
 		out := make([]byte, 0, width*height*3)
+		// 4:2:2 and 4:2:0 chroma is filtered as libjpeg filters it, so a
+		// subsampled frame decodes to the picture dcmtk and pydicom show;
+		// see upsample.go. Other layouts are repeated, through YCbCrAt.
+		if cb, cr, ok := fancyChroma(src); ok {
+			i := 0
+			for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+				for x := bounds.Min.X; x < bounds.Max.X; x++ {
+					c := color.YCbCr{Y: src.Y[src.YOffset(x, y)], Cb: cb[i], Cr: cr[i]}
+					i++
+					if keepYCbCr {
+						out = append(out, c.Y, c.Cb, c.Cr)
+						continue
+					}
+					r, g, b := yccToRGB(c.Y, c.Cb, c.Cr)
+					out = append(out, r, g, b)
+				}
+			}
+			return out
+		}
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				c := src.YCbCrAt(x, y)
 				if keepYCbCr {
-					c := src.YCbCrAt(x, y)
 					out = append(out, c.Y, c.Cb, c.Cr)
 					continue
 				}
-				r, g, b, _ := src.At(x, y).RGBA()
-				out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+				// Converted as libjpeg converts, not by image/color; see ycc.go.
+				r, g, b := yccToRGB(c.Y, c.Cb, c.Cr)
+				out = append(out, r, g, b)
 			}
 		}
 		return out
@@ -1409,7 +1586,7 @@ func encodeRLESegment(data []byte) []byte {
 // 1000:1 is deliberately generous. Deflate reaches it on genuinely repetitive
 // medical data — an all-black CT frame is mostly zeros — so a tighter ratio
 // would reject legitimate files.
-const MaxInflateRatio int64 = 1000
+const MaxInflateRatio int64 = inflate.MaxRatio
 
 // MinInflateAllowance is the smallest output any deflated stream may produce
 // regardless of how small its compressed form is.
@@ -1417,7 +1594,7 @@ const MaxInflateRatio int64 = 1000
 // Without a floor the ratio bound would reject a 500-byte stream holding a
 // legitimately blank 512 KiB frame. The floor is what keeps the ratio safe to
 // apply to genuinely tiny inputs.
-const MinInflateAllowance int64 = 8 << 20
+const MinInflateAllowance int64 = inflate.MinAllowance
 
 // InflateLimitFor returns how many bytes a deflated stream of compressedSize
 // bytes may be allowed to produce, given an absolute ceiling.
@@ -1425,18 +1602,5 @@ const MinInflateAllowance int64 = 8 << 20
 // Pass a non-positive compressedSize when the compressed length is unknown; the
 // absolute ceiling is then the only bound available.
 func InflateLimitFor(compressedSize, absoluteMax int64) int64 {
-	// Short-circuit before multiplying, so a large compressedSize cannot
-	// overflow into a small or negative limit.
-	if compressedSize <= 0 || compressedSize > absoluteMax/MaxInflateRatio {
-		return absoluteMax
-	}
-
-	limit := compressedSize * MaxInflateRatio
-	if limit < MinInflateAllowance {
-		limit = MinInflateAllowance
-	}
-	if limit > absoluteMax {
-		limit = absoluteMax
-	}
-	return limit
+	return inflate.LimitFor(compressedSize, absoluteMax)
 }

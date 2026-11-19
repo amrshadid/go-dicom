@@ -114,8 +114,8 @@ func (ds *Dataset) formatValue(elem *dataelem.DataElement, maxLen int) string {
 		return "<empty>"
 	}
 
-	// Handle byte slice values
-	if b, ok := value.([]byte); ok {
+	// Handle byte slice values, and any other value that stands for bytes
+	if b, ok := elem.Bytes(); ok {
 		if len(b) == 0 {
 			return "<empty>"
 		}

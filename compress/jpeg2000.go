@@ -16,6 +16,10 @@ import (
 // Allocated, and reconciling the codestream's idea of signedness with the data
 // set's, which are allowed to disagree and sometimes do.
 //
+// The three High-Throughput JPEG 2000 syntaxes (.201, .202, .203) decode
+// through it too: their codestreams are JPEG 2000 ones whose code-blocks are
+// coded by the HT block coder, which compress/jpeg2000 decodes.
+//
 // Both transfer syntaxes decode through the same path. The difference between
 // them is which wavelet the encoder chose, and the codestream says so itself —
 // the transfer syntax is not consulted, so a file labeled lossy that holds a
@@ -23,6 +27,13 @@ import (
 
 // errEmptyJPEG2000Frame reports a fragment with nothing in it.
 var errEmptyJPEG2000Frame = errors.New("jpeg2000: the frame is empty")
+
+// errSubsampledJPEG2000 reports a frame with a subsampled component.
+func errSubsampledJPEG2000(component, dx, dy int) error {
+	return &jpeg2000.ErrUnsupported{Feature: fmt.Sprintf(
+		"component %d subsampled %dx%d in a DICOM frame (PS3.5 8.2.4 allows no Photometric Interpretation for components of different sizes)",
+		component, dx, dy)}
+}
 
 // JPEG2000Decompressor decodes JPEG 2000 frames.
 //
@@ -96,10 +107,44 @@ func (d *JPEG2000Decompressor) DecompressFrame(data []byte, bitsAllocated, bitsS
 		return nil, fmt.Errorf("jpeg2000: Bits Allocated is %d, which is not 8, 16 or 32",
 			bitsAllocated)
 	}
+	// A component deeper than the sample it is written into would keep only
+	// its low bits: a picture, and the wrong one.
+	for c, depth := range img.Depths {
+		if depth > bitsAllocated {
+			return nil, fmt.Errorf("jpeg2000: component %d is coded at %d bits, more than the %d bits allocated to a sample",
+				c, depth, bitsAllocated)
+		}
+	}
 	if bitsStored <= 0 || bitsStored > bitsAllocated {
 		bitsStored = bitsAllocated
 	}
 	return packJPEG2000(img, bitsAllocated, bitsStored, pixelRepresentation == 1), nil
+}
+
+// FrameHeader reads the image's size from the codestream's SIZ (T.800 A.5.1)
+// without decoding it: the reference grid less its origin, the number of
+// components, and the deepest of them. See FrameHeaderReader.
+//
+// It is the parse the decode itself starts with. A JPEG 2000 codestream can
+// describe a large image in a few hundred bytes honestly, so nothing in the
+// codestream alone tells such a frame from a real one; the data set can.
+func (d *JPEG2000Decompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	if len(data) == 0 {
+		return FrameHeader{}, errEmptyJPEG2000Frame
+	}
+	codestream, err := jpeg2000.ParseCodestream(data)
+	if err != nil {
+		return FrameHeader{}, err
+	}
+	header := FrameHeader{
+		Columns:    int(codestream.Width - codestream.XOffset),
+		Rows:       int(codestream.Height - codestream.YOffset),
+		Components: len(codestream.Components),
+	}
+	for _, c := range codestream.Components {
+		header.Precision = max(header.Precision, c.Depth)
+	}
+	return header, nil
 }
 
 // decodeJPEG2000 parses and decodes one frame.
@@ -110,6 +155,21 @@ func decodeJPEG2000(data []byte) (*jpeg2000.Image, error) {
 	codestream, err := jpeg2000.ParseCodestream(data)
 	if err != nil {
 		return nil, err
+	}
+	// The codec decodes a subsampled component to its own, smaller plane.
+	// A DICOM frame cannot be one: PS3.5 8.2.4 allows JPEG 2000 only with
+	// the Photometric Interpretations of its table (MONOCHROME1 and 2,
+	// PALETTE COLOR, YBR_RCT, YBR_ICT, RGB, YBR_FULL), "No other Standard
+	// Photometric Interpretation Values shall be used", and every one of
+	// them has each sample of a pixel at every pixel; the data set's
+	// attributes "shall contain Values that are consistent with the
+	// characteristics of the compressed data stream". So a frame whose
+	// components are of different sizes is refused by name here rather
+	// than resampled into a picture the file does not describe.
+	for i, comp := range codestream.Components {
+		if comp.DX != 1 || comp.DY != 1 {
+			return nil, errSubsampledJPEG2000(i, comp.DX, comp.DY)
+		}
 	}
 	return jpeg2000.Decode(codestream)
 }

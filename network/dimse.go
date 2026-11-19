@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -77,6 +78,8 @@ var (
 	tagCommandDataSetType        = tag.New(0x0000, 0x0800)
 	tagStatus                    = tag.New(0x0000, 0x0900)
 	tagAffectedSOPInstanceUID    = tag.New(0x0000, 0x1000)
+	tagMoveOriginatorAE          = tag.New(0x0000, 0x1030)
+	tagMoveOriginatorMessageID   = tag.New(0x0000, 0x1031)
 
 	// Requested SOP Instance UID. N-GET, N-SET, N-ACTION and N-DELETE name
 	// their target with this, not with Affected SOP Instance UID — the
@@ -104,14 +107,28 @@ type CEchoResponse struct {
 }
 
 // CStoreRequest represents a C-STORE-RQ message.
+//
+// An SCP fills every field from the command it received, whichever way the
+// handler takes the store. The UIDs are the command's, as the peer sent
+// them: they are not compared with the data set's own SOP Class UID
+// (0008,0016) and SOP Instance UID (0008,0018), and they are not checked to
+// be UIDs. A handler that builds a path or a key from one checks it first,
+// as WriteCStoreFile does (valuerep.ValidateUID).
 type CStoreRequest struct {
 	MessageID           uint16
 	AffectedSOPClass    string
 	AffectedSOPInstance string
 	Priority            uint16
+	// MoveOriginatorAE and MoveOriginatorMsgID are set when the store is a
+	// sub-operation of a C-MOVE (PS3.7 9.3.1.1): the AE that asked for the
+	// move, and the Message ID of its C-MOVE-RQ.
 	MoveOriginatorAE    string
 	MoveOriginatorMsgID uint16
-	DataSet             *dataset.Dataset
+	// DataSet is nil for a handler that takes the data set as a stream
+	// (CStoreStreamer), and never nil for one given the decoded data set:
+	// a C-STORE-RQ that says no data set follows is refused before any
+	// handler is called (PS3.7 9.3.1.1).
+	DataSet *dataset.Dataset
 }
 
 // CStoreResponse represents a C-STORE-RSP message.
@@ -235,7 +252,20 @@ func EncodeCommandDataset(ds *dataset.Dataset) ([]byte, error) {
 }
 
 // DecodeCommandDataset decodes a DICOM command dataset from Implicit VR Little Endian bytes.
+//
+// A retired or unknown command element the peer sent is reported through
+// config.Logger. A server or client given its own logger decodes the command
+// sets it receives with that logger instead.
 func DecodeCommandDataset(data []byte) (*dataset.Dataset, error) {
+	return decodeCommandDataset(context.Background(), data)
+}
+
+// decodeCommandDataset is DecodeCommandDataset reporting to the logger ctx
+// carries. A peer of an older standard sends retired command elements, such as
+// Command Length to End (0000,0001), and each one warns as the element is
+// added; on a server with its own logger that line belongs in its log
+// (Association.logContext), not the global one.
+func decodeCommandDataset(ctx context.Context, data []byte) (*dataset.Dataset, error) {
 	ds := dataset.NewDataset()
 	r := bytes.NewReader(data)
 
@@ -274,7 +304,7 @@ func DecodeCommandDataset(data []byte) (*dataset.Dataset, error) {
 		// Determine VR from dictionary
 		vr := getCommandVR(t)
 		elem := dataelem.NewDataElement(t, vr, value)
-		_ = ds.Add(elem)
+		_ = ds.AddWithContext(ctx, elem)
 	}
 
 	return ds, nil
@@ -504,8 +534,7 @@ func getUSValue(ds *dataset.Dataset, t tag.Tag) (uint16, error) {
 	if !ok {
 		return 0, fmt.Errorf("element %s not found", t)
 	}
-	val := elem.GetValue()
-	data, ok := val.([]byte)
+	data, ok := elem.Bytes()
 	if !ok || len(data) < 2 {
 		return 0, fmt.Errorf("invalid US value for %s", t)
 	}
@@ -517,8 +546,7 @@ func getUIValue(ds *dataset.Dataset, t tag.Tag) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("element %s not found", t)
 	}
-	val := elem.GetValue()
-	data, ok := val.([]byte)
+	data, ok := elem.Bytes()
 	if !ok {
 		return "", fmt.Errorf("invalid UI value for %s", t)
 	}
@@ -532,10 +560,11 @@ func getUIValue(ds *dataset.Dataset, t tag.Tag) (string, error) {
 
 // encodeCommandElement encodes a single command element in Implicit VR Little Endian.
 func encodeCommandElement(buf *bytes.Buffer, t tag.Tag, elem *dataelem.DataElement) error {
-	val := elem.GetValue()
-	data, ok := val.([]byte)
+	// Bytes, not a []byte assertion, so a command element built as a number or
+	// a string encodes as the writer would encode it (#420).
+	data, ok := elem.Bytes()
 	if !ok {
-		return fmt.Errorf("element %s value is not []byte", t)
+		return fmt.Errorf("element %s holds %T, which has no bytes to encode", t, elem.GetValue())
 	}
 
 	// Tag: group (2 bytes LE) + element (2 bytes LE)

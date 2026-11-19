@@ -68,7 +68,7 @@ func (ds *Dataset) ResolveVR(t tag.Tag, elem *dataelem.DataElement, enclosing ..
 		}
 	}
 
-	if strings.Contains(string(vr), " or ") {
+	if dataelem.OffersVRChoice(string(vr)) {
 		vr = ds.resolveAmbiguousVR(t, vr, enclosing)
 	}
 	if len(vr) != 2 {
@@ -140,7 +140,7 @@ func (ds *Dataset) uint16Value(t tag.Tag) (uint16, bool) {
 	if !ok {
 		return 0, false
 	}
-	raw, ok := elem.GetValue().([]byte)
+	raw, ok := elem.Bytes()
 	if !ok || len(raw) < 2 {
 		return 0, false
 	}

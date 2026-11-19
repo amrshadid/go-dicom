@@ -2,7 +2,6 @@ package cli
 
 import (
 	"io"
-	"strings"
 
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
@@ -34,6 +33,9 @@ type displayScope struct {
 	source io.ReaderAt
 	// whole asks for all of such a value, where it is one that is printed.
 	whole bool
+	// bigEndian reports that the file writes the words of its bulk values
+	// with the most significant byte first, as Explicit VR Big Endian does.
+	bigEndian bool
 }
 
 // decidingTags are the attributes dataset.ResolveVR consults. Each is read
@@ -57,7 +59,7 @@ func newDisplayScope(elements []*filereader.DataElementValue, outer *displayScop
 	if outer != nil {
 		scope.enclosing = append([]*dataset.Dataset{outer.deciding}, outer.enclosing...)
 		inherited = outer.encodings
-		scope.source, scope.whole = outer.source, outer.whole
+		scope.source, scope.whole, scope.bigEndian = outer.source, outer.whole, outer.bigEndian
 	}
 	scope.encodings = filereader.TextEncodings(elements, inherited)
 	return scope
@@ -80,7 +82,7 @@ func (s *displayScope) vr(e *filereader.DataElementValue) string {
 		}
 		return ""
 	}
-	if !strings.Contains(e.VR, " or ") {
+	if !dataelem.OffersVRChoice(e.VR) {
 		return e.VR
 	}
 	elem := dataelem.NewDataElement(e.Tag, dataelem.VR(e.VR), e.Value)

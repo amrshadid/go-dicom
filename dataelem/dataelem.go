@@ -363,28 +363,6 @@ func GetVRInfo(vr VR) *VRInfo {
 	return nil
 }
 
-// IsValidVR checks if a VR string is valid.
-func IsValidVR(vr VR) bool {
-	return GetVRInfo(vr) != nil
-}
-
-// IsTextVR checks if a VR is text-based.
-func IsTextVR(vr VR) bool {
-	info := GetVRInfo(vr)
-	return info != nil && info.IsText
-}
-
-// IsCharacterSetVR reports whether Specific Character Set (0008,0005) applies
-// to values of the VR: SH, LO, UC, ST, LT, UT and PN (PS3.5 6.1.2.3, Table
-// 6.2-1). The other text VRs are in the default repertoire whatever it says.
-func IsCharacterSetVR(vr VR) bool {
-	switch vr {
-	case SH, LO, UC, ST, LT, UT, PN:
-		return true
-	}
-	return false
-}
-
 // IsNumericVR checks if a VR represents numeric values.
 func IsNumericVR(vr VR) bool {
 	info := GetVRInfo(vr)
@@ -492,7 +470,7 @@ func (de *DataElement) ValidateAgainstDictionary() error {
 
 	// Validate VR if present
 	if de.VR != "" && info.VR != "" {
-		if string(de.VR) != info.VR && !isValidVRVariant(string(de.VR), info.VR) {
+		if !VRMatchesDictionary(string(de.VR), info.VR) {
 			return fmt.Errorf("VR mismatch for %s: expected %s, got %s",
 				t.String(), info.VR, de.VR)
 		}
@@ -566,22 +544,4 @@ func (de *DataElement) IsRetiredTag() bool {
 	}
 
 	return t.IsRetired()
-}
-
-// isValidVRVariant checks if a VR is a valid variant of the expected VR.
-// Handles cases like "OB or OW" where either is acceptable.
-func isValidVRVariant(actual, expected string) bool {
-	if expected == "OB or OW" {
-		return actual == "OB" || actual == "OW"
-	}
-	if expected == "OB or OD" {
-		return actual == "OB" || actual == "OD"
-	}
-	if expected == "US or SS" {
-		return actual == "US" || actual == "SS"
-	}
-	if expected == "OW or OB" {
-		return actual == "OW" || actual == "OB"
-	}
-	return false
 }

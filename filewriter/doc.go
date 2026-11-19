@@ -122,6 +122,38 @@
 //	[File Meta Information Group (0002)]
 //	[Data Elements (Groups 0004+)]
 //
+// # Sequences
+//
+// A sequence and its items are written with explicit lengths, with one
+// exception: in Implicit VR, a sequence whose tag the dictionary does not call
+// a sequence (tag.Tag.IsDictionarySequence), a private one above all, is
+// written with undefined length and closed by a Sequence Delimitation Item.
+// Implicit VR names no VR, so that is the only thing that tells a reader such
+// an element holds items (PS3.5 6.2.2 Note 5, 7.5.1); dcmtk and pydicom read
+// it with its byte count as one opaque value.
+//
+// # Values Copied From the Source File
+//
+// A data set read with filereader.ReadOptions.SkipBulkData and built with
+// DICOMFile.GetDatasetWithValuesInFile holds a dataelem.ValueInFile for each
+// value left in the file. ElementsFromDataset sets DataElement.InFile for it,
+// and a writer given that file with SetValueSource copies the bytes from
+// there as it writes the element, a megabyte at a time, swapping byte order
+// when the target's differs from the source's. The file is the one a whole
+// read writes, byte for byte. A value inside a sequence is copied into memory
+// with its item, which is encoded there to be measured. Without a value
+// source such an element is an error, never an empty value.
+//
+//	df, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(in),
+//		filereader.ReadOptions{SkipBulkData: true})
+//	ds, err := df.GetDatasetWithValuesInFile()
+//	// ... change the attributes of ds ...
+//	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
+//	w.SetValueSource(in, df.IsLittleEndian)
+//	w.SetFileMetaInfo(meta)
+//	_ = w.AddDataElements(filewriter.ElementsFromDataset(ds))
+//	err = w.Write()
+//
 // # Thread Safety
 //
 // DCMFileWriter is not thread-safe. Each goroutine must have its own writer

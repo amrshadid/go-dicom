@@ -29,12 +29,31 @@ go-dicom show patient.dcm::PatientName       # One element, its whole value
 go-dicom show patient.dcm --full             # The table with whole values, not the first 100 bytes
 go-dicom show patient.dcm --json             # Every element with its byte offsets in the file
 go-dicom info -verbose -stats patient.dcm    # File metadata
+go-dicom validate ct.dcm                     # Check it against its IOD; --json, exit 3 on errors
 go-dicom convert patient.dcm output.json     # Convert to JSON
+go-dicom modify -set PatientName=Doe^Jane in.dcm out.dcm  # Set, insert or delete attributes
+go-dicom modify -insert 'ReferencedImageSequence[0].ReferencedSOPInstanceUID=1.2.3' -in-place f.dcm
+go-dicom modify -insert-file '(0009,xx10,"ACME",OB)=blob.bin' in.dcm out.dcm   # A binary value from a file
+go-dicom modify -delete-all InstanceCreationDate in.dcm out.dcm   # Every occurrence, in every item
+go-dicom compress -syntax rle ct.dcm ct-rle.dcm   # Also jpeg-ls, jpeg2000; jpeg -quality 90 is lossy
+go-dicom decompress ct-rle.dcm ct.dcm        # Native pixel data
+go-dicom convert patient.dcm dicom.json --format dicom-json   # DICOM JSON, which create reads back
+go-dicom create dicom.json patient-copy.dcm  # A file from DICOM JSON
+go-dicom create study.json instances/        # An array of objects: one file each, named by SOP Instance UID
+go-dicom create -template ct.dcm screen.png sc.dcm   # A Secondary Capture in the CT's study
+go-dicom create -patient-id 123 report.pdf report.dcm  # An Encapsulated PDF
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
 go-dicom anonymize -profile retain-dates scan.dcm clean.dcm
 go-dicom anonymize -redact 0,0,640,40 us.dcm clean.dcm   # Black out burned-in text
 go-dicom share ct.dcm ct.png --window 40,400             # A picture that is safe to hand on
 go-dicom share -redact 0,0,640,40 us.dcm us.png          # ...with burned-in text blacked out
+go-dicom diff original.dcm anonymized.dcm    # Element by element; exit 0 equal, 1 different, 2 error
+go-dicom diff a.dcm b.dcm --json --ignore-meta --ignore SOPInstanceUID
+go-dicom dicomdir study/                     # Write study/DICOMDIR; refuses file names that are not File IDs
+go-dicom dicomdir --copy-to media/ export/   # ...or copy the files as DICOM/IM000001... and index those
+go-dicom dicomdir --list study/DICOMDIR      # The records as a tree
+go-dicom sr report.dcm                       # A structured report's content tree, indented, with its verifiers and predecessors
+go-dicom sr report.dcm --json                # ...with each item's position
 go-dicom convert ct.dcm ct.png --format png  # Render as PNG (or jpeg), windowed
 go-dicom convert cine.dcm f.png --format png --frame all   # f-0001.png, f-0002.png, ...
 go-dicom codify patient.dcm -output struct.go # Generate Go code
@@ -42,6 +61,12 @@ go-dicom tag-doc -keyword PatientName        # Tag documentation
 go-dicom qido -match "PatientName=Doe*" https://pacs.example.org/dicom-web   # Search a DICOMweb service
 go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # Download a study
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
+go-dicom mppsscu -aec RIS -patient-id P123 -accession A42 -modality MR ris:104   # A step IN PROGRESS; prints its UID
+go-dicom mppsscu -aec RIS -complete <uid> -series <uid> -protocol "T1 AX" ris:104   # ...and COMPLETED
+go-dicom upsscu -aec TPS -claim <step uid> tps:104                            # Take a unified procedure step; prints its Transaction UID
+go-dicom upsscu -aec TPS -complete <step uid> -transaction <uid> tps:104      # ...and finish it
+go-dicom wlmscp -dir ./worklist -aet RIS -port 104                          # Serve the worklist files of a directory to modalities
+go-dicom storescp -allow PRISMA1@10.0.0.5 -allow-file modalities.txt         # Admit a title only from its address; a list in a file
 ```
 
 ## The library's log
@@ -57,7 +82,7 @@ GODICOM_LOG=warn go-dicom show odd.dcm      # or info, or debug
 ## The event log
 
 Every network command (`echoscu`, `echoscp`, `storescu`, `storescp`, `findscu`,
-`movescu`, `getscu`, `commitscu`, `qrscp`) takes `-events <file>`, or `-events -`
+`movescu`, `getscu`, `commitscu`, `mppsscu`, `upsscu`, `qrscp`, `wlmscp`) takes `-events <file>`, or `-events -`
 for standard output. It appends one JSON object per line as things happen, so
 the file can be followed while the command runs:
 
@@ -81,6 +106,38 @@ under its own. Two commands' logs are paired by their addresses. A PDU's bytes
 are cut at `-events-pdu-bytes` (65536 by default, 0 for all), and
 `bytesTruncated` says when.
 
+## Serving a worklist
+
+`wlmscp` is a Modality Worklist SCP over a directory, as dcmtk's `wlmscpfs`
+is: each file is one worklist entry, with File Meta Information or without,
+whatever its name. It answers Modality Worklist C-FIND and C-ECHO and refuses
+every other SOP class at negotiation.
+
+- The directory is read again at every query, so a file added, changed or
+  removed while the server runs is served as it is then. A file is parsed
+  again only when its size or modification time changes.
+- A file that is not a worklist entry (not DICOM, or a data set with no
+  Scheduled Procedure Step Sequence, such as an image or `wlmscpfs`'s empty
+  `lockfile`) is not served, and is reported once on the server's output,
+  and again only if it changes. Names starting with a dot and
+  subdirectories are passed over.
+- Matching is package `matching`'s, the archive's own rules (PS3.4 C.2.2.2):
+  the Scheduled Procedure Step Sequence item by item, and each answer holds
+  the keys asked for, the step cut to the keys asked for in it. A Query/Retrieve
+  Level in a query is neither matched nor returned.
+- `wlmscpfs` serves one subdirectory per called AE title; `wlmscp` serves one
+  directory under its own `-aet`. To serve dcmtk's sample database, convert
+  its `.dump` files with `dump2dcm`, as its README says, and point `-dir` at
+  the `OFFIS` directory. A person's name is matched whatever its case
+  (`vivaldi*` finds VIVALDI^ANTONIO), which `wlmscpfs` does not do.
+
+```bash
+for f in wlistdb/OFFIS/*.dump; do dump2dcm "$f" "worklist/$(basename "$f" .dump).wl"; done
+go-dicom wlmscp -dir worklist -aet OFFIS -port 11112
+findscu -W -aec OFFIS -k "ScheduledProcedureStepSequence[0].Modality=CT" localhost 11112   # dcmtk's
+go-dicom findscu -worklist -modality CT -aec OFFIS localhost:11112
+```
+
 ## API Reference
 
 ```go
@@ -95,6 +152,10 @@ type Command interface {
     AddFlags(*flag.FlagSet)
     Execute([]string) error
 }
+
+// ExitError is returned by a command that chooses its exit status; main ends
+// with Code, and prints Err when it is not nil. Other errors end with 1.
+type ExitError struct { Code int; Err error }
 
 type FileSpec struct { FilePath, Element string; Index int }
 func ParseFileSpec(spec string) (*FileSpec, error)

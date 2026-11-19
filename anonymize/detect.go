@@ -1,6 +1,8 @@
 package anonymize
 
 import (
+	"errors"
+	"fmt"
 	"image"
 	"sort"
 
@@ -66,6 +68,59 @@ func DetectBurnedInText(ds *dataset.Dataset, detector TextDetector) ([]dataset.P
 	return regions, nil
 }
 
+// MaxDetectedShare is the largest share of a picture that a detector's
+// regions may cover and still be filled by an automatic redaction.
+//
+// It is set from what was measured, not from what text could cover. On the
+// real screens of pydicom's corpus, sharp and softened, the detector marks
+// at most 17.8% of a picture (an ultrasound screen with two header blocks,
+// a clock, labels and a caption), and on the scans the tests draw labels
+// over, at most 20.0%. Where it is wrong about a picture with no text, it is
+// wrong by a great deal: on every corpus scan without text, softened five
+// ways and taken at sixteen offsets, it marks either 1.6% or less, or 38.7%
+// or more (an abdominal MR whose anatomy, at a quarter of its size, lines up
+// like large lettering). A quarter is between the two. A picture that is
+// nothing but large lettering is over it too, and is refused: a refusal
+// destroys nothing, and the regions can be given by hand.
+const MaxDetectedShare = 0.25
+
+// ErrImplausibleRedaction is wrapped by the error an automatic redaction
+// returns when the regions found cover more than MaxDetectedShare of the
+// picture.
+var ErrImplausibleRedaction = errors.New("the regions found cover more of the picture than text does")
+
+// CheckDetectedShare returns an error wrapping ErrImplausibleRedaction when
+// regions cover more than MaxDetectedShare of a picture width by height
+// pixels, counting a pixel that two regions share once.
+//
+// It is for a caller about to fill a detector's regions without a person
+// looking. Filled, a region that took in anatomy blacks out what the image
+// was kept for, and nothing would say so; refused, the image stays as it
+// was and the caller is told why.
+func CheckDetectedShare(regions []dataset.PixelRegion, width, height int) error {
+	if width <= 0 || height <= 0 {
+		return nil
+	}
+	covered := make([]bool, width*height)
+	n := 0
+	for _, r := range regions {
+		box := image.Rect(r.X, r.Y, r.X+r.Width, r.Y+r.Height).Intersect(image.Rect(0, 0, width, height))
+		for y := box.Min.Y; y < box.Max.Y; y++ {
+			for x := box.Min.X; x < box.Max.X; x++ {
+				if i := y*width + x; !covered[i] {
+					covered[i] = true
+					n++
+				}
+			}
+		}
+	}
+	if share := float64(n) / float64(width*height); share > MaxDetectedShare {
+		return fmt.Errorf("%w: %.1f%% of a %d by %d picture, over the %.0f%% an automatic redaction fills",
+			ErrImplausibleRedaction, share*100, width, height, MaxDetectedShare*100)
+	}
+	return nil
+}
+
 // strokeDetector is the built-in TextDetector.
 type strokeDetector struct{}
 
@@ -98,7 +153,7 @@ func (strokeDetector) DetectText(img image.Image) []image.Rectangle {
 	}
 	bounds := img.Bounds()
 	full := colorPlanes(img)
-	var found []image.Rectangle
+	var found, onGrid []image.Rectangle
 	for scale := 1; scale <= maxScale; scale *= 2 {
 		planes := full.reduced(scale)
 		if planes.w < minPictureSide || planes.h < minPictureSide {
@@ -111,7 +166,30 @@ func (strokeDetector) DetectText(img image.Image) []image.Rectangle {
 			// regular, so there nearly every shape of a line has to be.
 			overTexture := pass == 2
 			strict := scale > 1 || overTexture
-			for _, line := range textLines(characterShapes(ink, planes, strict), strict) {
+			characters, cells := characterShapes(ink, planes, strict)
+			if !strict {
+				// At the picture's own scale a character generator's grid is
+				// still exact. Reduced, a pixel is an average of several and
+				// the boxes of its cells are not.
+				for _, line := range gridLines(cells) {
+					if !onPlainGround(line, ink, planes) {
+						continue
+					}
+					// Not grown: the cells already say where the line is, and
+					// growing by color, from a line of small soft glyphs whose
+					// color is allowed to vary, ran on into a color bar
+					// beside a label. Widened by a cell instead: a glyph
+					// narrower than the cell, a 1, a colon, a plus, has a box
+					// of its own and is not in the run, and at either end of
+					// it, it is in the next cell.
+					pad := max(2, line.height/3)
+					r := image.Rect(line.x0-line.pitch, line.y0-pad, line.x1+line.pitch, line.y1+pad)
+					if r = r.Add(bounds.Min).Intersect(bounds); !r.Empty() {
+						onGrid = append(onGrid, r)
+					}
+				}
+			}
+			for _, line := range textLines(characters, strict) {
 				if overTexture {
 					// Among the brightest pixels of a busy picture a few
 					// shapes line up by chance; a word does not.
@@ -126,7 +204,16 @@ func (strokeDetector) DetectText(img image.Image) []image.Rectangle {
 					// for ground that is not plain.
 					continue
 				}
-				line = extended(line, ink, planes, strict)
+				if !overTexture || onPlainGround(line, ink, planes) {
+					// Growing a line trusts color to stop it at the edge of
+					// the picture. The over-texture map holds only full
+					// white, the caption's color and the brightest of the
+					// texture's alike, so there it cannot: a caption over
+					// saturated texture ran on across the scan and down it,
+					// and the region took a third of the picture. On a plain
+					// ground it still can, and large lettering needs it.
+					line = extended(line, ink, planes, strict)
+				}
 				// Back to the picture's coordinates, with a margin: the
 				// edge of a stroke is blurred over a pixel or two, and a
 				// letter's edge is as readable as its middle.
@@ -137,6 +224,22 @@ func (strokeDetector) DetectText(img image.Image) []image.Rectangle {
 					found = append(found, r)
 				}
 			}
+		}
+	}
+	// A line on a grid is kept only where the rules for a character found
+	// nothing. Where they found the line, their region already holds it, and
+	// a grid that runs on across a double space would join two of their
+	// regions into one that also takes the space between.
+	for _, r := range onGrid {
+		alone := true
+		for _, f := range found {
+			if r.Overlaps(f) {
+				alone = false
+				break
+			}
+		}
+		if alone {
+			found = append(found, r)
 		}
 	}
 	return mergeRectangles(found)
@@ -267,11 +370,12 @@ func (s shape) height() int { return s.y1 - s.y0 }
 
 // characterShapes joins ink pixels that touch, corners included, and returns
 // the shapes that could be a character: of a character's height, not much
-// wider than tall, and neither a speck nor a filled block.
-func characterShapes(ink []bool, p planes, strict bool) []shape {
+// wider than tall, and neither a speck nor a filled block. It also returns,
+// as cells, every shape with a character's box that only the tests of how a
+// character is drawn turned away; gridLines decides what they are.
+func characterShapes(ink []bool, p planes, strict bool) (shapes, cells []shape) {
 	w, h := p.w, p.h
 	seen := make([]bool, len(ink))
-	var shapes []shape
 	var stack, pixels []int
 	for start, isInk := range ink {
 		if !isInk || seen[start] {
@@ -307,11 +411,132 @@ func characterShapes(ink []bool, p planes, strict bool) []shape {
 		}
 		s.stroke = strokeWidth(s, pixels, w)
 		s.color, s.spread = colorOf(p, pixels)
-		if isCharacter(s, strict) {
+		character := isCharacter(s, strict)
+		if character {
 			shapes = append(shapes, s)
 		}
+		if character || isCell(s) {
+			cells = append(cells, s)
+		}
 	}
-	return shapes
+	return shapes, cells
+}
+
+// isCell reports whether a shape with a character's box could be a
+// character that the tests of isCharacter turn away for how it is drawn:
+// strokes that run together, a glyph that fills its box, color that varies.
+// That is what a small font softened by blur or by smoothed edges looks like,
+// and also what a blob does, so a cell is not taken for a character alone.
+// gridLines takes cells only in a run that has the geometry of a character
+// generator, which a blob does not.
+func isCell(s shape) bool {
+	w, h := s.width(), s.height()
+	filled := float64(s.area) / float64(w*h)
+	if s.area < 6 || (filled < 0.15 && s.area < h) {
+		return false
+	}
+	// A block of one flat color is a block, however it is placed. A glyph
+	// that fills its cell does so with ink of varying brightness: the gaps
+	// between its strokes, blended, are lighter than its ground and darker
+	// than its strokes.
+	if filled > 0.92 && s.spread <= flatColor {
+		return false
+	}
+	return s.spread <= colorTolerance(maxColorSpread, h, false)
+}
+
+// gridLines finds runs of cells laid out as a character generator lays out
+// text: boxes of one width and one height, standing on one row, their left
+// edges a whole number of cells apart. The modality draws every character
+// of a fixed-pitch font in a cell of one size, so its full-height glyphs have
+// identical boxes on an exact pitch however their strokes are blurred, and a
+// colon or a space only skips a cell. A blob of anatomy or noise matches
+// another in all four of its edges seldom; three of them on one pitch, rarely.
+//
+// A run is three cells or more, of one color, and not all of one area: three
+// identical marks in a row, a dashed rule or a row of ticks, are a pattern,
+// and the glyphs of a word differ.
+func gridLines(cells []shape) []line {
+	type row struct{ y0, y1, w int }
+	rows := map[row][]shape{}
+	for _, s := range cells {
+		k := row{s.y0, s.y1, s.width()}
+		rows[k] = append(rows[k], s)
+	}
+	var lines []line
+	for k, members := range rows {
+		if len(members) < 3 {
+			continue
+		}
+		sort.Slice(members, func(i, j int) bool { return members[i].x0 < members[j].x0 })
+		// The pitch is the smallest step between neighbors: a cell's width
+		// and the space after it, which is less than half a character's
+		// height in any font.
+		pitch := 0
+		for i := 1; i < len(members); i++ {
+			if step := members[i].x0 - members[i-1].x0; step > 0 && (pitch == 0 || step < pitch) {
+				pitch = step
+			}
+		}
+		h := k.y1 - k.y0
+		if pitch <= k.w || pitch > k.w+max(2, h/2) {
+			continue
+		}
+		start := 0
+		for i := 1; i <= len(members); i++ {
+			if i < len(members) {
+				// Up to two empty cells, a colon and a space, stay in the run.
+				step := members[i].x0 - members[i-1].x0
+				if step%pitch == 0 && step <= 3*pitch {
+					continue
+				}
+			}
+			if l, ok := gridLine(members[start:i], h); ok {
+				l.pitch = pitch
+				lines = append(lines, l)
+			}
+			start = i
+		}
+	}
+	// In reading order, as textLines returns them, whatever order the rows
+	// came out of the map in.
+	sort.Slice(lines, func(i, j int) bool {
+		if lines[i].y0 != lines[j].y0 {
+			return lines[i].y0 < lines[j].y0
+		}
+		return lines[i].x0 < lines[j].x0
+	})
+	return lines
+}
+
+// gridLine makes a line of a run of cells, if it is long enough, in one
+// color, and not one mark repeated.
+func gridLine(run []shape, h int) (line, bool) {
+	if len(run) < 3 {
+		return line{}, false
+	}
+	l := line{x0: run[0].x0, y0: run[0].y0, x1: run[len(run)-1].x1, y1: run[0].y1, height: h, count: len(run)}
+	for c := range l.color {
+		values := make([]int, len(run))
+		for i, s := range run {
+			values[i] = s.color[c]
+		}
+		l.color[c] = median(values)
+	}
+	tolerance := colorTolerance(sameColor, h, false)
+	alike := true
+	for _, s := range run {
+		l.ink += s.area
+		if s.area != run[0].area {
+			alike = false
+		}
+		for c := range l.color {
+			if d(s.color[c], l.color[c]) > tolerance {
+				return line{}, false
+			}
+		}
+	}
+	return l, !alike
 }
 
 // strokeWidth measures how thick a shape's strokes are: the median length
@@ -447,6 +672,9 @@ type line struct {
 	// count is how many shapes it was made of, and ink how many pixels
 	// they hold.
 	count, ink int
+	// pitch is, for a line found on a character generator's grid, the
+	// width of one cell.
+	pitch int
 }
 
 // saturated marks the pixels that stand out and are also as bright as a

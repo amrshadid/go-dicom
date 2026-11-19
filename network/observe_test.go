@@ -252,7 +252,7 @@ func TestEventsOfARejectionAndAnAbort(t *testing.T) {
 	a, b := net.Pipe()
 	near, far := NewTransport(a, 0), NewTransport(b, 0)
 	log, events := newEventLog()
-	near.observe(events)
+	near.observe(events, nil)
 
 	go func() {
 		_, _ = far.ReadPDU(ctx)
@@ -299,7 +299,7 @@ func TestNoEventsWithoutAManager(t *testing.T) {
 	a, b := net.Pipe()
 	defer func() { _ = a.Close(); _ = b.Close() }()
 	transport := NewTransport(a, 0)
-	transport.observe(nil)
+	transport.observe(nil, nil)
 	if transport.observed() != nil {
 		t.Error("a transport with no manager has an observer")
 	}

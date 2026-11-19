@@ -144,7 +144,7 @@ func watchForCancel(ctx context.Context, assoc *Association, messageID uint16) (
 		}
 
 		if isCmd {
-			if cmdDS, decErr := DecodeCommandDataset(data); decErr == nil {
+			if cmdDS, decErr := decodeCommandDataset(assoc.logContext(ctx), data); decErr == nil {
 				commandField, msgID, _, _ := ParseCommandDataset(cmdDS)
 				if commandField == CommandCCancelRQ && msgID == messageID {
 					close(w.canceled)
@@ -196,7 +196,7 @@ func (s *SCP) streamCFindResponses(ctx context.Context, assoc *Association, stre
 	handlerDone := make(chan error, 1)
 	go func() {
 		defer close(out)
-		handlerDone <- streamer.StreamCFind(opCtx, req, out)
+		handlerDone <- guardHandler(func() error { return streamer.StreamCFind(opCtx, req, out) })
 	}()
 
 	for resp := range out {
@@ -206,13 +206,13 @@ func (s *SCP) streamCFindResponses(ctx context.Context, assoc *Association, stre
 			continue
 		}
 		if err := s.sendCFindPending(ctx, assoc, ctxID, messageID, sopClassUID, resp); err != nil {
-			DefaultLogger.Error("failed to send C-FIND match: %v", err)
+			s.log().Error("failed to send C-FIND match: %v", err)
 			break
 		}
 	}
 
-	if err := <-handlerDone; err != nil && !watcher.wasCanceled() {
-		DefaultLogger.Error("streaming C-FIND handler failed: %v", err)
+	if err := awaitHandler(handlerDone); err != nil && !watcher.wasCanceled() {
+		s.log().Error("streaming C-FIND handler failed: %v", err)
 		return StatusUnableToProcess
 	}
 

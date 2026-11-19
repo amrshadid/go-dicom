@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/config"
@@ -102,6 +103,13 @@ type DataElement struct {
 	// Items holds the nested items of a Sequence (SQ) element. When set, Value
 	// and Length are ignored and the sequence is serialized from these items.
 	Items []*SequenceItem
+
+	// InFile, when set, says the value is not in Value but in the writer's
+	// value source (SetValueSource), at this offset and length, in the
+	// source's byte order. Value and Length are then ignored. It is how a data
+	// set read with filereader.ReadOptions.SkipBulkData is written back whole:
+	// see filereader.DICOMFile.GetDatasetWithValuesInFile.
+	InFile *dataelem.ValueInFile
 }
 
 // SequenceItem is one item within a Sequence (SQ) element.
@@ -126,6 +134,11 @@ type DCMFileWriter struct {
 	// bitsAllocated is (0028,0100) as written, for the Pixel Data byte-order
 	// swap when the target syntax is big endian.
 	bitsAllocated int
+
+	// source is where the values of elements with InFile set are copied
+	// from, and sourceLittleEndian the byte order they are in there.
+	source             io.ReaderAt
+	sourceLittleEndian bool
 }
 
 // NewDCMFileWriter creates a new DICOM file writer.
@@ -150,6 +163,19 @@ func (dfw *DCMFileWriter) SetExplicitVR(explicit bool) {
 // encapsulated fragments, which changes how (7FE0,0010) is written.
 func (dfw *DCMFileWriter) SetEncapsulated(encapsulated bool) {
 	dfw.encapsulated = encapsulated
+}
+
+// SetValueSource names the file the values of elements with InFile set are
+// copied from, and the byte order its data set is in: the file the data set
+// was read from with filereader.ReadOptions.SkipBulkData. Values are copied as
+// the element is written, a chunk at a time, so they are never in memory whole
+// except inside a sequence, whose items are encoded in memory to be measured.
+//
+// The source must not change between reading and writing: the offsets are
+// those it had when it was read.
+func (dfw *DCMFileWriter) SetValueSource(source io.ReaderAt, littleEndian bool) {
+	dfw.source = source
+	dfw.sourceLittleEndian = littleEndian
 }
 
 // SetLittleEndian sets the byte order (little-endian or big-endian).
@@ -244,6 +270,17 @@ func (dfw *DCMFileWriter) WriteFileMetaInfo(metaInfo *FileMetaInfo) error {
 		addMeta(0x0018, "AE", metaInfo.ReceivingApplicationEntityTitle)
 	}
 
+	// Checked before anything is written: a value too long for its 16-bit
+	// length field was written with its length truncated while the group
+	// length counted it whole, so the header described a different file
+	// from the one that followed it.
+	for _, elem := range elements {
+		if isShortVR(elem.VR) && elem.Length > 0xFFFF {
+			return fmt.Errorf("file meta %s is %d bytes; a %s value holds at most 65535",
+				elem.Tag, elem.Length, elem.VR)
+		}
+	}
+
 	// Calculate total group length (all elements after group length tag)
 	groupLength := uint32(0)
 	for _, elem := range elements {
@@ -316,6 +353,9 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 	// A sequence is serialized from its items rather than from a byte value.
 	if elem.VR == "SQ" || elem.Items != nil {
 		return dfw.writeSequence(elem, forceExplicitVR)
+	}
+	if elem.InFile != nil {
+		return dfw.writeValueInFile(elem, forceExplicitVR)
 	}
 
 	// Bits Allocated decides the width Pixel Data is byte-swapped in below, and
@@ -390,43 +430,8 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		}
 	}
 
-	// Write tag
-	if err := dfw.WriteTag(elem.Tag); err != nil {
+	if err := dfw.writeHeader(elem.Tag, elem.VR, elem.Length, dfw.explicitVR || forceExplicitVR); err != nil {
 		return err
-	}
-
-	explicitVR := dfw.explicitVR || forceExplicitVR
-
-	if explicitVR {
-		// Write VR (2 bytes)
-		if err := dfw.writer.WriteBytes([]byte(elem.VR)); err != nil {
-			return fmt.Errorf("failed to write VR: %w", err)
-		}
-		dfw.position += 2
-
-		// Write length based on VR type
-		if isShortVR(elem.VR) {
-			// Short VR format: 2-byte length
-			if err := dfw.writer.WriteUint16(uint16(elem.Length)); err != nil {
-				return fmt.Errorf("failed to write value length: %w", err)
-			}
-			dfw.position += 2
-		} else {
-			// Long VR format: 2-byte reserved + 4-byte length
-			if err := dfw.writer.WriteBytes([]byte{0x00, 0x00}); err != nil {
-				return fmt.Errorf("failed to write reserved bytes: %w", err)
-			}
-			if err := dfw.writer.WriteUint32(elem.Length); err != nil {
-				return fmt.Errorf("failed to write value length: %w", err)
-			}
-			dfw.position += 6
-		}
-	} else {
-		// Implicit VR: 4-byte length
-		if err := dfw.writer.WriteUint32(elem.Length); err != nil {
-			return fmt.Errorf("failed to write value length: %w", err)
-		}
-		dfw.position += 4
 	}
 
 	// Write value
@@ -437,6 +442,138 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 		dfw.position += int64(elem.Length)
 	}
 
+	return nil
+}
+
+// writeHeader writes an element's tag, its VR when explicit, and its length.
+func (dfw *DCMFileWriter) writeHeader(t tag.Tag, vr string, length uint32, explicitVR bool) error {
+	// A short VR states its length in 16 bits when the VR is explicit, and a
+	// longer value cannot be stated in it. Writing the low 16 bits of the
+	// length put every element after it in the wrong place. Refused before
+	// the tag is written, so a refusal leaves nothing of the element behind.
+	if explicitVR && isShortVR(vr) && length > 0xFFFF {
+		return fmt.Errorf("%s value of %s is %d bytes; its explicit VR length field holds at most 65535",
+			vr, t, length)
+	}
+
+	if err := dfw.WriteTag(t); err != nil {
+		return err
+	}
+
+	if explicitVR {
+		// Write VR (2 bytes)
+		if err := dfw.writer.WriteBytes([]byte(vr)); err != nil {
+			return fmt.Errorf("failed to write VR: %w", err)
+		}
+		dfw.position += 2
+
+		// Write length based on VR type
+		if isShortVR(vr) {
+			// Short VR format: 2-byte length
+			if err := dfw.writer.WriteUint16(uint16(length)); err != nil {
+				return fmt.Errorf("failed to write value length: %w", err)
+			}
+			dfw.position += 2
+		} else {
+			// Long VR format: 2-byte reserved + 4-byte length
+			if err := dfw.writer.WriteBytes([]byte{0x00, 0x00}); err != nil {
+				return fmt.Errorf("failed to write reserved bytes: %w", err)
+			}
+			if err := dfw.writer.WriteUint32(length); err != nil {
+				return fmt.Errorf("failed to write value length: %w", err)
+			}
+			dfw.position += 6
+		}
+	} else {
+		// Implicit VR: 4-byte length
+		if err := dfw.writer.WriteUint32(length); err != nil {
+			return fmt.Errorf("failed to write value length: %w", err)
+		}
+		dfw.position += 4
+	}
+	return nil
+}
+
+// copyChunk is how much of a value left in the source is held at once. A
+// multiple of eight, so a byte-order swap never splits a number across two
+// chunks.
+const copyChunk = 1 << 20
+
+// writeValueInFile writes an element whose value is copied from the value
+// source. It makes the same choices WriteDataElement makes for a value in
+// memory, in the same order, so the two write the same bytes: the VR, the
+// byte order, undefined length for encapsulated Pixel Data, and padding.
+func (dfw *DCMFileWriter) writeValueInFile(elem *DataElement, forceExplicitVR bool) (err error) {
+	ref := *elem.InFile
+	if dfw.source == nil {
+		// Writing nothing in its place would make an image with no pixels
+		// that reads as complete.
+		return fmt.Errorf("element %s: its value is %s, and the writer has no value source to copy it from",
+			elem.Tag.String(), ref)
+	}
+	if ref.Offset < 0 || ref.Length < 0 || ref.Length >= int64(undefinedLength) {
+		return fmt.Errorf("element %s: %s cannot be written as one value", elem.Tag.String(), ref)
+	}
+
+	vr := elem.VR
+	if len(vr) != 2 {
+		vr = "UN"
+	}
+
+	// The source holds the value in its own byte order and memory holds it
+	// little endian. A whole read swaps a big endian value into memory, and
+	// the writer swaps it out again for a big endian target, both at the
+	// same width; with the value never in memory, a swap is needed only when
+	// the two orders differ, and then once.
+	swapWidth := 0
+	if dfw.sourceLittleEndian != dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(vr)) {
+		swapWidth = dataelem.PixelDataSwapWidth(dataelem.VR(vr), 0)
+		if elem.Tag == pixelDataTag {
+			swapWidth = dataelem.PixelDataSwapWidth(dataelem.VR(vr), dfw.bitsAllocated)
+		}
+	}
+
+	length := uint32(ref.Length)
+	pad := length%2 != 0
+	if dfw.encapsulated && elem.Tag == pixelDataTag {
+		// As WriteDataElement: undefined length and a closing delimiter
+		// (PS3.5 A.4). The items are the value, and are never padded.
+		length, pad = undefinedLength, false
+		defer func() {
+			if err == nil {
+				err = dfw.writeSequenceDelimiter()
+			}
+		}()
+	} else if pad {
+		length++
+	}
+
+	if err := dfw.writeHeader(elem.Tag, vr, length, dfw.explicitVR || forceExplicitVR); err != nil {
+		return err
+	}
+
+	buf := make([]byte, min(int64(copyChunk), ref.Length))
+	for done := int64(0); done < ref.Length; {
+		chunk := buf[:min(int64(len(buf)), ref.Length-done)]
+		if _, err := dfw.source.ReadAt(chunk, ref.Offset+done); err != nil {
+			return fmt.Errorf("element %s: copying its value from the source at offset %d: %w",
+				elem.Tag.String(), ref.Offset+done, err)
+		}
+		dataelem.SwapBytes(chunk, swapWidth)
+		if err := dfw.writer.WriteBytes(chunk); err != nil {
+			return fmt.Errorf("failed to write data element value: %w", err)
+		}
+		done += int64(len(chunk))
+		dfw.position += int64(len(chunk))
+	}
+
+	if pad {
+		// The VR's padding byte, as padValueForVR gives a value in memory.
+		if err := dfw.writer.WriteBytes(padValueForVR(vr, []byte{0})[1:]); err != nil {
+			return fmt.Errorf("failed to write data element value: %w", err)
+		}
+		dfw.position++
+	}
 	return nil
 }
 
@@ -453,12 +590,45 @@ func (s *seekBuffer) Seek(_ int64, _ int) (int64, error) { return int64(s.buf.Le
 
 func (s *seekBuffer) Bytes() []byte { return s.buf.Bytes() }
 
+// EncodeFileHeader returns what comes before the data set in a Part 10 file:
+// the 128-byte preamble, "DICM", and the File Meta Information that
+// WriteFileMetaInfo writes for meta (PS3.10 7.1). The data set follows it,
+// encoded in meta.TransferSyntaxUID.
+//
+// It is for a writer that has the data set as bytes already encoded, such as
+// a C-STORE received over the network, and copies them after the header
+// without decoding them.
+func EncodeFileHeader(meta *FileMetaInfo) ([]byte, error) {
+	buf := &seekBuffer{}
+	w := NewDCMFileWriter(filebase.NewFileWriter(buf))
+	if err := w.WritePreamble(); err != nil {
+		return nil, err
+	}
+	if err := w.WriteDICMPrefix(); err != nil {
+		return nil, err
+	}
+	if err := w.WriteFileMetaInfo(meta); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 // writeSequence serializes a Sequence (SQ) element and its nested items.
 //
 // Items are written with explicit lengths rather than delimiters, so the
 // encoding is self-describing. Item tags always use the implicit-style header
 // — tag then 4-byte length, no VR — even inside an explicit VR transfer
 // syntax (PS3.5 Section 7.5).
+//
+// The sequence itself has an explicit length too, except in Implicit VR when
+// the dictionary does not call its tag a sequence: a private sequence above
+// all. There nothing but an undefined length tells a reader the element holds
+// items (PS3.5 6.2.2 Note 5, CP-246), so it is written with one and closed by
+// a Sequence Delimitation Item (PS3.5 7.5.1). With its byte count instead,
+// dcmtk and pydicom read the whole sequence as one opaque value, and so did
+// this library's own reader: a vendor's private sequence did not survive one
+// pass through anonymize or modify as a sequence. The items inside may keep
+// their lengths; both readers parse them once they know they are items.
 func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool) error {
 	// Serialize the items first so the sequence length is known up front.
 	itemBytes, err := dfw.encodeSequenceItems(elem.Items, forceExplicitVR)
@@ -466,11 +636,17 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 		return err
 	}
 
+	explicitVR := dfw.explicitVR || forceExplicitVR
+	length := uint32(len(itemBytes))
+	if elem.Tag.SequenceNeedsUndefinedLength(explicitVR) {
+		length = undefinedLength
+	}
+
 	if err := dfw.WriteTag(elem.Tag); err != nil {
 		return err
 	}
 
-	if dfw.explicitVR || forceExplicitVR {
+	if explicitVR {
 		if err := dfw.writer.WriteBytes([]byte("SQ")); err != nil {
 			return fmt.Errorf("failed to write SQ VR: %w", err)
 		}
@@ -480,7 +656,7 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 		dfw.position += 4
 	}
 
-	if err := dfw.writer.WriteUint32(uint32(len(itemBytes))); err != nil {
+	if err := dfw.writer.WriteUint32(length); err != nil {
 		return fmt.Errorf("failed to write sequence length: %w", err)
 	}
 	dfw.position += 4
@@ -492,6 +668,9 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 		dfw.position += int64(len(itemBytes))
 	}
 
+	if length == undefinedLength {
+		return dfw.writeSequenceDelimiter()
+	}
 	return nil
 }
 
@@ -546,6 +725,7 @@ func (dfw *DCMFileWriter) encodeElements(elements []*DataElement, forceExplicitV
 	nested := NewDCMFileWriter(inner)
 	nested.explicitVR = dfw.explicitVR
 	nested.littleEndian = dfw.littleEndian
+	nested.source, nested.sourceLittleEndian = dfw.source, dfw.sourceLittleEndian
 
 	for _, e := range elements {
 		if e == nil {
@@ -662,6 +842,13 @@ func (dfw *DICOMFileWriter) SetFileMetaInfo(metaInfo *FileMetaInfo) {
 		dfw.writer.SetExplicitVR(explicitVR)
 		dfw.writer.SetLittleEndian(littleEndian)
 	}
+}
+
+// SetValueSource names the file the values of elements with InFile set are
+// copied from, and the byte order of its data set; see
+// DCMFileWriter.SetValueSource.
+func (dfw *DICOMFileWriter) SetValueSource(source io.ReaderAt, littleEndian bool) {
+	dfw.writer.SetValueSource(source, littleEndian)
 }
 
 // AddDataElement adds a data element to the dataset.

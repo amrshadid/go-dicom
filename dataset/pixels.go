@@ -13,10 +13,18 @@ import (
 	"github.com/amrshadid/go-dicom/encaps"
 	"github.com/amrshadid/go-dicom/pixels"
 	"github.com/amrshadid/go-dicom/tag"
+	"github.com/amrshadid/go-dicom/uid"
 )
 
 // GetPixelDataInfo extracts pixel data metadata from the dataset.
 // Returns an error if required pixel data tags are missing.
+//
+// RescaleSlope and RescaleIntercept hold Rescale Slope (0028,1053) and Rescale
+// Intercept (0028,1052), and 1 and 0 when the image has none: an absent slope
+// means no scaling, not a slope of 0. An enhanced multi-frame image holds them
+// per frame in the functional groups, so there the fields hold frame 0's values
+// (its own group, or else the shared one) and later frames can differ; the
+// rescale of a frame is part of what RenderFrame applies.
 func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 	info := &PixelDataInfo{
 		BitsAllocated:       8,
@@ -103,6 +111,11 @@ func (ds *Dataset) GetPixelDataInfo() (*PixelDataInfo, error) {
 			info.PhotometricInterpretation = val
 		}
 	}
+
+	// Rescale Slope (0028,1053) and Intercept (0028,1052). They were never read
+	// from the data set, so both were 0 for every image and a slope of 0 turned
+	// each pixel into the intercept.
+	info.RescaleSlope, info.RescaleIntercept = rescaleOf(ds, 0)
 
 	// Validate required fields
 	if info.Rows == 0 || info.Columns == 0 {
@@ -704,6 +717,9 @@ func (ds *Dataset) pixelBytesForDecoding(info *PixelDataInfo) ([]byte, error) {
 		// pixel-interleaved little-endian samples.
 		return normalizeNativePixelBytes(pixelBytes, info), nil
 	}
+	if compression == "" {
+		return nil, ds.undecodedSyntax()
+	}
 
 	encData, err := ds.ExtractEncapsulatedFrames()
 	if err != nil {
@@ -837,6 +853,15 @@ func (ds *Dataset) pixelCompression(pixelBytes []byte, info *PixelDataInfo) (com
 	if uid := ds.TransferSyntaxUID(); uid != "" {
 		compression, err := compress.TransferSyntaxToCompressionType(uid)
 		if err != nil {
+			// A syntax with no decoder here, such as JPEG XL, whose
+			// Pixel Data is fragments: encapsulated, of no known compression.
+			// Taken for native, its fragments were read as samples, and the
+			// refusal was a count of bytes ("holds 4330 bytes and the image
+			// needs 8192") that named neither the syntax nor the reason, and
+			// a redaction could have written black into the codestream.
+			if compress.IsEncapsulated(uid) && looksEncapsulated(pixelBytes) {
+				return "", true
+			}
 			return compress.UNCOMPRESSED, false
 		}
 		// Deflate compresses the whole data set, not the pixel element, so by
@@ -851,11 +876,33 @@ func (ds *Dataset) pixelCompression(pixelBytes []byte, info *PixelDataInfo) (com
 	if expected > 0 && len(pixelBytes) == expected {
 		return compress.UNCOMPRESSED, false
 	}
-	if len(pixelBytes) >= 8 && pixelBytes[0] == 0xFE && pixelBytes[1] == 0xFF &&
-		pixelBytes[2] == 0x00 && pixelBytes[3] == 0xE0 {
+	if looksEncapsulated(pixelBytes) {
 		return sniffPixelCompression(pixelBytes), true
 	}
 	return compress.UNCOMPRESSED, false
+}
+
+// looksEncapsulated reports whether Pixel Data begins as encapsulated data
+// does: with the item that holds the Basic Offset Table (PS3.5 A.4).
+func looksEncapsulated(pixelBytes []byte) bool {
+	return len(pixelBytes) >= 8 && pixelBytes[0] == 0xFE && pixelBytes[1] == 0xFF &&
+		pixelBytes[2] == 0x00 && pixelBytes[3] == 0xE0
+}
+
+// undecodedSyntax is the refusal for encapsulated Pixel Data in a transfer
+// syntax this package has no decoder for, naming the syntax.
+func (ds *Dataset) undecodedSyntax() error {
+	return fmt.Errorf("the pixel data is in %s, which is read and carried and not decoded",
+		transferSyntaxName(ds.TransferSyntaxUID()))
+}
+
+// transferSyntaxName is a transfer syntax's name and UID, or the UID alone
+// when the dictionary does not know it.
+func transferSyntaxName(u string) string {
+	if info := uid.GetUIDInfo(u); info != nil {
+		return fmt.Sprintf("%s (%s)", info.Name, u)
+	}
+	return "transfer syntax " + u
 }
 
 // sniffPixelCompression guesses a codec from the first fragment, for data sets
@@ -882,21 +929,71 @@ func ds_parseEncapsulated(pixelBytes []byte) (*compress.EncapsulatedData, error)
 	return encaps.NewParser(bytes.NewReader(pixelBytes), true).ParseEncapsulatedData()
 }
 
-// decompressPixelFrame decodes one compressed frame into raw samples.
+// checkFrameSize refuses a decoded frame of any length but the one the data
+// set says a frame is.
+//
+// A short frame is never right, and nothing above notices it: a decoder that
+// unpacked a frame of 8 bits in an image of 16 bits allocated at one byte a
+// sample handed back half the image, and DecodedPixelData returned it with no
+// error, to be read as 16-bit samples by everything after it (#362). In a
+// multi-frame image every later frame would also start in the wrong place.
+//
+// A long one is not right either. It is a frame of another image than the
+// data set describes, and kept whole it was written out under Rows and Columns
+// that do not describe it (#548). The bundled decoders refuse such a frame by
+// its header before decoding it; this is what holds a decoder registered
+// without FrameHeader, and a JPEG frame whose rows its header leaves to a DNL
+// segment, to the same rule.
+func checkFrameSize(frame []byte, info *PixelDataInfo) error {
+	if len(frame) != info.BytesPerFrame {
+		return fmt.Errorf("the frame decodes to %d bytes and the image needs %d",
+			len(frame), info.BytesPerFrame)
+	}
+	return nil
+}
+
+// decompressPixelFrame decodes one compressed frame into raw samples, held
+// to the image the data set describes.
+//
+// PS3.5 8.2 has the Image Pixel Module describe the decompressed image and
+// requires it to be consistent with the compressed stream. Each frame is held
+// to it: a decoder that can read its codestream's header is asked for the
+// image's size first, and a frame of other columns, rows or components than
+// Columns, Rows and Samples per Pixel is refused with both before it is
+// decoded. A codestream can describe a 4096x4096 image in two hundred bytes,
+// so the size the data set declares, not the codestream's, is what a frame
+// may cost. Every frame is then held to the frame length the data set gives.
 func decompressPixelFrame(compression compress.CompressionType, fragment []byte, info *PixelDataInfo) ([]byte, error) {
+	frame, err := decodePixelFrame(compression, fragment, info)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkFrameSize(frame, info); err != nil {
+		return nil, err
+	}
+	return frame, nil
+}
+
+// decodePixelFrame chooses the decoder for one frame and runs it.
+func decodePixelFrame(compression compress.CompressionType, fragment []byte, info *PixelDataInfo) ([]byte, error) {
 	// RLE needs the image layout: its segments are planar, one per byte of
 	// each sample, and interleaving them requires knowing how many of each.
+	// It has no size of its own, so it is told the number of pixels, which
+	// each segment must hold one byte of.
 	if compression == compress.RLE {
-		return compress.NewRLEDecompressor().DecompressFrame(
-			fragment, info.SamplesPerPixel, info.BitsAllocated)
+		return compress.NewRLEDecompressor().DecompressFrameOfSize(
+			fragment, info.SamplesPerPixel, info.BitsAllocated, info.Rows*info.Columns)
 	}
 
 	// Baseline and extended JPEG are decodable with the standard library. The
 	// Photometric Interpretation goes with it: it decides whether a
 	// color-transformed frame should come back as RGB or stay in YBR.
 	if compression == compress.JPEG {
-		return compress.NewJPEGDecompressorForPhotometric(info.PhotometricInterpretation).
-			Decompress(fragment)
+		decoder := compress.NewJPEGDecompressorForPhotometric(info.PhotometricInterpretation)
+		if err := checkFrameHeader(decoder, fragment, info); err != nil {
+			return nil, err
+		}
+		return decoder.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored, info.PixelRepresentation)
 	}
 
 	// Everything else goes through the registry. JPEG-LS, JPEG Lossless and
@@ -907,19 +1004,37 @@ func decompressPixelFrame(compression compress.CompressionType, fragment []byte,
 		return nil, fmt.Errorf("no decoder available for %s; supply one with "+
 			"compress.GetExternalRegistry().RegisterExternalDecoder: %w", compression, err)
 	}
+	if err := checkFrameHeader(decoder, fragment, info); err != nil {
+		return nil, err
+	}
 
-	// JPEG 2000 needs the layout for the same reason RLE does, and for one
-	// more. A codestream carries its own sample depth and its own signedness,
-	// and DICOM's Bits Allocated and Pixel Representation may differ from both:
-	// Bits Allocated decides how wide each sample is written, and where the two
-	// disagree about sign the data set is the authority. A decoder the caller
-	// registered gets the plain call, since only this one knows what to do with
-	// the extra arguments.
-	if bundled, ok := decoder.(*compress.JPEG2000Decompressor); ok {
-		return bundled.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored,
+	// A codestream carries its own sample depth, and DICOM's Bits Allocated may
+	// differ from it: a JPEG-LS or lossless JPEG frame coded at 8 bits in an
+	// image of 16 bits allocated is legal, and unpacked at its own width it is
+	// half the image, returned as the whole of it. JPEG 2000 also carries its own
+	// signedness, and where it disagrees with Pixel Representation the data set
+	// is the authority. A decoder that can write the data set's layout says so
+	// by satisfying FrameDecompressor, as every bundled one does; one the caller
+	// registered without it gets the plain call.
+	if framed, ok := decoder.(compress.FrameDecompressor); ok {
+		return framed.DecompressFrame(fragment, info.BitsAllocated, info.BitsStored,
 			info.PixelRepresentation)
 	}
 	return decoder.Decompress(fragment)
+}
+
+// checkFrameHeader holds a frame's codestream header to the data set's
+// image, for a decoder that can read one; see compress.FrameHeaderReader.
+func checkFrameHeader(decoder compress.Decompressor, fragment []byte, info *PixelDataInfo) error {
+	reader, ok := decoder.(compress.FrameHeaderReader)
+	if !ok {
+		return nil
+	}
+	header, err := reader.FrameHeader(fragment)
+	if err != nil {
+		return err
+	}
+	return header.Check(info.Columns, info.Rows, info.SamplesPerPixel, info.BitsAllocated)
 }
 
 // PixelArrayBySample returns pixel data with color samples in their own

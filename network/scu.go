@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -36,7 +37,9 @@ import (
 // [SCU.Abort] must not wait behind a [SCU.Find] whose results have not been
 // drained.
 type SCU struct {
-	config      SCUConfig
+	config SCUConfig
+	// ownLog is SCUConfig.Logger as a Logger, nil for DefaultLogger.
+	ownLog      *Logger
 	association *Association
 	messageID   atomic.Uint32
 	mu          sync.Mutex
@@ -127,7 +130,7 @@ func (s *SCU) beginExclusiveOperation(ctx context.Context) (func(), error) {
 // NewSCU creates a new SCU with the given configuration.
 func NewSCU(config SCUConfig) *SCU {
 	config.applyDefaults()
-	return &SCU{config: config}
+	return &SCU{config: config, ownLog: loggerFor(config.Logger)}
 }
 
 // nextMessageID returns the next message ID.
@@ -176,8 +179,10 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 	// long as it ran, forever with context.Background (#206): the response to
 	// the request has ARTIM, and each PDU after it DIMSETimeout.
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
-	transport.observe(s.config.Events)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
+	transport.observe(s.config.Events, s.ownLog)
 	s.association = NewAssociation(transport)
+	s.association.logger = s.ownLog
 
 	if contexts == nil {
 		contexts = s.defaultContexts()
@@ -291,7 +296,7 @@ func (s *SCU) Echo(ctx context.Context) error {
 		return fmt.Errorf("failed to receive C-ECHO-RSP: %w", err)
 	}
 
-	respDS, err := DecodeCommandDataset(msg.command)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 	if err != nil {
 		return fmt.Errorf("failed to decode C-ECHO-RSP: %w", err)
 	}
@@ -329,13 +334,13 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	if !ok {
 		return fmt.Errorf("dataset missing SOP Class UID (0008,0016)")
 	}
-	sopClassUID := extractStringValue(sopClassElem.GetValue())
+	sopClassUID := extractStringValue(sopClassElem)
 
 	sopInstanceElem, ok := ds.Get(tag.New(0x0008, 0x0018)) // SOPInstanceUID
 	if !ok {
 		return fmt.Errorf("dataset missing SOP Instance UID (0008,0018)")
 	}
-	sopInstanceUID := extractStringValue(sopInstanceElem.GetValue())
+	sopInstanceUID := extractStringValue(sopInstanceElem)
 
 	pcID, ok := storeContextFor(assoc.AcceptedContexts(), sopClassUID, ds.TransferSyntaxUID())
 	if !ok {
@@ -354,7 +359,7 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 		return fmt.Errorf("failed to encode C-STORE-RQ: %w", err)
 	}
 
-	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(pcID), s.config.Network.JPEGQuality)
+	dataBytes, err := encodeDataset(ds, assoc.TransferSyntaxFor(pcID), s.config.Network)
 	if err != nil {
 		return fmt.Errorf("failed to encode dataset: %w", err)
 	}
@@ -369,7 +374,7 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 		return fmt.Errorf("failed to receive C-STORE-RSP: %w", err)
 	}
 
-	respDS, err := DecodeCommandDataset(msg.command)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 	if err != nil {
 		return fmt.Errorf("failed to decode C-STORE-RSP: %w", err)
 	}
@@ -563,7 +568,7 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, messag
 			return
 		}
 
-		cmdDS, err := DecodeCommandDataset(msg.command)
+		cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 		if err != nil {
 			results <- &CFindResult{Err: err}
 			return
@@ -590,7 +595,7 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, messag
 			return
 		}
 
-		resultDS, err := DecodeDataset(msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
+		resultDS, err := decodeDataset(assoc.logContext(ctx), msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
 		if err != nil {
 			results <- &CFindResult{Err: err}
 			return
@@ -670,7 +675,7 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 			continue // Skip data PDUs (sub-operations handled by destination SCP)
 		}
 
-		respDS, err := DecodeCommandDataset(cmdData)
+		respDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 		if err != nil {
 			return fmt.Errorf("failed to decode C-MOVE-RSP: %w", err)
 		}
@@ -759,7 +764,7 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 			continue
 		}
 
-		cmdDS, err := DecodeCommandDataset(cmdData)
+		cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 		if err != nil {
 			return fmt.Errorf("failed to decode C-GET response: %w", err)
 		}
@@ -806,7 +811,7 @@ func (s *SCU) handleGetSubOperation(ctx context.Context, assoc *Association,
 			return NewDIMSEError("UNEXPECTED",
 				"expected a data set for the C-STORE sub-operation, got a command", 0)
 		}
-		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		ds, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			// Report the failure to the peer rather than dropping the
 			// association; the remaining instances may still be usable.
@@ -817,7 +822,9 @@ func (s *SCU) handleGetSubOperation(ctx context.Context, assoc *Association,
 
 	status := StatusSuccess
 	if s.config.OnCStore != nil {
-		status = s.config.OnCStore(ctx, sopClassUID, sopInstanceUID, ds)
+		// As a server's handlers are, the callback is given this client's
+		// logger in its context (config.LoggerFromContext).
+		status = s.config.OnCStore(assoc.logContext(ctx), sopClassUID, sopInstanceUID, ds)
 	}
 
 	return s.respondToSubOperation(ctx, assoc, ctxID, messageID,
@@ -894,14 +901,13 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 		}
 	}
 
-	_, respData, _, err := assoc.ReceivePData(ctx)
+	status, respSet, err := receiveNResponse(ctx, assoc, messageID, "N-EVENT-REPORT-RSP")
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
-	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NEventReportResponse{
+		DataSet:              respSet,
 		MessageIDRespondedTo: messageID,
 		AffectedSOPClass:     sopClassUID,
 		AffectedSOPInstance:  sopInstanceUID,
@@ -910,8 +916,22 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 	}, nil
 }
 
-// NGet sends an N-GET-RQ.
+// NGet sends an N-GET-RQ for every attribute of the instance: the request
+// carries no Attribute Identifier List. NGetAttributes asks for some.
 func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NGetResponse, error) {
+	return s.NGetAttributes(ctx, sopClassUID, sopInstanceUID, nil)
+}
+
+// NGetAttributes sends an N-GET-RQ whose Attribute Identifier List (0000,1005)
+// names the attributes wanted, in the order given (PS3.7 10.1.2.1.4); the SCP
+// returns those it has. An empty or nil list sends none, which asks for every
+// attribute, as NGet does.
+//
+// It is a method of its own rather than a list added to NGet: a variadic
+// parameter would keep NGet's call sites compiling, but not a method value or
+// an interface written against NGet's signature, such as a test double.
+func (s *SCU) NGetAttributes(ctx context.Context, sopClassUID, sopInstanceUID string,
+	attributes []tag.Tag) (*NGetResponse, error) {
 	release, err := s.beginOperation(ctx)
 	if err != nil {
 		return nil, err
@@ -928,34 +948,30 @@ func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NG
 		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
 	}
 
-	cmdDS := BuildNGetRQ(s.nextMessageID(), sopClassUID, sopInstanceUID)
-	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	messageID := s.nextMessageID()
+	cmdDS := BuildNGetRQ(messageID, sopClassUID, sopInstanceUID)
+	if err := addAttributeIdentifierList(cmdDS, attributes); err != nil {
+		return nil, fmt.Errorf("N-GET-RQ: %w", err)
+	}
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode N-GET-RQ: %w", err)
+	}
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
 	}
 
-	_, respData, _, err := assoc.ReceivePData(ctx)
+	status, respSet, err := receiveNResponse(ctx, assoc, messageID, "N-GET-RSP")
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
-	_, _, status, _ := ParseCommandDataset(respDS)
-
-	resp := &NGetResponse{
-		AffectedSOPClass:    sopClassUID,
-		AffectedSOPInstance: sopInstanceUID,
-		Status:              status,
-	}
-
-	// Check if data set follows
-	if HasDataSet(respDS) {
-		dsCtxID, dsData, _, err := assoc.ReceivePData(ctx)
-		if err == nil {
-			resp.DataSet, _ = DecodeDataset(dsData, assoc.TransferSyntaxFor(dsCtxID))
-		}
-	}
-
-	return resp, nil
+	return &NGetResponse{
+		MessageIDRespondedTo: messageID,
+		AffectedSOPClass:     sopClassUID,
+		AffectedSOPInstance:  sopInstanceUID,
+		Status:               status,
+		DataSet:              respSet,
+	}, nil
 }
 
 // NSet sends an N-SET-RQ.
@@ -976,7 +992,8 @@ func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *
 		return nil, NewAssociationError("NO_CONTEXT", fmt.Sprintf("no context for %s", sopClassUID))
 	}
 
-	cmdDS := BuildNSetRQ(s.nextMessageID(), sopClassUID, sopInstanceUID)
+	messageID := s.nextMessageID()
+	cmdDS := BuildNSetRQ(messageID, sopClassUID, sopInstanceUID)
 	cmdBytes, _ := EncodeCommandDataset(cmdDS)
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
@@ -986,17 +1003,17 @@ func (s *SCU) NSet(ctx context.Context, sopClassUID, sopInstanceUID string, ds *
 		return nil, err
 	}
 
-	_, respData, _, err := assoc.ReceivePData(ctx)
+	status, respSet, err := receiveNResponse(ctx, assoc, messageID, "N-SET-RSP")
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
-	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NSetResponse{
-		AffectedSOPClass:    sopClassUID,
-		AffectedSOPInstance: sopInstanceUID,
-		Status:              status,
+		MessageIDRespondedTo: messageID,
+		DataSet:              respSet,
+		AffectedSOPClass:     sopClassUID,
+		AffectedSOPInstance:  sopInstanceUID,
+		Status:               status,
 	}, nil
 }
 
@@ -1019,7 +1036,8 @@ func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, a
 	}
 
 	hasDS := ds != nil
-	cmdDS := BuildNActionRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, actionTypeID, hasDS)
+	messageID := s.nextMessageID()
+	cmdDS := BuildNActionRQ(messageID, sopClassUID, sopInstanceUID, actionTypeID, hasDS)
 	cmdBytes, _ := EncodeCommandDataset(cmdDS)
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
@@ -1031,18 +1049,18 @@ func (s *SCU) NAction(ctx context.Context, sopClassUID, sopInstanceUID string, a
 		}
 	}
 
-	_, respData, _, err := assoc.ReceivePData(ctx)
+	status, respSet, err := receiveNResponse(ctx, assoc, messageID, "N-ACTION-RSP")
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
-	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NActionResponse{
-		AffectedSOPClass:    sopClassUID,
-		AffectedSOPInstance: sopInstanceUID,
-		ActionTypeID:        actionTypeID,
-		Status:              status,
+		MessageIDRespondedTo: messageID,
+		DataSet:              respSet,
+		AffectedSOPClass:     sopClassUID,
+		AffectedSOPInstance:  sopInstanceUID,
+		ActionTypeID:         actionTypeID,
+		Status:               status,
 	}, nil
 }
 
@@ -1065,7 +1083,8 @@ func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, d
 	}
 
 	hasDS := ds != nil
-	cmdDS := BuildNCreateRQ(s.nextMessageID(), sopClassUID, sopInstanceUID, hasDS)
+	messageID := s.nextMessageID()
+	cmdDS := BuildNCreateRQ(messageID, sopClassUID, sopInstanceUID, hasDS)
 	cmdBytes, _ := EncodeCommandDataset(cmdDS)
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
@@ -1077,17 +1096,17 @@ func (s *SCU) NCreate(ctx context.Context, sopClassUID, sopInstanceUID string, d
 		}
 	}
 
-	_, respData, _, err := assoc.ReceivePData(ctx)
+	status, respSet, err := receiveNResponse(ctx, assoc, messageID, "N-CREATE-RSP")
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
-	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NCreateResponse{
-		AffectedSOPClass:    sopClassUID,
-		AffectedSOPInstance: sopInstanceUID,
-		Status:              status,
+		MessageIDRespondedTo: messageID,
+		DataSet:              respSet,
+		AffectedSOPClass:     sopClassUID,
+		AffectedSOPInstance:  sopInstanceUID,
+		Status:               status,
 	}, nil
 }
 
@@ -1119,7 +1138,7 @@ func (s *SCU) NDelete(ctx context.Context, sopClassUID, sopInstanceUID string) (
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
+	respDS, _ := decodeCommandDataset(assoc.logContext(ctx), respData)
 	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NDeleteResponse{
@@ -1203,13 +1222,49 @@ func (s *SCU) IsAssociated() bool {
 // PS3.5 Section 6.2 makes trailing spaces non-significant for AE. Trimming only
 // NUL left every odd-length AE title with a trailing space, so a C-MOVE to a
 // destination whose title had an odd number of characters never matched.
-func extractStringValue(val interface{}) string {
-	switch v := val.(type) {
-	case string:
-		return strings.TrimRight(v, "\x00 ")
-	case []byte:
-		return strings.TrimRight(string(v), "\x00 ")
-	default:
-		return fmt.Sprintf("%v", v)
+//
+// The value is read through Bytes. A switch here knew []byte and string and
+// printed anything else with %v, so a SOP Instance UID held as a []string
+// went out as "[1.2.3]" (#420). A value that holds no bytes is no string.
+func extractStringValue(elem *dataelem.DataElement) string {
+	raw, ok := elem.Bytes()
+	if !ok {
+		return ""
 	}
+	return strings.TrimRight(string(raw), "\x00 ")
+}
+
+// receiveNResponse reads the response to an N-service request: its command,
+// and the data set that follows when the command says one does. Each of the
+// N-service responses may carry one (PS3.7 10.1): the attribute list of an
+// N-CREATE, N-SET or N-GET, the reply of an N-ACTION or N-EVENT-REPORT.
+//
+// Only N-GET read it. The others read the command and stopped, so the data
+// set stayed on the association and the next operation took it for its own
+// response: an MPPS N-SET after an N-CREATE that returned its attributes
+// panicked decoding it as a command, and where it decoded, read status 0 and
+// reported a failure as success (#379). The whole message is read by its
+// message ID, as the C-services read theirs, and a response that does not
+// decode is an error rather than a status of zero.
+func receiveNResponse(ctx context.Context, assoc *Association, messageID uint16, name string) (uint16, *dataset.Dataset, error) {
+	msg, err := assoc.ReceiveResponse(ctx, messageID)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to receive %s: %w", name, err)
+	}
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to decode %s: %w", name, err)
+	}
+	_, _, status, err := ParseCommandDataset(respDS)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to parse %s: %w", name, err)
+	}
+	if !msg.hasDataSet {
+		return status, nil, nil
+	}
+	ds, err := decodeDataset(assoc.logContext(ctx), msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
+	if err != nil {
+		return status, nil, fmt.Errorf("failed to decode the data set of %s: %w", name, err)
+	}
+	return status, ds, nil
 }
