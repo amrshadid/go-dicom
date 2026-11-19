@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-19
+
+The largest release so far. The library now writes every compressed syntax
+it reads, decodes JPEG 2000 whole, serves DICOMweb in full, checks an
+instance against its IOD, and the command line covers the jobs people use
+dcmtk for. Nothing is removed or renamed; for programs using the library
+there are additions only.
+
+- **Every compressed syntax is written.** RLE, JPEG Baseline and 12-bit
+  Extended, lossless JPEG, JPEG-LS lossless and near-lossless, and JPEG 2000
+  lossless and lossy (a ratio met by rate-distortion optimal truncation, in
+  quality layers). `compress` and `decompress` change a file's transfer
+  syntax, and a send is transcoded to what the peer accepts.
+- **JPEG 2000 decodes whole.** Every progression order and progression
+  change, precincts, every code-block style, region of interest, subsampled
+  components, and High-Throughput JPEG 2000 (Part 15). Checked against
+  OpenJPEG, and against Apple's decoder where the two disagree. Packed packet headers (PPM/PPT) are still refused by
+  name, and JPEG XL is carried and not decoded.
+- **The DICOMweb server is complete.** Frames, bulk data at every level,
+  rendered images and thumbnails (with their lookup tables and ICC profile),
+  float and 1-bit frames, and a frame encoded into the syntax a request
+  names.
+- **New commands.** `diff`, `dicomdir`, `sr`, `modify`, `create`,
+  `compress`, `decompress`, `validate`, `findscu -worklist`, `wlmscp`,
+  `mppsscu` and `upsscu`; `storescp` and `qrscp` admit only the callers
+  they are given (`-allow`, `-allow-file`).
+- **`validate`** checks an instance against what its SOP class requires:
+  modules, Type 1/2/1C/2C attributes whose conditions are stated in a fixed
+  form, enumerated values, and the functional groups of enhanced IODs.
+- **For servers built on the library.** A server can stop without cutting
+  the stores in progress, set what it accepts before it listens, take a
+  C-STORE as a stream, refuse a caller before negotiation, and have its own
+  logger; an abort says why; a failed TLS handshake is an event; a read can
+  bound the length of any one value.
+- **Memory.** `convert`, `anonymize`, `info` and `validate` no longer hold
+  the image: a 200 MB frame becomes a PNG in 28 MB where it took 340 MB. A
+  JPEG 2000 codestream of a few hundred bytes can no longer claim gigabytes,
+  and a frame that is not the image its data set describes is refused.
+- **Correctness found by checking against dcmtk, pydicom and OpenJPEG.**
+  JPEG color by its Photometric Interpretation, JPEG-LS thresholds and
+  restart markers per T.87, the PS3.8 close after a rejection or an abort,
+  and C-GET order among others; see Fixed.
+
+Nothing in the format of `show --json` changes: `schemaVersion` is still 1.
+Every `-events` line now carries `"schemaVersion":1`, which a reader of
+1.10.0's lines may ignore.
+
 ### Added
 
 - **The guides can be published as a site.** `docs/` gains an index page and
@@ -4240,7 +4287,8 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/amrshadid/go-dicom/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/amrshadid/go-dicom/compare/v1.10.0...v1.11.0
 [1.10.0]: https://github.com/amrshadid/go-dicom/compare/v1.9.1...v1.10.0
 [1.9.1]: https://github.com/amrshadid/go-dicom/compare/v1.9.0...v1.9.1
 [1.9.0]: https://github.com/amrshadid/go-dicom/compare/v1.8.0...v1.9.0
