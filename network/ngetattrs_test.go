@@ -107,3 +107,49 @@ func TestNGetHandlerIsGivenTheAttributeIdentifierList(t *testing.T) {
 	default:
 	}
 }
+
+// TestSCUSendsTheAttributeIdentifierList: SCU.NGet had no way to name the
+// attributes wanted, though an SCP has read the list since #380. Over a real
+// association, NGetAttributes sends the tags it is given, in that order, and
+// the SCP's handler receives them; NGet, and NGetAttributes with an empty
+// list, send none, which the handler receives as nil: every attribute.
+func TestSCUSendsTheAttributeIdentifierList(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	recorder := &nGetListRecorder{lists: make(chan []tag.Tag, 3)}
+	server, err := StartServer(ctx, SCPConfig{AETitle: "NGET_SCP", Port: 0, BindAddress: "127.0.0.1"}, recorder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	server.SetSupportedAbstractSyntaxes([]string{ModalityPerformedProcedureStepUID})
+
+	scu := NewSCU(SCUConfig{CallingAE: "NGET_SCU", CalledAE: "NGET_SCP", Address: server.Addr()})
+	if err := scu.Associate(ctx, []PresentationContextItem{{ID: 1, AbstractSyntax: ModalityPerformedProcedureStepUID,
+		TransferSyntaxes: []string{ImplicitVRLittleEndianUID}}}); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = scu.Release(ctx) }()
+
+	const instance = "1.2.826.0.1.3680043.10.511.486.1"
+	want := []tag.Tag{tag.New(0x0040, 0x0252), tag.New(0x2100, 0x0020), tag.New(0x0008, 0x1150)}
+	if rsp, err := scu.NGetAttributes(ctx, ModalityPerformedProcedureStepUID, instance, want); err != nil || rsp.Status != StatusSuccess {
+		t.Fatalf("NGetAttributes: %v, %+v", err, rsp)
+	}
+	if got := <-recorder.lists; !reflect.DeepEqual(got, want) {
+		t.Errorf("the handler was given %v, want %v", got, want)
+	}
+
+	if _, err := scu.NGet(ctx, ModalityPerformedProcedureStepUID, instance); err != nil {
+		t.Fatalf("NGet: %v", err)
+	}
+	if got := <-recorder.lists; got != nil {
+		t.Errorf("NGet sent the list %v, want none", got)
+	}
+	if _, err := scu.NGetAttributes(ctx, ModalityPerformedProcedureStepUID, instance, []tag.Tag{}); err != nil {
+		t.Fatalf("NGetAttributes with an empty list: %v", err)
+	}
+	if got := <-recorder.lists; got != nil {
+		t.Errorf("an empty list was sent as %v, want no list", got)
+	}
+}

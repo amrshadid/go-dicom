@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -9,8 +10,10 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/amrshadid/go-dicom/compress"
@@ -29,26 +32,52 @@ const (
 	jpegBaselineSyntax    = "1.2.840.10008.1.2.4.50"
 )
 
-// createFromJSON reads a DICOM JSON object, or an array of one, with the
-// reader the DICOMweb client uses (Dataset.FromDICOMJSON).
-func createFromJSON(path, syntax string) (*created, error) {
+// createFromJSON reads DICOM JSON: one object, or an array of them, as a
+// DICOMweb metadata response holds a study. Each object is a data set with the
+// reader the DICOMweb client uses (Dataset.FromDICOMJSON). A value held at a
+// BulkDataURI is read from the local file it names, within bulkDir (default:
+// the directory of the JSON file).
+func createFromJSON(path, syntax, bulkDir string) ([]*created, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	object := bytes.TrimSpace(data)
-	if len(object) > 0 && object[0] == '[' {
-		var objects []json.RawMessage
-		if err := json.Unmarshal(object, &objects); err != nil {
+	if bulkDir == "" {
+		bulkDir = filepath.Dir(path)
+	}
+	text := bytes.TrimSpace(data)
+	objects := []json.RawMessage{text}
+	if len(text) > 0 && text[0] == '[' {
+		objects = nil
+		if err := json.Unmarshal(text, &objects); err != nil {
 			return nil, fmt.Errorf("not DICOM JSON: %w", err)
 		}
-		if len(objects) != 1 {
-			return nil, fmt.Errorf("the array holds %d objects; one file is made from one", len(objects))
+		if len(objects) == 0 {
+			return nil, errors.New("the array holds no objects")
 		}
-		object = objects[0]
 	}
+	made := make([]*created, 0, len(objects))
+	for i, object := range objects {
+		c, err := createObjectFromJSON(object, syntax, bulkDir)
+		if err != nil {
+			if len(objects) > 1 {
+				return nil, fmt.Errorf("object %d of %d: %w", i+1, len(objects), err)
+			}
+			return nil, err
+		}
+		made = append(made, c)
+	}
+	return made, nil
+}
+
+// createObjectFromJSON makes the data set of one DICOM JSON object.
+func createObjectFromJSON(object json.RawMessage, syntax, bulkDir string) (*created, error) {
+	// Numbers are kept as written: a value read as a float64 and written
+	// back would not be the digits it came as.
+	decoder := json.NewDecoder(bytes.NewReader(object))
+	decoder.UseNumber()
 	var generic any
-	if err := json.Unmarshal(object, &generic); err != nil {
+	if err := decoder.Decode(&generic); err != nil {
 		return nil, fmt.Errorf("not DICOM JSON: %w", err)
 	}
 	if _, ok := generic.(map[string]any); !ok {
@@ -56,9 +85,14 @@ func createFromJSON(path, syntax string) (*created, error) {
 	}
 	// The reader records a value held by URI as empty, which is as much as
 	// can be known without fetching it; a file written from that would hold
-	// an empty Pixel Data and look complete.
-	if at := bulkDataURI(generic, ""); at != "" {
-		return nil, fmt.Errorf("%s is held at a BulkDataURI, which is not fetched; give it as InlineBinary", at)
+	// an empty Pixel Data and look complete. So each is read here, from a
+	// local file, and given to the reader as InlineBinary.
+	if n, err := inlineBulkData(generic, "", bulkDir); err != nil {
+		return nil, err
+	} else if n > 0 {
+		if object, err = json.Marshal(generic); err != nil {
+			return nil, err
+		}
 	}
 	ds := dataset.NewDataset()
 	if err := ds.FromDICOMJSONString(string(object)); err != nil {
@@ -85,26 +119,135 @@ func createFromJSON(path, syntax string) (*created, error) {
 	return &created{ds: ds, syntax: syntax, what: "from DICOM JSON"}, nil
 }
 
-// bulkDataURI returns the tag path of the first element held by URI.
-func bulkDataURI(v any, at string) string {
+// bulkBinaryVRs are the VRs a value may be read from a file for: the ones
+// DICOM JSON carries as InlineBinary, and so as bulk data (PS3.18 F.2.7).
+var bulkBinaryVRs = map[string]bool{
+	"OB": true, "OD": true, "OF": true, "OL": true, "OV": true, "OW": true, "UN": true,
+}
+
+// inlineBulkData replaces each element held by BulkDataURI, in v and in every
+// item under it, with the bytes of the local file the URI names, as
+// InlineBinary. It returns how many it replaced. at is the tag path, for the
+// messages.
+func inlineBulkData(v any, at, bulkDir string) (int, error) {
+	replaced := 0
 	switch value := v.(type) {
 	case map[string]any:
-		if _, ok := value["BulkDataURI"]; ok {
-			return at
+		if uri, ok := value["BulkDataURI"]; ok {
+			vr, _ := value["vr"].(string)
+			if !bulkBinaryVRs[vr] {
+				return 0, fmt.Errorf("%s is a BulkDataURI of VR %q; only a binary value (OB, OW, OF, OD, OL, OV, UN) is read from a file", at, vr)
+			}
+			name, _ := uri.(string)
+			raw, err := readBulkFile(name, bulkDir)
+			if err != nil {
+				return 0, fmt.Errorf("%s: BulkDataURI %q: %w", at, name, err)
+			}
+			delete(value, "BulkDataURI")
+			value["InlineBinary"] = base64.StdEncoding.EncodeToString(compress.PadToEven(raw))
+			return 1, nil
 		}
 		for key, member := range value {
-			if found := bulkDataURI(member, strings.TrimPrefix(at+"."+key, ".")); found != "" {
-				return found
+			n, err := inlineBulkData(member, strings.TrimPrefix(at+"."+key, "."), bulkDir)
+			if err != nil {
+				return replaced, err
 			}
+			replaced += n
 		}
 	case []any:
 		for _, item := range value {
-			if found := bulkDataURI(item, at); found != "" {
-				return found
+			n, err := inlineBulkData(item, at, bulkDir)
+			if err != nil {
+				return replaced, err
 			}
+			replaced += n
 		}
 	}
-	return ""
+	return replaced, nil
+}
+
+// within reports whether path is dir or lies under it, by name.
+func within(dir, path string) bool {
+	absDir, errDir := filepath.Abs(dir)
+	absPath, errPath := filepath.Abs(path)
+	if errDir != nil || errPath != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// readBulkFile reads the file a BulkDataURI names. It is a file: URI or a
+// path, which is relative to bulkDir; a URI that reaches the network is
+// refused by name, since a command that makes a file does not reach out
+// unasked. Whatever the URI says, the file must lie inside bulkDir: the JSON
+// may have come from a server, and a path that climbs out of the directory
+// would put any file of the machine into the one this command makes.
+func readBulkFile(uri, bulkDir string) ([]byte, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, fmt.Errorf("not a URI: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "", "file":
+	case "http", "https":
+		return nil, errors.New("it is at a network address, and create does not fetch: a command that makes a file does not reach the network unasked; " +
+			"fetch it first, with curl for one, and name the file in the BulkDataURI")
+	default:
+		return nil, fmt.Errorf("a %s: URI is not read; only a file: URI or a path is", u.Scheme)
+	}
+	if u.Host != "" && !strings.EqualFold(u.Host, "localhost") {
+		return nil, fmt.Errorf("the host %q is not this machine", u.Host)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, errors.New("a query or a fragment (a byte range) is not read; the whole file is the value")
+	}
+	name := u.Path
+	if name == "" {
+		name = u.Opaque // file:relative/path
+		if unescaped, err := url.PathUnescape(name); err == nil {
+			name = unescaped
+		}
+	}
+	if name == "" {
+		return nil, errors.New("it names no file")
+	}
+	if runtime.GOOS == "windows" && len(name) > 2 && name[0] == '/' && name[2] == ':' {
+		name = name[1:] // file:///C:/x
+	}
+	name = filepath.FromSlash(name)
+	if !filepath.IsAbs(name) {
+		name = filepath.Join(bulkDir, name)
+	}
+	// Contained by its name first, so that a path out of the directory is
+	// refused as that whether or not the file exists, and then by where it
+	// really is, so that a symbolic link in the directory cannot lead out.
+	outside := fmt.Errorf("it is outside %s; give -bulk-dir the directory BulkDataURIs may be read from", bulkDir)
+	if !within(bulkDir, name) {
+		return nil, outside
+	}
+	resolved, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return nil, err
+	}
+	root, err := filepath.EvalSymlinks(bulkDir)
+	if err != nil {
+		return nil, fmt.Errorf("-bulk-dir: %w", err)
+	}
+	if !within(root, resolved) {
+		return nil, outside
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("it is not a file")
+	}
+	if info.Size() > 0xFFFFFFFD {
+		return nil, fmt.Errorf("it is %d bytes, more than one value can hold", info.Size())
+	}
+	return os.ReadFile(resolved)
 }
 
 func rawBytes(ds *dataset.Dataset, t tag.Tag) []byte {
@@ -112,7 +255,7 @@ func rawBytes(ds *dataset.Dataset, t tag.Tag) []byte {
 	if !ok {
 		return nil
 	}
-	b, _ := elem.GetValue().([]byte)
+	b, _ := elem.Bytes()
 	return b
 }
 

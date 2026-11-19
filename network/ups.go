@@ -410,7 +410,7 @@ func upsStringValue(ds *dataset.Dataset, t tag.Tag) string {
 	if !ok {
 		return ""
 	}
-	value, ok := elem.GetValue().([]byte)
+	value, ok := elem.Bytes()
 	if !ok {
 		return ""
 	}

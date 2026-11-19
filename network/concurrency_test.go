@@ -217,7 +217,7 @@ func TestTheAsyncWindowIsProposedAsAsked(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := truthfulAsyncWindow(tc.proposed)
+			got := truthfulAsyncWindow(tc.proposed, DefaultLogger)
 			if got == nil {
 				t.Fatal("truthfulAsyncWindow dropped the window entirely")
 			}
@@ -232,7 +232,7 @@ func TestTheAsyncWindowIsProposedAsAsked(t *testing.T) {
 		})
 	}
 
-	if truthfulAsyncWindow(nil) != nil {
+	if truthfulAsyncWindow(nil, DefaultLogger) != nil {
 		t.Error("no window proposed should stay no window, not become one")
 	}
 }
@@ -378,7 +378,7 @@ func TestConcurrentOperationsEachGetTheirOwnResponse(t *testing.T) {
 func TestTheCallersWindowIsNotModifiedInPlace(t *testing.T) {
 	proposed := &AsynchronousOperationsWindow{MaxOperationsInvoked: 4, MaxOperationsPerformed: 4}
 
-	_ = truthfulAsyncWindow(proposed)
+	_ = truthfulAsyncWindow(proposed, DefaultLogger)
 
 	if proposed.MaxOperationsInvoked != 4 {
 		t.Errorf("the caller's window was rewritten to %d; it should be copied, not modified",

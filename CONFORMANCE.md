@@ -55,7 +55,8 @@ them as a Part 10 file with File Meta Information built from the command (PS3.10
 handler's read with an error that is never `io.EOF`, and no response is sent; one
 the handler stops reading early is read to its end and discarded before the
 handler's status is sent. A C-STORE-RQ that states no data set follows is
-refused with C000H without the handler being called (PS3.7 9.3.1.1).
+refused with C000H without the handler being called, whether it streams or is
+given the decoded data set (PS3.7 9.3.1.1).
 
 `WriteCStoreFile` checks the command's Affected SOP Class UID and Affected SOP
 Instance UID, and the transfer syntax, against PS3.5 9.1 before it writes
@@ -344,7 +345,7 @@ As an origin server (`dicomweb.NewServer`, `qrscp -web`):
 | Service | Supported | Not supported |
 |---------|-----------|---------------|
 | QIDO-RS | `/studies`, `/series`, `/instances` and the same within a study or a series. Matching is the archive's own (section 2.7), so a search matches what a C-FIND does: single value, wildcard, range, list of UID, and `Sequence.Attribute` for an attribute inside a sequence. `includefield`, `limit`, `offset`. Results as DICOM JSON in UTF-8, each with the attributes of PS3.18 10.6.3.3 the archive holds a value for; 204 when nothing matches | XML results. Fuzzy matching: `fuzzymatching=true` is answered by literal matching and a `Warning: 299`. `includefield=all` returns the default attributes |
-| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON. Frames, `…/frames/{list}`: one part a frame, in the order asked; by default, or for `application/octet-stream`, uncompressed in Explicit VR Little Endian, a compressed frame decoded for it; for `application/octet-stream; transfer-syntax=*`, or the frame's own type (`image/jpeg`, `image/jls`, `image/jp2`, `image/jpx`, `image/dicom-rle`, `image/x-dicom-rle` accepted for it), as stored. Each frame read from the file by its position, through the Extended or Basic Offset Table, a frame over several fragments joined. A frame number not in the image: 404; a list that is not frame numbers counted from 1: 400; a compressed type the frame is not held in: 406. Bulk data, `…/instances/{instance}/bulkdata/{tag}[/{item}/{tag}…]`: each value metadata leaves out (binary values over 1 KiB, Pixel Data at any length), read from the file by its position, as `application/octet-stream` in little endian; Pixel Data as its frames are sent, every frame in one part when uncompressed. `/metadata` gives a `BulkDataURI` for each, inside sequences too. The bulk data of a study, a series or an instance, `…/bulkdata` (PS3.18 Table 10.4.1.5-1): every value metadata names, a part each with its `BulkDataURI` as `Content-Location`, instance by instance in the archive's order; Pixel Data uncompressed in one part, or, for `transfer-syntax=*`, compressed frames as stored, a part a frame at its frame resource; only `multipart/related; type="application/octet-stream"` (406 otherwise), 204 when there is no bulk value. Rendered, `…/instances/{instance}/rendered` and `…/frames/{list}/rendered`, and thumbnails of an instance, frames, a series and a study (the first instance with an image, its first frame): `image/jpeg` (the default) or `image/png`, one picture bare, several in `multipart/related`; `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]` and `quality` applied; a thumbnail fitted to 128 pixels when no viewport is given. Refused: a malformed parameter, a flipped viewport region, `iccprofile` other than `no`: 400; another media type: 406; a study or a series rendered whole, an instance with no Pixel Data: 501. `annotation`: the picture, not annotated, and `Warning: 299` | Frames of Float and Double Float Pixel Data, a frame of a 1-bit image that starts inside a byte, frames sent outside a multipart body. Encoding into a compressed syntax on request |
+| WADO-RS | Study, series and instance as `multipart/related; type="application/dicom"`. `transfer-syntax=*`, or a request that accepts anything: each instance as the archive holds it, byte for byte. No transfer syntax named: Explicit VR Little Endian, an instance held compressed being decoded for it. Any other syntax: the instances already in it, 206 when some are not and 406 when none is. One instance as `application/dicom`: the file itself. `/metadata` as DICOM JSON. Frames, `…/frames/{list}`: one part a frame, in the order asked; by default, or for `application/octet-stream`, uncompressed in Explicit VR Little Endian, a compressed frame decoded for it; for `application/octet-stream; transfer-syntax=*`, or the frame's own type (`image/jpeg`, `image/jls`, `image/jp2`, `image/jpx`, `image/dicom-rle`, `image/x-dicom-rle` accepted for it), as stored. Each frame read from the file by its position, through the Extended or Basic Offset Table, a frame over several fragments joined. Frames of Float and Double Float Pixel Data, their floats little endian. A frame of a 1-bit image that starts inside a byte (frames are packed with no padding between them, PS3.5 8.1.1) sent as a 1-bit frame on its own is laid out: from the lowest bit of its first byte, zero bits after its last. A frame number not in the image: 404; a list that is not frame numbers counted from 1: 400; a compressed type the frame is not held in: 406. Bulk data, `…/instances/{instance}/bulkdata/{tag}[/{item}/{tag}…]`: each value metadata leaves out (binary values over 1 KiB, Pixel Data at any length), read from the file by its position, as `application/octet-stream` in little endian; Pixel Data as its frames are sent, every frame in one part when uncompressed. `/metadata` gives a `BulkDataURI` for each, inside sequences too. The bulk data of a study, a series or an instance, `…/bulkdata` (PS3.18 Table 10.4.1.5-1): every value metadata names, a part each with its `BulkDataURI` as `Content-Location`, instance by instance in the archive's order; Pixel Data uncompressed in one part, or, for `transfer-syntax=*`, compressed frames as stored, a part a frame at its frame resource; only `multipart/related; type="application/octet-stream"` (406 otherwise), 204 when there is no bulk value. Rendered, `…/instances/{instance}/rendered` and `…/frames/{list}/rendered`, and thumbnails of an instance, frames, a series and a study (the first instance with an image, its first frame): `image/jpeg` (the default) or `image/png`, one picture bare, several in `multipart/related`; `window=center,width,function`, `viewport=vw,vh[,sx,sy,sw,sh]` and `quality` applied; a thumbnail fitted to 128 pixels when no viewport is given. Refused: a malformed parameter, a flipped viewport region, `iccprofile` other than `no`: 400; another media type: 406; a study or a series rendered whole, an instance with no Pixel Data: 501. `annotation`: the picture, not annotated, and `Warning: 299` | Frames sent outside a multipart body. A Float or Double Float Pixel Data image rendered (501). Encoding into a compressed syntax on request |
 | STOW-RS | `application/dicom` parts in `multipart/related`, to `/studies` or into a study. Each instance kept or refused on its own: 200 when all were kept, 202 when some were, 409 when none was, with Referenced SOP Sequence and Failed SOP Sequence in the answer. Failure reasons: A900H for an instance sent into a study it is not of, 0110H when the archive could not keep it. A compressed instance is kept in the syntax it came in. A request is bounded (4 GiB unless set), 413 beyond | Metadata with separate bulk data (415). A part that is not a DICOM file has no UID to be listed under, and shows in the status alone |
 
 `qrscp -web` serves under `/dicom-web`. A port alone listens on this machine
@@ -358,7 +359,7 @@ against pydicom's reading of the files, a C-FIND on the same archive, and
 Orthanc holding the same files. Frames are checked the same way: every file
 of pydicom's corpus with pixel data is stored, and each of its frames is the
 bytes pydicom divides out of the file and the bytes Orthanc sends, except
-32-bit big endian, which Orthanc 1.13 reverses in two-byte words.
+32-bit big endian, which Orthanc 1.13 reverses in two-byte words. Float and Double Float images, little and big endian, and a packed 1-bit image, written by pydicom, have each frame equal to pydicom's `pixel_array`; Orthanc 1.13 refuses all three (400).
 
 UPS-RS and the capabilities service are not implemented. Bulk data that
 metadata refers to by URI is not fetched: the element is kept, empty.
@@ -388,15 +389,18 @@ of, and does not name a file it could not read; both are counted as refused.
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
-| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges) |
+| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
+| Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
+| A failed TLS handshake | Reported to `SCPConfig.Events` as `EVTTLSHandshakeFailed`, with the client's address and a `*TLSHandshakeError` naming the check that failed; nothing of the client's certificate is carried |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
+| Why this side aborted | The events of an A-ABORT this side sends carry `Event.LocalAbort`: the cause (`AbortCauseTimeout`, `AbortCauseProtocolViolation`, `AbortCauseHandlerPanic`, `AbortCauseStopping`, `AbortCauseRequested`) and the error behind it. The PDU is unchanged |
 | Timeouts | `NetworkConfig`: `ARTIMTimeout` (30 s) for association setup and release, `DIMSETimeout` (60 s) for each PDU after it; an SCP aborts an association idle for longer |
-| Supported SOP classes | `SetSupportedAbstractSyntaxes` |
-| Supported transfer syntaxes | `SetSupportedTransferSyntaxes` |
+| Supported SOP classes | `SCPConfig.AbstractSyntaxes`, read before the listener opens (nil keeps the defaults, which include query and retrieve; a non-nil list is used as given, so an empty one accepts nothing; `StorageAndVerificationSyntaxes()` is the storage-only list), or `SetSupportedAbstractSyntaxes` for associations from then on |
+| Supported transfer syntaxes | `SCPConfig.TransferSyntaxes`, the same way, or `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
-| Logging destination and format | `config.SetLogger`, for the whole library |
+| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, apart from the data set validation warnings of #503 |
 | Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
 
 Everything the library reports goes through `config.Logger`, so one call
@@ -465,7 +469,8 @@ advisory.
 | `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
 | `valuerep.MaxUIDLength` | 64 characters | A UID longer than PS3.5 §9.1 permits |
-| Element length verification | every element | An element declaring more bytes than the stream holds |
+| Element length verification | every element | An element declaring more bytes than the stream holds; from a stream of unknown size, each value is allocated as its bytes arrive |
+| `filereader.ReadOptions.MaxValueLength` | no limit unless set | A value longer than the reader will hold, refused by tag and length before it is allocated |
 
 The parsers that consume untrusted input — PDU decoding, data set decoding, DIMSE
 command decoding, and file reading — have fuzz targets that run in continuous
@@ -585,6 +590,18 @@ how decoded samples are shaped and coloured, and the one tolerance.
   would leave a reader to convert a second time. This matches pydicom. Convert
   with the attribute, not despite it.
 
+  For a three-component JPEG the attribute is also what says whether the
+  components were transformed at all, since the JPEG Interchange Format does
+  not carry a color space (PS3.5 8.2.1). RGB means they were not, YBR_FULL and
+  YBR_FULL_422 that they were, and a JFIF or Adobe marker or component
+  identifiers spelling R, G, B do not overrule it. This is dcmtk's default
+  (`dcmdjpeg +cp`). pydicom 3 lets a marker overrule the attribute where the
+  two disagree: an RGB frame with a JFIF marker or an Adobe marker saying
+  YCbCr is converted there and not here, and a YBR frame with an Adobe marker
+  saying RGB or identifiers R, G, B is left as stored there and converted
+  here. No file in pydicom's corpus is in one of those cells. Without a data
+  set, `compress.NewJPEGDecompressor` guesses from the stream as libjpeg does.
+
 - **Subsampled JPEG chroma is filtered as libjpeg filters it.** T.81 leaves
   the filter to the decoder. A 4:2:2 or 4:2:0 frame is brought to full
   resolution with libjpeg's default "fancy upsampling", the triangle filter
@@ -595,6 +612,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   level being the inverse DCT, as on frames that are not subsampled. Other
   layouts (4:4:0, 4:1:1) are repeated, as libjpeg 6b does. 12-bit frames are
   repeated too; DICOM has no 12-bit color (PS3.5 Table 8.2.1-1).
+
+- **A JPEG decoded to RGB is converted with libjpeg's arithmetic.** JFIF gives
+  the YCbCr equations and leaves the rounding to the decoder; this one rounds
+  as libjpeg's `jdcolor.c` does (each coefficient scaled by 2^16, each product
+  rounded, Y added after the shift), which is what dcmtk and Pillow use. On
+  frames whose inverse DCT agrees the result is theirs exactly; elsewhere a
+  one-level difference in the YCbCr planes can become two in RGB, since Cb
+  is multiplied by 1.772. On pydicom's corpus every color JPEG decoded to RGB
+  is within one level of dcmtk and Pillow except `examples_ybr_color.dcm`, at
+  two for that reason.
 
 - **`RenderFrame` renders for display, within what it knows.** It applies the
   sign of the samples, the Modality LUT Sequence or Rescale Slope and
@@ -683,6 +710,38 @@ how decoded samples are shaped and coloured, and the one tolerance.
   the signed ones included, come back exact. The size matches dcmtk's own
   encoder at the same NEAR to within a few hundred bytes. CI runs the dcmtk
   check at NEAR 2.
+
+  **Below 8 bits the thresholds are T.87's, and dcmtk's are not at 6 and 7
+  bits.** A frame with no LSE segment is coded with the default thresholds of
+  T.87 C.2.4.1.1, which below MAXVAL 128 come from a formula of their own:
+  T1, T2, T3 are 2, 3, 5 at 6 bits and 2, 3, 10 at 7 (3, 7, 21 at 8 bits). Its
+  CLAMP sends a threshold above MAXVAL to the one below it, not to MAXVAL,
+  which decides the thresholds of near-lossless coding with a large NEAR
+  (128, 128, 128 at 8 bits and NEAR 127). Both rules are followed when coding
+  and decoding, and an LSE segment that leaves a threshold at zero has that
+  one defaulted on its own. CharLS before 2.1 used the 8-bit formula at every
+  precision (CharLS issue 51), giving 2, 3, 4 at 6 and 7 bits; at every other
+  precision the two agree. dcmtk 3.7.0 still bundles that CharLS, so between
+  dcmtk and every current decoder a 6 or 7 bit frame without an LSE segment is
+  read with the wrong thresholds: dcmtk refuses this library's frames ("Too
+  much compressed data" or "Invalid compressed image data"), and this library
+  refuses dcmtk's, with an error that names the cause and both sets of
+  thresholds. Decoding them with the old thresholds is not offered, because a
+  stream does not say which it was coded with. A 7-bit dcmtk frame used to
+  decode here without an error to an image up to 127 levels off: a scan whose
+  samples are all decoded with more than a byte of its data unread is now
+  refused, as CharLS and dcmtk refuse it. `dcmcjpls +t1 2 +t2 3 +t3 5` (or
+  `+t3 10` at 7 bits) writes the thresholds into an LSE segment, and that
+  frame decodes the same everywhere.
+
+  *Verified:* a 41 by 37 image at every precision from 2 to 8, coded at NEAR 0,
+  1, 2 and the largest NEAR allowed: this library's lossless frames are byte
+  for byte CharLS 2.2's, and every frame either of them codes decodes to the
+  same samples in this library, CharLS 2.2 and libjpeg (pylibjpeg-libjpeg).
+  dcmtk 3.7.0 agrees with them at 8 bits and at the largest NEAR, where the
+  clamp decides, and with none of them at 6 and 7 bits otherwise; dcmcjpls
+  refuses to code below 6 bits. With the thresholds given explicitly all four
+  decode dcmtk's 6 and 7 bit frames exactly.
 
   **JPEG Baseline (Process 1) is written only when the sender sets
   `NetworkConfig.JPEGQuality`**, for the same reason: it is lossy. It codes
@@ -816,7 +875,7 @@ how decoded samples are shaped and coloured, and the one tolerance.
   that cannot be satisfied fails rather than putting bytes on the wire
   described as something they are not, which the receiver could not detect.
 
-  *Verified:* the encoder's output is decoded by CharLS through pylibjpeg, which
+  *Verified:* the encoder's output is decoded by libjpeg through pylibjpeg, which
   shares no code with this library. A round trip through this package's own
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
@@ -838,7 +897,7 @@ In an Implicit VR file, a sequence whose tag the dictionary does not call a
 sequence, a private one above all, is written with undefined length and a
 Sequence Delimitation Item (PS3.5 7.5.1): nothing else tells a reader it holds
 items (Note 5 below). Every other sequence and every item has an explicit length.
-The network codec does not do this yet (#424).
+A data set sent on an association follows the same rule (#424).
 
 On reading, an element encoded as UN whose tag the dictionary knows takes that
 VR, and its value is read as Implicit VR Little Endian, which PS3.5 6.2.2 Note 2
@@ -847,7 +906,10 @@ creator is LO (PS3.5 7.8.1). Anything else private keeps UN, an ambiguous
 dictionary entry keeps UN, and a UN element in a big endian file keeps UN,
 because Note 2's little endian value must not be byte-swapped with the rest of
 the data set. An undefined length means items whatever the dictionary says
-(Note 5), and they are parsed as a sequence.
+(Note 5), and they are parsed as a sequence. A data set received on an
+association is read the same way: only pixel data with undefined length is taken
+for fragments, and a UN element's items are read as Implicit VR Little Endian
+(#424).
 
 On writing, a private attribute read without a VR, as every attribute of an
 implicit VR file is, takes the VR GDCM's private dictionary gives it, looked up
@@ -966,6 +1028,9 @@ checks that pynetdicom receives the attribute list); and an SCP never gave an
 N-GET handler the Attribute Identifier List (#380, fixed: the media creation
 SCP test now asserts the handler is given the two tags pynetdicom asks for, in
 order). The media creation SCP answers N-CREATE without an attribute list.
+The SCU sends an Attribute Identifier List with `SCU.NGetAttributes` (#486);
+pynetdicom's N-GET SCP receives the tags in the order given and returns only
+those attributes. `SCU.NGet` sends none, which asks for every attribute.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes
@@ -995,14 +1060,31 @@ of its SOP class, with tables generated from PS3.3 and PS3.4 (the edition is
 printed): module usage, attribute Types 1, 2 and the value of a present 1C,
 value multiplicity from PS3.6, Enumerated Values and Defined Terms where the
 tables list them, and item counts where a sequence's description states them.
-It does not evaluate conditions, which PS3.3 writes as prose: a Conditional
-module, an absent Type 1C or 2C attribute and a macro included under a
-condition are reported as not checked. Repeating groups (60xx), the
-Functional Group Macros of enhanced IODs, context groups (PS3.16), rules
-between attributes and attributes the IOD does not name are not checked. No
-other validator was available to compare it with (`dciodvfy` is not
-installed where it was built); its findings for five corpus files were
-compared with the standard by hand.
+A condition PS3.3 states in one of a few fixed sentence forms naming one
+attribute by its tag ("... is present", "... is not present", "... has a
+Value of X", "... Value 1 is X or Y", "... is present and has a Value of X",
+with or without "May be present otherwise") is evaluated: 645 of the 1867
+Type 1C and 2C attributes, 25 of the 316 Conditional modules and 45 of the
+171 Conditional Functional Group Macros of 2026d. The Shared and Per-Frame
+Functional Groups of the 29 enhanced IODs with a Functional Group Macros
+table are checked against it: usage, where a macro may be, one per-frame
+item for each frame, and each macro's attributes.
+Any other condition is prose, and a Conditional module, an absent Type 1C or
+2C attribute and a macro included under a condition whose condition is prose
+are reported as not checked. Repeating groups (60xx), context groups (PS3.16), rules
+between attributes and attributes the IOD does not name are not checked.
+
+It has not been compared with another validator: neither `dciodvfy`
+(dicom3tools) nor the Python `dicom-validator` was available where it was
+built. Its findings were compared with PS3.3 by hand instead, for fifteen
+corpus files of thirteen IODs: CT Image, MR Image, Secondary Capture Image,
+RT Dose and MR Image with an overlay when it was written (#408), and RT
+Structure Set, RT Plan, RT Ion Plan, Segmentation, Ultrasound Multi-frame
+Image, Ultrasound Image, Basic Text SR, Comprehensive SR, 12-Lead ECG and
+Secondary Capture Image again once conditions and functional groups were
+checked (#482). Every error it reported in those files is a real defect of
+the file, and no Type 1 or Type 2 attribute of a Mandatory module that a
+second reading of the tables found missing went unreported.
 
 ---
 

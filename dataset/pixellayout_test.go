@@ -192,7 +192,13 @@ func TestPhotometricInterpretationDecidesColorSpace(t *testing.T) {
 	if d := compress.NewJPEGDecompressorForPhotometric("YBR_FULL_422"); !d.KeepYCbCr {
 		t.Error("a YBR photometric interpretation did not keep the YCbCr samples")
 	}
-	if d := compress.NewJPEGDecompressorForPhotometric("RGB"); d.KeepYCbCr {
-		t.Error("an RGB photometric interpretation kept the YCbCr samples")
+	// RGB keeps the samples as stored too: it says no transform was applied,
+	// so converting them as YCbCr invents one (#443). Only a value that does
+	// not name the components leaves the guess to the stream.
+	if d := compress.NewJPEGDecompressorForPhotometric("RGB"); !d.KeepYCbCr {
+		t.Error("an RGB photometric interpretation let the stream's guess convert the samples")
+	}
+	if d := compress.NewJPEGDecompressorForPhotometric("MONOCHROME2"); d.KeepYCbCr {
+		t.Error("a photometric interpretation that names no color components kept them as stored")
 	}
 }

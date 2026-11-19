@@ -473,3 +473,45 @@ func TestIsGroupLength(t *testing.T) {
 		}
 	}
 }
+
+// A sequence needs undefined length only where nothing else tells a reader it
+// is one: Implicit VR, under a tag the dictionary does not call a sequence.
+// The file writer and the network encoder both decide by this, so the rule is
+// pinned here once for both.
+func TestSequenceNeedsUndefinedLength(t *testing.T) {
+	private := tag.New(0x0029, 0x1010)
+	standard := tag.New(0x0008, 0x1140) // Referenced Image Sequence
+	unlisted := tag.New(0x0008, 0x0001) // a standard group, no dictionary entry
+	cases := []struct {
+		t          tag.Tag
+		explicitVR bool
+		want       bool
+	}{
+		{private, false, true},
+		{unlisted, false, true},
+		{standard, false, false},
+		{private, true, false},
+		{standard, true, false},
+	}
+	for _, c := range cases {
+		if got := c.t.SequenceNeedsUndefinedLength(c.explicitVR); got != c.want {
+			t.Errorf("%s explicit=%v: got %v, want %v", c.t, c.explicitVR, got, c.want)
+		}
+	}
+}
+
+// Only the three pixel data elements read an undefined length as encapsulated
+// fragments; the file reader and the network decoder read any other as a
+// sequence. A private element in group 7FE1 is not pixel data.
+func TestIsPixelData(t *testing.T) {
+	for _, pd := range []tag.Tag{tag.New(0x7FE0, 0x0010), tag.New(0x7FE0, 0x0008), tag.New(0x7FE0, 0x0009)} {
+		if !pd.IsPixelData() {
+			t.Errorf("%s is pixel data and was not recognized as such", pd)
+		}
+	}
+	for _, other := range []tag.Tag{tag.New(0x7FE0, 0x0000), tag.New(0x7FE1, 0x0010), tag.New(0x0001, 0x0001), tag.New(0x0028, 0x0010)} {
+		if other.IsPixelData() {
+			t.Errorf("%s is not pixel data and was taken for it", other)
+		}
+	}
+}

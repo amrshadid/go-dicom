@@ -1,11 +1,6 @@
 package dataelem
 
-import "strings"
-
-// vrChoiceSeparator joins the alternatives of a dictionary VR that offers a
-// choice, as the DICOM standard's data dictionary writes them: "OB or OW",
-// "US or SS", "US or SS or OW" (PS3.6 Table 6-1, and the notes of Annex A).
-const vrChoiceSeparator = " or "
+import vrfacts "github.com/amrshadid/go-dicom/internal/vr"
 
 // VRChoices returns the VRs a dictionary entry allows: one for an ordinary
 // entry, several for one that offers a choice ("US or OW" gives US and OW).
@@ -15,13 +10,13 @@ const vrChoiceSeparator = " or "
 // none of them had "US or OW" (LUT Data) or "US or SS or OW" (Gray Lookup Table
 // Data) in all three, so a conformant element was reported as a VR mismatch.
 func VRChoices(entry string) []string {
-	return strings.Split(entry, vrChoiceSeparator)
+	return vrfacts.Choices(entry)
 }
 
 // OffersVRChoice reports whether a dictionary entry offers a choice of VRs,
 // as "OB or OW" does.
 func OffersVRChoice(entry string) bool {
-	return strings.Contains(entry, vrChoiceSeparator)
+	return vrfacts.OffersChoice(entry)
 }
 
 // VRMatchesDictionary reports whether an element's VR is one the dictionary's
@@ -29,10 +24,5 @@ func OffersVRChoice(entry string) bool {
 // offers. It is the one check behind the VR mismatch reported when an element
 // is read, added to a data set or validated.
 func VRMatchesDictionary(actual, entry string) bool {
-	for _, choice := range VRChoices(entry) {
-		if actual == choice {
-			return true
-		}
-	}
-	return false
+	return vrfacts.MatchesDictionary(actual, entry)
 }

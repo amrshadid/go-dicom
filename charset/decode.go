@@ -187,7 +187,7 @@ func handleDecodingError(ctx context.Context, encoding string, data []byte, errM
 		return "", errors.NewDicomUnicodeDecodeError(encoding, data, errMsg)
 	case config.WARN:
 		msg := fmt.Sprintf("Failed to decode byte string with encoding '%s': %s", encoding, errMsg)
-		logWarning(msg)
+		logWarning(ctx, msg)
 		return decodeWithReplacement(encoding, data), nil
 	default:
 		return decodeWithReplacement(encoding, data), nil

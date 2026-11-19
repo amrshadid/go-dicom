@@ -59,7 +59,7 @@ func (s *SCP) recoverAssociation(assoc *Association) {
 	if hp, ok := p.(*handlerPanic); ok {
 		p, stack = hp.value, hp.stack
 	}
-	DefaultLogger.Error("panic serving the association with %q from %s; aborting it: %v\n%s",
+	s.log().Error("panic serving the association with %q from %s; aborting it: %v\n%s",
 		assoc.CallingAE(), assoc.transport.RemoteAddr(), p, stack)
 	if assoc.State() == StateAssociated {
 		// Its own context: the one the association was served with may be
@@ -70,6 +70,7 @@ func (s *SCP) recoverAssociation(assoc *Association) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+		_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0,
+			abortedBy(AbortCauseHandlerPanic, fmt.Errorf("handler panicked: %v", p)))
 	}
 }

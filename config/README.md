@@ -47,6 +47,10 @@ func ReadingValidationModeFromContext(ctx context.Context) ValidationMode
 func SetDebug(enabled bool, output io.Writer)
 func IsDebugging() bool
 func SetLogger(logger *slog.Logger)
+// A logger for the work given ctx, instead of Logger; filereader carries a
+// read's ReadOptions.Logger this way.
+func WithLogger(ctx context.Context, logger *slog.Logger) context.Context
+func LoggerFromContext(ctx context.Context) *slog.Logger // Logger when ctx has none
 
 // Handler registry
 type PixelDataHandler interface {
