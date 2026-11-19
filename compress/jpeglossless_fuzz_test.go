@@ -35,5 +35,6 @@ func FuzzJPEGLosslessDecompress(f *testing.F) {
 			t.Fatal("decoded successfully but produced no pixels")
 		}
 		checkFrameWidths(t, decoder, data, out, err)
+		checkFrameHeaderAgrees(t, decoder, data, out, err)
 	})
 }

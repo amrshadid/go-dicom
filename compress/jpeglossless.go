@@ -111,6 +111,20 @@ func (d *JPEGLosslessDecompressor) DecompressFrame(data []byte, bitsAllocated, b
 	return samples, nil
 }
 
+// FrameHeader reads the frame's size from its SOF3 segment without decoding
+// it; see FrameHeaderReader.
+func (d *JPEGLosslessDecompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	header, marker, err := jpegFrameHeader(data)
+	if err != nil {
+		return FrameHeader{}, fmt.Errorf("jpeglossless: %w", err)
+	}
+	if marker != markerSOF3 {
+		return FrameHeader{}, fmt.Errorf("%w: frame marker 0x%02X is not lossless Huffman (SOF3)",
+			errNotLosslessJPEG, marker)
+	}
+	return header, nil
+}
+
 // losslessComponent is one color component of the frame.
 type losslessComponent struct {
 	id       byte

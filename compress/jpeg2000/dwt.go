@@ -156,8 +156,19 @@ type scratch struct {
 func synthesize1D(y []float32, i0, i1 int, reversible bool, s *scratch) {
 	if i1-i0 == 1 {
 		// A single sample is its own reconstruction if it is a low-pass one,
-		// and a high-pass sample alone carries twice its value (F.3.7).
-		if i0%2 != 0 {
+		// and a high-pass sample alone carries twice its value (F.3.7, as
+		// this package cites it): so the 5/3 halves one at an odd coordinate.
+		//
+		// The 9/7 does not. Its high-pass synthesis here scales by 2/K
+		// (dwtHighScale) and stepSize leaves the band gain out of Rb, so a
+		// detail coefficient is half what it would be with 1/K and the gain:
+		// OpenJPEG's normalization, whose source calls 1/K the standard's
+		// and compensates in the step sizes just so. In these units the
+		// factor of two is already gone, and halving again gave a quarter of
+		// the sample (#549). OpenJPEG's 9/7 decoder leaves such a sample as
+		// it is, and Kakadu (in Apple's ImageIO) decodes the same codestreams
+		// to the same samples; this decoder now does too.
+		if reversible && i0%2 != 0 {
 			y[0] /= 2
 		}
 		return

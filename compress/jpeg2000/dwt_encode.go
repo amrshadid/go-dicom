@@ -123,10 +123,11 @@ func analyze97(x []float32, i0, i1 int, buf []float64) []float64 {
 		return buf
 	}
 	if n == 1 {
-		// As for the 5/3: a lone sample at an odd coordinate is doubled.
-		if !isEven(i0) {
-			x[0] *= 2
-		}
+		// Unlike the 5/3, a lone sample at an odd coordinate is not doubled:
+		// in the normalization above, which divides high-pass coefficients by
+		// 2/K, the standard's doubling is already undone, as synthesize1D
+		// explains. An encoder here never meets one, its one tile being at
+		// the origin, where a lone sample is at coordinate 0.
 		return buf
 	}
 

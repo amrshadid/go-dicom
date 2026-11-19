@@ -76,6 +76,12 @@ var openJPEGEncodings = []openJPEGEncoding{
 	// And the irreversible path, where the tolerance applies.
 	{"RPCL irreversible", []string{"-p", "RPCL", "-I", "-c", "[32,32],[16,16]"}},
 	{"PCRL irreversible layers", []string{"-p", "PCRL", "-I", "-r", "20,5", "-c", "[32,32]"}},
+	// Tiles of 48x40 over six resolutions leave the right-hand and bottom
+	// tiles too narrow for their levels: a resolution of one sample at an
+	// odd coordinate, which the 9/7 filter leaves as it is in this
+	// package's normalization and the 5/3 halves (#549).
+	{"irreversible narrow edge tiles", []string{"-I", "-t", "48,40", "-n", "6"}},
+	{"reversible narrow edge tiles", []string{"-t", "48,40", "-n", "6"}},
 
 	// The code-block style options (Table A.19, D.5 to D.7), which -M takes
 	// as the sum of their bits: each alone, the two that split a block into
@@ -541,6 +547,12 @@ var openJPEGFixtures = []openJPEGFixture{
 	// component in signed color.
 	{"opj_poc_volumes.j2k", "-F 35,29,1,8,u -n 4 -POC T1=0,0,1,2,1,RLCP/T1=0,0,3,4,1,CPRL -r 20,5,1", "8cf265c848188663"},
 	{"opj_poc_components.j2k", "-F 27,21,3,12,s -n 3 -POC T1=0,2,2,3,3,PCRL/T1=0,0,2,3,2,LRCP -r 10,1", "85a8c30dba9f6d14"},
+	// The 9/7 filter on a flat 64x40 image of 200 (a PGM), tiles of 48x40
+	// and six resolutions: the second tile's coarsest resolution with any
+	// sample is one sample at an odd coordinate (#549). OpenJPEG and Apple's
+	// ImageIO decode it to 200 and 164; 164 and not 200 is opj_compress's
+	// doing, which writes that sample at half.
+	{"opj_narrow_edge_tile_irreversible.j2k", "-i flat.pgm -t 48,40 -n 6 -I", "88a3517f5ad30703"},
 }
 
 // TestJP2BoxWithA64BitLengthAroundAFixture wraps a committed fixture in a JP2
