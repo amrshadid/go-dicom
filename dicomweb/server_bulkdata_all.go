@@ -174,7 +174,7 @@ func sendPixelsAsBulkData(file io.ReadSeeker, wants []frameWant, base, location 
 	header := textproto.MIMEHeader{}
 	header.Set("Content-Type", media+"; transfer-syntax="+syntax)
 	var out io.Writer
-	for n := 1; n <= len(source.ranges); n++ {
+	for n := 1; n <= source.count(); n++ {
 		// Read before its part is begun, so the first frame of the first
 		// instance that cannot be read or decoded is still answered with a
 		// status.

@@ -66,6 +66,16 @@ type ValueTooLongError struct {
 // are (dataelem.ValueInFile), for filewriter to copy them from the file
 // with SetValueSource. A deflated file is refused.
 func (df *DICOMFile) GetDatasetWithValuesInFile() (*dataset.Dataset, error)
+
+// Where each frame lies in the file, and a reader of them by position: a
+// frame, or part of a native one. A FrameReader is a dataset.FrameReader,
+// so Dataset.RenderFramesFrom draws from the file a frame or a band at a
+// time.
+func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error)
+func (df *DICOMFile) FrameReader(src io.ReaderAt) (*FrameReader, error)
+func (r *FrameReader) ReadFrame(i int) ([]byte, error)
+func (r *FrameReader) ReadFrameBytes(i int, offset int64, p []byte) error
+
 func NewDCMFileReader(reader filebase.Reader) *DCMFileReader
 
 func (dfr *DCMFileReader) ReadPreamble() error

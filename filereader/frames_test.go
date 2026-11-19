@@ -2,6 +2,8 @@ package filereader
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -44,5 +46,66 @@ func TestFrameRangesOfPackedOneBitImage(t *testing.T) {
 		if got, err := df.FrameFirstBit(i); err != nil || got != bit {
 			t.Errorf("frame %d begins at bit %d (%v), want %d", i, got, err, bit)
 		}
+	}
+}
+
+// TestFrameReaderReadsPartOfAFrameAsTheWholeFrame: any run of bytes of a
+// native frame read with ReadFrameBytes is that run of the frame
+// ReadFrame gives, and both are the whole read's Pixel Data, in little
+// and big endian files, at 8, 16 and 32 bits, starting and ending at odd
+// bytes where a big endian file is reversed in pairs or fours. A compressed
+// frame has no bytes to read part of and is refused.
+func TestFrameReaderReadsPartOfAFrameAsTheWholeFrame(t *testing.T) {
+	dir := os.Getenv("GODICOM_PYDICOM_DATA")
+	if dir == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	for _, name := range []string{"CT_small.dcm", "MR_small_bigendian.dcm", "rtdose_expb.dcm",
+		"SC_rgb_small_odd_big_endian.dcm", "ExplVR_BigEnd.dcm", "rtdose.dcm"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		whole := wholeFileWith(t, data, ReadOptions{})
+		pixels := elementAt(whole, 0x7FE0, 0x0010).Value
+		df := wholeFileWith(t, data, ReadOptions{SkipBulkData: true})
+		reader, err := df.FrameReader(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var joined []byte
+		for i := 0; i < reader.Frames(); i++ {
+			frame, err := reader.ReadFrame(i)
+			if err != nil {
+				t.Fatalf("%s frame %d: %v", name, i, err)
+			}
+			joined = append(joined, frame...)
+			for _, part := range [][2]int{{0, len(frame)}, {1, 3}, {3, 5}, {len(frame) / 2, len(frame)/2 + 7}, {len(frame) - 3, 3}} {
+				offset, n := part[0], min(part[1], len(frame)-part[0])
+				got := make([]byte, n)
+				if err := reader.ReadFrameBytes(i, int64(offset), got); err != nil {
+					t.Fatalf("%s frame %d, bytes %d+%d: %v", name, i, offset, n, err)
+				}
+				if !bytes.Equal(got, frame[offset:offset+n]) {
+					t.Errorf("%s frame %d, bytes %d+%d: % x, and the frame has % x", name, i, offset, n,
+						got, frame[offset:offset+n])
+				}
+			}
+		}
+		if !bytes.HasPrefix(pixels, joined) {
+			t.Errorf("%s: the frames read by position are not the whole read's Pixel Data", name)
+		}
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "SC_rgb_rle_2frame.dcm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := wholeFileWith(t, data, ReadOptions{SkipBulkData: true}).FrameReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.ReadFrameBytes(0, 0, make([]byte, 4)); err == nil {
+		t.Error("part of a compressed frame was read")
 	}
 }

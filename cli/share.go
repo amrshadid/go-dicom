@@ -122,6 +122,9 @@ func (sc *ShareCommand) Execute(args []string) error {
 			if err != nil {
 				return fmt.Errorf("share: %v", err)
 			}
+			if err := checkDetectedShare(ds, found); err != nil {
+				return fmt.Errorf("share: %s: %w", input, err)
+			}
 			regions, detected = append(regions, found...), len(found)
 		}
 		if len(regions) > 0 {
@@ -173,7 +176,9 @@ OPTIONS:
   -redact x,y,w,h    Fill a rectangle with black in every frame, counted in
                      pixels from the top left. Repeat it for more rectangles.
   -redact auto       Fill the regions in which a detector finds text. It can
-                     miss: look at the picture before you hand it on.
+                     miss: look at the picture before you hand it on. When
+                     what is found covers more than a quarter of the
+                     picture, more than text does, nothing is written.
   -preview           Write the picture with those regions outlined and
                      nothing redacted, to see what auto would fill. Not for
                      handing on: the text is all still in it.

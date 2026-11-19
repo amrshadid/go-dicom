@@ -130,7 +130,7 @@ func (s *Server) bulkdata(w http.ResponseWriter, r *http.Request, target retriev
 			s.fail(w, err)
 			return
 		}
-		numbers := make([]int, len(source.ranges))
+		numbers := make([]int, source.count())
 		for i := range numbers {
 			numbers[i] = i + 1
 		}
