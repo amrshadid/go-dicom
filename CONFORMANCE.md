@@ -995,9 +995,14 @@ of its SOP class, with tables generated from PS3.3 and PS3.4 (the edition is
 printed): module usage, attribute Types 1, 2 and the value of a present 1C,
 value multiplicity from PS3.6, Enumerated Values and Defined Terms where the
 tables list them, and item counts where a sequence's description states them.
-It does not evaluate conditions, which PS3.3 writes as prose: a Conditional
-module, an absent Type 1C or 2C attribute and a macro included under a
-condition are reported as not checked. Repeating groups (60xx), the
+A condition PS3.3 states in one of a few fixed sentence forms naming one
+attribute by its tag ("... is present", "... is not present", "... has a
+Value of X", "... Value 1 is X or Y", "... is present and has a Value of X",
+with or without "May be present otherwise") is evaluated: 580 of the 1681
+Type 1C and 2C attributes and 25 of the 316 Conditional modules of 2026d.
+Any other condition is prose, and a Conditional module, an absent Type 1C or
+2C attribute and a macro included under a condition whose condition is prose
+are reported as not checked. Repeating groups (60xx), the
 Functional Group Macros of enhanced IODs, context groups (PS3.16), rules
 between attributes and attributes the IOD does not name are not checked. No
 other validator was available to compare it with (`dciodvfy` is not

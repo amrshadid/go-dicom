@@ -36,8 +36,39 @@ broken_ct.dcm: 1.2.840.10008.5.1.4.1.1.2, checked as the CT Image IOD (PS3.3 A.3
   error       (0028,0101) Bits Stored: Enumerated Values: the value is "99"; the Enumerated Values are 12, 13, 14, 15, 16 [CT Image; PS3.3 C.8.2.1.1.5]
   ...
   not checked Synchronization: Usage C: absent; whether it is required was not checked: Required if time synchronization was applied. [...]
-8 error(s), 0 warning(s), 39 not checked
+8 error(s), 0 warning(s), 36 not checked
 ```
+
+## Conditions
+
+A condition PS3.3 states in one of a few fixed sentence forms, naming one
+attribute by its tag, is generated as data (`Condition`) and evaluated:
+
+| Form | Example (PS3.3 2026d) |
+|---|---|
+| `IsPresent` | Required if Extended Offset Table (7FE0,0001) is present. |
+| `IsAbsent` | Required if Pixel Data Provider URL (0028,7FE0) is not present. |
+| `HasValue` | Required if Multi-energy CT Acquisition (0018,9361) is YES. / Image Type (0008,0008) Value 1 is ORIGINAL or MIXED. |
+| `IsPresentWithValue` | Required if Partial View (0028,1350) is present with a Value of YES. |
+
+each optionally followed by "May be present otherwise." (`Otherwise`). An
+attribute or module whose condition holds and that is absent is an error, and
+so is one present where its condition does not hold and PS3.3 does not say it
+may be present otherwise (PS3.5 7.4.2, 7.4.4; PS3.3 A.1.3.2).
+
+The generator reads a condition so only when the whole of what the
+description says about presence is that one sentence. A sentence that matches
+a form in part ("has a Value greater than 1"), two tests joined, a condition
+another sentence qualifies, or a name that does not agree with its tag, is
+prose. The numbers, from the tables generated from PS3.3 2026d:
+
+| | Conditions | IsPresent | IsAbsent | HasValue | IsPresentWithValue | Prose |
+|---|---|---|---|---|---|---|
+| Type 1C and 2C attributes | 1681 | 99 | 67 | 402 | 12 | 1101 |
+| Conditional modules | 316 | 0 | 0 | 23 | 2 | 291 |
+
+`scripts/iod-tables.py` prints them on standard error, with why each prose
+condition was not read.
 
 ## API Reference
 
@@ -65,16 +96,19 @@ func Edition() string
 func IODForSOPClass(sopClassUID string) (*IOD, bool)
 func LookupTable(label string) (*Table, bool)
 type IOD struct { Name, Section, Table string; Modules []ModuleUsage }
-type ModuleUsage struct { Module, Table string; Usage Usage; Condition string }
+type ModuleUsage struct { Module, Table string; Usage Usage; Condition string; When *Condition }
 type Table struct { Name, Section string; Rows []Row }
-type Row struct { Depth int; Include string; Tag, Mask uint32; Name string; Type AttributeType; ... }
+type Row struct { Depth int; Include string; Tag, Mask uint32; Name string; Type AttributeType; Condition string; When *Condition; ... }
+type Condition struct { Test ConditionTest; Tag uint32; Value int; Values []string; Otherwise bool }
 ```
 
 ## What is not checked
 
-Conditions are prose in PS3.3 and none is evaluated: a Conditional module, an
-absent Type 1C or 2C attribute and a macro included under a condition are
-each reported as `NotChecked`, with the condition, never passed. Also
+A condition in prose is not evaluated: a Conditional module and an absent
+Type 1C or 2C attribute whose condition is prose, and a macro included under
+a condition, are each reported as `NotChecked`, with the condition, never
+passed. So is a condition in a sequence item that names an attribute outside
+the item, and one testing "a Value" of an attribute holding several. Also
 reported as not checked: repeating groups such as (60xx,eeee), the Functional
 Group Macros of the enhanced IODs, and SR content nested deeper than twelve
 levels. Not checked at all: context groups (PS3.16), rules between

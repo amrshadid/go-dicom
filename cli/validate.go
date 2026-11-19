@@ -182,10 +182,16 @@ USAGE:
   written by hand. Pixel Data and other bulk values are left in the file:
   their presence and length are checked, not their bytes.
 
+  A condition PS3.3 states in a fixed form naming one attribute ("Required
+  if Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES") is evaluated: a Type 1C or 2C attribute, or a
+  Conditional module, absent where its condition holds is an error, and so
+  is one present where it does not, unless PS3.3 says "May be present
+  otherwise".
+
 NOT CHECKED:
-  What PS3.3 states in prose is reported as "not checked", never passed:
-  the condition of a Conditional module, and of a Type 1C or 2C attribute
-  that is absent. Also not checked: attributes of repeating groups such as
+  A condition PS3.3 states in prose is reported as "not checked", never
+  passed. Also not checked: attributes of repeating groups such as
   (60xx,eeee), the Functional Group Macros of the enhanced IODs, context
   groups (PS3.16), rules that tie one attribute to another, and attributes
   the IOD does not name.

@@ -506,6 +506,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certificate by subject, SAN or fingerprint, a third kind of entry, and would
   be a flag of its own.
 
+- **`validate` evaluates the conditions PS3.3 states in a fixed form**
+  (#449). Every Type 1C and 2C attribute and every Conditional module was
+  reported "not checked", so a CT image with no Pixel Data and no Pixel Data
+  Provider URL passed with exit status 0. The generator now reads a
+  condition as data when the whole of what PS3.3 says about presence is one
+  sentence of a few forms naming one attribute by its tag ("Required if
+  Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES", "Image Type (0008,0008) Value 1 is ORIGINAL or
+  MIXED", "... is present and has a Value of X"), with "May be present
+  otherwise" when it is said. Of 1681 Type 1C and 2C attributes in the tables
+  of PS3.3 2026d, 580 are read so, and 25 of 316 Conditional modules; the
+  rest, and any sentence matching a form only in part, stay prose and are
+  still reported as not checked with their text. An attribute or module
+  absent where its condition holds is an error, and so is one present where
+  it does not hold unless PS3.3 allows it otherwise (PS3.5 7.4.2, 7.4.4;
+  PS3.3 A.1.3.2). Over pydicom's corpus, seven findings are new, each
+  checked against the file with pydicom, and 524 fewer are not checked.
+  Exit statuses and `--json` are as they were.
+
 ### Changed
 
 - **`validate` no longer holds the image to check the attributes** (#440).
