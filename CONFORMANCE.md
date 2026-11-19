@@ -838,7 +838,7 @@ In an Implicit VR file, a sequence whose tag the dictionary does not call a
 sequence, a private one above all, is written with undefined length and a
 Sequence Delimitation Item (PS3.5 7.5.1): nothing else tells a reader it holds
 items (Note 5 below). Every other sequence and every item has an explicit length.
-The network codec does not do this yet (#424).
+A data set sent on an association follows the same rule (#424).
 
 On reading, an element encoded as UN whose tag the dictionary knows takes that
 VR, and its value is read as Implicit VR Little Endian, which PS3.5 6.2.2 Note 2
@@ -847,7 +847,10 @@ creator is LO (PS3.5 7.8.1). Anything else private keeps UN, an ambiguous
 dictionary entry keeps UN, and a UN element in a big endian file keeps UN,
 because Note 2's little endian value must not be byte-swapped with the rest of
 the data set. An undefined length means items whatever the dictionary says
-(Note 5), and they are parsed as a sequence.
+(Note 5), and they are parsed as a sequence. A data set received on an
+association is read the same way: only pixel data with undefined length is taken
+for fragments, and a UN element's items are read as Implicit VR Little Endian
+(#424).
 
 On writing, a private attribute read without a VR, as every attribute of an
 implicit VR file is, takes the VR GDCM's private dictionary gives it, looked up

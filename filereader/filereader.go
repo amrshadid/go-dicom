@@ -633,7 +633,7 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 	// sequence item may itself have undefined length, which a pixel fragment
 	// never does. UN_sequence.dcm and nested_priv_SQ.dcm were both unreadable
 	// for that reason while pydicom read them.
-	if element.UndefinedLength && !isEncapsulatedPixelDataTag(element.Tag) {
+	if element.UndefinedLength && !element.Tag.IsPixelData() {
 		if depth >= MaxSequenceDepth {
 			return nil, fmt.Errorf("sequence nesting exceeds maximum depth %d at tag %s",
 				MaxSequenceDepth, element.Tag.String())
@@ -710,7 +710,7 @@ func (dfr *DCMFileReader) isBulk(element *DataElementValue) bool {
 	if !dfr.options.SkipBulkData {
 		return false
 	}
-	if isEncapsulatedPixelDataTag(element.Tag) {
+	if element.Tag.IsPixelData() {
 		return true
 	}
 	if element.VR == "" {
@@ -2012,22 +2012,6 @@ func (dfr *DCMFileReader) readExplicitLength(element *DataElementValue) error {
 	element.Length = length
 	dfr.position += 4
 	return nil
-}
-
-// isEncapsulatedPixelDataTag reports whether a tag may carry encapsulated pixel
-// data, which is the only legitimate use of undefined length outside a sequence.
-//
-// PixelData is the familiar one; the float variants were added for pixel data
-// that cannot be represented as integers and use the same encapsulation.
-func isEncapsulatedPixelDataTag(t tag.Tag) bool {
-	switch t {
-	case tag.New(0x7FE0, 0x0010), // PixelData
-		tag.New(0x7FE0, 0x0008), // FloatPixelData
-		tag.New(0x7FE0, 0x0009): // DoubleFloatPixelData
-		return true
-	default:
-		return false
-	}
 }
 
 // tryReadMetaGroupLength reads (0002,0000) if it is the next element.
