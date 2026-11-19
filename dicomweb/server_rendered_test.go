@@ -276,3 +276,47 @@ func TestRenderedRefusals(t *testing.T) {
 		t.Errorf("annotation: status %d, Warning %q", response.StatusCode, response.Header.Get("Warning"))
 	}
 }
+
+// TestRenderedFrameWithoutAWindowSpansTheStoredRange checks a 12-bit image
+// with no window, whose three frames hold 0 to 999, 1000 to 1999 and 0 to
+// 3999: each is drawn over 0 to 4095, the identity VOI LUT of PS3.3
+// C.11.2.1.2.2, so one gray is one value in every frame. Each was drawn
+// over its own range, all three the same picture.
+func TestRenderedFrameWithoutAWindowSpansTheStoredRange(t *testing.T) {
+	ds := multiFrame(t, "1.2.3.7", 3, 1, 3)
+	samples := []int{0, 500, 999, 1000, 1500, 1999, 0, 2000, 3999}
+	pixels := make([]byte, 2*len(samples))
+	for i, v := range samples {
+		pixels[2*i], pixels[2*i+1] = byte(v), byte(v>>8)
+	}
+	for _, e := range []struct {
+		t     tag.Tag
+		vr    dataelem.VR
+		value any
+	}{
+		{tag.New(0x0028, 0x0100), dataelem.US, uint16(16)},
+		{tag.New(0x0028, 0x0101), dataelem.US, uint16(12)},
+		{tag.New(0x0028, 0x0102), dataelem.US, uint16(11)},
+		{tag.New(0x7FE0, 0x0010), dataelem.OW, pixels},
+	} {
+		ds.Remove(e.t)
+		if err := ds.Add(dataelem.NewDataElement(e.t, e.vr, e.value)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	file, err := encodeFile(ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &recorder{}
+	backend.hold("1.2.3.7", file)
+	for n, want := range map[string][3]uint8{"1": {0, 31, 62}, "2": {62, 93, 124}, "3": {0, 125, 249}} {
+		response, body := get(t, backend, heldInstances+"1.2.3.7/frames/"+n+"/rendered", "Accept", mediaPNG)
+		img := decodePNG(t, response, body)
+		for x, level := range want {
+			if got := img.(*goimage.Gray).GrayAt(x, 0).Y; got != level {
+				t.Errorf("frame %s pixel %d is %d, want %d", n, x, got, level)
+			}
+		}
+	}
+}

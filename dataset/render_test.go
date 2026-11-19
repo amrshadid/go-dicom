@@ -174,6 +174,44 @@ func TestRenderWithoutAWindowUsesTheDataRange(t *testing.T) {
 	}
 }
 
+// TestRenderStoredRange checks RenderOptions.StoredRange, the identity VOI
+// LUT of PS3.3 C.11.2.1.2.2: an image with no window spans what its Bits
+// Stored can hold, through its rescale, not the values it holds. 12 bits
+// unsigned is 0 to 4095; signed, -2048 to 2047; with slope 2 and intercept
+// -1024 that becomes -5120 to 3070, where stored 512 is 0, at 159 of 255.
+// A window in the image wins.
+func TestRenderStoredRange(t *testing.T) {
+	stored := &dataset.RenderOptions{StoredRange: true}
+	for _, c := range []struct {
+		name string
+		p    picture
+		want []uint8
+	}{
+		{"unsigned", picture{allocated: 16, stored: 12, photometric: "MONOCHROME2",
+			px: words(0, 1000, 4095)}, []uint8{0, 62, 255}},
+		{"signed", picture{allocated: 16, stored: 12, signed: true, photometric: "MONOCHROME2",
+			px: words(0x0800, 0, 0x07FF)}, []uint8{0, 128, 255}},
+		{"rescaled", picture{allocated: 16, stored: 12, signed: true, photometric: "MONOCHROME2",
+			px: words(0x0800, 0x0200, 0x07FF), text: map[tag.Tag]string{tagSlope: "2", tagIntercept: "-1024"}},
+			[]uint8{0, 159, 255}},
+		{"a window of its own", picture{allocated: 16, stored: 12, photometric: "MONOCHROME2",
+			px: words(0, 1000, 4095), text: map[tag.Tag]string{tagWindowCenter: "1000", tagWindowWidth: "2"}},
+			[]uint8{0, 255, 255}},
+	} {
+		if got := grays(t, c.p.dataset(), stored); !sameLevels(got, c.want) {
+			t.Errorf("%s: levels %v, want %v", c.name, got, c.want)
+		}
+	}
+	// The values alone, without the option: the same three span 0 to 255.
+	ramp := picture{allocated: 16, stored: 12, photometric: "MONOCHROME2", px: words(100, 200, 300)}.dataset()
+	if got := grays(t, ramp, stored); !sameLevels(got, []uint8{6, 12, 19}) {
+		t.Errorf("stored range: %v", got)
+	}
+	if got := grays(t, ramp, nil); !sameLevels(got, []uint8{0, 128, 255}) {
+		t.Errorf("values' range: %v", got)
+	}
+}
+
 // TestRenderInvertsMonochrome1: high values are dark there.
 func TestRenderInvertsMonochrome1(t *testing.T) {
 	ds := picture{allocated: 8, stored: 8, photometric: "MONOCHROME1", px: []byte{10, 20, 30}}.dataset()

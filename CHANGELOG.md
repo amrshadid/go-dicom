@@ -1242,6 +1242,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SkipBulkData`, Pixel Data is passed over and everything read is held to
   the maximum.
 
+- **The frames of one image rendered over DICOMweb share one scale when
+  neither the request nor the image gives a window** (#489). Each frame was
+  drawn from a data set holding only that frame, so with no window it was
+  stretched over its own lowest and highest value: frames of a 12-bit image
+  holding 0 to 999, 1000 to 1999 and 0 to 3999 came out as the same picture,
+  one gray a different value in each. PS3.3 C.11.2.1.2.2 makes the VOI LUT
+  the identity when an image has neither a window nor a VOI LUT, so a frame
+  is now drawn over the range its Bits Stored can hold, through its rescale
+  or Modality LUT; those three frames end at 62, run from 62 to 124, and end
+  at 249. The range is found without reading a pixel. An image whose values
+  fill little of it, 32-bit RT Dose for one, is dark until a `window` is
+  given. `RenderOptions.StoredRange` asks `RenderFrame` for this; without it
+  `RenderFrame` and `convert` keep spanning the values across all frames.
+  Orthanc 1.13 stretches each frame to its own values, as this server did.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

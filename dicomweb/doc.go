@@ -117,7 +117,9 @@
 // as image/jpeg or image/png. The window, viewport and quality query
 // parameters are applied; what is not done, a flipped viewport region or an
 // ICC profile, is refused with 400, and a study or a series rendered whole
-// with 501.
+// with 501. With no window given and none in the image, a frame is drawn
+// over the range its Bits Stored can hold, the identity VOI LUT of PS3.3
+// C.11.2.1.2.2, so every frame of an image is on one scale.
 //
 // Instances are stored as the application/dicom parts of a multipart
 // request, to /studies or into a study. Each is kept or refused on its own,
