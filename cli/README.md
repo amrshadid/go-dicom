@@ -33,6 +33,8 @@ go-dicom validate ct.dcm                     # Check it against its IOD; --json,
 go-dicom convert patient.dcm output.json     # Convert to JSON
 go-dicom modify -set PatientName=Doe^Jane in.dcm out.dcm  # Set, insert or delete attributes
 go-dicom modify -insert 'ReferencedImageSequence[0].ReferencedSOPInstanceUID=1.2.3' -in-place f.dcm
+go-dicom modify -insert-file '(0009,xx10,"ACME",OB)=blob.bin' in.dcm out.dcm   # A binary value from a file
+go-dicom modify -delete-all InstanceCreationDate in.dcm out.dcm   # Every occurrence, in every item
 go-dicom compress -syntax rle ct.dcm ct-rle.dcm   # Also jpeg-ls, jpeg2000; jpeg -quality 90 is lossy
 go-dicom decompress ct-rle.dcm ct.dcm        # Native pixel data
 go-dicom convert patient.dcm dicom.json --format dicom-json   # DICOM JSON, which create reads back

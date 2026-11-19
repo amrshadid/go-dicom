@@ -9,22 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`create` makes a file for each object of a DICOM JSON array, and reads a
-  BulkDataURI that names a local file** (#448). An array of more than one
-  object, which is what a DICOMweb metadata response is, was refused ("one
-  file is made from one"), and any value held at a BulkDataURI was refused
-  because the reader would have written it empty. Now an array makes one file
-  for each object in the output directory, named by SOP Instance UID as `wado`
-  names them, with nothing written when any object is refused or two share a
-  UID. A BulkDataURI that is a `file:` URI or a path is read into the value
-  from inside `-bulk-dir` (by default the JSON file's directory), links
-  followed, so JSON from a server cannot pull another file of the machine into
-  the one made; a `http:` or `https:` one is refused by name and not fetched,
-  since a command that makes a file does not reach the network unasked. Checked
-  against the JSON pydicom writes for a list of instances, with its values
-  inline and with them in files, and against the metadata and bulk data
-  `qrscp -web` serves: each comes back as the original data sets. An array of
-  one object, and every object that worked, are as they were.
+- **`modify` takes a binary value from a file, and changes or removes an
+  attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
+  (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute
+  the bytes of a file, padded to an even length and checked to be a whole
+  number of words; until now every binary value was refused, so a palette or
+  a private blob could not be set without writing Go. `-set-all` and
+  `-delete-all` (`-ma` and `-ea`) act on an attribute in the data set and in
+  every item of every sequence, to any depth, where a path needed one edit
+  per item and the item counts. Over pydicom's corpus the results match
+  pydicom's element by element, and dcmodify's. No invocation that worked
+  before changes; the refusal of a binary value given as text now names the
+  new flags.
 
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
@@ -451,6 +447,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the loss and is a new instance, as `jpeg` already did; a parameter given
   to a syntax that does not take it is refused. dcmtk, libjpeg and OpenJPEG
   decode what it writes in each new syntax.
+
+- **`create` makes a file for each object of a DICOM JSON array, and reads a
+  BulkDataURI that names a local file** (#448). An array of more than one
+  object, which is what a DICOMweb metadata response is, was refused ("one
+  file is made from one"), and any value held at a BulkDataURI was refused
+  because the reader would have written it empty. Now an array makes one file
+  for each object in the output directory, named by SOP Instance UID as `wado`
+  names them, with nothing written when any object is refused or two share a
+  UID. A BulkDataURI that is a `file:` URI or a path is read into the value
+  from inside `-bulk-dir` (by default the JSON file's directory), links
+  followed, so JSON from a server cannot pull another file of the machine into
+  the one made; a `http:` or `https:` one is refused by name and not fetched,
+  since a command that makes a file does not reach the network unasked. Checked
+  against the JSON pydicom writes for a list of instances, with its values
+  inline and with them in files, and against the metadata and bulk data
+  `qrscp -web` serves: each comes back as the original data sets. An array of
+  one object, and every object that worked, are as they were.
 
 ### Changed
 
