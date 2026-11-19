@@ -214,8 +214,11 @@ missing), the Failure Reasons of PS3.3 C.14.1.1.
 ### 2.7 Matching in the archive
 
 `dcmstore`, and so `qrscp`, matches by the rules of PS3.4 C.2.2: universal,
-single value, list of UID, wildcard, range and sequence matching. Where the
-standard leaves the choice to the SCP:
+single value, list of UID, wildcard, range, sequence, empty value (`""`) and
+multiple value matching. The rules are package `matching`'s, which matches a
+query against any data set, and the store runs them against its index, so
+the two answer a query alike. Where the standard leaves the choice to the
+SCP:
 
 | Choice | What the archive does |
 |---|---|
@@ -225,7 +228,8 @@ standard leaves the choice to the SCP:
 | Character set of a query | The query is read in the Specific Character Set it declares, and the index is UTF-8, so a name matches however the query and the instance were each written. |
 | Character set of an answer | `ISO_IR 192` when the answer holds anything outside ASCII; none when it does not (C.4.1.1.3.2). |
 | A date or time in its ACR-NEMA form | `1997.04.24` and `09:30:00` are read as `19970424` and `093000`, in a stored value and in a query. The stored value is returned as it is. |
-| An attribute with no value in an instance | Matches universal matching only. A range does not match a study with no date. |
+| An attribute with no value in an instance | Matches universal matching, `*` and `""` only. A range does not match a study with no date. |
+| A key of more than one value (C.2.2.2.8) | Matches an instance that matches any one of its values. A key of LT, ST, UT or UR is one value: a backslash in it is text. |
 | A key the index does not hold | Not matched on, and returned with no value (C.2.2.1.2). |
 
 ---

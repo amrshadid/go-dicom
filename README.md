@@ -435,6 +435,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 | Package | Description |
 |---------|-------------|
 | [network](./network/) | DICOM networking — SCU/SCP, DIMSE services, PDU encoding, TLS |
+| [matching](./matching/) | C-FIND matching (PS3.4 C.2.2.2) of a query against a data set, sequences item by item, and the answer built from a match; the archive in `dcmstore` matches with it |
 
 #### Encoding and Compression
 | Package | Description |

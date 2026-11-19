@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A query can be matched against a data set** (#515). C-FIND matching
+  lived only inside `dcmstore`, unexported and written against its index, so
+  a program with entries of its own, a worklist for one, had nothing to call:
+  `WorklistHandler` sends whatever `OnWorklist` returns. Package `matching`
+  reads a query once (`Compile`) and matches it against any data set, by
+  every rule of PS3.4 C.2.2.2: universal, single value, list of UID,
+  wildcard, range, sequence matching item by item, so a step at one station
+  and a date from another step is not a match, and the two rules nothing
+  had: `""` matches an entity where the attribute is empty, and a key of
+  more than one value, `CT\MR`, matches either. Both were compared as plain
+  text before and never matched. `Response` builds the answer from a match:
+  the keys asked for, empty where the entry has none, sequences cut to the
+  items that matched and the keys asked for in them, text in UTF-8 with
+  ISO_IR 192 declared when it needs it. `dcmstore` now matches through it
+  rather than its own code. Over the pydicom corpus and 24 generated
+  instances, 192 queries at the four levels give answers byte for byte the
+  same as before, except the 12 that use the two new rules, which matched
+  nothing before. A text value of LT, ST, UT or UR is one value: split at a
+  backslash, a comment `a\b` matched a query for `a` and never itself.
+
 - **An N-GET can ask for the attributes it wants** (#486). An SCP has read
   the Attribute Identifier List (0000,1005) since #380, but `SCU.NGet` could
   not send one, so a requester always asked for every attribute.
