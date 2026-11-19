@@ -1,11 +1,14 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 
 	"github.com/amrshadid/go-dicom/network"
@@ -23,19 +26,125 @@ import (
 // than resolved: resolved once at start-up it would hold whatever the name
 // pointed to then, and resolved on every association it would put DNS in
 // front of every caller.
+//
+// An entry that pairs a title with an address, TITLE@ADDRESS, is a third
+// kind: that title is admitted from that address, and from nowhere else
+// unless another entry says so. Each pair is a way in of its own, beside the
+// way in the titles and addresses make together: "-allow CT2,10.0.0.0/8,
+// PRISMA1@192.168.1.5" admits CT2 from 10.0.0.0/8 and PRISMA1 from
+// 192.168.1.5, and neither CT2 from 192.168.1.5 nor PRISMA1 from 10.0.0.0/8.
+// An AE title may hold an @ (PS3.5 6.2), so an entry is a pair only when
+// what follows its last @ is an address.
+//
+// The same entries may be read from a file, -allow-file, one to a line.
 type allowFlag struct {
 	titles   []string
 	prefixes []netip.Prefix
+	pairs    []allowPair
 }
+
+// allowPair is a title admitted from an address or a range.
+type allowPair struct {
+	title  string
+	prefix netip.Prefix
+}
+
+func (p allowPair) String() string { return p.title + "@" + p.prefix.String() }
 
 func (a *allowFlag) add(fs *flag.FlagSet) {
 	fs.Var(a, "allow",
-		"Callers to admit, comma separated and repeatable: calling AE titles, and IP addresses "+
-			"or CIDR ranges (10.0.0.0/8, fd00::/8). With both, a caller needs a listed title and "+
-			"a listed address. Any other caller is refused before anything is negotiated: an "+
-			"unlisted title as calling-AE-title-not-recognized, an unlisted address with no "+
-			"reason given. A host name is not resolved: it is read as an AE title "+
-			"(default: every caller is admitted)")
+		"Callers to admit, comma separated and repeatable: calling AE titles, IP addresses "+
+			"or CIDR ranges (10.0.0.0/8, fd00::/8), and TITLE@ADDRESS to admit a title only from "+
+			"an address (PRISMA1@10.0.0.5). With titles and addresses both, a caller needs a "+
+			"listed title and a listed address; each TITLE@ADDRESS is a way in of its own. Any "+
+			"other caller is refused before anything is negotiated: an unlisted title as "+
+			"calling-AE-title-not-recognized, an unlisted address, or a listed title from an "+
+			"address it is not admitted from, with no reason given. A host name is not "+
+			"resolved: it is read as an AE title (default: every caller is admitted)")
+	fs.Var(allowFileFlag{a}, "allow-file",
+		"A file of entries for -allow, one to a line, in the same forms; a # starts a comment, "+
+			"on a line of its own or after a space. Repeatable, and joined with -allow. "+
+			"A file with no entry is an error: it would admit every caller")
+}
+
+// allowFileFlag is -allow-file: it reads the entries of a file into the list.
+type allowFileFlag struct{ list *allowFlag }
+
+func (f allowFileFlag) String() string { return "" }
+
+func (f allowFileFlag) Set(path string) error { return f.list.readFile(path) }
+
+// maxAllowFile bounds what -allow-file reads. A list of callers is a few
+// lines a modality; a megabyte is a file that is not one.
+const maxAllowFile = 1 << 20
+
+// readFile adds the entries of a file, one to a line. A # at the start of a
+// line, or after a space or a tab, begins a comment that runs to its end, so
+// an AE title that holds " #" cannot be written here and is given with
+// -allow. A file with no entry is refused: an empty list admits every
+// caller, and a file emptied by mistake or named wrongly would open the
+// server.
+func (a *allowFlag) readFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("-allow-file: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	scanner := bufio.NewScanner(&limitedReader{r: f, n: maxAllowFile + 1})
+	entries := 0
+	for line := 1; scanner.Scan(); line++ {
+		text := strings.TrimRight(scanner.Text(), "\r")
+		if line == 1 {
+			text = strings.TrimPrefix(text, "\uFEFF")
+		}
+		if i := commentStart(text); i >= 0 {
+			text = text[:i]
+		}
+		if strings.Trim(text, " \t") == "" {
+			continue
+		}
+		before := len(a.titles) + len(a.prefixes) + len(a.pairs)
+		if err := a.Set(strings.ReplaceAll(text, "\t", " ")); err != nil {
+			return fmt.Errorf("%s:%d: %w", path, line, err)
+		}
+		entries += len(a.titles) + len(a.prefixes) + len(a.pairs) - before
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("-allow-file %s: %v", path, err)
+	}
+	if entries == 0 {
+		return fmt.Errorf("-allow-file %s has no entry; an empty list admits every caller", path)
+	}
+	return nil
+}
+
+// limitedReader fails, rather than ends, when it has given n bytes, so a file
+// over the bound is an error and not a list that stops early.
+type limitedReader struct {
+	r io.Reader
+	n int
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if l.n <= 0 {
+		return 0, fmt.Errorf("the file is longer than %d bytes", maxAllowFile)
+	}
+	if len(p) > l.n {
+		p = p[:l.n]
+	}
+	n, err := l.r.Read(p)
+	l.n -= n
+	return n, err
+}
+
+// commentStart is where a comment begins in a line, or -1.
+func commentStart(line string) int {
+	for i := 0; i < len(line); i++ {
+		if line[i] == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+			return i
+		}
+	}
+	return -1
 }
 
 // String lists the entries, titles first, in a form Set reads back.
@@ -45,6 +154,9 @@ func (a *allowFlag) String() string {
 	}
 	entries := append([]string{}, a.titles...)
 	for _, p := range a.prefixes {
+		entries = append(entries, p.String())
+	}
+	for _, p := range a.pairs {
 		entries = append(entries, p.String())
 	}
 	return strings.Join(entries, ",")
@@ -65,6 +177,13 @@ func (a *allowFlag) describe() string {
 		}
 		parts = append(parts, "addresses "+strings.Join(ranges, ", "))
 	}
+	if len(a.pairs) > 0 {
+		pairs := make([]string, len(a.pairs))
+		for i, p := range a.pairs {
+			pairs[i] = p.String()
+		}
+		parts = append(parts, "titles from addresses "+strings.Join(pairs, ", "))
+	}
 	return strings.Join(parts, "; ")
 }
 
@@ -81,6 +200,24 @@ func (a *allowFlag) Set(value string) error {
 		if prefix, ok := parseAllowedAddress(entry); ok {
 			a.prefixes = append(a.prefixes, prefix)
 			continue
+		}
+		if at := strings.LastIndex(entry, "@"); at >= 0 {
+			title, tail := strings.Trim(entry[:at], " "), strings.Trim(entry[at+1:], " ")
+			if prefix, ok := parseAllowedAddress(tail); ok {
+				if title == "" {
+					return fmt.Errorf("-allow entry %q has no AE title before the @", entry)
+				}
+				if err := checkAllowedTitle(title); err != nil {
+					return err
+				}
+				a.pairs = append(a.pairs, allowPair{title: title, prefix: prefix})
+				continue
+			}
+			// What follows reads as an address and is not one: a pairing
+			// mistyped, which as a title would admit no one.
+			if tail != "" && strings.Trim(tail, "0123456789./:") == "" {
+				return fmt.Errorf("-allow entry %q: %q after the @ is not a valid IP address or CIDR range", entry, tail)
+			}
 		}
 		if err := checkAllowedTitle(entry); err != nil {
 			return err
@@ -135,7 +272,7 @@ func checkAllowedTitle(entry string) error {
 // library's log (#283), so without it a refused scanner would leave no trace
 // on the server's side.
 func (a *allowFlag) admission(report func(format string, args ...any)) func(context.Context, *network.AssociationRequest) *network.AssociationRejection {
-	if len(a.titles) == 0 && len(a.prefixes) == 0 {
+	if len(a.titles) == 0 && len(a.prefixes) == 0 && len(a.pairs) == 0 {
 		return nil
 	}
 	titles := make(map[string]bool, len(a.titles))
@@ -143,28 +280,59 @@ func (a *allowFlag) admission(report func(format string, args ...any)) func(cont
 		titles[t] = true
 	}
 	prefixes := append([]netip.Prefix{}, a.prefixes...)
+	pairs := append([]allowPair{}, a.pairs...)
+	// Every range there is, for telling a caller from an address no entry
+	// names from one that is named for another title.
+	listed := append([]netip.Prefix{}, prefixes...)
+	pairedTitles := make(map[string]bool, len(pairs))
+	for _, p := range pairs {
+		listed = append(listed, p.prefix)
+		pairedTitles[p.title] = true
+	}
+	// The titles and addresses together are one way in, with the rule they
+	// have always had: both kinds, when both are given. Each pair is another.
+	together := len(titles) > 0 || len(prefixes) > 0
 
 	return func(_ context.Context, req *network.AssociationRequest) *network.AssociationRejection {
-		// The address first, so a caller from a place none is admitted
-		// learns nothing about which titles are known.
-		if len(prefixes) > 0 && !addressAllowed(req.RemoteAddr, prefixes) {
+		// Compared as the SCP gives it, without the spaces that are not
+		// significant, and with its case: PS3.5 does not fold AE titles.
+		if together &&
+			(len(prefixes) == 0 || addressAllowed(req.RemoteAddr, prefixes)) &&
+			(len(titles) == 0 || titles[req.CallingAE]) {
+			return nil
+		}
+		for _, p := range pairs {
+			if p.title == req.CallingAE && addressAllowed(req.RemoteAddr, []netip.Prefix{p.prefix}) {
+				return nil
+			}
+		}
+
+		noReason := &network.AssociationRejection{
+			Result: network.RJResultRejectedPermanent,
+			Source: network.RJSourceServiceUser,
+			Reason: network.RJReasonUserNoReason,
+		}
+		switch {
+		case pairedTitles[req.CallingAE]:
+			// A listed title, from an address it is not admitted from. The
+			// table has no reason for that, and not recognizing a title that
+			// is listed would be untrue.
+			report("Refused %q from %s: the address is not one %q is admitted from on -allow\n", req.CallingAE, req.RemoteAddr, req.CallingAE)
+			return noReason
+		case titles[req.CallingAE]:
+			report("Refused %q from %s: the address is not on -allow\n", req.CallingAE, req.RemoteAddr)
+			return noReason
+		case len(listed) > 0 && !addressAllowed(req.RemoteAddr, listed):
+			// The address first, so a caller from a place none is admitted
+			// learns nothing about which titles are known.
 			report("Refused %q from %s: the address is not on -allow\n", req.CallingAE, req.RemoteAddr)
 			// PS3.8 Table 9-21 has no reason for an address. Saying the
 			// calling AE title was not recognized would be untrue of a
 			// listed title calling from the wrong place.
-			return &network.AssociationRejection{
-				Result: network.RJResultRejectedPermanent,
-				Source: network.RJSourceServiceUser,
-				Reason: network.RJReasonUserNoReason,
-			}
+			return noReason
 		}
-		// Compared as the SCP gives it, without the spaces that are not
-		// significant, and with its case: PS3.5 does not fold AE titles.
-		if len(titles) > 0 && !titles[req.CallingAE] {
-			report("Refused %q from %s: the calling AE title is not on -allow\n", req.CallingAE, req.RemoteAddr)
-			return network.RejectCallingAE()
-		}
-		return nil
+		report("Refused %q from %s: the calling AE title is not on -allow\n", req.CallingAE, req.RemoteAddr)
+		return network.RejectCallingAE()
 	}
 }
 

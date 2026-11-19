@@ -35,6 +35,12 @@
 // above it, the module, the section and table of PS3.3 the rule is in, the
 // rule, and a Severity.
 //
+// No bulk value's bytes are needed. A data set read with
+// filereader.ReadOptions.SkipBulkData and built with
+// GetDatasetWithValuesInFile, its Pixel Data a dataelem.ValueInFile, is
+// checked as if it had been read whole; the value's length says whether it is
+// empty. go-dicom validate reads files that way.
+//
 // # Conditions
 //
 // PS3.3 states a share of its conditions in a few fixed sentence forms that
