@@ -101,6 +101,23 @@ scp.SetHandler(&network.StorageHandler{
 log.Fatal(scp.ListenAndServe(ctx))
 ```
 
+What the server accepts is set in the configuration, so it holds from the
+first association. Left nil, `AbstractSyntaxes` and `TransferSyntaxes` keep the
+defaults, which include query and retrieve; a list is used exactly as given,
+and an empty one accepts nothing:
+
+```go
+server, err := network.StartServer(ctx, network.SCPConfig{
+    AETitle:          "ARCHIVE",
+    Port:             11112,
+    AbstractSyntaxes: network.StorageAndVerificationSyntaxes(),
+}, storeHandler)
+```
+
+`SetSupportedAbstractSyntaxes` and `SetSupportedTransferSyntaxes` still work,
+for associations negotiated after they are called; on a `Server` that is after
+`StartServer` has begun accepting.
+
 ### TLS Encrypted Communication
 
 Set `TLS` on the configuration and every association goes over TLS: `Associate`

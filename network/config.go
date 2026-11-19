@@ -212,6 +212,26 @@ type SCPConfig struct {
 	// uses it as its Events.
 	Events *EventManager
 
+	// AbstractSyntaxes are the SOP classes the SCP accepts. They are read by
+	// NewSCP and StartServer before the listener opens, so no association is
+	// ever negotiated with a wider set, which setting them afterwards with
+	// SetSupportedAbstractSyntaxes cannot promise: the accept loop is already
+	// running when StartServer returns.
+	//
+	// Nil and empty are different. Nil keeps the defaults, which include
+	// query and retrieve (Patient Root, Study Root and Patient/Study Only
+	// FIND, MOVE and GET) as well as verification, the common storage
+	// classes and storage commitment. A non-nil list is used exactly as
+	// given, so an empty one accepts nothing. StorageAndVerificationSyntaxes
+	// is the list for a storage-only archive.
+	AbstractSyntaxes []string
+
+	// TransferSyntaxes are the transfer syntaxes the SCP accepts, read when
+	// AbstractSyntaxes are. Nil keeps the defaults (DefaultTransferSyntaxes);
+	// a non-nil list is used exactly as given, so an empty one accepts no
+	// presentation context at all.
+	TransferSyntaxes []string
+
 	// TLS, when set, makes ListenAndServe and StartServer accept associations
 	// over TLS only.
 	TLS *TLSConfig
