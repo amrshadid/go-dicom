@@ -844,6 +844,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An A-ABORT is read by the peer before the connection is closed** (#513).
+  This side wrote its A-ABORT and closed the connection behind it. A peer
+  still sending had bytes on their way that were never read, and a connection
+  closed with bytes unread is reset, which discards what the peer had not yet
+  read: the A-ABORT. On Windows a client that sent a request and then read
+  got "connection forcibly closed" and never learned it had been aborted, or
+  why. This side now stops sending, reads and drops what arrives until the
+  peer closes or a second has passed, and closes then, on a goroutine of its
+  own: the association gives back its slot and its handler at once. PS3.8
+  gives the wait ARTIM; a second is kept so that a peer that will not close
+  holds a connection and nothing else.
+
 - **An Implicit VR image is no longer warned about for its own VR** (#483).
   Where the dictionary offers a choice of VRs, an element read from an
   Implicit VR file carries the whole choice, and the check added with the fix

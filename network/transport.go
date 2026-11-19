@@ -26,9 +26,71 @@ type Transport struct {
 	// established, DIMSETimeout after. Zero is no bound.
 	readTimeout time.Duration
 
+	// closeWait is ARTIM, set by the SCU or SCP that owns the transport: the
+	// most the peer is given to close the connection after this side sent an
+	// A-ABORT, itself capped by abortLinger. Zero closes at once.
+	closeWait time.Duration
+
 	// obs reports what passes as events, when the SCU or SCP that owns the
 	// transport was given somewhere to report to. Nil otherwise.
 	obs *observer
+}
+
+// setCloseWait gives the peer d to close the connection after an A-ABORT
+// this side sends. Zero or less closes at once.
+func (t *Transport) setCloseWait(d time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closeWait = d
+}
+
+// abortLinger is the longest the peer is given to close after an A-ABORT.
+//
+// The state machine gives it ARTIM (PS3.8 9.2: AA-1 and AA-8 send the PDU,
+// start the timer and await the transport connection close in Sta13). A
+// second is long enough for the A-ABORT to cross and be read, and a
+// connection that a peer will not close is not worth holding for thirty.
+const abortLinger = time.Second
+
+// closeAfterPeer ends this side's use of the connection after an A-ABORT it
+// sent, and leaves the connection itself for the peer to close, for a
+// moment, reading and dropping what arrives meanwhile (AA-6).
+//
+// Closing behind the PDU lost it. A peer still sending has bytes on their way
+// that this side will never read, and a connection closed with bytes unread
+// is reset: the reset discards what the peer had not yet read, the A-ABORT
+// with it, and the peer saw a broken connection in place of an abort (#513,
+// on Windows in CI). So this side stops sending, which tells the peer the
+// A-ABORT is the last of it, and reads until the peer closes or the linger
+// ends, and closes then.
+//
+// The transport is closed to its owner at once: the association is over, its
+// slot and its handler are given back now, and only the connection lingers,
+// on a goroutine of its own. A caller whose context is already over, which
+// is a server being stopped, closes without waiting. It is a bound, not a
+// promise: a peer still sending when the linger ends is closed on as before.
+func (t *Transport) closeAfterPeer(ctx context.Context) error {
+	t.mu.Lock()
+	wait := min(t.closeWait, abortLinger)
+	if t.closed || wait <= 0 || ctx.Err() != nil {
+		t.mu.Unlock()
+		return t.Close()
+	}
+	t.closed = true
+	conn, obs := t.conn, t.obs
+	t.mu.Unlock()
+	if obs != nil {
+		obs.emit(obs.event(EVTConnClose))
+	}
+	go func() {
+		if half, ok := conn.(interface{ CloseWrite() error }); ok {
+			_ = half.CloseWrite()
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(wait))
+		_, _ = io.Copy(io.Discard, conn)
+		_ = conn.Close()
+	}()
+	return nil
 }
 
 // SetReadTimeout bounds how long each ReadPDU waits for a whole PDU, whatever
