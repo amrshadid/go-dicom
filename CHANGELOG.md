@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The JPEG 2000 decoder decodes High-Throughput code-blocks** (#403). An
+  HTJ2K codestream (ISO/IEC 15444-15, ITU-T T.814) keeps everything of Part 1
+  but the block coder, and `jpeg2000.ParseCodestream` stopped at its CAP
+  marker: `unexpected marker FF50`. `compress/jpeg2000` now reads the CAP
+  segment and decodes HT code-blocks, the cleanup pass and the SigProp and
+  MagRef refinement passes, written from the standard's text, inside the
+  existing decoder, so tiles, precincts, progressions, layers and both filters
+  carry over. pydicom-data's two HTJ2K files and openjpeg-data's HT
+  codestreams decode to OpenJPEG 2.5.4's samples, exactly where reversible, and
+  so do 390 codestreams transcoded to HT by the tests from `opj_compress`
+  output at 8 to 16 bits, signed and unsigned, gray and color. HTJ2K pixel
+  data in a data set is still refused by name until the transfer syntaxes are
+  wired to it. Placeholder passes, more than one HT set, a region of interest
+  on HT blocks, and HT and Part 1 blocks mixed in one tile-component are
+  refused by name; HTJ2K is not encoded.
+
 - **An N-GET can ask for the attributes it wants** (#486). An SCP has read
   the Attribute Identifier List (0000,1005) since #380, but `SCU.NGet` could
   not send one, so a requester always asked for every attribute.

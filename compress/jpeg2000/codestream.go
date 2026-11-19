@@ -1,5 +1,7 @@
 // Package jpeg2000 decodes JPEG 2000 Part 1 codestreams in pure Go, and
-// encodes them: losslessly with Encode, and lossy with EncodeLossy.
+// encodes them: losslessly with Encode, and lossy with EncodeLossy. It also
+// decodes High-Throughput JPEG 2000 (Part 15, ITU-T T.814), whose code-blocks
+// are coded by the HT block coder and which it does not encode.
 //
 // DICOM carries JPEG 2000 in two transfer syntaxes, 1.2.840.10008.1.2.4.90
 // (lossless) and .91 (lossy), and this library bundled no decoder for either:
@@ -18,11 +20,13 @@ package jpeg2000
 import (
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 )
 
 // Markers delimit the segments of a codestream (PS 15444-1 Annex A).
 const (
 	markerSOC = 0xFF4F // start of codestream
+	markerCAP = 0xFF50 // extended capabilities (Part 1 A.5.2, Part 15 A.3)
 	markerSIZ = 0xFF51 // image and tile size
 	markerCOD = 0xFF52 // coding style default
 	markerCOC = 0xFF53 // coding style component
@@ -36,6 +40,7 @@ const (
 	markerPPM = 0xFF60 // packed packet headers, main header
 	markerPPT = 0xFF61 // packed packet headers, tile-part header
 	markerCRG = 0xFF63 // component registration
+	markerCPF = 0xFF59 // corresponding profile (Part 15 A.6)
 	markerCOM = 0xFF64 // comment
 	markerSOT = 0xFF90 // start of tile-part
 	markerSOD = 0xFF93 // start of data
@@ -180,6 +185,13 @@ type Codestream struct {
 	// (A.6.6). Either replaces the coding style's single progression.
 	ProgressionChanges     []ProgressionChange
 	TileProgressionChanges map[int][]ProgressionChange
+
+	// HTCapabilities is Ccap15, the CAP segment's word for Part 15 (T.814
+	// Table A.2), and HasHTCapabilities says the segment declared Part 15. A
+	// codestream with HT code-blocks must declare it; the word itself states
+	// constraints on the codestream that a decoder may use and need not.
+	HTCapabilities    uint16
+	HasHTCapabilities bool
 
 	TileParts []TilePart
 }
@@ -362,6 +374,8 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 		case markerSIZ:
 			err = parseSIZ(c, segment)
 			seenSIZ = true
+		case markerCAP:
+			err = parseCAP(c, segment)
 		case markerCOD:
 			c.Coding, err = parseCOD(segment)
 			seenCOD = true
@@ -372,10 +386,11 @@ func ParseCodestream(data []byte) (*Codestream, error) {
 			seenQCD = true
 		case markerQCC:
 			err = parseQCC(c, segment)
-		case markerCOM, markerTLM, markerPLM, markerPLT, markerCRG:
+		case markerCOM, markerTLM, markerPLM, markerPLT, markerCRG, markerCPF:
 			// Comments and length indexes say nothing about how to decode;
 			// skipping them is what the standard expects of a reader that does
-			// not use them.
+			// not use them. CPF names the Part 1 profile an HTJ2K codestream
+			// can be transcoded back to, which decoding does not need either.
 		case markerPPM, markerPPT:
 			err = &ErrUnsupported{Feature: "packed packet headers (PPM/PPT)"}
 		case markerPOC:
@@ -437,6 +452,32 @@ func codestreamFromJP2(data []byte) ([]byte, error) {
 		pos += length
 	}
 	return nil, fmt.Errorf("jpeg2000: JP2 container holds no codestream box")
+}
+
+// parseCAP reads a CAP segment (Part 1 A.5.2): Pcap, a bit for each part of
+// ISO/IEC 15444 whose capabilities the codestream uses, the most significant
+// bit being Part 1, and a 16-bit Ccap word for each bit set, in order.
+//
+// Part 15 is the only part this decoder has. A codestream that needs another
+// part's capabilities is refused by name: decoding it as if they were not
+// there would quietly produce the wrong samples.
+func parseCAP(c *Codestream, s []byte) error {
+	if len(s) < 4 {
+		return fmt.Errorf("jpeg2000: CAP is %d bytes, want at least 4", len(s))
+	}
+	pcap := be32(s)
+	if words := bits.OnesCount32(pcap); len(s) != 4+2*words {
+		return fmt.Errorf("jpeg2000: CAP declares %d capability words in %d bytes", words, len(s))
+	}
+	const part15 = 1 << (32 - 15) // Pcap15, the 15th most significant bit (T.814 A.3.1)
+	if other := pcap &^ part15; other != 0 {
+		return &ErrUnsupported{Feature: fmt.Sprintf("the capabilities of Part %d", bits.LeadingZeros32(other)+1)}
+	}
+	if pcap&part15 != 0 {
+		c.HTCapabilities = uint16(be16(s[4:]))
+		c.HasHTCapabilities = true
+	}
+	return nil
 }
 
 func parseSIZ(c *Codestream, s []byte) error {
@@ -704,9 +745,18 @@ func parseCodingParameters(style *CodingStyle, s []byte) error {
 	case style.CodeBlockWidth*style.CodeBlockHt > 4096:
 		return fmt.Errorf("jpeg2000: code-block %dx%d exceeds 4096 samples",
 			style.CodeBlockWidth, style.CodeBlockHt)
-	case style.BlockStyle&0xC0 != 0:
-		// The six low bits are Part 1's. Bit 6 is Part 15's High-Throughput
-		// block coder, a different coder altogether, and bit 7 is reserved.
+	case style.BlockStyle&blockStyleHTMixed != 0:
+		// The six low bits are Part 1's and bit 6 is Part 15's High-Throughput
+		// block coder. Bit 7 alone is reserved; with bit 6 it lets HT and Part
+		// 1 code-blocks mix within a tile-component, told apart only by trying
+		// to decode a block as one and falling back to the other (T.814 A.4).
+		// No codestream to check that against exists here, and OpenJPEG does
+		// not decode it either.
+		return &ErrUnsupported{
+			Feature: fmt.Sprintf("code-block style 0x%02X", style.BlockStyle)}
+	case style.BlockStyle&BlockStyleHT != 0 && style.BlockStyle&^(BlockStyleHT|BlockStyleVertical) != 0:
+		// T.814 Table A.3: beside bit 6, only the vertically causal bit has a
+		// meaning, and the rest are reserved.
 		return &ErrUnsupported{
 			Feature: fmt.Sprintf("code-block style 0x%02X", style.BlockStyle)}
 	case style.Wavelet != Wavelet53Reversible && style.Wavelet != Wavelet97Irreversible:
@@ -909,11 +959,39 @@ func validate(c *Codestream, seenSIZ, seenCOD, seenQCD bool) error {
 	case len(c.TileParts) == 0:
 		return fmt.Errorf("jpeg2000: codestream has no tile-parts")
 	}
+	if usesHT(c) && !c.HasHTCapabilities {
+		// T.814 A.3.1: an HTJ2K codestream declares Part 15 in a CAP segment.
+		return fmt.Errorf("jpeg2000: HT code-blocks in a codestream whose CAP segment does not declare Part 15")
+	}
 	if c.Coding.MCT && len(c.Components) < 3 {
 		return fmt.Errorf("jpeg2000: the multiple component transform needs three components, not %d",
 			len(c.Components))
 	}
 	return nil
+}
+
+// usesHT reports whether any coding style of the codestream, in the main
+// header or a tile-part header, codes its blocks with the HT block coder.
+func usesHT(c *Codestream) bool {
+	if c.Coding.BlockStyle&BlockStyleHT != 0 {
+		return true
+	}
+	for _, style := range c.ComponentCoding {
+		if style.BlockStyle&BlockStyleHT != 0 {
+			return true
+		}
+	}
+	for _, style := range c.TileCoding {
+		if style.BlockStyle&BlockStyleHT != 0 {
+			return true
+		}
+	}
+	for _, style := range c.TileComponentCoding {
+		if style.BlockStyle&BlockStyleHT != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // errorf builds a package error with the package's prefix.

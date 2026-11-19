@@ -52,6 +52,80 @@ func FuzzDecodeBlockStyles(f *testing.F) {
 	})
 }
 
+// FuzzDecodeHTBlock runs the HT block decoder (T.814 clause 7) on arbitrary
+// bytes, split anywhere into a cleanup and a refinement segment, with any
+// number of passes up to three, any skipped bit planes, any block size up to
+// 64 on a side and either SigProp neighborhood. Every one of its lengths and
+// bit counts comes out of the data: Scup from the last two bytes, exponent
+// bounds and MagSgn widths from the VLC stream. Any error is fine; a panic,
+// or coefficients that do not fit the band, is not. The seeds are code-blocks
+// of the committed HT fixtures, so the fuzzer starts from streams that decode.
+func FuzzDecodeHTBlock(f *testing.F) {
+	f.Add([]byte{0x00, 0x11, 0x22, 0xFF, 0x7F, 0x20, 0x00}, uint8(1), uint8(10), uint8(15), uint8(3), uint16(4), false)
+	f.Add([]byte{0xFF, 0x7F, 0xFF, 0x7F, 0xFF, 0x7F, 0x30, 0x00}, uint8(3), uint8(12), uint8(63), uint8(63), uint16(5), true)
+	paths, _ := filepath.Glob("testdata/ht_*.j2k")
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		c, err := jpeg2000.ParseCodestream(data)
+		if err != nil {
+			continue
+		}
+		tile, err := jpeg2000.ReadTilePacketsForTest(c, 0)
+		if err != nil {
+			continue
+		}
+		for i, block := range tile.Blocks {
+			if block.Style&jpeg2000.BlockStyleHT == 0 || i%7 != 0 {
+				continue
+			}
+			split := uint16(len(block.Data))
+			if len(block.Segments) > 0 {
+				split = uint16(block.Segments[0].Length)
+			}
+			f.Add(block.Data, uint8(block.Passes-1), uint8(block.ZeroBitPlanes), uint8(block.Block.Width()-1),
+				uint8(block.Block.Height()-1), split, block.Style&jpeg2000.BlockStyleVertical != 0)
+		}
+	}
+
+	f.Fuzz(func(t *testing.T, data []byte, passes, skipped, width, height uint8, split uint16, vertical bool) {
+		w, h := int(width%64)+1, int(height%64)+1
+		style := byte(jpeg2000.BlockStyleHT)
+		if vertical {
+			style |= jpeg2000.BlockStyleVertical
+		}
+		n := int(passes%3) + 1
+		block := jpeg2000.CodeBlockData{
+			Block:         jpeg2000.CodeBlock{X1: w, Y1: h},
+			BandType:      int(width % 4),
+			ZeroBitPlanes: int(skipped % 24),
+			Passes:        n,
+			Data:          data,
+			Style:         style,
+		}
+		cut := min(int(split), len(data))
+		block.Segments = []jpeg2000.CodewordSegment{{Passes: 1, Length: cut}}
+		if n > 1 {
+			block.Segments = append(block.Segments, jpeg2000.CodewordSegment{Passes: n - 1, Length: len(data) - cut})
+		}
+		const magnitudeBits = 24
+		values, err := jpeg2000.DecodeBlock(block, magnitudeBits)
+		if err != nil {
+			return
+		}
+		if len(values) != w*h {
+			t.Fatalf("a %dx%d block decoded to %d values", w, h, len(values))
+		}
+		for _, v := range values {
+			if v >= 1<<(magnitudeBits+1) || v <= -(1<<(magnitudeBits+1)) {
+				t.Fatalf("a coefficient of %d halves from %d magnitude bits", v, magnitudeBits)
+			}
+		}
+	})
+}
+
 // FuzzParseCodestream runs the parser against arbitrary bytes. Every length in
 // a codestream comes from the file, and this file came from a peer: a segment
 // length, a component count, a tile index or a Psot can each point past the end
