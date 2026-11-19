@@ -1040,6 +1040,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was 137 levels off. CONFORMANCE §8.1 says where pydicom 3 decides
   differently.
 
+- **JPEG-LS thresholds follow T.87 at every precision, and a frame read with
+  the wrong ones is refused by name** (#422). Near-lossless coding with a
+  large NEAR clamped a default threshold above MAXVAL to MAXVAL, where T.87
+  C.2.4.1.1 sets it to the threshold below: at 8 bits and NEAR 127 the frame
+  was coded with 255, 255, 255 instead of 128, 128, 128, and CharLS and dcmtk
+  refused it while libjpeg decoded it to a different image. The same holds
+  from 3 bits upward wherever NEAR is large, and frames of theirs failed
+  here the same way. An LSE segment that gave some thresholds and left the
+  others at zero was refused instead of having each zero one defaulted. At 6
+  and 7 bits this library was right and dcmtk is not: its bundled CharLS
+  predates the 2.1 fix of the default thresholds there, so each refuses the
+  other's frames. A 7-bit dcmtk frame decoded here without an error to an
+  image up to 127 levels off; a scan whose samples are all decoded with more
+  than a byte of its data unread is now refused, and at 6 and 7 bits the
+  error says dcmtk's thresholds may be the cause, gives both sets, and how
+  dcmcjpls codes a frame everyone reads. Lossless frames from 2 to 8 bits
+  are byte for byte CharLS 2.2's; CONFORMANCE §8.2 has the comparison.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

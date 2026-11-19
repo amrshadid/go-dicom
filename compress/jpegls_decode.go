@@ -14,6 +14,18 @@ import (
 // more cover the EOI marker the scan runs up against.
 const maxJPEGLSTrailingSlack = 10
 
+// maxJPEGLSUnreadBytes is how many whole bytes of a scan's entropy-coded data
+// may follow the last bit its samples needed.
+//
+// One: an encoder whose last byte is 0xFF must follow it with a byte of
+// stuffing, and that byte carries no sample. More than that means
+// the decoder finished the image while the encoder was still coding it: the two
+// disagreed about a parameter, and every sample after the point where they
+// parted is wrong though the frame decoded. CharLS and dcmtk refuse such a scan
+// too. Every JPEG-LS frame in the pydicom corpus and in CharLS's conformance
+// set ends with none.
+const maxJPEGLSUnreadBytes = 1
+
 // maxJPEGLSExpansion bounds how many samples a frame of the given compressed
 // size may declare.
 //
@@ -53,7 +65,6 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 		img       *jpeglsImage
 		compIDs   []byte
 		params    jpeglsParams
-		presetT   bool
 		haveFrame bool
 		scans     int
 		pos       = 2
@@ -102,8 +113,7 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 			return nil, fmt.Errorf("%w: frame marker 0x%02X is not JPEG-LS (SOF55)", errNotJPEGLS, marker)
 
 		case markerLSE:
-			var err error
-			if presetT, err = parseLSE(body, &params); err != nil {
+			if err := parseLSE(body, &params); err != nil {
 				return nil, err
 			}
 			pos += segLen
@@ -119,11 +129,13 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 
 			scanParams := params
 			scanParams.near = scan.near
-			scanParams.computeDefaults(presetT)
+			if err := scanParams.computeDefaults(); err != nil {
+				return nil, err
+			}
 
 			consumed, err := decodeJPEGLSScan(img, scan, &scanParams, data[pos+segLen:])
 			if err != nil {
-				return nil, err
+				return nil, nameLegacyThresholds(err, params, scanParams, img.precision)
 			}
 			scans++
 			pos += segLen + consumed
@@ -198,19 +210,21 @@ func parseJPEGLSFrameHeader(body, stream []byte) (*jpeglsImage, []byte, error) {
 	return img, ids, nil
 }
 
-// parseLSE reads a preset parameters segment, returning whether it set the
-// gradient thresholds.
-func parseLSE(body []byte, params *jpeglsParams) (bool, error) {
+// parseLSE reads a preset parameters segment into params. A zero field is left
+// zero, which computeDefaults reads as "use the default" (T.87 C.2.4.1.1), and
+// computeDefaults is also where the values are checked, because their range
+// depends on the NEAR of the scan they are used in.
+func parseLSE(body []byte, params *jpeglsParams) error {
 	if len(body) < 1 {
-		return false, fmt.Errorf("jpegls: empty LSE segment")
+		return fmt.Errorf("jpegls: empty LSE segment")
 	}
 	// Only type 1 carries coding parameters; the others are mapping tables this
 	// decoder does not need.
 	if body[0] != 1 {
-		return false, nil
+		return nil
 	}
 	if len(body) < 11 {
-		return false, fmt.Errorf("jpegls: LSE type 1 is %d bytes, want 11", len(body))
+		return fmt.Errorf("jpegls: LSE type 1 is %d bytes, want 11", len(body))
 	}
 
 	maxVal := int(binary.BigEndian.Uint16(body[1:]))
@@ -222,18 +236,33 @@ func parseLSE(body []byte, params *jpeglsParams) (bool, error) {
 	if maxVal > 0 {
 		params.maxVal = maxVal
 	}
-	if reset > 0 {
-		params.reset = reset
+	params.t1, params.t2, params.t3, params.reset = t1, t2, t3, reset
+	return nil
+}
+
+// nameLegacyThresholds adds to a scan's decoding error the one known cause that
+// is not damage: a frame coded by CharLS before 2.1, which dcmtk bundles, with
+// the default thresholds that CharLS computed differently from T.87 at 6 and 7
+// bits. Such a frame is a valid stream for other thresholds, so it fails here
+// partway or ends with data left over, as this package's frames do in dcmtk.
+// Decoding it with the old thresholds is not offered: the stream does not say
+// which were used, and guessing would turn a damaged frame into a wrong picture.
+//
+// given holds what the LSE segments set, so a frame that named its thresholds
+// is not blamed on defaults it did not use.
+func nameLegacyThresholds(err error, given, used jpeglsParams, precision int) error {
+	if given.t1 != 0 || given.t2 != 0 || given.t3 != 0 {
+		return err
 	}
-	if t1 == 0 && t2 == 0 && t3 == 0 {
-		return false, nil
+	l1, l2, l3 := legacyCharLSThresholds(used.maxVal, used.near)
+	if l1 == used.t1 && l2 == used.t2 && l3 == used.t3 {
+		return err
 	}
-	if t1 > t2 || t2 > t3 || t3 > params.maxVal {
-		return false, fmt.Errorf("jpegls: LSE thresholds %d,%d,%d are not ordered within MAXVAL %d",
-			t1, t2, t3, params.maxVal)
-	}
-	params.t1, params.t2, params.t3 = t1, t2, t3
-	return true, nil
+	return fmt.Errorf("%w; a %d-bit frame with no LSE segment fails this way when dcmtk or "+
+		"another CharLS before 2.1 coded it, with thresholds %d,%d,%d where T.87 C.2.4.1.1 "+
+		"gives %d,%d,%d (dcmcjpls codes a frame every decoder reads when the thresholds are "+
+		"given: +t1 %d +t2 %d +t3 %d)",
+		err, precision, l1, l2, l3, used.t1, used.t2, used.t3, used.t1, used.t2, used.t3)
 }
 
 // parseJPEGLSScanHeader reads SOS. NEAR sits where a DCT process puts Ss, and
@@ -366,7 +395,13 @@ func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
 	// top bit set. Stuffing guarantees a 0xFF inside the segment is followed by
 	// seven data bits with that bit clear, so the two cannot be confused — the
 	// bit reader relies on the same rule to stop.
-	return entropyLength(entropy), nil
+	end := entropyLength(entropy)
+	if unread := d.reader.unreadBytes(end); unread > maxJPEGLSUnreadBytes {
+		return 0, fmt.Errorf("jpegls: every sample of the scan is decoded with %d bytes of its "+
+			"entropy-coded data unread, so it was coded with other parameters than this decoder "+
+			"used and the image would be wrong", unread)
+	}
+	return end, nil
 }
 
 // entropyLength returns the number of bytes of entropy-coded data before the next
