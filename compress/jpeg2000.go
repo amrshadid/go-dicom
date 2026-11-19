@@ -121,6 +121,32 @@ func (d *JPEG2000Decompressor) DecompressFrame(data []byte, bitsAllocated, bitsS
 	return packJPEG2000(img, bitsAllocated, bitsStored, pixelRepresentation == 1), nil
 }
 
+// FrameHeader reads the image's size from the codestream's SIZ (T.800 A.5.1)
+// without decoding it: the reference grid less its origin, the number of
+// components, and the deepest of them. See FrameHeaderReader.
+//
+// It is the parse the decode itself starts with. A JPEG 2000 codestream can
+// describe a large image in a few hundred bytes honestly, so nothing in the
+// codestream alone tells such a frame from a real one; the data set can.
+func (d *JPEG2000Decompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	if len(data) == 0 {
+		return FrameHeader{}, errEmptyJPEG2000Frame
+	}
+	codestream, err := jpeg2000.ParseCodestream(data)
+	if err != nil {
+		return FrameHeader{}, err
+	}
+	header := FrameHeader{
+		Columns:    int(codestream.Width - codestream.XOffset),
+		Rows:       int(codestream.Height - codestream.YOffset),
+		Components: len(codestream.Components),
+	}
+	for _, c := range codestream.Components {
+		header.Precision = max(header.Precision, c.Depth)
+	}
+	return header, nil
+}
+
 // decodeJPEG2000 parses and decodes one frame.
 func decodeJPEG2000(data []byte) (*jpeg2000.Image, error) {
 	if len(data) == 0 {

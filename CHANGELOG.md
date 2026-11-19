@@ -1044,6 +1044,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A frame that is not the image its data set describes is refused**
+  (#548). Nothing compared a compressed frame's own size with Rows, Columns
+  and Samples per Pixel; only a frame shorter than the image was refused. A
+  1888-byte file of a 64x64 image holding a 4096x4096 JPEG 2000 frame was
+  decoded at 4096x4096 (300 MB resident) and `decompress` wrote its 32 MiB
+  out under Rows and Columns of 64, and a frame of the right length in
+  another shape, 64x64 read as 32x128 or a color frame as one sample a pixel,
+  decoded as a picture it is not. Every codec had the gap. PS3.5 8.2 has the
+  data set describe the decompressed image and agree with the compressed
+  stream, so a frame whose columns, rows or components differ is now refused
+  with both sets of numbers, before it is decoded where its header states
+  them: JPEG 2000's SIZ, JPEG's frame header, JPEG-LS's SOF55. The 1888-byte
+  file is refused with under a megabyte allocated. An RLE frame has no size
+  of its own; each segment must decode to Rows times Columns bytes and is
+  refused as soon as it passes that, so a 4096x4096 frame in a 64x64 data set
+  costs the 64x64; a reshaped RLE frame of the right length cannot be told
+  from the right one. Every path that decodes a frame has the rule: decoded
+  pixel data, `decompress`, rendering and `convert`, DICOMweb frames and
+  rendered, redaction and a send that transcodes. Any frame longer than the
+  image is refused too, as a shorter one was, and the JPEG decoders refuse a
+  second frame header. `compress.FrameHeaderReader` and `ErrFrameMismatch`
+  let a decoder of the caller's take part. Every file of pydicom's corpus,
+  and dcmtk's encodings of nine of them, decodes to the same samples as
+  before.
+
 - **A refusal is logged once where a server has its own logger** (#537).
   `LoggingEventHandlers` leaves out a refusal the SCP has already logged to
   the same log, and asked `DefaultLogger` whether it had; since a server can

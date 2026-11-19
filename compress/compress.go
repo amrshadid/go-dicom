@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -857,7 +858,32 @@ func (d *RLEDecompressor) Decompress(data []byte) ([]byte, error) {
 // for multi-byte samples the least significant byte comes first. RLE stores the
 // opposite of both — one planar segment per byte position, most significant
 // first — so the reassembly reverses the byte order within each sample.
+//
+// The frame is as many pixels as its segments hold; DecompressFrameOfSize
+// holds it to the number of pixels a data set says it has.
 func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllocated int) ([]byte, error) {
+	return d.DecompressFrameOfSize(data, samplesPerPixel, bitsAllocated, 0)
+}
+
+// DecompressFrameOfSize is DecompressFrame for a frame of a known number of
+// pixels, Rows times Columns. A pixels of 0 or less is not known.
+//
+// An RLE frame states no size of its own (PS3.5 G.3): its header says only how
+// many segments follow, which DecompressFrame already holds to the samples and
+// bytes of a pixel. What says the size is each segment's length, one byte for
+// every pixel, so each must decode to exactly pixels bytes; one that decodes to
+// more is refused when it passes the number, without decoding the rest of it,
+// which bounds what a frame costs by the image the data set describes and not
+// by what its runs expand to. The refusal wraps ErrFrameMismatch.
+//
+// One byte more is accepted when pixels is odd, and dropped. G.3.1 pads each
+// segment to an even length, and an encoder that pads with a literal run rather
+// than after the last one leaves a segment that decodes one byte long; pydicom
+// accepts it with a warning.
+//
+// A frame of the right number of pixels in another shape (64x64 for 32x128)
+// cannot be told from the right one: nothing in RLE says where a row ends.
+func (d *RLEDecompressor) DecompressFrameOfSize(data []byte, samplesPerPixel, bitsAllocated, pixels int) ([]byte, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
@@ -884,6 +910,10 @@ func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllo
 	// for every pixel, so they must all be the same length.
 	segments := make([][]byte, len(offsets))
 	pixelCount := -1
+	limit := 0
+	if pixels > 0 {
+		limit = pixels + pixels%2
+	}
 	for i, off := range offsets {
 		// The offsets are 32 bits of the file's choosing. Compared as ints
 		// they are negative on a 32-bit platform once past 2^31, and a
@@ -897,9 +927,20 @@ func (d *RLEDecompressor) DecompressFrame(data []byte, samplesPerPixel, bitsAllo
 				i, start, end, len(data))
 		}
 
-		segment, err := decodeRLESegment(data[start:end])
+		segment, err := decodeRLESegment(data[start:end], limit)
+		if errors.Is(err, errRLESegmentTooLong) {
+			return nil, fmt.Errorf("%w: its RLE segment %d holds more than %d bytes, one a pixel, "+
+				"and Rows times Columns is %d", ErrFrameMismatch, i, limit, pixels)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("rle: segment %d: %w", i, err)
+		}
+		if pixels > 0 {
+			if len(segment) < pixels {
+				return nil, fmt.Errorf("%w: its RLE segment %d holds %d bytes, one a pixel, "+
+					"and Rows times Columns is %d", ErrFrameMismatch, i, len(segment), pixels)
+			}
+			segment = segment[:pixels]
 		}
 		if pixelCount == -1 {
 			pixelCount = len(segment)
@@ -980,8 +1021,15 @@ func parseRLEHeader(data []byte) ([]uint32, error) {
 // Genuine corruption is still caught, by the caller: every segment carries one
 // byte per pixel, so DecompressFrame requires them all to decode to the same
 // length. A segment truncated anywhere but the pad byte comes out short.
-func decodeRLESegment(data []byte) ([]byte, error) {
+//
+// A limit above 0 is the most bytes the segment may decode to: past it the
+// decode stops with errRLESegmentTooLong, and the output is allocated at the
+// limit, which a segment of the right size fills exactly.
+func decodeRLESegment(data []byte, limit int) ([]byte, error) {
 	var result []byte
+	if limit > 0 {
+		result = make([]byte, 0, limit)
+	}
 
 	for i := 0; i < len(data); {
 		control := data[i]
@@ -1009,10 +1057,17 @@ func decodeRLESegment(data []byte) ([]byte, error) {
 			}
 			i++
 		}
+		if limit > 0 && len(result) > limit {
+			return nil, errRLESegmentTooLong
+		}
 	}
 
 	return result, nil
 }
+
+// errRLESegmentTooLong is decodeRLESegment's refusal of a segment that decodes
+// to more bytes than its limit.
+var errRLESegmentTooLong = errors.New("rle: the segment decodes to more bytes than the frame has pixels")
 
 // CanDecompress reports whether data begins with a plausible RLE segment
 // header.
@@ -1092,6 +1147,37 @@ func (d *JPEGDecompressor) DecompressFrame(data []byte, bitsAllocated, bitsStore
 		return nil, fmt.Errorf("jpeg: %w", err)
 	}
 	return samples, nil
+}
+
+// FrameHeader reads the frame's size from its frame header without decoding
+// it; see FrameHeaderReader. The components are those the frame is coded in:
+// one or three, whatever the subsampling, and four for a CMYK frame, which a
+// decode hands back as three.
+//
+// It reads the header as the decoder that will decode the frame does: a
+// 12-bit frame as the decoder here, and an 8-bit one with image/jpeg, whose
+// reading of the bytes ahead of the frame header is its own (it takes FF 00
+// for padding, where the decoders here take it for a segment).
+func (d *JPEGDecompressor) FrameHeader(data []byte) (FrameHeader, error) {
+	if sequentialJPEGPrecision(data) == 12 {
+		header, _, err := jpegFrameHeader(data)
+		if err != nil {
+			return FrameHeader{}, fmt.Errorf("jpeg: %w", err)
+		}
+		return header, nil
+	}
+	config, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return FrameHeader{}, fmt.Errorf("failed to decode JPEG: %w", err)
+	}
+	components := 3
+	switch config.ColorModel {
+	case color.GrayModel:
+		components = 1
+	case color.CMYKModel:
+		components = 4
+	}
+	return FrameHeader{Columns: config.Width, Rows: config.Height, Components: components, Precision: 8}, nil
 }
 
 // decode decodes one frame at its own width and reports its precision.

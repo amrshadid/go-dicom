@@ -105,6 +105,12 @@ func decodeJPEGLS(data []byte) (*jpeglsImage, error) {
 
 		switch marker {
 		case markerSOF55:
+			// One frame header to an image, as in T.81 B.2. A second would
+			// size the image again after its size was held to the data
+			// set's (see jpegFrameHeader).
+			if haveFrame {
+				return nil, fmt.Errorf("jpegls: a second frame header")
+			}
 			var err error
 			if img, compIDs, err = parseJPEGLSFrameHeader(body, data); err != nil {
 				return nil, err

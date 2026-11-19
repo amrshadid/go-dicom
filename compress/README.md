@@ -39,6 +39,16 @@ type FrameDecompressor interface {
     DecompressFrame(data []byte, bitsAllocated, bitsStored, pixelRepresentation int) ([]byte, error)
 }
 
+// Satisfied by the JPEG, JPEG Lossless, JPEG-LS and JPEG 2000 decoders: the
+// frame's columns, rows, components and precision read from its header, without
+// decoding it. A data set's pixel path refuses a frame that is not its image
+// (FrameHeader.Check, ErrFrameMismatch) before decoding it; RLE, which has no
+// size of its own, is held to Rows x Columns by DecompressFrameOfSize.
+type FrameHeaderReader interface {
+    Decompressor
+    FrameHeader(data []byte) (FrameHeader, error)
+}
+
 type Compressor interface {
     Compress(data []byte) ([]byte, error)
 }
