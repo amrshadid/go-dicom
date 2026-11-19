@@ -28,6 +28,13 @@ import (
 // errEmptyJPEG2000Frame reports a fragment with nothing in it.
 var errEmptyJPEG2000Frame = errors.New("jpeg2000: the frame is empty")
 
+// errSubsampledJPEG2000 reports a frame with a subsampled component.
+func errSubsampledJPEG2000(component, dx, dy int) error {
+	return &jpeg2000.ErrUnsupported{Feature: fmt.Sprintf(
+		"component %d subsampled %dx%d in a DICOM frame (PS3.5 8.2.4 allows no Photometric Interpretation for components of different sizes)",
+		component, dx, dy)}
+}
+
 // JPEG2000Decompressor decodes JPEG 2000 frames.
 //
 // It satisfies Decompressor, so it is what GetExternalRegistry returns for
@@ -122,6 +129,21 @@ func decodeJPEG2000(data []byte) (*jpeg2000.Image, error) {
 	codestream, err := jpeg2000.ParseCodestream(data)
 	if err != nil {
 		return nil, err
+	}
+	// The codec decodes a subsampled component to its own, smaller plane.
+	// A DICOM frame cannot be one: PS3.5 8.2.4 allows JPEG 2000 only with
+	// the Photometric Interpretations of its table (MONOCHROME1 and 2,
+	// PALETTE COLOR, YBR_RCT, YBR_ICT, RGB, YBR_FULL), "No other Standard
+	// Photometric Interpretation Values shall be used", and every one of
+	// them has each sample of a pixel at every pixel; the data set's
+	// attributes "shall contain Values that are consistent with the
+	// characteristics of the compressed data stream". So a frame whose
+	// components are of different sizes is refused by name here rather
+	// than resampled into a picture the file does not describe.
+	for i, comp := range codestream.Components {
+		if comp.DX != 1 || comp.DY != 1 {
+			return nil, errSubsampledJPEG2000(i, comp.DX, comp.DY)
+		}
 	}
 	return jpeg2000.Decode(codestream)
 }

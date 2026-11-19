@@ -2,7 +2,7 @@
 
 Each job is shown twice: as a command line, and as Go. Every Go sample here is
 taken from an `Example` function in
-[`examples/commonjobs`](../examples/commonjobs/example_test.go), named beside
+[`examples/commonjobs`](https://github.com/amrshadid/go-dicom/blob/main/examples/commonjobs/example_test.go), named beside
 it, with the error handling shortened; `go test ./examples/commonjobs` runs
 each function and checks what it prints. Every command line was run on a
 file from pydicom's test corpus (`CT_small.dcm` as `ct.dcm` and
