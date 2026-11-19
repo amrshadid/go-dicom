@@ -218,7 +218,9 @@ func (h *UPSHandler) HandleNSet(ctx context.Context, req *NSetRequest) (*NSetRes
 			continue
 		}
 		step.Attributes.Remove(t)
-		if err := step.Attributes.Add(elem); err != nil {
+		// The peer's own attributes: a retired one warns, and the warning
+		// goes to the server's logger, which ctx carries.
+		if err := step.Attributes.AddWithContext(ctx, elem); err != nil {
 			return nil, fmt.Errorf("applying %s: %w", t, err)
 		}
 	}

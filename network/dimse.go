@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -251,7 +252,20 @@ func EncodeCommandDataset(ds *dataset.Dataset) ([]byte, error) {
 }
 
 // DecodeCommandDataset decodes a DICOM command dataset from Implicit VR Little Endian bytes.
+//
+// A retired or unknown command element the peer sent is reported through
+// config.Logger. A server or client given its own logger decodes the command
+// sets it receives with that logger instead.
 func DecodeCommandDataset(data []byte) (*dataset.Dataset, error) {
+	return decodeCommandDataset(context.Background(), data)
+}
+
+// decodeCommandDataset is DecodeCommandDataset reporting to the logger ctx
+// carries. A peer of an older standard sends retired command elements, such as
+// Command Length to End (0000,0001), and each one warns as the element is
+// added; on a server with its own logger that line belongs in its log
+// (Association.logContext), not the global one.
+func decodeCommandDataset(ctx context.Context, data []byte) (*dataset.Dataset, error) {
 	ds := dataset.NewDataset()
 	r := bytes.NewReader(data)
 
@@ -290,7 +304,7 @@ func DecodeCommandDataset(data []byte) (*dataset.Dataset, error) {
 		// Determine VR from dictionary
 		vr := getCommandVR(t)
 		elem := dataelem.NewDataElement(t, vr, value)
-		_ = ds.Add(elem)
+		_ = ds.AddWithContext(ctx, elem)
 	}
 
 	return ds, nil

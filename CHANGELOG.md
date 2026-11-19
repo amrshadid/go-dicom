@@ -864,6 +864,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An A-ABORT is read by the peer before the connection is closed** (#513).
+  This side wrote its A-ABORT and closed the connection behind it. A peer
+  still sending had bytes on their way that were never read, and a connection
+  closed with bytes unread is reset, which discards what the peer had not yet
+  read: the A-ABORT. On Windows a client that sent a request and then read
+  got "connection forcibly closed" and never learned it had been aborted, or
+  why. This side now stops sending, reads and drops what arrives until the
+  peer closes or a second has passed, and closes then, on a goroutine of its
+  own: the association gives back its slot and its handler at once. PS3.8
+  gives the wait ARTIM; a second is kept so that a peer that will not close
+  holds a connection and nothing else.
+
 - **An Implicit VR image is no longer warned about for its own VR** (#483).
   Where the dictionary offers a choice of VRs, an element read from an
   Implicit VR file carries the whole choice, and the check added with the fix
@@ -1314,6 +1326,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   given. `RenderOptions.StoredRange` asks `RenderFrame` for this; without it
   `RenderFrame` and `convert` keep spanning the values across all frames.
   Orthanc 1.13 stretches each frame to its own values, as this server did.
+
+- **A server or client given its own logger gets the warnings of what it
+  receives** (#503). The data sets and command sets the network decoded were
+  built with `dataset.Add`, whose validation warnings (a retired attribute, a
+  VR the dictionary does not give) went to `config.Logger` whatever logger
+  the server or client had: the corpus sent as C-STOREs wrote 14 lines to the
+  global logger and none to the server's. They are now built with
+  `dataset.AddWithContext` under a context carrying that logger, as a file
+  read with its own logger builds its data set (#481): C-STORE, the C-FIND,
+  C-MOVE and C-GET identifiers and results, the C-GET sub-operations a client
+  receives, the N-service data sets both ways, storage commitment, and the
+  command sets. A server's handlers, and a client's `OnCStore`, are given the
+  same context, so the built-in UPS handler's warnings, as it applies an
+  N-SET, go to the server's logger too. With no logger given, nothing
+  changes. Never in a release.
 
 ## [1.10.0] - 2026-11-17
 

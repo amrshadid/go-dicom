@@ -116,6 +116,30 @@ func loggerFor(l *slog.Logger) *Logger {
 	return &Logger{level: LogLevelDebug, own: l}
 }
 
+// carriedBy returns ctx carrying, for config.LoggerFromContext, the slog.Logger
+// of the server or client l belongs to. A nil l, which is a server or client
+// given no logger, leaves ctx as it is, so what is logged under it goes to
+// config.Logger, as it always did.
+//
+// It is how the lines that are not this package's own reach that logger:
+// the validation warnings dataset.AddWithContext raises while the codec builds
+// a data set it received. Those went to config.Logger whatever logger the
+// server had been given, one line for each retired or VR-mismatched element
+// of every instance (#503). The logger travels the way a file read's does
+// (#481), in the context, and no global is changed.
+func (l *Logger) carriedBy(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if l == nil {
+		return ctx
+	}
+	l.mu.RLock()
+	own := l.own
+	l.mu.RUnlock()
+	return config.WithLogger(ctx, own)
+}
+
 // orDefault is l, or DefaultLogger when l is nil, read at call time so that
 // replacing DefaultLogger takes effect.
 func (l *Logger) orDefault() *Logger {
