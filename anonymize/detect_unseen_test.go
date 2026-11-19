@@ -274,5 +274,8 @@ const unseenFound = 51
 // markedAsLettering is the one picture of the set on which the detector
 // marks a large part of a scan with no text in it, at a reduced scale: three
 // blobs of anatomy taken for large lettering and grown over the scan (#536).
-// It is reported and left out of the bound until that is fixed.
+// It is reported and left out of the bound: no rule of the detector was found
+// that tells those blobs from large lettering at every offset of the
+// reduction without losing lettering. An automatic redaction of it is
+// refused instead (TestMostOfAScanIsNotRedactedAutomatically).
 const markedAsLettering = "examples_overlay.dcm, box 2x2"

@@ -1509,6 +1509,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as libjpeg decodes them. A marker missing, out of order or where the DRI
   does not put it is refused with an error saying so.
 
+- **`-redact auto` no longer blacks out half of a scan with no text in it**
+  (#536). On pydicom's `examples_overlay.dcm`, an abdominal MR, smoothed as
+  a picture resampled by half a pixel is, the text detector took three
+  blobs of anatomy at a quarter of the picture's size for large lettering
+  and grew the line over the scan: one region of 46.6% of the picture, which
+  `anonymize -redact auto` and `share -redact auto` filled with black. Taken
+  at sixteen offsets and five kinds of smoothing, the same scan is marked
+  over 38% in 40 of 80 pictures, up to 86.5%. No rule of the detector was
+  found that tells those blobs from large lettering at every offset without
+  losing lettering, so the detector is unchanged and the redaction is
+  guarded instead: when the regions found cover more than a quarter of the
+  picture, nothing is filled, the command fails naming the share, and in a
+  directory the other files are still written. On every scan of the corpus
+  without text the detector marks either 1.6% or less or 38.7% or more; on
+  the real screens it marks at most 17.8%, and on the scans the tests draw
+  labels over at most 20.0%. A picture that is nothing but large lettering
+  is over a quarter too and is refused, which destroys nothing: its regions
+  can be given with `-redact x,y,w,h`. `-detect` and `share -preview` still
+  show everything found. In Go, `RedactDetectedText` returns an error
+  wrapping `ErrImplausibleRedaction`, and `CheckDetectedShare` applies the
+  same bound to a caller's own regions.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
