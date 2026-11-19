@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`modify` takes a binary value from a file, and changes or removes an
+  attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
+  (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute
+  the bytes of a file, padded to an even length and checked to be a whole
+  number of words; until now every binary value was refused, so a palette or
+  a private blob could not be set without writing Go. `-set-all` and
+  `-delete-all` (`-ma` and `-ea`) act on an attribute in the data set and in
+  every item of every sequence, to any depth, where a path needed one edit
+  per item and the item counts. Over pydicom's corpus the results match
+  pydicom's element by element, and dcmodify's. No invocation that worked
+  before changes; the refusal of a binary value given as text now names the
+  new flags.
+
 - **`show --json` and the `-events` log have a written contract.** Two other
   programs read them, and what `schemaVersion` 1 promised was written nowhere.
   `docs/show-json.md` and `docs/events.md` say what each property means and
@@ -434,6 +447,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the loss and is a new instance, as `jpeg` already did; a parameter given
   to a syntax that does not take it is refused. dcmtk, libjpeg and OpenJPEG
   decode what it writes in each new syntax.
+
+- **`create` makes a file for each object of a DICOM JSON array, and reads a
+  BulkDataURI that names a local file** (#448). An array of more than one
+  object, which is what a DICOMweb metadata response is, was refused ("one
+  file is made from one"), and any value held at a BulkDataURI was refused
+  because the reader would have written it empty. Now an array makes one file
+  for each object in the output directory, named by SOP Instance UID as `wado`
+  names them, with nothing written when any object is refused or two share a
+  UID. A BulkDataURI that is a `file:` URI or a path is read into the value
+  from inside `-bulk-dir` (by default the JSON file's directory), links
+  followed, so JSON from a server cannot pull another file of the machine into
+  the one made; a `http:` or `https:` one is refused by name and not fetched,
+  since a command that makes a file does not reach the network unasked. Checked
+  against the JSON pydicom writes for a list of instances, with its values
+  inline and with them in files, and against the metadata and bulk data
+  `qrscp -web` serves: each comes back as the original data sets. An array of
+  one object, and every object that worked, are as they were.
+
+- **`sr` prints what it left out: verifying observers, predecessor documents,
+  nested template identifiers and Real World Value Mapping references**
+  (#455). The help said the document's verifier and the reports it replaces
+  were not printed, and a reader had to fall back on `show`. The header now
+  lists each verifying observer (name, organization, time and code) and each
+  predecessor document with its series and study; an item built from a
+  template other than the root's ends with `# TID 1411 (DCMR)`, as dsrdump's
+  `+Pt` prints it; an image reference ends with `mapped by` and the mapping
+  instances it names. `--json` has them as `verifyingObservers` and
+  `predecessorDocuments` in the document, `template` on an item and
+  `realWorldValueMappings` in a reference, each present only where the report
+  has it, so `schemaVersion` stays 1 under the rule it already had: it changes
+  when a field is renamed, removed or changes its meaning, not when one is
+  added. A report with none of them prints as it did. Compared with dcmtk's
+  `dsr2xml +Wt` and `dsrdump +Pt` on four reports written with pydicom (all
+  four features, none, several predecessor studies and series, an image with a
+  presentation state and a mapping deep in the tree) and on `test-SR.dcm`: the
+  same observers, predecessor instances, templates and mappings. The identical
+  documents of a report are still not printed.
+
+- **`-allow` pairs a title with an address, and its list can be read from a
+  file** (#462). `-allow` kept titles and addresses as two lists a caller had
+  to match both of, so "PRISMA1 only from 10.0.0.5" could not be said:
+  `PRISMA1@10.0.0.5` was read as an AE title that nobody has, and the server
+  refused its own scanner. `TITLE@ADDRESS` (an address or a CIDR range) now
+  admits that title from there and from nowhere else; each pair is a way in of
+  its own beside the titles and addresses given together, whose rule is as it
+  was. An @ in a title that is not followed by an address stays a title, and
+  one followed by something that reads as an address and is not (`CT@10.0.0`)
+  is an error. `-allow-file` reads entries from a file, one to a line, with `#`
+  comments on a line of their own or after a space, and is joined with `-allow`;
+  a file with no entry, or none that is there, stops the server, since an empty
+  list admits every caller. A listed title calling from an address it is not
+  admitted from is refused with no reason given, as an unlisted address is,
+  since "not recognized" would be untrue of it, and the server prints which.
+  Checked with dcmtk's `echoscu` and pynetdicom against `storescp` and
+  `qrscp`: admitted and refused callers, and the reason each is shown, match.
+  Admission by TLS client certificate is not part of `-allow`: it names a
+  certificate by subject, SAN or fingerprint, a third kind of entry, and would
+  be a flag of its own.
 
 ### Changed
 

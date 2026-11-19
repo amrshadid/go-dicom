@@ -303,10 +303,12 @@ go build -o go-dicom .
 ./go-dicom convert ct.dcm ct.png --format png --window 40,400   # A PNG or JPEG, as a viewer shows it
 ./go-dicom codify patient.dcm         # Go source that recreates the file
 ./go-dicom modify -set PatientName=Doe^Jane -insert 'RequestAttributesSequence[0].RequestedProcedureID=RP1' in.dcm out.dcm  # Edit attributes; syntax and pixels kept
+./go-dicom modify -insert-file '(0009,xx10,"ACME",OB)=blob.bin' -delete-all InstanceCreationDate in.dcm out.dcm  # A binary value from a file; every occurrence of an attribute
 ./go-dicom compress -syntax jpeg-ls ct.dcm ct-jls.dcm    # Every syntax the library writes; lossy ones only with -quality, -near, -ratio or -psnr
 ./go-dicom decompress ct-jls.dcm ct.dcm                  # Native pixel data again
 ./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
 ./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF
+./go-dicom create study.json instances/                         # DICOM JSON array (a WADO-RS metadata response): one file each, by SOP Instance UID
 ./go-dicom create -template ct.dcm report.pdf report.dcm     # An Encapsulated PDF in the CT's study
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out
@@ -376,6 +378,9 @@ DICOMWEB_TOKEN=... ./go-dicom qrscp -output ./archive/ -web 0.0.0.0:8080
 # Admit only the callers listed: these AE titles, from these addresses. Any
 # other is refused before anything is negotiated
 ./go-dicom qrscp -port 11112 -output ./archive/ -allow PRISMA1,CT_2,10.20.0.0/16
+# A title admitted only from its own address, and the list kept in a file
+# (one entry to a line, # for comments)
+./go-dicom qrscp -port 11112 -output ./archive/ -allow PRISMA1@10.20.1.5 -allow-file modalities.txt
 
 # Any network command over TLS. With -tls-ca a server requires a client
 # certificate from that CA and a client verifies the server against it
