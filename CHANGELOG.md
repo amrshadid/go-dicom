@@ -574,6 +574,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing Type 1 or Type 2 attribute of a Mandatory module that it had not
   reported. CONFORMANCE §8.6 says what was compared, and what was not.
 
+- **A read logs to a logger of its own** (#481). A file read logged only to
+  the global `config.Logger`, stderr by default, so a server could not give
+  one read its own logger, or keep one read quiet, without changing it for
+  every read in the process. `ReadOptions.Logger` takes a `*slog.Logger` for
+  everything the read logs, the reader, the character set decisions and the
+  validation `GetDataset` runs, and none of it reaches the global one; nil
+  is the global one, as before. `slog.New(slog.DiscardHandler)` reads
+  silently. The logger is carried in a context, by the new
+  `config.WithLogger` and `config.LoggerFromContext`, to `charset`'s
+  `WithContext` functions and the new `Dataset.AddWithContext` and
+  `AddSequenceWithContext`. The character set lines printed the file's own
+  Specific Character Set value; they now name only the defined term assumed,
+  or the length of one that is not a term.
+
 ### Changed
 
 - **`validate` no longer holds the image to check the attributes** (#440).

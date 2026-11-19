@@ -40,6 +40,7 @@ type ReadOptions struct {
     SkipBulkData      bool
     BulkDataThreshold uint32 // the longest binary value still read
     MaxValueLength    uint32 // the longest value held; zero is no maximum
+    Logger            *slog.Logger // where this read logs; nil is config.Logger
 }
 
 // A value longer than MaxValueLength ends the read before it is allocated,
@@ -52,6 +53,12 @@ type ValueTooLongError struct {
     Max    uint32
     Offset int64
 }
+
+// A silent read:
+//   filereader.ReadOptions{Logger: slog.New(slog.DiscardHandler)}
+// With a logger given, nothing the read does reaches config.Logger, the
+// validation GetDataset runs and the character set decisions included. A
+// line names tags, VRs, lengths and offsets, never a value's text.
 
 // A file read that way as a data set whose skipped values say where they
 // are (dataelem.ValueInFile), for filewriter to copy them from the file

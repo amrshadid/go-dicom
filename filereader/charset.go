@@ -14,7 +14,7 @@ const SpecificCharacterSetTag = tag.Tag(0x00080005)
 
 // GetCharacterSet extracts the CharacterSet from the DICOM file data elements.
 func (df *DICOMFile) GetCharacterSet() *charset.CharacterSet {
-	return df.GetCharacterSetWithContext(context.Background())
+	return df.GetCharacterSetWithContext(df.context())
 }
 
 // GetCharacterSetWithContext extracts the CharacterSet with context support.
@@ -44,7 +44,7 @@ func (df *DICOMFile) GetCharacterSetWithContext(ctx context.Context) *charset.Ch
 // This method is for single-byte text VRs (LO, LT, SH, ST, UC, UT).
 // For PersonName (PN) VR, use DecodePersonName instead.
 func (df *DICOMFile) DecodeTextValue(elem *DataElementValue) (string, error) {
-	return df.DecodeTextValueWithContext(context.Background(), elem)
+	return df.DecodeTextValueWithContext(df.context(), elem)
 }
 
 // DecodeTextValueWithContext decodes a text value with context support.
@@ -75,7 +75,7 @@ func (df *DICOMFile) DecodeTextValueWithContext(ctx context.Context, elem *DataE
 
 // DecodePersonName decodes a PersonName value from a data element using the file's character set.
 func (df *DICOMFile) DecodePersonName(elem *DataElementValue) (*charset.PersonName, error) {
-	return df.DecodePersonNameWithContext(context.Background(), elem)
+	return df.DecodePersonNameWithContext(df.context(), elem)
 }
 
 // DecodePersonNameWithContext decodes a PersonName with context support.
@@ -162,7 +162,7 @@ func (df *DICOMFile) DecodeAllPersonNamesWithContext(ctx context.Context) map[ta
 
 // GetTextValueByTag is a convenience method to get a decoded text value by tag.
 func (df *DICOMFile) GetTextValueByTag(t tag.Tag) (string, error) {
-	return df.GetTextValueByTagWithContext(context.Background(), t)
+	return df.GetTextValueByTagWithContext(df.context(), t)
 }
 
 // GetTextValueByTagWithContext gets a text value by tag with context support.
@@ -178,7 +178,7 @@ func (df *DICOMFile) GetTextValueByTagWithContext(ctx context.Context, t tag.Tag
 
 // GetPersonNameByTag is a convenience method to get a decoded PersonName by tag.
 func (df *DICOMFile) GetPersonNameByTag(t tag.Tag) (*charset.PersonName, error) {
-	return df.GetPersonNameByTagWithContext(context.Background(), t)
+	return df.GetPersonNameByTagWithContext(df.context(), t)
 }
 
 // GetPersonNameByTagWithContext gets a PersonName by tag with context support.
