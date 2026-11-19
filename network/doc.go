@@ -243,10 +243,20 @@
 // SCUConfig.Logger, a *slog.Logger: everything it logs then goes there, at
 // every level, and nothing to DefaultLogger. Nil means DefaultLogger, as
 // before. Two servers in one process can so keep apart lines that name AE
-// titles, addresses and SOP Instance UIDs. Not covered: a panic in an event
-// handler when the application calls EventManager.Emit itself, and the
-// validation warnings of the dataset, dataelem and charset packages while a
-// data set is decoded or encoded, which go to config.Logger (#503).
+// titles, addresses and SOP Instance UIDs.
+//
+// That includes the validation warnings dataset.Add raises while a command
+// set or data set it received is decoded (a retired attribute, a VR the
+// dictionary does not give): the data set is built with
+// dataset.AddWithContext under a context carrying the logger
+// (config.WithLogger), the way a file read with ReadOptions.Logger builds its
+// own. Each handler of a server, and a client's OnCStore, is given that
+// context too, so config.LoggerFromContext(ctx) in it is the server's or
+// client's logger, and the built-in UPS handler logs there as it applies an
+// N-SET. Not covered: a panic in an event handler when the application calls
+// EventManager.Emit itself, and anything the application adds to a data set
+// with dataset.Add rather than AddWithContext(ctx, ...). DecodeDataset and
+// DecodeCommandDataset, called directly, log to config.Logger as before.
 //
 // # Limitations
 //

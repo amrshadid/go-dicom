@@ -295,7 +295,7 @@ func (s *SCU) Echo(ctx context.Context) error {
 		return fmt.Errorf("failed to receive C-ECHO-RSP: %w", err)
 	}
 
-	respDS, err := DecodeCommandDataset(msg.command)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 	if err != nil {
 		return fmt.Errorf("failed to decode C-ECHO-RSP: %w", err)
 	}
@@ -373,7 +373,7 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 		return fmt.Errorf("failed to receive C-STORE-RSP: %w", err)
 	}
 
-	respDS, err := DecodeCommandDataset(msg.command)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 	if err != nil {
 		return fmt.Errorf("failed to decode C-STORE-RSP: %w", err)
 	}
@@ -567,7 +567,7 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, messag
 			return
 		}
 
-		cmdDS, err := DecodeCommandDataset(msg.command)
+		cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 		if err != nil {
 			results <- &CFindResult{Err: err}
 			return
@@ -594,7 +594,7 @@ func (s *SCU) receiveFindResults(ctx context.Context, assoc *Association, messag
 			return
 		}
 
-		resultDS, err := DecodeDataset(msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
+		resultDS, err := decodeDataset(assoc.logContext(ctx), msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
 		if err != nil {
 			results <- &CFindResult{Err: err}
 			return
@@ -674,7 +674,7 @@ func (s *SCU) Move(ctx context.Context, queryDS *dataset.Dataset, moveDestinatio
 			continue // Skip data PDUs (sub-operations handled by destination SCP)
 		}
 
-		respDS, err := DecodeCommandDataset(cmdData)
+		respDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 		if err != nil {
 			return fmt.Errorf("failed to decode C-MOVE-RSP: %w", err)
 		}
@@ -763,7 +763,7 @@ func (s *SCU) Get(ctx context.Context, queryDS *dataset.Dataset) error {
 			continue
 		}
 
-		cmdDS, err := DecodeCommandDataset(cmdData)
+		cmdDS, err := decodeCommandDataset(assoc.logContext(ctx), cmdData)
 		if err != nil {
 			return fmt.Errorf("failed to decode C-GET response: %w", err)
 		}
@@ -810,7 +810,7 @@ func (s *SCU) handleGetSubOperation(ctx context.Context, assoc *Association,
 			return NewDIMSEError("UNEXPECTED",
 				"expected a data set for the C-STORE sub-operation, got a command", 0)
 		}
-		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+		ds, err = decodeDataset(assoc.logContext(ctx), dataBytes, assoc.TransferSyntaxFor(ctxID))
 		if err != nil {
 			// Report the failure to the peer rather than dropping the
 			// association; the remaining instances may still be usable.
@@ -821,7 +821,9 @@ func (s *SCU) handleGetSubOperation(ctx context.Context, assoc *Association,
 
 	status := StatusSuccess
 	if s.config.OnCStore != nil {
-		status = s.config.OnCStore(ctx, sopClassUID, sopInstanceUID, ds)
+		// As a server's handlers are, the callback is given this client's
+		// logger in its context (config.LoggerFromContext).
+		status = s.config.OnCStore(assoc.logContext(ctx), sopClassUID, sopInstanceUID, ds)
 	}
 
 	return s.respondToSubOperation(ctx, assoc, ctxID, messageID,
@@ -1135,7 +1137,7 @@ func (s *SCU) NDelete(ctx context.Context, sopClassUID, sopInstanceUID string) (
 	if err != nil {
 		return nil, err
 	}
-	respDS, _ := DecodeCommandDataset(respData)
+	respDS, _ := decodeCommandDataset(assoc.logContext(ctx), respData)
 	_, _, status, _ := ParseCommandDataset(respDS)
 
 	return &NDeleteResponse{
@@ -1248,7 +1250,7 @@ func receiveNResponse(ctx context.Context, assoc *Association, messageID uint16,
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to receive %s: %w", name, err)
 	}
-	respDS, err := DecodeCommandDataset(msg.command)
+	respDS, err := decodeCommandDataset(assoc.logContext(ctx), msg.command)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to decode %s: %w", name, err)
 	}
@@ -1259,7 +1261,7 @@ func receiveNResponse(ctx context.Context, assoc *Association, messageID uint16,
 	if !msg.hasDataSet {
 		return status, nil, nil
 	}
-	ds, err := DecodeDataset(msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
+	ds, err := decodeDataset(assoc.logContext(ctx), msg.dataSet, assoc.TransferSyntaxFor(msg.contextID))
 	if err != nil {
 		return status, nil, fmt.Errorf("failed to decode the data set of %s: %w", name, err)
 	}
