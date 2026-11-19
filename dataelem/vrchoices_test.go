@@ -93,3 +93,34 @@ func TestElementValidationAcceptsEveryVROfLUTData(t *testing.T) {
 		}
 	}
 }
+
+// TestADictionaryChoiceMatchesItself proves that an element carrying the whole
+// of a dictionary entry as its VR is not a mismatch with that entry. That is
+// what the reader gives an element of an Implicit VR file whose tag offers a
+// choice, and it was reported as "expected OB or OW, got OB or OW" for the
+// Pixel Data of every Implicit VR image (#483). Every entry of the dictionary
+// that offers a choice is checked, so a later edition's is covered too.
+func TestADictionaryChoiceMatchesItself(t *testing.T) {
+	checked := 0
+	check := func(label, entry string) {
+		if !dataelem.OffersVRChoice(entry) {
+			return
+		}
+		checked++
+		if !dataelem.VRMatchesDictionary(entry, entry) {
+			t.Errorf("%s: the entry %q does not match itself", label, entry)
+		}
+	}
+	for tg, info := range tag.StandardDicomDictionary {
+		check(tag.FromInt(tg).String(), info.VR)
+	}
+	for _, info := range tag.RepeaterDictionary {
+		check(info.Mask, info.VR)
+	}
+	if checked == 0 {
+		t.Fatal("the dictionary offered no choice of VRs to check")
+	}
+	if dataelem.VRMatchesDictionary("US or SS", "OB or OW") {
+		t.Error("one choice of VRs matched another")
+	}
+}

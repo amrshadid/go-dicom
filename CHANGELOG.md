@@ -653,6 +653,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An Implicit VR image is no longer warned about for its own VR** (#483).
+  Where the dictionary offers a choice of VRs, an element read from an
+  Implicit VR file carries the whole choice, and the check added with the fix
+  for LUT Data compared it with each choice only. Pixel Data was reported as
+  `expected OB or OW, got OB or OW`, and Smallest and Largest Image Pixel
+  Value the same way, on ordinary images. Never in a release.
+
 - **A C-STORE with no data set is refused whatever the handler** (#457). A
   C-STORE-RQ whose Command Data Set Type says no data set follows was
   refused with C000H by a handler that streams, but a handler given the
