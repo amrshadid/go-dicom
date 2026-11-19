@@ -596,6 +596,16 @@ how decoded samples are shaped and coloured, and the one tolerance.
   layouts (4:4:0, 4:1:1) are repeated, as libjpeg 6b does. 12-bit frames are
   repeated too; DICOM has no 12-bit color (PS3.5 Table 8.2.1-1).
 
+- **A JPEG decoded to RGB is converted with libjpeg's arithmetic.** JFIF gives
+  the YCbCr equations and leaves the rounding to the decoder; this one rounds
+  as libjpeg's `jdcolor.c` does (each coefficient scaled by 2^16, each product
+  rounded, Y added after the shift), which is what dcmtk and Pillow use. On
+  frames whose inverse DCT agrees the result is theirs exactly; elsewhere a
+  one-level difference in the YCbCr planes can become two in RGB, since Cb
+  is multiplied by 1.772. On pydicom's corpus every color JPEG decoded to RGB
+  is within one level of dcmtk and Pillow except `examples_ybr_color.dcm`, at
+  two for that reason.
+
 - **`RenderFrame` renders for display, within what it knows.** It applies the
   sign of the samples, the Modality LUT Sequence or Rescale Slope and
   Intercept, the VOI LUT Sequence or a window (LINEAR, LINEAR_EXACT or
