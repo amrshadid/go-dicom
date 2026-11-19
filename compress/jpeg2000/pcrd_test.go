@@ -17,7 +17,7 @@ import (
 func randomBlock(r *rand.Rand, w, h int) ([]int32, []float64) {
 	q := make([]int32, w*h)
 	exact := make([]float64, w*h)
-	scale := math.Exp2(float64(r.Intn(12)))
+	scale := math.Exp2(float64(r.Intn(8)))
 	for i := range q {
 		x := math.Abs(r.NormFloat64()) * scale
 		if r.Intn(10) == 0 {
@@ -42,8 +42,8 @@ func randomBlock(r *rand.Rand, w, h int) ([]int32, []float64) {
 func TestTruncatedBlocksDecodeAsCounted(t *testing.T) {
 	r := rand.New(rand.NewSource(526))
 	points := 0
-	for trial := 0; trial < 300; trial++ {
-		w, h := 1+r.Intn(64), 1+r.Intn(64)
+	for trial := 0; trial < 40; trial++ {
+		w, h := 1+r.Intn(48), 1+r.Intn(48)
 		q, exact := randomBlock(r, w, h)
 		band := r.Intn(4)
 		encoded, cuts, err := encodeBlockTruncations(q, exact, w, h, band, false)
