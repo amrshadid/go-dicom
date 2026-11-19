@@ -130,6 +130,17 @@ type Event struct {
 	// the peer sent, and on every other event. The PDU itself says only what
 	// PS3.8 Table 9-26 lets it say, which several causes share.
 	LocalAbort *LocalAbort
+
+	// refusal is, on the EVTAssocRejected of a refusal this side sent, the
+	// line the SCP logged for it; nil when it logged none. It is how
+	// LoggingEventHandlers tells whether that line reached its own log.
+	refusal *refusalLine
+}
+
+// refusalLine is where, and at what level, an SCP logged a refusal.
+type refusalLine struct {
+	log   *Logger
+	level LogLevel
 }
 
 // LocalAbort is why this side sent an A-ABORT.
