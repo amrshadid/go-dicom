@@ -443,7 +443,7 @@ func (c *Codestream) readPacket(data []byte, pos, tile int, step packetStep,
 				if err != nil {
 					return 0, err
 				}
-				if style.BlockStyle&(BlockStyleBypass|BlockStyleTermAll) == 0 {
+				if style.BlockStyle&(BlockStyleBypass|BlockStyleTermAll|BlockStyleHT) == 0 {
 					length, err := readSegmentLength(r, b, passes)
 					if err != nil {
 						return 0, err
@@ -636,8 +636,19 @@ func readSegmentLengths(r *bitReader, b *blockState, passes int, blockStyle byte
 
 // segmentCapacity is how many passes a block's codeword segment number index
 // holds, under a style with bypass or termination on each pass.
+//
+// HT code-blocks (T.814 B.2, B.3) have segments of their own: an HT cleanup
+// pass alone, then an HT refinement segment of a SigProp and a MagRef pass,
+// and so on, which is the bypass pattern with a first segment of one pass.
+// That is the set T for no placeholder passes; a block with placeholder
+// passes is refused when it is decoded (htSegmentsOf).
 func segmentCapacity(blockStyle byte, index int) int {
 	switch {
+	case blockStyle&BlockStyleHT != 0:
+		if index%2 == 1 {
+			return 2
+		}
+		return 1
 	case blockStyle&BlockStyleTermAll != 0:
 		return 1
 	case index == 0:

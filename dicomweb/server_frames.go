@@ -48,7 +48,11 @@ var frameMedia = map[string]string{
 	compress.JPEG2000Lossy:           "image/jp2",
 	"1.2.840.10008.1.2.4.92":         "image/jpx",
 	"1.2.840.10008.1.2.4.93":         "image/jpx",
-	compress.RLELossless:             mediaRLE,
+	// A single HTJ2K codestream (T.814 Annex E.3).
+	compress.HTJ2KLossless:     "image/jphc",
+	compress.HTJ2KLosslessRPCL: "image/jphc",
+	compress.HTJ2K:             "image/jphc",
+	compress.RLELossless:       mediaRLE,
 }
 
 // mediaRLE is RLE Lossless as IANA registered it. The standard's text has
