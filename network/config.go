@@ -199,8 +199,10 @@ type SCPConfig struct {
 	// PS3.8 Table 9-21 does not define, which is sent as that refusal
 	// instead. Each refusal is logged at the info level, the AE titles
 	// quoted, and reported to Events as EVTAssocRejected, whose Description
-	// names it; a server that also logs its events (LoggingEventHandlers)
-	// has it in its log twice.
+	// names it. LoggingEventHandlers on the same log leaves out a refusal
+	// the SCP's line has already put there, so it appears once; at the
+	// default warning level, where the SCP's line is not written, theirs is
+	// the one that appears.
 	// Callers turned away by MaxAssociations are refused before it is asked.
 	//
 	// It is called concurrently for different connections and must be safe
@@ -219,6 +221,26 @@ type SCPConfig struct {
 	// commitment results and UPS event reports. A Server started with it
 	// uses it as its Events.
 	Events *EventManager
+
+	// AbstractSyntaxes are the SOP classes the SCP accepts. They are read by
+	// NewSCP and StartServer before the listener opens, so no association is
+	// ever negotiated with a wider set, which setting them afterwards with
+	// SetSupportedAbstractSyntaxes cannot promise: the accept loop is already
+	// running when StartServer returns.
+	//
+	// Nil and empty are different. Nil keeps the defaults, which include
+	// query and retrieve (Patient Root, Study Root and Patient/Study Only
+	// FIND, MOVE and GET) as well as verification, the common storage
+	// classes and storage commitment. A non-nil list is used exactly as
+	// given, so an empty one accepts nothing. StorageAndVerificationSyntaxes
+	// is the list for a storage-only archive.
+	AbstractSyntaxes []string
+
+	// TransferSyntaxes are the transfer syntaxes the SCP accepts, read when
+	// AbstractSyntaxes are. Nil keeps the defaults (DefaultTransferSyntaxes);
+	// a non-nil list is used exactly as given, so an empty one accepts no
+	// presentation context at all.
+	TransferSyntaxes []string
 
 	// Logger, when set, is where everything this SCP logs goes: the
 	// associations it accepts, those it opens itself (C-MOVE sub-operations,

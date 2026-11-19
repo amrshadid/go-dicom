@@ -16,7 +16,8 @@ type EventType int
 // Server.Events). What is emitted: the connection opening and closing, every
 // PDU either way, the association being requested, accepted, established,
 // rejected, released and aborted, every DIMSE message either way, and the
-// service event of each request received. EVTACSERecv, EVTACSESent,
+// service event of each request received, and on a TLS server a handshake
+// that failed (EVTTLSHandshakeFailed). EVTACSERecv, EVTACSESent,
 // EVTDataRecv, EVTDataSent, EVTFSMTransition and the four negotiation events
 // are declared for pynetdicom's names and are not emitted.
 const (
@@ -71,6 +72,12 @@ const (
 	EVTSOPExtended // SOP class extended negotiation requested
 	EVTSOPCommon   // SOP class common extended negotiation requested
 	EVTUserID      // User identity negotiation requested
+
+	// EVTTLSHandshakeFailed is a TLS server's handshake with a client
+	// failing, before any association exists. Its Error is a
+	// *TLSHandshakeError naming the check that failed; RemoteAddr says who.
+	// Declared after pynetdicom's names, which have none for it.
+	EVTTLSHandshakeFailed
 )
 
 // Event carries information about a network event.
@@ -117,12 +124,79 @@ type Event struct {
 	// Command is the command set of a DIMSE event, and of the service event
 	// a request gives rise to.
 	Command *CommandInfo
+
+	// LocalAbort says why this side aborted, on the EVTPDUSent and
+	// EVTAssocAborted of an A-ABORT this side sent. It is nil on an abort
+	// the peer sent, and on every other event. The PDU itself says only what
+	// PS3.8 Table 9-26 lets it say, which several causes share.
+	LocalAbort *LocalAbort
+}
+
+// LocalAbort is why this side sent an A-ABORT.
+type LocalAbort struct {
+	// Cause is which kind of reason it was.
+	Cause AbortCause
+	// Err is what went wrong, in words: the timeout, the bound that was
+	// broken, the handler's panic. Nil when the application asked for the
+	// abort.
+	Err error
+}
+
+// AbortCause is the kind of reason this side aborted an association for.
+type AbortCause int
+
+// The causes of an A-ABORT this side sends.
+const (
+	// AbortCauseUnknown is not set by this package; it is the zero value.
+	AbortCauseUnknown AbortCause = iota
+	// AbortCauseTimeout: the peer sent nothing for longer than DIMSETimeout,
+	// or stopped partway through a message (PS3.8 9.1.5).
+	AbortCauseTimeout
+	// AbortCauseProtocolViolation: the peer broke the protocol or a bound: a
+	// PDU unexpected in its state, one unrecognized or over the advertised
+	// maximum, a message that changed context partway, a command set or data
+	// set over its bound, a command this side does not know.
+	AbortCauseProtocolViolation
+	// AbortCauseHandlerPanic: a handler, the application's code, panicked
+	// while serving the association.
+	AbortCauseHandlerPanic
+	// AbortCauseStopping: the server is stopping, and the association was
+	// in the middle of something its context's end cut short.
+	AbortCauseStopping
+	// AbortCauseRequested: the application asked for the abort, by
+	// SCU.Abort or Association.Abort.
+	AbortCauseRequested
+)
+
+// String names the cause, such as "timeout" or "handler-panic".
+func (c AbortCause) String() string {
+	switch c {
+	case AbortCauseTimeout:
+		return "timeout"
+	case AbortCauseProtocolViolation:
+		return "protocol-violation"
+	case AbortCauseHandlerPanic:
+		return "handler-panic"
+	case AbortCauseStopping:
+		return "stopping"
+	case AbortCauseRequested:
+		return "requested"
+	default:
+		return "unknown"
+	}
+}
+
+// abortedBy is the LocalAbort of a cause and the error behind it.
+func abortedBy(cause AbortCause, err error) *LocalAbort {
+	return &LocalAbort{Cause: cause, Err: err}
 }
 
 // EventDetail is the part of an Event that holds lists.
 type EventDetail struct {
 	// PDUBytes is the event's PDU as it crossed the connection, header
-	// included.
+	// included. A received P-DATA-TF carries its bytes only when a handler
+	// of EVTPDURecv was registered as it began to arrive: it holds the data
+	// sets, and copying it for nobody doubled what an instance cost.
 	PDUBytes []byte
 	// PresentationContexts is the outcome of each presentation context, on
 	// EVTAssocAccepted and EVTAssocEstablished.
@@ -217,7 +291,7 @@ func (em *EventManager) On(eventType EventType, handler EventHandler) {
 func (em *EventManager) OnAny(handler EventHandler) {
 	em.mu.Lock()
 	defer em.mu.Unlock()
-	for t := EVTConnOpen; t <= EVTUserID; t++ {
+	for t := EVTConnOpen; t <= EVTTLSHandshakeFailed; t++ {
 		em.handlers[t] = append(em.handlers[t], handler)
 	}
 }
@@ -339,6 +413,8 @@ func EventTypeString(et EventType) string {
 		return "EVT_SOP_COMMON"
 	case EVTUserID:
 		return "EVT_USER_ID"
+	case EVTTLSHandshakeFailed:
+		return "EVT_TLS_HANDSHAKE_FAILED"
 	default:
 		return "EVT_UNKNOWN"
 	}

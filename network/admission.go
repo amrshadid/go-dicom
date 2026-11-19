@@ -202,6 +202,12 @@ func associationRequest(transport *Transport, rq *AssociateRQ) *AssociationReque
 func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *AssociateRQ) *AssociationRejection {
 	if s.config.Admit == nil {
 		if rq.CalledAE != s.config.AETitle {
+			// Logged here like every refusal the SCP decides, so that it is
+			// logged once whether or not anyone logs the events: this one was
+			// logged only by LoggingEventHandlers, and a server without them
+			// refused callers without a word.
+			s.log().Info("refusing %q from %s: it called %q, and this SCP answers to %q",
+				rq.CallingAE, transport.RemoteAddr(), rq.CalledAE, s.config.AETitle)
 			return RejectCalledAE()
 		}
 		return nil

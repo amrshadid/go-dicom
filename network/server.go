@@ -173,7 +173,10 @@ func (s *Server) SetHandler(handler Handler) {
 	s.scp.SetHandler(handler)
 }
 
-// SetSupportedAbstractSyntaxes configures which SOP Classes this server accepts.
+// SetSupportedAbstractSyntaxes configures which SOP Classes this server
+// accepts, for associations negotiated from then on. The accept loop is
+// already running when StartServer returns, so SCPConfig.AbstractSyntaxes is
+// the way to set them before the first.
 func (s *Server) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedAbstractSyntaxes(syntaxes)
 }
@@ -196,7 +199,9 @@ func (s *Server) ReportUPSEvent(ctx context.Context, receivingAE string, event *
 	return s.scp.ReportUPSEvent(ctx, receivingAE, event)
 }
 
-// SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server accepts.
+// SetSupportedTransferSyntaxes configures which Transfer Syntaxes this server
+// accepts, for associations negotiated from then on; SCPConfig.TransferSyntaxes
+// sets them before the first.
 func (s *Server) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.scp.SetSupportedTransferSyntaxes(syntaxes)
 }

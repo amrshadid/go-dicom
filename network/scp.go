@@ -34,6 +34,11 @@ type SCP struct {
 	// atomically because associations are handled concurrently.
 	messageID atomic.Uint32
 
+	// drainer is what Server.Shutdown keeps: whether a stop has begun, and
+	// the connections being served. Made on first use (drain).
+	drainInit sync.Once
+	drainer   *drainState
+
 	// ownLog is SCPConfig.Logger as a Logger, nil for DefaultLogger; see log.
 	ownLog *Logger
 }
@@ -62,6 +67,15 @@ func NewSCP(config SCPConfig) *SCP {
 	if config.MaxAssociations > 0 {
 		scp.assocSlots = make(chan struct{}, config.MaxAssociations)
 	}
+	// Taken here, before any listener exists, so the first association is
+	// negotiated with them. Nil keeps the defaults; an empty list is a
+	// choice, and is kept.
+	if config.AbstractSyntaxes != nil {
+		scp.supportedAbstractSyntaxes = syntaxSet(config.AbstractSyntaxes)
+	}
+	if config.TransferSyntaxes != nil {
+		scp.supportedTransferSyntaxes = syntaxSet(config.TransferSyntaxes)
+	}
 	return scp
 }
 
@@ -72,24 +86,32 @@ func (s *SCP) SetHandler(handler Handler) {
 	s.handler = handler
 }
 
-// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports.
+// SetSupportedAbstractSyntaxes sets the abstract syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.AbstractSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedAbstractSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedAbstractSyntaxes = make(map[string]bool, len(syntaxes))
-	for _, syn := range syntaxes {
-		s.supportedAbstractSyntaxes[syn] = true
-	}
+	s.supportedAbstractSyntaxes = syntaxSet(syntaxes)
 }
 
-// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports.
+// SetSupportedTransferSyntaxes sets the transfer syntaxes this SCP supports,
+// for associations negotiated from then on. SCPConfig.TransferSyntaxes sets
+// them before the first.
 func (s *SCP) SetSupportedTransferSyntaxes(syntaxes []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.supportedTransferSyntaxes = make(map[string]bool, len(syntaxes))
+	s.supportedTransferSyntaxes = syntaxSet(syntaxes)
+}
+
+// syntaxSet is a list of UIDs as the set negotiation looks them up in. It is
+// a copy, so a caller changing its slice later changes nothing.
+func syntaxSet(syntaxes []string) map[string]bool {
+	set := make(map[string]bool, len(syntaxes))
 	for _, syn := range syntaxes {
-		s.supportedTransferSyntaxes[syn] = true
+		set[syn] = true
 	}
+	return set
 }
 
 // ListenAndServe starts the SCP server, listening for incoming associations.
@@ -280,6 +302,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 
 	assoc := NewAssociation(transport)
+	defer s.track(transport, assoc)()
 	assoc.logger = s.ownLog
 	// A panic below, which is to say in a handler, ends this association and
 	// nothing else. Deferred after Close so that it runs first, while there
@@ -296,6 +319,15 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	transport.SetReceiveLimit(s.config.Network.MaxPDUSize)
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
+		// On a TLS server the handshake ran inside that read. A client it
+		// turned away is reported as such, not only logged.
+		if failure := handshakeFailure(transport, err); failure != nil && ctx.Err() == nil {
+			if o := transport.observed(); o != nil {
+				e := o.event(EVTTLSHandshakeFailed)
+				e.Description, e.Error = failure.Error(), failure
+				o.events.Emit(e)
+			}
+		}
 		// A connection that opens and closes without sending a PDU is not a fault.
 		// Every TCP health check, load-balancer probe and port scan does exactly
 		// that, and each one was logging an error describing a working server: a
@@ -312,7 +344,17 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	rq, ok := pdu.(*AssociateRQ)
 	if !ok {
 		s.log().Warn("expected A-ASSOCIATE-RQ, got %T", pdu)
-		_ = assoc.Abort(ctx, AbortSourceServiceProvider, 2)
+		_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, abortUnexpectedPDU,
+			abortedBy(AbortCauseProtocolViolation, fmt.Errorf("expected A-ASSOCIATE-RQ, got %T", pdu)))
+		return
+	}
+
+	// A server that is stopping takes no new association, even on a
+	// connection it accepted before the stop: rejected-transient, so the
+	// caller tries again later (PS3.8 Table 9-21, temporary-congestion).
+	if s.draining() {
+		r := RejectBusy()
+		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return
 	}
 
@@ -361,18 +403,39 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 	}
 	ctx = ContextWithAssociationInfo(ctx, info)
 
+	// servedWhileStopping is set once an operation has finished after a
+	// Shutdown began: the peer's next PDU is then waited for, to answer a
+	// release, but no new operation is started (see shutdown.go).
+	servedWhileStopping := false
 	for {
 		if assoc.State() != StateAssociated {
 			return
 		}
+		// Waiting for a request while the server stops: everything the peer
+		// sent has been answered, so the association is aborted at once.
+		if !servedWhileStopping && s.draining() {
+			s.abortStopping(assoc)
+			return
+		}
 
-		// Receive a PDU (could be command data or release/abort)
-		ctxID, cmdData, isCmd, err := assoc.ReceivePData(ctx)
+		// Receive a PDU (could be command data or release/abort). A Shutdown
+		// beginning ends the wait, unless an operation has already finished
+		// since it began.
+		readCtx, endRead := ctx, context.CancelFunc(func() {})
+		if !servedWhileStopping {
+			readCtx, endRead = s.idleReadContext(ctx)
+		}
+		ctxID, cmdData, isCmd, err := assoc.ReceivePData(readCtx)
+		endRead()
 		if err != nil {
+			if ctx.Err() == nil && s.draining() && errors.Is(err, context.Canceled) {
+				s.abortStopping(assoc)
+				return
+			}
 			var timeout *TimeoutError
 			if errors.As(err, &timeout) {
 				s.log().Warn("aborting the association with %s: %v", assoc.CallingAE(), err)
-				_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+				_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0, abortedBy(AbortCauseTimeout, err))
 				return
 			}
 			if endedNormally(err) {
@@ -397,6 +460,13 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 		commandField, messageID, _, err := ParseCommandDataset(cmdDS)
 		if err != nil {
 			s.log().Error("failed to parse command: %v", err)
+			return
+		}
+
+		// A request read after an operation finished during a Shutdown is
+		// not started: the peer is aborted and knows it was not answered.
+		if servedWhileStopping {
+			s.abortStopping(assoc)
 			return
 		}
 
@@ -436,8 +506,12 @@ func (s *SCP) handleAssociation(ctx context.Context, assoc *Association, handler
 			s.log().Warn("C-CANCEL received for message %d; no operation in progress", messageID)
 		default:
 			s.log().Warn("unsupported command: 0x%04X", commandField)
-			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+			_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0,
+				abortedBy(AbortCauseProtocolViolation, fmt.Errorf("unsupported command 0x%04X", commandField)))
 			return
+		}
+		if s.draining() {
+			servedWhileStopping = true
 		}
 	}
 }
@@ -476,34 +550,45 @@ func (s *SCP) handleCEcho(ctx context.Context, assoc *Association, handler Handl
 func (s *SCP) handleCStore(ctx context.Context, assoc *Association, handler Handler,
 	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
 
-	// A handler that reads the data set as it arrives is given the bytes
-	// before they are assembled, and is never handed a decoded copy.
-	if streamer, ok := streamsCStore(handler); ok {
-		s.handleCStoreStream(ctx, assoc, streamer, ctxID, messageID, cmdDS)
-		return
-	}
-
 	req := cstoreRequest(messageID, cmdDS)
 	sopClassUID, sopInstanceUID := req.AffectedSOPClass, req.AffectedSOPInstance
 
-	// Read the data set if present
-	var ds *dataset.Dataset
-	if HasDataSet(cmdDS) {
-		_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
-		if err != nil {
-			s.log().Error("failed to receive C-STORE data: %v", err)
-			return
-		}
-		if isCmd {
-			s.log().Warn("expected data, got command during C-STORE")
-			return
-		}
-		ds, err = DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
-		if err != nil {
-			s.refuse(ctx, assoc, ctxID, "C-STORE", err,
-				BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
-			return
-		}
+	// A C-STORE-RQ carries the instance to store (PS3.7 9.3.1.1). One whose
+	// Command Data Set Type says none follows has nothing to store, and
+	// whatever a handler answered would describe an instance it never had.
+	// It is refused here, before either kind of handler: the streamed path
+	// refused it since #321, while a handler given the decoded data set was
+	// called with a nil one, and a StorageHandler answered for it. A data set
+	// the peer sends anyway is not this message's: the next read takes it as
+	// stray data.
+	if !HasDataSet(cmdDS) {
+		s.log().Warn("refusing a C-STORE of %s that says no data set follows (PS3.7 9.3.1.1)",
+			sopInstanceUID)
+		s.sendCStoreRSP(ctx, assoc, ctxID, req, StatusUnableToProcess)
+		return
+	}
+
+	// A handler that reads the data set as it arrives is given the bytes
+	// before they are assembled, and is never handed a decoded copy.
+	if streamer, ok := streamsCStore(handler); ok {
+		s.handleCStoreStream(ctx, assoc, streamer, ctxID, req)
+		return
+	}
+
+	_, dataBytes, isCmd, err := assoc.ReceivePData(ctx)
+	if err != nil {
+		s.log().Error("failed to receive C-STORE data: %v", err)
+		return
+	}
+	if isCmd {
+		s.log().Warn("expected data, got command during C-STORE")
+		return
+	}
+	ds, err := DecodeDataset(dataBytes, assoc.TransferSyntaxFor(ctxID))
+	if err != nil {
+		s.refuse(ctx, assoc, ctxID, "C-STORE", err,
+			BuildCStoreRSP(messageID, sopClassUID, sopInstanceUID, StatusUnableToProcess))
+		return
 	}
 
 	req.DataSet = ds

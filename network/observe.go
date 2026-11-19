@@ -99,9 +99,36 @@ func (o *observer) event(eventType EventType) *Event {
 	}
 }
 
+// wantsBytes reports whether a received PDU of this type should be kept as
+// it is read, for an event that hands its bytes to a handler.
+//
+// A P-DATA-TF is reported with its bytes on EVTPDURecv and on nothing else:
+// the DIMSE events are read from its PDVs, not from the raw bytes, and
+// EVTDataRecv is not emitted. It carries the data sets, so it is copied only
+// while a handler of EVTPDURecv is registered. Every other PDU is copied as
+// before: each is reported with its bytes on an association event as well
+// (EVTAssocRequested, EVTAssocAccepted and the rest), and each is bounded
+// and small, an A-ASSOCIATE-RQ at most MaxAssociatePDULength.
+//
+// The answer is taken when the PDU begins to arrive. A handler of
+// EVTPDURecv registered while a P-DATA-TF is being read is given that PDU
+// without its bytes, and the next one with them.
+func (o *observer) wantsBytes(pduType byte) bool {
+	if pduType != PDUTypeDataTF {
+		return true
+	}
+	return o.events.HasHandlers(EVTPDURecv)
+}
+
 // pdu reports a PDU that was sent or received, and whatever it means for
 // the association and for the DIMSE message it is part of.
 func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
+	o.pduWhy(sent, pdu, raw, nil)
+}
+
+// pduWhy is pdu, with why this side aborted when the PDU is an A-ABORT it
+// sent.
+func (o *observer) pduWhy(sent bool, pdu PDU, raw []byte, local *LocalAbort) {
 	eventType, direction := EVTPDURecv, 1
 	if sent {
 		eventType, direction = EVTPDUSent, 0
@@ -150,11 +177,18 @@ func (o *observer) pdu(sent bool, pdu PDU, raw []byte) {
 		o.emit(with(EVTAssocReleased))
 
 	case *AbortPDU:
-		o.emit(with(eventType))
-		o.emit(with(EVTAssocAborted))
+		for _, t := range []EventType{eventType, EVTAssocAborted} {
+			e := with(t)
+			e.LocalAbort = local
+			o.emit(e)
+		}
 
 	case *PDataTF:
-		o.emit(with(eventType))
+		// Not built for nobody: there is one of these for every few
+		// kilobytes of every instance.
+		if o.events.HasHandlers(eventType) {
+			o.emit(with(eventType))
+		}
 		for _, pdv := range p.PDVItems {
 			if !pdv.IsCommand {
 				continue

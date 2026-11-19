@@ -174,6 +174,31 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 		fmt.Sprintf(format, args...), slog.String("component", "network"))
 }
 
+// writesLike reports whether a message l logs at level is written, and to the
+// same place as other's messages: other is l, or both write through
+// config.Logger. Both filters are asked, this Logger's level and the slog
+// handler's.
+func (l *Logger) writesLike(other *Logger, level LogLevel) bool {
+	l.mu.RLock()
+	target, enabled := l.own, l.level >= level
+	l.mu.RUnlock()
+	if !enabled {
+		return false
+	}
+	if other != l {
+		other.mu.RLock()
+		otherOwn := other.own
+		other.mu.RUnlock()
+		if target != nil || otherOwn != nil {
+			return false
+		}
+	}
+	if target == nil {
+		target = config.Logger
+	}
+	return target != nil && target.Enabled(context.Background(), level.slogLevel())
+}
+
 // Error logs an error message.
 func (l *Logger) Error(format string, args ...interface{}) {
 	l.log(LogLevelError, format, args...)
@@ -214,6 +239,10 @@ func DebugLogger() {
 
 // LoggingEventHandlers returns event handlers that log association lifecycle events.
 // Attach these to an SCP's EventManager for operational visibility.
+//
+// A refusal an SCP sends is logged by the SCP itself, at the info level; the
+// EVTAssocRejected handler leaves it out when that line went to the same log,
+// so each refusal is there once.
 func LoggingEventHandlers(logger *Logger) map[EventType]EventHandler {
 	return map[EventType]EventHandler{
 		EVTConnOpen: func(e *Event) {
@@ -228,7 +257,20 @@ func LoggingEventHandlers(logger *Logger) map[EventType]EventHandler {
 		EVTAssocAccepted: func(e *Event) {
 			logger.Info("Association accepted: %s -> %s", e.CallingAE, e.CalledAE)
 		},
+		// An SCP logs each refusal it sends where it decides it, at the info
+		// level, with the caller's address and the cause, whether or not
+		// anyone handles its events. A server with these handlers on the same
+		// log then had every refusal in it twice. The SCP cannot be the one
+		// to give way: it cannot tell whether a logger is listening, since a
+		// Server always has an EventManager, and an earlier attempt that
+		// logged only without one silenced the line for everyone. So this
+		// line gives way, and only where the SCP's line reached the same log:
+		// at the default warning level the SCP's line is not written, and
+		// this one is the only report of the refusal.
 		EVTAssocRejected: func(e *Event) {
+			if e.Role == "SCP" && DefaultLogger.writesLike(logger, LogLevelInfo) {
+				return
+			}
 			logger.Warn("Association rejected: %s -> %s: %s", e.CallingAE, e.CalledAE, e.Description)
 		},
 		EVTAssocReleased: func(e *Event) {
