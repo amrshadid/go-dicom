@@ -158,6 +158,10 @@ can miss, so look at what it found before anything leaves you:
 $ go-dicom anonymize -detect examples_rgb_color.dcm
 248,10,63,43
 8,11,78,42
+140,19,44,10
+0,67,24,10
+295,67,24,10
+0,107,24,10
 123,179,28,10
 158,179,23,10
 198,227,60,10
@@ -166,7 +170,7 @@ $ go-dicom share -preview examples_rgb_color.dcm check.png
 Wrote check.png
 ...
 $ go-dicom anonymize -redact auto examples_rgb_color.dcm us-anon.dcm
-  examples_rgb_color.dcm: 6 region(s) detected and filled
+  examples_rgb_color.dcm: 10 region(s) detected and filled
 De-identified 1 file(s)
 $ go-dicom share -redact 0,0,320,56 examples_rgb_color.dcm us.png
 Wrote us.png
