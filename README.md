@@ -417,6 +417,7 @@ The library is organized into focused packages, each handling a specific DICOM a
 |---------|-------------|
 | [filebase](./filebase/) | Low-level binary I/O with byte order handling |
 | [filereader](./filereader/) | DICOM file reading (preamble, meta info, dataset) |
+| [filereader/attributes](./filereader/attributes/) | The parser alone, for a program that reads attributes and no pixels: the same elements, without linking the codecs |
 | [filewriter](./filewriter/) | DICOM file writing with validation |
 | [fileutil](./fileutil/) | Byte order detection, padding, caching, codec integration |
 | [fileset](./fileset/) | File-set management and DICOMDIR: reads the record tree from its byte offsets, and generates a conformant index |
@@ -701,11 +702,11 @@ which is enough for an archive or a router, and not enough for a viewer.
 | Deflated Explicit VR LE | Read/Write | Yes | Yes |
 | RLE Lossless | Read/Write | **Yes** | Yes |
 | JPEG Baseline (`.50`) | Read/Write | **Yes** | Yes |
-| JPEG Extended (`.51`) | Read/Write | **8-bit** | Yes |
+| JPEG Extended (`.51`) | Read/Write | **Yes** | Yes |
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
-| HTJ2K (`.201`-`.203`) | Read/Write | **Yes** (not encoded) | As it is |
+| HTJ2K (`.201`-`.203`) | Read/Write | **Yes** (not encoded) | As it is, or decoded for a peer that takes only uncompressed |
 | JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
@@ -722,8 +723,9 @@ number of tiles and quality layers.
 JPEG Extended decodes at both 8 and 12 bits, the 12-bit case in pure Go.
 JPEG-LS decodes at 2 to 16 bits, lossless and near-lossless, single or multi component,
 in both line- and sample-interleaved modes. A 6 or 7 bit frame that dcmtk coded
-without an LSE segment is refused, as dcmtk refuses this library's: its CharLS
-uses default thresholds there that T.87 does not (CONFORMANCE §8.2).
+without an LSE segment is refused by name: its CharLS uses default thresholds
+there that T.87 does not. This library's own frames carry their thresholds in
+an LSE segment where the two differ, so dcmtk reads them (CONFORMANCE §8.2).
 
 Values in an Explicit VR Big Endian file are normalised to little endian while
 parsing and converted back on write, so byte order never reaches code above
