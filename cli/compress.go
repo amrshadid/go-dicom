@@ -47,46 +47,44 @@ const (
 	paramRate    = "-ratio or -psnr"
 )
 
-// compressTarget is a syntax this library writes.
+// compressTarget is a syntax this library writes: an entry of the library's
+// one table of coders (dataset.PixelEncoders), with the flag its parameter
+// is given by.
 type compressTarget struct {
 	uid, name string
 	param     string
-	compress  func(ds *dataset.Dataset, p compressParams) error
+	encoder   dataset.PixelEncoder
+}
+
+// paramFlags are the flags of each parameter a coder takes.
+var paramFlags = map[dataset.EncoderParam]string{
+	dataset.EncoderParamNone:         paramNone,
+	dataset.EncoderParamJPEGQuality:  paramQuality,
+	dataset.EncoderParamJPEGLSNear:   paramNear,
+	dataset.EncoderParamJPEG2000Rate: paramRate,
+}
+
+// targetOf is the target of an encoder.
+func targetOf(e dataset.PixelEncoder) compressTarget {
+	return compressTarget{uid: e.UID, name: e.Name, param: paramFlags[e.Param], encoder: e}
+}
+
+// encoderParams are p as the data set's coders take them.
+func (p compressParams) encoderParams() dataset.EncoderParams {
+	return dataset.EncoderParams{JPEGQuality: p.quality, JPEGLSNear: p.near,
+		JPEG2000Rate: compress.JPEG2000Rate{Ratio: p.ratio, PSNR: p.psnr}}
+}
+
+// compress codes ds's pixel data in the target's syntax.
+func (t compressTarget) compress(ds *dataset.Dataset, p compressParams) error {
+	return t.encoder.EncodeInPlace(ds, p.encoderParams())
 }
 
 // lossy reports whether coding with p loses anything. JPEG-LS Near-Lossless
 // with an allowed error of 0 is lossless; every other target with a parameter
 // is lossy at every value of it.
 func (t compressTarget) lossy(p compressParams) bool {
-	if t.param == paramNear {
-		return p.near > 0
-	}
-	return t.param != paramNone
-}
-
-// compressTargets are the syntaxes the data set's coders write, under the
-// names the command takes.
-var compressTargets = []compressTarget{
-	{"1.2.840.10008.1.2.5", "RLE Lossless", paramNone,
-		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressRLELosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.80", "JPEG-LS Lossless", paramNone,
-		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEGLSLosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.81", "JPEG-LS Near-Lossless", paramNear,
-		func(ds *dataset.Dataset, p compressParams) error { return ds.CompressJPEGLSNearLosslessInPlace(p.near) }},
-	{"1.2.840.10008.1.2.4.90", "JPEG 2000 Lossless", paramNone,
-		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEG2000LosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.91", "JPEG 2000", paramRate,
-		func(ds *dataset.Dataset, p compressParams) error {
-			return ds.CompressJPEG2000InPlace(compress.JPEG2000Rate{Ratio: p.ratio, PSNR: p.psnr})
-		}},
-	{"1.2.840.10008.1.2.4.57", "JPEG Lossless", paramNone,
-		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEGLosslessInPlace() }},
-	{"1.2.840.10008.1.2.4.70", "JPEG Lossless, Selection Value 1", paramNone,
-		func(ds *dataset.Dataset, _ compressParams) error { return ds.CompressJPEGLosslessSV1InPlace() }},
-	{"1.2.840.10008.1.2.4.50", "JPEG Baseline", paramQuality,
-		func(ds *dataset.Dataset, p compressParams) error { return ds.CompressJPEGBaselineInPlace(p.quality) }},
-	{"1.2.840.10008.1.2.4.51", "JPEG Extended", paramQuality,
-		func(ds *dataset.Dataset, p compressParams) error { return ds.CompressJPEGExtendedInPlace(p.quality) }},
+	return t.encoder.Loses(p.encoderParams())
 }
 
 // compressNames maps what -syntax accepts to a target's UID.
@@ -120,10 +118,8 @@ func findTarget(given string) (compressTarget, error) {
 	if named, ok := compressNames[key]; ok {
 		uid = named
 	}
-	for _, t := range compressTargets {
-		if t.uid == uid {
-			return t, nil
-		}
+	if e, ok := dataset.PixelEncoderFor(uid); ok {
+		return targetOf(e), nil
 	}
 	if valuerep.ValidateUID(uid) != nil {
 		return compressTarget{}, fmt.Errorf("%q is neither a syntax name nor a transfer syntax UID; the names are %s", given, targetNames())

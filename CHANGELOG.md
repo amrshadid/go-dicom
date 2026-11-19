@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Which transfer syntax each coder writes is one table** (#534). A send,
+  the `compress` command and a frame encoded over DICOMweb each kept their
+  own map from a syntax to a `Dataset.Compress…InPlace` method, with which
+  of them lose detail and what each takes, so a coder added to one was
+  missing from the other two. `dataset.PixelEncoders` and
+  `PixelEncoderFor` are that table, with each syntax's name, whether it is
+  lossy and its parameter (JPEG quality, JPEG-LS NEAR, a JPEG 2000 rate),
+  and all three read it. Nothing they accept, refuse or write changed: for
+  every transfer syntax in the dictionary, each of the three gives the same
+  answer, message and bytes as before.
+
 - **A query can be matched against a data set** (#515). C-FIND matching
   lived only inside `dcmstore`, unexported and written against its index, so
   a program with entries of its own, a worklist for one, had nothing to call:
