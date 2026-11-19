@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
@@ -121,6 +122,90 @@ func (ds *Dataset) RenderEachFrame(opts *RenderOptions, use func(frame int, img 
 	return nil
 }
 
+// FrameReader reads the frames of an image one at a time from wherever its
+// Pixel Data is kept, for rendering an image whose data set does not hold
+// it. filereader.DICOMFile.FrameReader reads them from the file by
+// position.
+type FrameReader interface {
+	// ReadFrame returns frame i, counted from 0, as it is stored: the
+	// samples of a native frame, little endian, or the codestream of a
+	// compressed one, its fragments joined.
+	ReadFrame(i int) ([]byte, error)
+	// ReadFrameBytes reads len(p) bytes of native frame i, counted from
+	// 0, little endian, from byte offset within the frame, into p.
+	ReadFrameBytes(i int, offset int64, p []byte) error
+}
+
+// RenderFramesFrom renders the frames listed, counted from 0, in that
+// order, as RenderFrame renders them, reading their samples from frames
+// instead of the data set's Pixel Data, which the data set need not hold:
+// read the file with filereader.ReadOptions.SkipBulkData and give its
+// filereader.DICOMFile.FrameReader. Memory then follows a frame and not
+// the image (#533). Each picture is handed to use as it is made; an error
+// from use stops it and is returned.
+//
+// A compressed frame is read and decoded whole. A native frame of 8, 16 or
+// 32 bits a sample, with one sample a pixel or its samples pixel after
+// pixel, is read in bands of rows, about a megabyte at a time, and its
+// picture draws a band when a row of it is first asked for, so memory
+// follows a band and not the frame. That picture is neither an
+// *image.Gray nor an *image.NRGBA: it has their color model, reports
+// itself opaque, and is to be read only until use returns. image/png
+// reads its rows in order and encodes it byte for byte as it encodes
+// those. image/jpeg encodes a grayscale picture in one component only when
+// it is an *image.Gray, so copy it into one first to encode it as JPEG. A
+// band that cannot be read while use reads the picture leaves its rows
+// black, and the error is returned when use returns.
+//
+// An image with no window and no VOI LUT, given none and not StoredRange,
+// spans the range of the values across all its frames, as RenderFrame
+// does, so before the first row is drawn every frame is read once to find
+// it, a band or a frame at a time: memory still follows a band, and a
+// compressed image is decoded twice.
+func (ds *Dataset) RenderFramesFrom(frames FrameReader, list []int, opts *RenderOptions,
+	use func(frame int, img image.Image) error) error {
+	r, err := ds.newRendererFrom(frames, opts)
+	if err != nil {
+		return err
+	}
+	for _, f := range list {
+		if f < 0 || f >= r.info.NumberOfFrames {
+			return fmt.Errorf("render: frame %d does not exist; the image has %d, counted from 0",
+				f, r.info.NumberOfFrames)
+		}
+	}
+	for _, f := range list {
+		p, err := r.painterFor(f)
+		if err != nil {
+			return err
+		}
+		if !r.banded {
+			img, err := r.paintFrame(f, p)
+			if err != nil {
+				return err
+			}
+			if err := use(f, img); err != nil {
+				return err
+			}
+			continue
+		}
+		picture := &bandedPicture{r: r, frame: f, paint: p, y0: -1}
+		err = use(f, picture)
+		if picture.err != nil {
+			return picture.err
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderBandBytes is about how many bytes of samples a band of rows read
+// from a FrameReader holds. A variable so that a test can make bands of a
+// few rows out of a small image.
+var renderBandBytes = 1 << 20
+
 // renderer holds what every frame of one image shares.
 type renderer struct {
 	ds    *Dataset
@@ -128,6 +213,22 @@ type renderer struct {
 	px    []byte // samples by pixel, little endian, decompressed
 	width int    // bytes per sample
 	opts  RenderOptions
+
+	// frames, when set, is where the samples are read from, a frame or a
+	// band of rows at a time, and px holds only what was read last: pxFirst
+	// is the index its first sample has in the whole pixel data, and held
+	// says which frame and rows it is. Without frames, px is the whole
+	// pixel data and pxFirst 0.
+	frames       FrameReader
+	pxFirst      int
+	held         [3]int
+	encapsulated bool
+	compression  compress.CompressionType
+	// banded says native frames are read a band of bandRows rows at a time;
+	// otherwise bandRows is a whole frame.
+	banded   bool
+	bandRows int
+	band     []byte // what px is, for a band
 
 	// dataRange is the lowest and highest output value over all frames, for
 	// an image with no window. Found on first use.
@@ -162,7 +263,54 @@ func (ds *Dataset) newRenderer(opts *RenderOptions) (*renderer, error) {
 	if need := (bits + 7) / 8; len(px) < need {
 		return nil, fmt.Errorf("render: the pixel data holds %d bytes and the image needs %d", len(px), need)
 	}
-	r := &renderer{ds: ds, info: info, px: px, width: info.BitsAllocated / 8}
+	return ds.setUpRenderer(&renderer{ds: ds, info: info, px: px, bandRows: info.Rows}, opts)
+}
+
+// newRendererFrom is newRenderer for samples read from frames.
+func (ds *Dataset) newRendererFrom(frames FrameReader, opts *RenderOptions) (*renderer, error) {
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, fmt.Errorf("render: %w", err)
+	}
+	switch info.BitsAllocated {
+	case 1, 8, 16, 32:
+	default:
+		return nil, fmt.Errorf("render: %d bits allocated is not supported", info.BitsAllocated)
+	}
+	// The transfer syntax alone says whether a frame is compressed: there
+	// are no samples in hand to tell by, as there are for a data set that
+	// holds its Pixel Data.
+	syntax := ds.TransferSyntaxUID()
+	if syntax == "" {
+		return nil, fmt.Errorf("render: the data set names no transfer syntax, so whether its frames are compressed is not known")
+	}
+	encapsulated := compress.IsEncapsulated(syntax)
+	compression, err := compress.TransferSyntaxToCompressionType(syntax)
+	if err != nil && encapsulated {
+		return nil, fmt.Errorf("render: %w", ds.undecodedSyntax())
+	}
+	r := &renderer{ds: ds, info: info, frames: frames, held: [3]int{-1, 0, 0},
+		encapsulated: encapsulated, compression: compression, bandRows: info.Rows}
+	// A band is a run of whole rows as the frame stores them, which is so
+	// when every sample of a pixel is beside the others and each pixel has
+	// all of its own: not for color by plane, not for YBR_FULL_422, which
+	// shares chroma between two pixels, and not for 1-bit samples, packed
+	// across the ends of rows.
+	if !encapsulated && info.BitsAllocated >= 8 && info.Rows > 0 && info.Columns > 0 &&
+		(info.SamplesPerPixel == 1 || info.PlanarConfiguration == 0) &&
+		info.PhotometricInterpretation != "YBR_FULL_422" {
+		rowBytes := info.Columns * info.SamplesPerPixel * info.BitsAllocated / 8
+		r.banded = true
+		r.bandRows = min(max(renderBandBytes/rowBytes, 1), info.Rows)
+	}
+	return ds.setUpRenderer(r, opts)
+}
+
+// setUpRenderer reads what every frame shares, whatever the samples are
+// read from.
+func (ds *Dataset) setUpRenderer(r *renderer, opts *RenderOptions) (*renderer, error) {
+	info := r.info
+	r.width = info.BitsAllocated / 8
 	if opts != nil {
 		r.opts = *opts
 	}
@@ -294,23 +442,146 @@ func readLUT(item *Dataset, signedFirst bool, name string) (*lut, error) {
 }
 
 func (r *renderer) frame(f int) (image.Image, error) {
+	p, err := r.painterFor(f)
+	if err != nil {
+		return nil, err
+	}
+	return r.paintFrame(f, p)
+}
+
+// painter draws the pixels of one frame of a picture: pixel(i, out) draws
+// pixel i of the whole pixel data into out, one byte for a grayscale
+// picture and four, red, green, blue and alpha, for a color one.
+type painter struct {
+	gray  bool
+	pixel func(i int, out []byte)
+}
+
+// painterFor reads what drawing frame f needs: its window, tables and
+// range.
+func (r *renderer) painterFor(f int) (painter, error) {
 	switch p := r.info.PhotometricInterpretation; {
 	case r.info.SamplesPerPixel == 1 && p == "PALETTE COLOR":
-		return r.palette(f)
+		return r.palette()
 	case r.info.SamplesPerPixel == 1:
 		return r.gray(f)
 	case r.info.SamplesPerPixel == 3:
-		return r.color(f)
+		return r.color()
 	}
-	return nil, fmt.Errorf("render: %d samples per pixel is not supported", r.info.SamplesPerPixel)
+	return painter{}, fmt.Errorf("render: %d samples per pixel is not supported", r.info.SamplesPerPixel)
+}
+
+// paintFrame draws a whole frame as an *image.Gray or an *image.NRGBA.
+func (r *renderer) paintFrame(f int, p painter) (image.Image, error) {
+	bounds := image.Rect(0, 0, r.info.Columns, r.info.Rows)
+	if p.gray {
+		img := image.NewGray(bounds)
+		return img, r.paintRows(f, p, 0, r.info.Rows, img.Pix)
+	}
+	img := image.NewNRGBA(bounds)
+	return img, r.paintRows(f, p, 0, r.info.Rows, img.Pix)
+}
+
+// paintRows draws rows y0 to y1 of frame f into pix, which holds just
+// those rows, reading the samples a band at a time where they are read
+// from a FrameReader.
+func (r *renderer) paintRows(f int, p painter, y0, y1 int, pix []byte) error {
+	columns, size := r.info.Columns, 4
+	if p.gray {
+		size = 1
+	}
+	base := f * r.info.Rows * columns
+	for y := y0; y < y1; {
+		first := y / r.bandRows * r.bandRows
+		end := min(first+r.bandRows, r.info.Rows)
+		if err := r.load(f, first, end); err != nil {
+			return err
+		}
+		end = min(end, y1)
+		for i := y * columns; i < end*columns; i++ {
+			o := (i - y0*columns) * size
+			p.pixel(base+i, pix[o:o+size])
+		}
+		y = end
+	}
+	return nil
+}
+
+// load puts rows y0 to y1 of frame f in px, when the samples are read from
+// a FrameReader: those rows when frames are read in bands, else the whole
+// frame, decoded when it is compressed. A data set that holds its pixel
+// data has them all in px already.
+func (r *renderer) load(f, y0, y1 int) error {
+	if r.frames == nil {
+		return nil
+	}
+	if !r.banded {
+		y0, y1 = 0, r.info.Rows
+	}
+	if r.held == [3]int{f, y0, y1} {
+		return nil
+	}
+	info := r.info
+	perFrame := info.Rows * info.Columns
+	if r.banded {
+		rowBytes := int64(info.Columns * info.SamplesPerPixel * r.width)
+		// One buffer for every band: a band read into a new one each time
+		// is a megabyte of garbage a band, and the collector lets it pile
+		// up to the size of whatever else is held, the whole picture when
+		// it is encoded as JPEG.
+		need := int(int64(y1-y0) * rowBytes)
+		if cap(r.band) < need {
+			r.band = make([]byte, need)
+		}
+		r.band = r.band[:need]
+		r.held = [3]int{-1, 0, 0}
+		if err := r.frames.ReadFrameBytes(f, int64(y0)*rowBytes, r.band); err != nil {
+			return fmt.Errorf("render: %w", err)
+		}
+		r.px, r.pxFirst = r.band, (f*perFrame+y0*info.Columns)*info.SamplesPerPixel
+		r.held = [3]int{f, y0, y1}
+		return nil
+	}
+	data, err := r.frames.ReadFrame(f)
+	if err != nil {
+		return fmt.Errorf("render: %w", err)
+	}
+	if r.encapsulated {
+		// Decoded as pixelBytesForDecoding decodes each frame, and refused
+		// in its words.
+		decoded, err := decompressPixelFrame(r.compression, data, info)
+		if err == nil {
+			err = checkFrameSize(decoded, info)
+		}
+		if err != nil {
+			return fmt.Errorf("render: failed to decode %s frame %d: %w", r.compression, f, err)
+		}
+		data = decoded
+	} else {
+		// The corrections pixelBytesForDecoding makes to the whole value,
+		// made to this frame.
+		one := *info
+		one.NumberOfFrames = 1
+		data = normalizeNativePixelBytes(data, &one)
+	}
+	// In bits, since a 1-bit image packs eight samples to a byte.
+	if need := (perFrame*info.SamplesPerPixel*info.BitsAllocated + 7) / 8; len(data) < need {
+		return fmt.Errorf("render: frame %d holds %d bytes and needs %d", f, len(data), need)
+	}
+	r.px, r.pxFirst = data, f*perFrame*info.SamplesPerPixel
+	r.held = [3]int{f, y0, y1}
+	return nil
 }
 
 // sample returns stored sample i of the whole pixel data as a number: the
 // Bits Stored bits below High Bit, with their sign when the data is signed.
 func (r *renderer) sample(i int) float64 {
+	// px may hold only part of the pixel data, from sample pxFirst.
+	i -= r.pxFirst
 	if r.info.BitsAllocated == 1 {
 		// Packed from the low bit up, frame after frame with no padding
-		// between them (PS3.5 8.2): sample i is bit i of the whole value.
+		// between them (PS3.5 8.2): sample i is bit i of the whole value. A
+		// frame read alone starts at bit 0 of its first byte.
 		return float64(r.px[i/8] >> (i % 8) & 1)
 	}
 	var raw uint64
@@ -337,14 +608,12 @@ func (r *renderer) sample(i int) float64 {
 	return float64(raw)
 }
 
-func (r *renderer) gray(f int) (image.Image, error) {
+func (r *renderer) gray(f int) (painter, error) {
 	modality := r.modality(f)
-	perFrame := r.info.Rows * r.info.Columns
-	base := f * perFrame
 
 	window, function, voiLUT, err := r.voi(f)
 	if err != nil {
-		return nil, err
+		return painter{}, err
 	}
 	var low, high float64
 	switch {
@@ -352,12 +621,13 @@ func (r *renderer) gray(f int) (image.Image, error) {
 	case r.opts.StoredRange:
 		low, high = r.storedRange(f)
 	default:
-		low, high = r.outputRange()
+		if low, high, err = r.outputRange(); err != nil {
+			return painter{}, err
+		}
 	}
 
-	img := image.NewGray(image.Rect(0, 0, r.info.Columns, r.info.Rows))
-	for i := 0; i < perFrame; i++ {
-		x := modality(r.sample(base + i))
+	return painter{gray: true, pixel: func(i int, out []byte) {
+		x := modality(r.sample(i))
 		var y float64
 		switch {
 		case window != nil:
@@ -377,9 +647,8 @@ func (r *renderer) gray(f int) (image.Image, error) {
 		if r.invert {
 			level = 255 - level
 		}
-		img.Pix[i] = level
-	}
-	return img, nil
+		out[0] = level
+	}}, nil
 }
 
 // modality returns the Modality LUT for a frame as a function from stored
@@ -440,22 +709,30 @@ func (r *renderer) storedRange(f int) (low, high float64) {
 }
 
 // outputRange is the lowest and highest value of the image after its rescale,
-// over all frames, so the frames of one image share one scale.
-func (r *renderer) outputRange() (low, high float64) {
+// over all frames, so the frames of one image share one scale. Samples read
+// from a FrameReader are read for it a band or a frame at a time.
+func (r *renderer) outputRange() (low, high float64, err error) {
 	if r.dataRange != nil {
-		return r.dataRange[0], r.dataRange[1]
+		return r.dataRange[0], r.dataRange[1], nil
 	}
-	perFrame := r.info.Rows * r.info.Columns
+	columns := r.info.Columns
+	perFrame := r.info.Rows * columns
 	low, high = math.Inf(1), math.Inf(-1)
 	for f := 0; f < r.info.NumberOfFrames; f++ {
 		modality := r.modality(f)
-		for i := f * perFrame; i < (f+1)*perFrame; i++ {
-			x := modality(r.sample(i))
-			low, high = math.Min(low, x), math.Max(high, x)
+		for y := 0; y < r.info.Rows; y += r.bandRows {
+			end := min(y+r.bandRows, r.info.Rows)
+			if err := r.load(f, y, end); err != nil {
+				return 0, 0, err
+			}
+			for i := f*perFrame + y*columns; i < f*perFrame+end*columns; i++ {
+				x := modality(r.sample(i))
+				low, high = math.Min(low, x), math.Max(high, x)
+			}
 		}
 	}
 	r.dataRange = &[2]float64{low, high}
-	return low, high
+	return low, high, nil
 }
 
 var (
@@ -636,7 +913,7 @@ func clamp8(v float64) uint8 {
 	return uint8(math.Round(math.Min(255, math.Max(0, v))))
 }
 
-func (r *renderer) color(f int) (image.Image, error) {
+func (r *renderer) color() (painter, error) {
 	var ybr bool
 	switch r.info.PhotometricInterpretation {
 	case "RGB", "YBR_RCT", "YBR_ICT":
@@ -645,14 +922,12 @@ func (r *renderer) color(f int) (image.Image, error) {
 	case "YBR_FULL", "YBR_FULL_422":
 		ybr = true
 	default:
-		return nil, fmt.Errorf("render: photometric interpretation %q is not supported",
+		return painter{}, fmt.Errorf("render: photometric interpretation %q is not supported",
 			r.info.PhotometricInterpretation)
 	}
 
-	perFrame := r.info.Rows * r.info.Columns
-	img := image.NewNRGBA(image.Rect(0, 0, r.info.Columns, r.info.Rows))
-	for i := 0; i < perFrame; i++ {
-		s := (f*perFrame + i) * 3
+	return painter{pixel: func(i int, out []byte) {
+		s := i * 3
 		a, b, c := r.channel(s), r.channel(s+1), r.channel(s+2)
 		if ybr {
 			// PS3.3 C.7.6.3.1.2: full range Y, with Cb and Cr about 128.
@@ -661,10 +936,8 @@ func (r *renderer) color(f int) (image.Image, error) {
 			b = y - 0.344136*cb - 0.714136*cr
 			c = y + 1.772*cb
 		}
-		o := i * 4
-		img.Pix[o], img.Pix[o+1], img.Pix[o+2], img.Pix[o+3] = clamp8(a), clamp8(b), clamp8(c), 255
-	}
-	return img, nil
+		out[0], out[1], out[2], out[3] = clamp8(a), clamp8(b), clamp8(c), 255
+	}}, nil
 }
 
 // paletteTable is one of the three lookup tables of a PALETTE COLOR image.
@@ -673,30 +946,26 @@ type paletteTable struct {
 	entries []uint8
 }
 
-func (r *renderer) palette(f int) (image.Image, error) {
+func (r *renderer) palette() (painter, error) {
 	var tables [3]paletteTable
 	for c := range tables {
 		table, err := r.paletteTable(uint16(c))
 		if err != nil {
-			return nil, err
+			return painter{}, err
 		}
 		tables[c] = table
 	}
 
-	perFrame := r.info.Rows * r.info.Columns
-	img := image.NewNRGBA(image.Rect(0, 0, r.info.Columns, r.info.Rows))
-	for i := 0; i < perFrame; i++ {
-		value := int(r.sample(f*perFrame + i))
-		o := i * 4
+	return painter{pixel: func(i int, out []byte) {
+		value := int(r.sample(i))
 		for c, table := range tables {
 			// A value before the first entry takes the first, and one past
 			// the last takes the last (PS3.3 C.7.6.3.1.5).
 			index := min(max(value-table.first, 0), len(table.entries)-1)
-			img.Pix[o+c] = table.entries[index]
+			out[c] = table.entries[index]
 		}
-		img.Pix[o+3] = 255
-	}
-	return img, nil
+		out[3] = 255
+	}}, nil
 }
 
 // paletteTable reads the red (0), green (1) or blue (2) lookup table as

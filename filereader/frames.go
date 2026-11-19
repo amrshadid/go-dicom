@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/encaps"
 	"github.com/amrshadid/go-dicom/tag"
@@ -143,6 +144,168 @@ func (df *DICOMFile) extendedOffsets(src io.ReaderAt) ([]uint64, error) {
 		offsets[i] = binary.LittleEndian.Uint64(raw[8*i:])
 	}
 	return offsets, nil
+}
+
+// FrameReader reads the frames of a file's Pixel Data one at a time, by
+// position, from the bytes the file was read from, so that one frame costs
+// one frame of memory whatever the size of the rest. It satisfies
+// dataset.FrameReader, which Dataset.RenderFramesFrom renders from, and is
+// what the DICOMweb server reads a frame with.
+//
+// A native frame comes out little endian whatever the file's byte order,
+// as the reader gives the whole value: a big endian file is reversed at the
+// width the reader reverses Pixel Data at (dataelem.PixelDataSwapWidth),
+// counted from the value's first byte, so an 8-bit image in OW is reversed
+// in pairs and a frame of odd length shares its last pair with the next.
+// A compressed frame comes out as its fragments joined.
+type FrameReader struct {
+	ranges [][]encaps.Range
+	src    io.ReaderAt
+	// swap is the width to reverse native samples in, and value the bytes
+	// they are reversed within; swap is 0 when nothing is to be reversed.
+	swap  int
+	value encaps.Range
+	// packed is the length in bits of a frame of a 1-bit image whose frames
+	// start inside a byte, and firstBit the bit each begins at in its first
+	// byte; packed is 0 for every other image.
+	packed   int64
+	firstBit []int
+	// encapsulated is set when the frames are compressed.
+	encapsulated bool
+}
+
+// FrameReader returns a reader of the frames of the file's Pixel Data from
+// src, which is what FrameRanges says of src: the bytes the file was read
+// from, or for a deflated file the inflated data set.
+func (df *DICOMFile) FrameReader(src io.ReaderAt) (*FrameReader, error) {
+	pixels := df.PixelDataElement()
+	if pixels == nil {
+		return nil, fmt.Errorf("the file has no Pixel Data")
+	}
+	info, err := df.GetDataset().GetPixelDataInfo()
+	if err != nil {
+		return nil, err
+	}
+	reader := &FrameReader{src: src, encapsulated: pixels.UndefinedLength}
+	if reader.ranges, err = df.FrameRanges(src); err != nil {
+		return nil, err
+	}
+	if !pixels.UndefinedLength && !df.IsLittleEndian && !df.Deflated {
+		// Float and Double Float Pixel Data are OF and OD, reversed in fours
+		// and eights.
+		reader.swap = dataelem.PixelDataSwapWidth(dataelem.VR(pixels.VR), info.BitsAllocated)
+		reader.value = encaps.Range{Offset: pixels.Position.ValueOffset, Length: int64(pixels.Length)}
+	}
+	if bits := int64(info.Rows) * int64(info.Columns) * int64(info.SamplesPerPixel); info.BitsAllocated == 1 &&
+		!pixels.UndefinedLength && bits%8 != 0 && len(reader.ranges) > 1 {
+		reader.packed = bits
+		reader.firstBit = make([]int, len(reader.ranges))
+		for i := range reader.firstBit {
+			if reader.firstBit[i], err = df.FrameFirstBit(i); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return reader, nil
+}
+
+// Frames is how many frames there are to read.
+func (r *FrameReader) Frames() int {
+	return len(r.ranges)
+}
+
+// ReadFrame returns frame i, counted from 0, as the file holds it, native
+// samples little endian. A frame of a 1-bit image that starts inside a byte
+// is moved to start at the first bit of its first byte, the bits after it
+// cleared: on its own it has no position to start from, and that is how the
+// Pixel Data of a 1-bit image of one frame is laid out (PS3.5 8.1.1, D.1).
+func (r *FrameReader) ReadFrame(i int) ([]byte, error) {
+	if i < 0 || i >= len(r.ranges) {
+		return nil, fmt.Errorf("frame %d does not exist; there are %d, counted from 0", i, len(r.ranges))
+	}
+	var out []byte
+	for _, part := range r.ranges[i] {
+		chunk, err := r.read(part)
+		if err != nil {
+			return nil, fmt.Errorf("reading frame %d: %w", i+1, err)
+		}
+		out = append(out, chunk...)
+	}
+	if r.packed > 0 {
+		out = shiftBits(out, r.firstBit[i], r.packed)
+	}
+	return out, nil
+}
+
+// ReadFrameBytes reads len(p) bytes of native frame i, counted from 0,
+// from byte offset within it, into p, little endian: a band of rows of a
+// frame too large to be read whole, into a buffer used again for the next.
+// A compressed frame, or a 1-bit frame that starts inside a byte, has no
+// bytes to read part of, and is refused.
+func (r *FrameReader) ReadFrameBytes(i int, offset int64, p []byte) error {
+	if i < 0 || i >= len(r.ranges) {
+		return fmt.Errorf("frame %d does not exist; there are %d, counted from 0", i, len(r.ranges))
+	}
+	if r.encapsulated || len(r.ranges[i]) != 1 || r.packed > 0 {
+		return fmt.Errorf("frame %d is not native samples to read part of", i+1)
+	}
+	whole, n := r.ranges[i][0], int64(len(p))
+	if offset < 0 || offset+n > whole.Length {
+		return fmt.Errorf("bytes %d to %d of frame %d, which has %d", offset, offset+n, i+1, whole.Length)
+	}
+	part := encaps.Range{Offset: whole.Offset + offset, Length: n}
+	if r.swap <= 1 {
+		if _, err := r.src.ReadAt(p, part.Offset); err != nil {
+			return fmt.Errorf("reading frame %d: %w", i+1, err)
+		}
+		return nil
+	}
+	chunk, err := r.read(part)
+	if err != nil {
+		return fmt.Errorf("reading frame %d: %w", i+1, err)
+	}
+	copy(p, chunk)
+	return nil
+}
+
+// read reads one range, reversed to little endian where the file is big
+// endian: in whole units counted from the value's start, so the range is
+// widened to them and cut back after.
+func (r *FrameReader) read(part encaps.Range) ([]byte, error) {
+	start, end := part.Offset, part.Offset+part.Length
+	if r.swap > 1 {
+		unit := int64(r.swap)
+		start -= (start - r.value.Offset) % unit
+		end += (unit - (end-r.value.Offset)%unit) % unit
+		end = min(end, r.value.Offset+r.value.Length)
+	}
+	chunk := make([]byte, end-start)
+	if _, err := r.src.ReadAt(chunk, start); err != nil {
+		return nil, err
+	}
+	if r.swap > 1 {
+		dataelem.SwapBytes(chunk, r.swap)
+	}
+	return chunk[part.Offset-start : part.Offset-start+part.Length], nil
+}
+
+// shiftBits returns the bits bits of data that start at bit first of its
+// first byte, counted from the least significant bit, starting at bit 0
+// and followed by zero bits to the end of the last byte.
+func shiftBits(data []byte, first int, bits int64) []byte {
+	out := make([]byte, (bits+7)/8)
+	for i := range out {
+		at := i*8 + first
+		value := int(data[at/8]) >> (at % 8)
+		if at%8 != 0 && at/8+1 < len(data) {
+			value |= int(data[at/8+1]) << (8 - at%8)
+		}
+		out[i] = byte(value)
+	}
+	if rest := bits % 8; rest != 0 {
+		out[len(out)-1] &= byte(1<<rest - 1)
+	}
+	return out
 }
 
 // topLevel returns the element of the data set itself with this tag, not
