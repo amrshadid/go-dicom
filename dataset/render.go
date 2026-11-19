@@ -27,6 +27,13 @@ type RenderOptions struct {
 	// Window replaces the data set's own Window Center and Width. It applies
 	// to grayscale images only.
 	Window *Window
+	// StoredRange shows a grayscale image that has no window and no VOI LUT,
+	// and is given none, over the range its Bits Stored can hold, put
+	// through its Modality LUT or rescale: the identity VOI LUT of PS3.3
+	// C.11.2.1.2.2. Without it such an image spans the range of the values
+	// it holds. The stored range is the same for every frame and every image
+	// of the same kind, and is found without reading a pixel.
+	StoredRange bool
 }
 
 // RenderFrame renders one frame, counted from 0, as an 8-bit image a screen
@@ -340,7 +347,11 @@ func (r *renderer) gray(f int) (image.Image, error) {
 		return nil, err
 	}
 	var low, high float64
-	if window == nil && voiLUT == nil {
+	switch {
+	case window != nil || voiLUT != nil:
+	case r.opts.StoredRange:
+		low, high = r.storedRange(f)
+	default:
 		low, high = r.outputRange()
 	}
 
@@ -404,6 +415,28 @@ func windowed(x, center, width float64, function string) float64 {
 		return 255
 	}
 	return ((x-(center-0.5))/(width-1) + 0.5) * 255
+}
+
+// storedRange is the range of output values the Modality LUT stage can give
+// frame f, which an identity VOI LUT passes on (PS3.3 C.11.2.1.2.2): the
+// values Bits Stored can hold, signed when Pixel Representation says so,
+// through Rescale Slope and Intercept, or the output range of a Modality
+// LUT Sequence, 0 to 2^n-1 (C.11.1.1.1).
+func (r *renderer) storedRange(f int) (low, high float64) {
+	if t := r.modalityLUT; t != nil {
+		return 0, t.top
+	}
+	stored := r.info.BitsStored
+	if stored <= 0 || stored > r.info.BitsAllocated {
+		stored = r.info.BitsAllocated
+	}
+	low, high = 0, math.Ldexp(1, stored)-1
+	if r.info.PixelRepresentation == 1 {
+		low, high = -math.Ldexp(1, stored-1), math.Ldexp(1, stored-1)-1
+	}
+	modality := r.modality(f)
+	low, high = modality(low), modality(high)
+	return math.Min(low, high), math.Max(low, high)
 }
 
 // outputRange is the lowest and highest value of the image after its rescale,

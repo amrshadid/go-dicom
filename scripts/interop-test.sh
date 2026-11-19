@@ -3373,8 +3373,48 @@ for name in sorted(n for n in os.listdir(corpus) if n.endswith(".dcm")):
         color += 1
 if gray < 10 or color < 10:
     sys.exit("only %d grayscale and %d color frames compared" % (gray, color))
-print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels"
-      % (gray, color))
+
+# With no window asked for and none in the image, the VOI LUT is the
+# identity (PS3.3 C.11.2.1.2.2), so every frame is drawn over the range its
+# Bits Stored can hold (#489). pydicom writes a 12-bit image of three frames
+# holding 0-999, 1000-1999 and 0-3999 and no window; pydicom's
+# apply_voi_lut finds no window in it and passes its values through, and
+# they are scaled from 0..4095. Each frame used to span its own range.
+from pydicom.dataset import Dataset, FileMetaDataset
+from pydicom.uid import generate_uid
+ds = Dataset()
+ds.file_meta = FileMetaDataset()
+ds.file_meta.TransferSyntaxUID = "1.2.840.10008.1.2.1"
+ds.SOPClassUID = ds.file_meta.MediaStorageSOPClassUID = "1.2.840.10008.5.1.4.1.1.7.3"
+ds.SOPInstanceUID = ds.file_meta.MediaStorageSOPInstanceUID = generate_uid()
+ds.StudyInstanceUID, ds.SeriesInstanceUID = generate_uid(), generate_uid()
+ds.is_little_endian, ds.is_implicit_VR = True, False
+ds.Rows, ds.Columns, ds.NumberOfFrames, ds.SamplesPerPixel = 4, 100, 3, 1
+ds.PhotometricInterpretation = "MONOCHROME2"
+ds.BitsAllocated, ds.BitsStored, ds.HighBit, ds.PixelRepresentation = 16, 12, 11, 0
+ramp = numpy.linspace(0, 1, 100)
+ds.PixelData = numpy.stack([numpy.tile(f, (4, 1)) for f in (ramp * 999, 1000 + ramp * 999, ramp * 3999)]
+                           ).round().astype(numpy.uint16).tobytes()
+ds["PixelData"].VR = "OW"
+out = io.BytesIO()
+ds.save_as(out, write_like_original=False)
+ds = pydicom.dcmread(io.BytesIO(out.getvalue()))
+request(ours + "/studies", "application/dicom+json",
+        b"--b\r\nContent-Type: application/dicom\r\n\r\n" + out.getvalue() + b"\r\n--b--\r\n",
+        'multipart/related; type="application/dicom"; boundary=b')
+for number in (1, 2, 3):
+    status, _, body = request(ours + "/studies/%s/series/%s/instances/%s/frames/%d/rendered" % (
+        ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.SOPInstanceUID, number), "image/png")
+    if status != 200:
+        sys.exit("the windowless image's frame %d answered %d" % (number, status))
+    mine = numpy.asarray(Image.open(io.BytesIO(body)).convert("L"), dtype=numpy.int16)
+    values = apply_voi_lut(apply_modality_lut(ds.pixel_array[number - 1], ds), ds)
+    want = numpy.round(values / 4095 * 255)
+    if numpy.abs(mine - want).max() > 1:
+        sys.exit("the windowless image's frame %d is not drawn over its stored range: it reaches %d, want %d"
+                 % (number, mine.max(), want.max()))
+print("%d grayscale frames within one level of pydicom's windowing, %d color frames within two of its pixels; "
+      "three frames with no window drawn over their stored range, one gray one value" % (gray, color))
 PY
     ); then
       pass "qrscp -web rendered — $rendered"

@@ -381,10 +381,12 @@ func (s *Server) picture(source *frameSource, n int, want *renderTarget) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	var options *dataset.RenderOptions
-	if want.window != nil {
-		options = &dataset.RenderOptions{Window: want.window}
-	}
+	// With no window asked for and none in the image, the VOI LUT stage is
+	// the identity (PS3.3 C.11.2.1.2.2), and the picture spans the range the
+	// stored bits can hold. The data set holds this frame alone, so the
+	// range of its values would be this frame's, and each frame of an image
+	// would be stretched to its own: the same gray a different value in each.
+	options := &dataset.RenderOptions{Window: want.window, StoredRange: true}
 	img, err := ds.RenderFrame(0, options)
 	if err != nil {
 		return nil, err
@@ -436,8 +438,9 @@ var (
 // image, that frame's functional group alone, so RenderFrame takes its
 // rescale and window from it.
 //
-// Without a window the picture spans the frame's own range of values,
-// where RenderFrame over the whole image would span every frame's.
+// The range of the values it holds is this frame's alone, which is why a
+// picture of it without a window is drawn over the stored range instead
+// (RenderOptions.StoredRange).
 func (f *frameSource) alone(n int) (*dataset.Dataset, error) {
 	data, err := f.read(n - 1)
 	if err != nil {
