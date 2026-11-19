@@ -139,51 +139,81 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 			return nil, err
 		}
 
-		// Sequences hold nested data sets and are parsed recursively, so the
-		// items survive rather than being flattened into an opaque value.
-		if vr == dataelem.SQ {
-			seq, err := readSequence(r, enc, order, length, 0)
-			if err != nil {
-				return nil, err
-			}
-			_ = ds.AddSequence(t, seq)
-			continue
+		if err := readElementValue(ds, r, enc, order, t, vr, length, 0); err != nil {
+			return nil, err
 		}
-
-		// An undefined length on a non-sequence element means encapsulated
-		// pixel data: items, closed by a Sequence Delimitation Item (PS3.5 A.4).
-		// The value is the items alone, as the file reader holds it.
-		//
-		// This used to take the rest of the data set as the value. That kept the
-		// peer's delimiter inside it, so a file written from it closed the
-		// sequence twice and dcmtk refused it, and it swallowed any element
-		// after Pixel Data.
-		if length == undefinedLength {
-			value, err := readEncapsulated(r, order)
-			if err != nil {
-				return nil, err
-			}
-			_ = ds.Add(dataelem.NewDataElement(t, vr, value))
-			continue
-		}
-
-		if uint64(length) > uint64(r.Len()) {
-			return nil, NewPDUErrorf("DECODE_DS",
-				"element %s declares %d bytes but only %d remain", t.String(), length, r.Len())
-		}
-		if length > maxDatasetElementLength {
-			return nil, NewPDUErrorf("DECODE_DS",
-				"element %s length %d exceeds maximum %d", t.String(), length, maxDatasetElementLength)
-		}
-
-		value := make([]byte, length)
-		if _, err := io.ReadFull(r, value); err != nil {
-			return nil, NewPDUErrorf("DECODE_DS", "failed to read value for %s: %v", t.String(), err)
-		}
-		_ = ds.Add(dataelem.NewDataElement(t, vr, value))
 	}
 
 	return ds, nil
+}
+
+// readElementValue reads the value of the element whose header was just read,
+// and adds it to ds. A data set's own elements and those of a sequence item
+// are read here alike: the item reader used to have rules of its own, and an
+// undefined-length element inside an item silently ended the item.
+//
+// depth is the nesting of the sequence a sequence value would open.
+func readElementValue(ds *dataset.Dataset, r *bytes.Reader, enc transferSyntaxEncoding,
+	order binary.ByteOrder, t tag.Tag, vr dataelem.VR, length uint32, depth int) error {
+
+	// Sequences hold nested data sets and are parsed recursively, so the
+	// items survive rather than being flattened into an opaque value.
+	//
+	// An undefined length on anything but pixel data is a sequence too,
+	// whatever the VR says (PS3.5 6.2.2 Note 5, CP-246). In Implicit VR a
+	// private tag has no dictionary VR, and an undefined length is the only
+	// sign that it holds items; pynetdicom and most modalities send a vendor's
+	// private sequence so. It was read as encapsulated pixel data, which fails
+	// at the first item of undefined length, and the C-STORE was refused with
+	// 0110. The file reader asks tag.Tag.IsPixelData the same question.
+	if vr == dataelem.SQ || (length == undefinedLength && !t.IsPixelData()) {
+		// The value of an element sent as UN is Implicit VR Little Endian,
+		// whatever the syntax around it (PS3.5 6.2.2): the sender did not know
+		// the VRs inside either.
+		itemEnc := enc
+		if vr == dataelem.UN && enc.ExplicitVR {
+			itemEnc = transferSyntaxEncoding{}
+		}
+		seq, err := readSequence(r, itemEnc, itemEnc.byteOrder(), length, depth)
+		if err != nil {
+			return err
+		}
+		_ = ds.AddSequence(t, seq)
+		return nil
+	}
+
+	// An undefined length on pixel data means encapsulated pixel data: items,
+	// closed by a Sequence Delimitation Item (PS3.5 A.4). The value is the
+	// items alone, as the file reader holds it.
+	//
+	// This used to take the rest of the data set as the value. That kept the
+	// peer's delimiter inside it, so a file written from it closed the
+	// sequence twice and dcmtk refused it, and it swallowed any element after
+	// Pixel Data.
+	if length == undefinedLength {
+		value, err := readEncapsulated(r, order)
+		if err != nil {
+			return err
+		}
+		_ = ds.Add(dataelem.NewDataElement(t, vr, value))
+		return nil
+	}
+
+	if uint64(length) > uint64(r.Len()) {
+		return NewPDUErrorf("DECODE_DS",
+			"element %s declares %d bytes but only %d remain", t.String(), length, r.Len())
+	}
+	if length > maxDatasetElementLength {
+		return NewPDUErrorf("DECODE_DS",
+			"element %s length %d exceeds maximum %d", t.String(), length, maxDatasetElementLength)
+	}
+
+	value := make([]byte, length)
+	if _, err := io.ReadFull(r, value); err != nil {
+		return NewPDUErrorf("DECODE_DS", "failed to read value for %s: %v", t.String(), err)
+	}
+	_ = ds.Add(dataelem.NewDataElement(t, vr, value))
+	return nil
 }
 
 // readEncapsulated reads encapsulated pixel data up to and including its
@@ -375,6 +405,15 @@ func writeElement(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, vr d
 // the encoding self-describing and is accepted by every conforming peer. Item
 // tags always use the implicit-style header — tag then 4-byte length, no VR —
 // even inside an explicit VR transfer syntax (PS3.5 Section 7.5).
+//
+// The sequence itself has its byte count too, except where
+// tag.Tag.SequenceNeedsUndefinedLength says the peer could not otherwise tell
+// it is a sequence: in Implicit VR, under a tag the dictionary does not call
+// one, a vendor's private sequence above all. It then has undefined length and
+// a Sequence Delimitation Item (PS3.5 6.2.2 Note 5, 7.5.1). With its byte
+// count, dcmtk's storescp and pynetdicom's both stored such a sequence as one
+// opaque value. The file writer follows the same rule, so a data set sent and
+// one written to a file agree.
 func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq *sequence.Sequence,
 	enclosing []*dataset.Dataset) error {
 	order := enc.byteOrder()
@@ -417,10 +456,21 @@ func writeSequence(buf *bytes.Buffer, enc transferSyntaxEncoding, t tag.Tag, seq
 		buf.WriteString("SQ")
 		buf.Write([]byte{0x00, 0x00}) // reserved
 	}
-	if err := binary.Write(buf, order, uint32(itemsBuf.Len())); err != nil {
+	length := uint32(itemsBuf.Len())
+	if t.SequenceNeedsUndefinedLength(enc.ExplicitVR) {
+		length = undefinedLength
+	}
+	if err := binary.Write(buf, order, length); err != nil {
 		return err
 	}
 	buf.Write(itemsBuf.Bytes())
+	if length == undefinedLength {
+		for _, v := range []any{tag.SequenceDelimiterTag.Group(), tag.SequenceDelimiterTag.Element(), uint32(0)} {
+			if err := binary.Write(buf, order, v); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -569,28 +619,9 @@ func readSequenceItem(r *bytes.Reader, enc transferSyntaxEncoding, order binary.
 			return child, nil
 		}
 
-		if vr == dataelem.SQ {
-			nested, err := readSequence(r, enc, order, length, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			_ = child.AddSequence(t, nested)
-			continue
+		if err := readElementValue(child, r, enc, order, t, vr, length, depth+1); err != nil {
+			return nil, err
 		}
-
-		if length == undefinedLength {
-			return child, nil
-		}
-		if uint64(length) > uint64(r.Len()) {
-			return nil, NewPDUErrorf("DECODE_DS",
-				"element %s declares %d bytes but only %d remain", t, length, r.Len())
-		}
-
-		value := make([]byte, length)
-		if _, err := io.ReadFull(r, value); err != nil {
-			return child, nil //nolint:nilerr // a truncated value ends the item
-		}
-		_ = child.Add(dataelem.NewDataElement(t, vr, value))
 	}
 }
 

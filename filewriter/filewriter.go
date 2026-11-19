@@ -638,7 +638,7 @@ func (dfw *DCMFileWriter) writeSequence(elem *DataElement, forceExplicitVR bool)
 
 	explicitVR := dfw.explicitVR || forceExplicitVR
 	length := uint32(len(itemBytes))
-	if !explicitVR && !elem.Tag.IsDictionarySequence() {
+	if elem.Tag.SequenceNeedsUndefinedLength(explicitVR) {
 		length = undefinedLength
 	}
 

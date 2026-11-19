@@ -271,22 +271,24 @@ func TestEncodeJPEGLSRejectsBadInput(t *testing.T) {
 // with this package, so its decoding the output is evidence the stream is JPEG-LS
 // rather than evidence that two functions here agree with each other.
 
-// The check that counts: CharLS reads what this package wrote.
+// The check that counts: libjpeg reads what this package wrote.
 //
-// pylibjpeg wraps CharLS, the reference JPEG-LS implementation, and shares no code
-// with go-dicom. A round trip through this package's own decoder proves the two
-// agree; this proves the bytes are JPEG-LS.
+// pylibjpeg decodes JPEG-LS through pylibjpeg-libjpeg, Thomas Richter's libjpeg,
+// which shares no code with go-dicom or with CharLS. pylibjpeg does not wrap
+// CharLS; CharLS is checked through the frames it coded in
+// jpegls_lowprecision_test.go. A round trip through this
+// package's own decoder proves the two agree; this proves the bytes are JPEG-LS.
 //
 // Skipped when pylibjpeg is not installed, so the suite still runs on a machine
 // without it — but the skip says what is not being checked rather than passing
 // quietly.
-func TestJPEGLSOutputIsReadableByCharLS(t *testing.T) {
+func TestJPEGLSOutputIsReadableByLibjpeg(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
-		t.Skip("python3 is not on PATH, so CharLS cannot be asked to read the output")
+		t.Skip("python3 is not on PATH, so libjpeg cannot be asked to read the output")
 	}
 	if err := exec.Command(python, "-c", "import pylibjpeg, numpy").Run(); err != nil {
-		t.Skip("pylibjpeg is not installed; install it to verify the encoder against CharLS")
+		t.Skip("pylibjpeg is not installed; install it to verify the encoder against libjpeg")
 	}
 
 	// A pattern with a diagonal, so a decoder that transposed or shifted the image
@@ -330,20 +332,20 @@ expected = np.frombuffer(open(sys.argv[2], "rb").read(), dtype=np.uint8)
 
 decoded = np.asarray(decode(frame)).ravel().astype(np.uint8)
 if decoded.size != expected.size:
-    print(f"CharLS decoded {decoded.size} samples, want {expected.size}", file=sys.stderr)
+    print(f"libjpeg decoded {decoded.size} samples, want {expected.size}", file=sys.stderr)
     raise SystemExit(1)
 if not (decoded == expected).all():
     first = int(np.nonzero(decoded != expected)[0][0])
-    print(f"CharLS and go-dicom disagree first at sample {first}: "
+    print(f"libjpeg and go-dicom disagree first at sample {first}: "
           f"{decoded[first]} vs {expected[first]}", file=sys.stderr)
     raise SystemExit(1)
-print(f"CharLS decoded {decoded.size} samples identically")
+print(f"libjpeg decoded {decoded.size} samples identically")
 `
 
 	cmd := exec.Command(python, "-c", script, framePath, expectedPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("CharLS could not read the frame this package produced: %v\n%s", err, out)
+		t.Fatalf("libjpeg could not read the frame this package produced: %v\n%s", err, out)
 	}
 	t.Logf("%s", out)
 }

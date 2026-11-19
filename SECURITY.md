@@ -79,7 +79,8 @@ advisory:
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
 | `filereader.MaxSequenceDepth` | 64 | Unbounded recursion from deeply nested sequences |
 | `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
-| Element length verification | Every element | An element declaring more bytes than the stream holds |
+| Element length verification | Every element | An element declaring more bytes than the stream holds; from a stream of unknown size, each value is allocated as its bytes arrive |
+| `filereader.ReadOptions.MaxValueLength` | None unless set | A value longer than the caller will hold, refused by tag and length before it is allocated |
 
 The two inflate bounds work together, and the second exists because the first is
 not enough on its own. An absolute ceiling lets an attacker choose the cost of
