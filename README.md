@@ -308,6 +308,7 @@ go build -o go-dicom .
 ./go-dicom decompress ct-jls.dcm ct.dcm                  # Native pixel data again
 ./go-dicom convert scan.dcm scan.json --format dicom-json   # DICOM JSON (PS3.18 Annex F), sequences and binary values included
 ./go-dicom create scan.json copy.dcm                         # ...and back; also from a PNG or JPEG, or a PDF
+./go-dicom create study.json instances/                         # DICOM JSON array (a WADO-RS metadata response): one file each, by SOP Instance UID
 ./go-dicom create -template ct.dcm report.pdf report.dcm     # An Encapsulated PDF in the CT's study
 ./go-dicom anonymize study/ clean/    # De-identify a file or a directory (PS3.15 Annex E)
 ./go-dicom share -redact 0,0,640,40 us.dcm us.png   # A picture with no attributes, burned-in text blacked out

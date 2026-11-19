@@ -39,6 +39,7 @@ go-dicom compress -syntax rle ct.dcm ct-rle.dcm   # Also jpeg-ls, jpeg2000; jpeg
 go-dicom decompress ct-rle.dcm ct.dcm        # Native pixel data
 go-dicom convert patient.dcm dicom.json --format dicom-json   # DICOM JSON, which create reads back
 go-dicom create dicom.json patient-copy.dcm  # A file from DICOM JSON
+go-dicom create study.json instances/        # An array of objects: one file each, named by SOP Instance UID
 go-dicom create -template ct.dcm screen.png sc.dcm   # A Secondary Capture in the CT's study
 go-dicom create -patient-id 123 report.pdf report.dcm  # An Encapsulated PDF
 go-dicom anonymize study/ clean-study/       # De-identify a file or a directory
