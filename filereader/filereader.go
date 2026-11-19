@@ -99,7 +99,54 @@ type ReadOptions struct {
 	// when SkipBulkData is set. Zero reads none of them. Pixel Data is
 	// skipped whatever its length.
 	BulkDataThreshold uint32
+
+	// MaxValueLength is the longest value the read holds in memory. A
+	// longer one ends the read with a *ValueTooLongError naming it, before
+	// any of it is allocated, whether or not the size of the source is
+	// known. Zero is no maximum, as before it existed.
+	//
+	// It bounds a value as it is held: an element's value, a File Meta
+	// element's, and encapsulated Pixel Data as a whole, its items and
+	// their headers counted. A sequence is not a value and is not bounded
+	// by it; its items are read element by element. A value SkipBulkData
+	// leaves in the file is not held, so it is not refused either: read
+	// with both, Pixel Data of any length is passed over while a value read
+	// into memory, text or a binary value under BulkDataThreshold, is held
+	// to the maximum.
+	MaxValueLength uint32
 }
+
+// ErrValueTooLong is what a read refused by ReadOptions.MaxValueLength
+// matches with errors.Is.
+var ErrValueTooLong = errors.New("value is longer than the read allows")
+
+// ValueTooLongError is a value refused because it states more bytes than
+// ReadOptions.MaxValueLength. It says which element and where; nothing of
+// the value itself is in it, since none of it was read.
+type ValueTooLongError struct {
+	// Tag is the element whose value it is.
+	Tag tag.Tag
+	// Length is the length the file states, or for encapsulated Pixel Data
+	// the length it would have reached with the next item.
+	Length uint64
+	// Max is the maximum the read was given.
+	Max uint32
+	// Offset is where the element's tag begins.
+	Offset int64
+}
+
+// Error names the element by its dictionary name and tag.
+func (e *ValueTooLongError) Error() string {
+	name := e.Tag.GetName()
+	if name == "" {
+		name = "the element"
+	}
+	return fmt.Sprintf("%s %s at offset %d states a value of %d bytes, more than the maximum of %d this read holds",
+		name, e.Tag.String(), e.Offset, e.Length, e.Max)
+}
+
+// Is makes the error match ErrValueTooLong.
+func (e *ValueTooLongError) Is(target error) bool { return target == ErrValueTooLong }
 
 // NewDCMFileReader creates a new DICOM file reader.
 func NewDCMFileReader(reader filebase.Reader) *DCMFileReader {
@@ -305,8 +352,24 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 			dfr.position += 4
 		}
 
-		value := make([]byte, valueLength)
-		if err := dfr.reader.ReadBytes(value); err != nil {
+		if err := dfr.checkMaxValueLength(tagValue, uint64(valueLength), elementStart); err != nil {
+			return nil, err
+		}
+		// The meta group's lengths were allocated with no check at all, so a
+		// 200-byte file stating a 1 GiB element here cost 1 GiB even from a
+		// file whose size was known (#458). checkValueLength holds it to the
+		// bytes there are, and readValue to the bytes that arrive.
+		// Refused, the value is passed over to the end of the file, as reading
+		// it did: what follows the header is inside the value and is not a
+		// data set to be read.
+		var value []byte
+		err = dfr.checkValueLength(valueLength)
+		if err == nil {
+			value, err = dfr.readValue(valueLength)
+		} else if _, seekErr := dfr.reader.Seek(0, io.SeekEnd); seekErr != nil {
+			return nil, fmt.Errorf("failed to pass over a truncated file meta element: %w", seekErr)
+		}
+		if err != nil {
 			// Handle read error gracefully - file meta info might be incomplete/corrupted.
 			// Log a warning but continue with what we have so far; the rest of the
 			// file may still be readable.
@@ -317,8 +380,7 @@ func (dfr *DCMFileReader) ReadFileMetaInfo() (*FileMetaInfo, error) {
 					tagValue.String(), valueLength, err))
 			return metaInfo, nil
 		}
-		valueStart := dfr.position
-		dfr.position += int64(valueLength)
+		valueStart := dfr.position - int64(valueLength)
 
 		lengthSize := 4
 		if isShortVR(vr) {
@@ -659,7 +721,7 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 	// data: a run of items terminated by a Sequence Delimitation Item.
 	if element.UndefinedLength {
 		element.ValueSkipped = dfr.options.SkipBulkData
-		value, fragments, delimiter, err := dfr.readEncapsulatedValue()
+		value, fragments, delimiter, err := dfr.readEncapsulatedValue(element.Tag, start)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read encapsulated value for %s: %w",
 				element.Tag.String(), err)
@@ -671,12 +733,22 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 	}
 
 	if element.Length > 0 {
+		bulk := dfr.isBulk(element)
+		// The caller's maximum comes before the check against the stream: a
+		// value too long to hold is refused as that, not dropped as a
+		// truncation, whatever is left of the file. A value left in the file
+		// is not held, so it is not refused.
+		if !bulk {
+			if err := dfr.checkMaxValueLength(element.Tag, uint64(element.Length), start); err != nil {
+				return nil, err
+			}
+		}
 		// Guard the allocation against a corrupt or hostile length field before
 		// committing memory to it.
 		if err := dfr.checkValueLength(element.Length); err != nil {
 			return nil, fmt.Errorf("invalid length for tag %s: %w", element.Tag.String(), err)
 		}
-		if dfr.isBulk(element) {
+		if bulk {
 			if err := dfr.skip(element.Length); err != nil {
 				return nil, fmt.Errorf("failed to pass over the value of tag %s (claimed %d bytes): %w",
 					element.Tag.String(), element.Length, err)
@@ -684,13 +756,12 @@ func (dfr *DCMFileReader) readDataElement(explicitVR bool, depth int) (element *
 			element.ValueSkipped = true
 			return element, nil
 		}
-		value := make([]byte, element.Length)
-		if err := dfr.reader.ReadBytes(value); err != nil {
+		value, err := dfr.readValue(element.Length)
+		if err != nil {
 			return nil, fmt.Errorf("failed to read data element value for tag %s (claimed %d bytes): %w",
 				element.Tag.String(), element.Length, err)
 		}
 		element.Value = value
-		dfr.position += int64(element.Length)
 	}
 
 	return element, nil
@@ -787,6 +858,60 @@ func (dfr *DCMFileReader) checkValueLength(length uint32) error {
 			errTruncatedValue, length, remaining)
 	}
 	return nil
+}
+
+// checkMaxValueLength refuses a value longer than ReadOptions.MaxValueLength,
+// before anything is allocated for it. offset is where the element's tag
+// begins.
+func (dfr *DCMFileReader) checkMaxValueLength(t tag.Tag, length uint64, offset int64) error {
+	limit := dfr.options.MaxValueLength
+	if limit == 0 || length <= uint64(limit) {
+		return nil
+	}
+	return &ValueTooLongError{Tag: t, Length: length, Max: limit, Offset: offset}
+}
+
+// valuePieceSize is the first piece a value of unknown bound is read into;
+// see readValue.
+const valuePieceSize = 64 << 10
+
+// readValue reads a value of n bytes and advances the position past it.
+//
+// When the size of the source is known, checkValueLength has already held n
+// to the bytes that are there, and the value is one allocation. When it is
+// not, as for a socket or an upload body, n is the file's word alone: it was
+// allocated whole, so a stream stating 1 GiB and sending 16 bytes cost 1 GiB
+// (#458). It is read in pieces instead, the first of 64 KiB and each after
+// doubling what has arrived, so what is held is never more than twice what
+// the source has sent, plus the first piece. network's readPDUBody does the
+// same for a PDU.
+func (dfr *DCMFileReader) readValue(n uint32) ([]byte, error) {
+	if _, err := dfr.streamSizeOnce(); err == nil || n <= valuePieceSize {
+		value := make([]byte, n)
+		if err := dfr.reader.ReadBytes(value); err != nil {
+			return nil, err
+		}
+		dfr.position += int64(n)
+		return value, nil
+	}
+	// The position moves only once the whole value is in, as it does for one
+	// read: a value cut short leaves it at the value's start, which is where
+	// the warning about the truncation says the file ends.
+	size := int(n)
+	value := make([]byte, valuePieceSize)
+	if err := dfr.reader.ReadBytes(value); err != nil {
+		return nil, err
+	}
+	for len(value) < size {
+		grown := make([]byte, min(size, 2*len(value)))
+		copy(grown, value)
+		if err := dfr.reader.ReadBytes(grown[len(value):]); err != nil {
+			return nil, fmt.Errorf("after %d bytes: %w", len(value), err)
+		}
+		value = grown
+	}
+	dfr.position += int64(n)
+	return value, nil
 }
 
 // warn records a non-fatal problem found while reading the data set.
@@ -998,7 +1123,7 @@ func (dfr *DCMFileReader) readSequenceItem(explicitVR bool, depth int, declaredL
 // Keeping the encapsulation also matches what pydicom exposes as PixelData for
 // a compressed instance, so a value read here means the same thing as the value
 // a user would see there.
-func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, []FragmentPosition, int64, error) {
+func (dfr *DCMFileReader) readEncapsulatedValue(t tag.Tag, start int64) ([]byte, []FragmentPosition, int64, error) {
 	var raw bytes.Buffer
 	var fragments []FragmentPosition
 
@@ -1023,6 +1148,14 @@ func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, []FragmentPosition, i
 			return nil, nil, 0, fmt.Errorf("encapsulated data item has undefined length")
 		}
 
+		// The value held is the whole encapsulation, each item's header
+		// included, so that is what the maximum bounds; skipped, nothing of
+		// it is held.
+		if !dfr.options.SkipBulkData {
+			if err := dfr.checkMaxValueLength(t, uint64(raw.Len())+8+uint64(marker.length), start); err != nil {
+				return nil, nil, 0, err
+			}
+		}
 		if marker.length > 0 {
 			if err := dfr.checkValueLength(marker.length); err != nil {
 				return nil, nil, 0, err
@@ -1045,12 +1178,11 @@ func (dfr *DCMFileReader) readEncapsulatedValue() ([]byte, []FragmentPosition, i
 		writeItemHeader(&raw, dfr.reader.GetByteOrder(), marker)
 
 		if marker.length > 0 {
-			fragment := make([]byte, marker.length)
-			if err := dfr.reader.ReadBytes(fragment); err != nil {
+			fragment, err := dfr.readValue(marker.length)
+			if err != nil {
 				return nil, nil, 0, fmt.Errorf("failed to read encapsulated fragment (%d bytes): %w",
 					marker.length, err)
 			}
-			dfr.position += int64(marker.length)
 			raw.Write(fragment)
 		}
 		fragments = append(fragments, FragmentPosition{
@@ -1693,6 +1825,11 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 		if err != nil {
 			if err == io.EOF {
 				break
+			}
+			// The caller's maximum ends the read. It is not a truncation, and
+			// the tests on the text below must never take it for one.
+			if errors.Is(err, ErrValueTooLong) {
+				return nil, err
 			}
 			errMsg := err.Error()
 			if strings.Contains(errMsg, "reached end of file") {

@@ -1075,6 +1075,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one level of both except `examples_ybr_color.dcm`, at two, from the
   inverse DCT.
 
+- **A value read from a stream costs what arrived, not what its header
+  states, and a read can set a maximum** (#458). A declared length was held
+  to the bytes left only when the source could seek; from a socket or an
+  upload body the value was allocated whole first, so a 200-byte stream
+  whose first element stated 1 GiB cost 1 GiB. A File Meta element was never
+  checked at all, from any source. Such a value is now read in pieces as its
+  bytes arrive, never holding more than twice what came, and a meta element
+  is held to the size of a file like any other. `ReadOptions.MaxValueLength`
+  refuses a longer value before allocating it, with a `*ValueTooLongError`
+  (`errors.Is(err, filereader.ErrValueTooLong)`) naming the attribute, its
+  tag, offset and stated length; zero, the default, is no maximum. With
+  `SkipBulkData`, Pixel Data is passed over and everything read is held to
+  the maximum.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does
