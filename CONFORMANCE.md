@@ -575,6 +575,31 @@ how decoded samples are shaped and coloured, and the one tolerance.
   once, and B.12.2's rule that it is carried once is checked on the walk
   itself (`TestProgressionVolumesCarryEachPacketOnce`).
 
+  OpenJPEG 2.5.4 and this decoder part on a progression order change in a
+  tile-part header whose volumes leave some of the tile's packets out, as
+  `opj_compress -POC T2=0,0,2,2,1,RPCL -t 48,40 -n 4 -r 10,1` writes: the
+  second tile's POC holds resolutions 0 and 1 of four, and only those packets
+  are written. OpenJPEG decodes such a codestream wrongly, in that tile and
+  in the first, which has no POC at all. On CT_small's pixels its first tile
+  is 239.65 RMSE from the source (at most 1306) where this decoder's is
+  exact, and the tile with the POC 1156 where this decoder's is 49.7, the
+  image of the two resolutions written. This decoder is taken to be right on
+  two grounds, and not on the standard's text, which was not read: the
+  clauses it follows (a POC in a tile-part header applies to that tile alone,
+  A.6.6; a tile's packets are its volumes in order, none carried twice,
+  B.12.2) are as this package's comments cite them. First, the first tile
+  has no POC, so it must decode as the same image coded without one, which
+  is lossless, and this decoder's does, sample for sample. Second, Apple's
+  ImageIO, whose JPEG 2000 decoder is Kakadu's (its symbols are in the
+  system's library cache and OpenJPEG's are not), decodes the whole
+  codestream to this decoder's samples within its 8-bit output, half a
+  level, the tile with the POC included, and is as far from OpenJPEG's as
+  this decoder is. So a disagreement with OpenJPEG on such a file is not a
+  fault here. Volumes that cover every packet of their tile decode alike in
+  both (the matrix's `POC per tile`), and
+  `TestTilePOCThatLeavesPacketsOut` pins this decoder's reading on a 64x48
+  crop.
+
   A reversible codestream is required to match pydicom sample for sample. An
   irreversible one is held to a tolerance of one up to 12 bits and two at 16:
   the 9/7 filter is defined in real arithmetic, so two conformant decoders can
