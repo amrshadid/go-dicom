@@ -606,7 +606,8 @@ func (a *Association) abortWhy(ctx context.Context, source, reason byte, local *
 	a.mu.Lock()
 	a.state = StateIdle
 	a.mu.Unlock()
-	return a.transport.Close()
+	// The connection is the peer's to close now, for a moment.
+	return a.transport.closeAfterPeer(ctx)
 }
 
 // SendPData sends data as P-DATA-TF PDUs, fragmenting if necessary.

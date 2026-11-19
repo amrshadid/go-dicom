@@ -256,6 +256,7 @@ func (s *SCP) Close() error {
 func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 
 	// Only an A-ASSOCIATE-RQ can be answered with an A-ASSOCIATE-RJ; anything
 	// else gets the connection closed.
@@ -295,6 +296,7 @@ func (s *SCP) rejectAndAwaitClose(ctx context.Context, assoc *Association, trans
 		return
 	}
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 	_, _ = transport.ReadPDU(ctx)
 }
 
@@ -317,6 +319,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	// ARTIM runs from the accepted connection to the A-ASSOCIATE-RQ, and
 	// closes the connection when it expires (PS3.8 9.1.5, AE-5 and AA-2).
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
+	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 	// The only PDU due is an A-ASSOCIATE-RQ, which has its own bound. A
 	// P-DATA-TF sent in its place is not read past the Maximum Length this
 	// SCP will advertise: without a limit set yet it was read up to
