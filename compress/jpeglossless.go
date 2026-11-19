@@ -286,11 +286,18 @@ func (b *bitReader) readBit() int32 {
 	return bit
 }
 
+// readBits reads count bits, at most 16, as one number. fill leaves more than
+// 24 bits buffered, so one refill is always enough.
 func (b *bitReader) readBits(count int) int32 {
-	var v int32
-	for i := 0; i < count; i++ {
-		v = v<<1 | b.readBit()
+	if count <= 0 {
+		return 0
 	}
+	if b.n < uint(count) {
+		b.fill()
+	}
+	v := int32(b.bits >> (32 - uint(count)))
+	b.bits <<= uint(count)
+	b.n -= uint(count)
 	return v
 }
 

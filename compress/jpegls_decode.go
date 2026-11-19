@@ -360,6 +360,9 @@ type jpeglsDecoder struct {
 
 	contexts [contextCount]jpeglsContext
 
+	// buckets is quantize as a table, for the parameters of this scan.
+	buckets gradientBuckets
+
 	// runIndex is the position in the run-length order table, carried between
 	// runs so a flat image keeps coding longer runs per symbol.
 	//
@@ -411,6 +414,7 @@ func decodeJPEGLSScan(img *jpeglsImage, scan *jpeglsScan, params *jpeglsParams,
 		reader:          &jpeglsBitReader{data: entropy},
 		entropy:         entropy,
 		restartInterval: restartInterval,
+		buckets:         params.buckets(),
 	}
 	d.resetContexts()
 
@@ -805,7 +809,7 @@ func (d *jpeglsDecoder) isFlat(d1, d2, d3 int32) bool {
 
 // decodeRegular decodes one sample in regular mode, T.87 A.4 through A.6.
 func (d *jpeglsDecoder) decodeRegular(ra, rb, rc, d1, d2, d3 int32) (int32, error) {
-	q1, q2, q3 := d.params.quantize(d1), d.params.quantize(d2), d.params.quantize(d3)
+	q1, q2, q3 := d.buckets.of(d.params, d1), d.buckets.of(d.params, d2), d.buckets.of(d.params, d3)
 
 	// The 365 contexts are the 729 sign-bearing combinations folded in half:
 	// a context and its negation share statistics, with sign applied to the
