@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -63,6 +64,14 @@ func (ds *Dataset) TransferSyntaxUID() string {
 // Elements are validated against the DICOM dictionary for semantic checks.
 // Validation is non-fatal; warnings are printed but the element is added.
 func (ds *Dataset) Add(elem *dataelem.DataElement) error {
+	return ds.AddWithContext(context.Background(), elem)
+}
+
+// AddWithContext is Add, logging its validation warnings to the logger ctx
+// carries (config.WithLogger) instead of config.Logger. A file read with a
+// logger of its own builds its data set this way, so that nothing the read
+// does reaches the global logger.
+func (ds *Dataset) AddWithContext(ctx context.Context, elem *dataelem.DataElement) error {
 	if elem == nil {
 		return fmt.Errorf("element is nil")
 	}
@@ -84,7 +93,7 @@ func (ds *Dataset) Add(elem *dataelem.DataElement) error {
 	// Perform semantic validation against DICOM dictionary.
 	// Non-fatal; logs a warning through the configurable logger and continues.
 	if err := validateElementSemantics(t, elem); err != nil {
-		config.Logger.Warn("dataset: semantic validation",
+		config.LoggerFromContext(ctx).Warn("dataset: semantic validation",
 			"tag", t.String(), "err", err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -36,7 +37,9 @@ import (
 // [SCU.Abort] must not wait behind a [SCU.Find] whose results have not been
 // drained.
 type SCU struct {
-	config      SCUConfig
+	config SCUConfig
+	// ownLog is SCUConfig.Logger as a Logger, nil for DefaultLogger.
+	ownLog      *Logger
 	association *Association
 	messageID   atomic.Uint32
 	mu          sync.Mutex
@@ -127,7 +130,7 @@ func (s *SCU) beginExclusiveOperation(ctx context.Context) (func(), error) {
 // NewSCU creates a new SCU with the given configuration.
 func NewSCU(config SCUConfig) *SCU {
 	config.applyDefaults()
-	return &SCU{config: config}
+	return &SCU{config: config, ownLog: loggerFor(config.Logger)}
 }
 
 // nextMessageID returns the next message ID.
@@ -176,8 +179,9 @@ func (s *SCU) Associate(ctx context.Context, contexts []PresentationContextItem)
 	// long as it ran, forever with context.Background (#206): the response to
 	// the request has ARTIM, and each PDU after it DIMSETimeout.
 	transport.SetReadTimeout(s.config.Network.ARTIMTimeout)
-	transport.observe(s.config.Events)
+	transport.observe(s.config.Events, s.ownLog)
 	s.association = NewAssociation(transport)
+	s.association.logger = s.ownLog
 
 	if contexts == nil {
 		contexts = s.defaultContexts()
@@ -329,13 +333,13 @@ func (s *SCU) Store(ctx context.Context, ds *dataset.Dataset) error {
 	if !ok {
 		return fmt.Errorf("dataset missing SOP Class UID (0008,0016)")
 	}
-	sopClassUID := extractStringValue(sopClassElem.GetValue())
+	sopClassUID := extractStringValue(sopClassElem)
 
 	sopInstanceElem, ok := ds.Get(tag.New(0x0008, 0x0018)) // SOPInstanceUID
 	if !ok {
 		return fmt.Errorf("dataset missing SOP Instance UID (0008,0018)")
 	}
-	sopInstanceUID := extractStringValue(sopInstanceElem.GetValue())
+	sopInstanceUID := extractStringValue(sopInstanceElem)
 
 	pcID, ok := storeContextFor(assoc.AcceptedContexts(), sopClassUID, ds.TransferSyntaxUID())
 	if !ok {
@@ -909,8 +913,22 @@ func (s *SCU) NEventReport(ctx context.Context, sopClassUID, sopInstanceUID stri
 	}, nil
 }
 
-// NGet sends an N-GET-RQ.
+// NGet sends an N-GET-RQ for every attribute of the instance: the request
+// carries no Attribute Identifier List. NGetAttributes asks for some.
 func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NGetResponse, error) {
+	return s.NGetAttributes(ctx, sopClassUID, sopInstanceUID, nil)
+}
+
+// NGetAttributes sends an N-GET-RQ whose Attribute Identifier List (0000,1005)
+// names the attributes wanted, in the order given (PS3.7 10.1.2.1.4); the SCP
+// returns those it has. An empty or nil list sends none, which asks for every
+// attribute, as NGet does.
+//
+// It is a method of its own rather than a list added to NGet: a variadic
+// parameter would keep NGet's call sites compiling, but not a method value or
+// an interface written against NGet's signature, such as a test double.
+func (s *SCU) NGetAttributes(ctx context.Context, sopClassUID, sopInstanceUID string,
+	attributes []tag.Tag) (*NGetResponse, error) {
 	release, err := s.beginOperation(ctx)
 	if err != nil {
 		return nil, err
@@ -929,7 +947,13 @@ func (s *SCU) NGet(ctx context.Context, sopClassUID, sopInstanceUID string) (*NG
 
 	messageID := s.nextMessageID()
 	cmdDS := BuildNGetRQ(messageID, sopClassUID, sopInstanceUID)
-	cmdBytes, _ := EncodeCommandDataset(cmdDS)
+	if err := addAttributeIdentifierList(cmdDS, attributes); err != nil {
+		return nil, fmt.Errorf("N-GET-RQ: %w", err)
+	}
+	cmdBytes, err := EncodeCommandDataset(cmdDS)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode N-GET-RQ: %w", err)
+	}
 	if err := assoc.SendPData(ctx, pcID, cmdBytes, true); err != nil {
 		return nil, err
 	}
@@ -1195,15 +1219,16 @@ func (s *SCU) IsAssociated() bool {
 // PS3.5 Section 6.2 makes trailing spaces non-significant for AE. Trimming only
 // NUL left every odd-length AE title with a trailing space, so a C-MOVE to a
 // destination whose title had an odd number of characters never matched.
-func extractStringValue(val interface{}) string {
-	switch v := val.(type) {
-	case string:
-		return strings.TrimRight(v, "\x00 ")
-	case []byte:
-		return strings.TrimRight(string(v), "\x00 ")
-	default:
-		return fmt.Sprintf("%v", v)
+//
+// The value is read through Bytes. A switch here knew []byte and string and
+// printed anything else with %v, so a SOP Instance UID held as a []string
+// went out as "[1.2.3]" (#420). A value that holds no bytes is no string.
+func extractStringValue(elem *dataelem.DataElement) string {
+	raw, ok := elem.Bytes()
+	if !ok {
+		return ""
 	}
+	return strings.TrimRight(string(raw), "\x00 ")
 }
 
 // receiveNResponse reads the response to an N-service request: its command,

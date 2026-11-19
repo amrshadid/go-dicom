@@ -41,11 +41,12 @@ func BenchmarkJPEGDecompress420(b *testing.B) {
 	}
 }
 
-// BenchmarkJPEGDecompress420ToRGB decodes the same frame to RGB, as a data
-// set described as RGB is decoded.
+// BenchmarkJPEGDecompress420ToRGB decodes the same frame to RGB, as a frame
+// is decoded with no data set to say its color space: the stream is taken for
+// YCbCr and converted.
 func BenchmarkJPEGDecompress420ToRGB(b *testing.B) {
 	data := colorJPEG420(b)
-	d := compress.NewJPEGDecompressorForPhotometric("RGB")
+	d := compress.NewJPEGDecompressor()
 	b.SetBytes(512 * 512 * 3)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 
 	"github.com/amrshadid/go-dicom/anonymize"
@@ -15,6 +14,7 @@ import (
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/filewriter"
+	"github.com/amrshadid/go-dicom/internal/heldvalue"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -45,47 +45,6 @@ func readDataset(t *testing.T, path string) (*dataset.Dataset, error) {
 		return nil, err
 	}
 	return df.GetDataset(), nil
-}
-
-// heldAsStrings rebuilds a data set the way an application builds one in
-// memory: every text value held as a Go string, or as a []string when it has
-// more than one value, sequences rebuilt item by item. The bytes each value
-// stands for are unchanged, padding included, so the two data sets are the
-// same data set held two ways.
-func heldAsStrings(t *testing.T, src *dataset.Dataset) *dataset.Dataset {
-	t.Helper()
-	out := dataset.NewDataset()
-	for _, elem := range src.GetAll() {
-		tg, ok := elem.Tag()
-		if !ok {
-			t.Fatalf("an element without a tag: %v", elem)
-		}
-		value := elem.GetValue()
-		switch v := value.(type) {
-		case *sequence.Sequence:
-			seq := sequence.New()
-			for _, item := range v.Items() {
-				if inner, isDS := item.(*dataset.Dataset); isDS {
-					if err := seq.Append(heldAsStrings(t, inner)); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			value = seq
-		case []byte:
-			if dataelem.IsTextVR(src.ResolveVR(tg, elem)) {
-				if strings.Contains(string(v), `\`) {
-					value = strings.Split(string(v), `\`)
-				} else {
-					value = string(v)
-				}
-			}
-		}
-		if err := out.Add(dataelem.NewDataElement(tg, elem.GetVR(), value)); err != nil {
-			t.Fatalf("adding %s: %v", tg, err)
-		}
-	}
-	return out
 }
 
 // outcome lists, one line per element at any depth, what a data set holds
@@ -224,7 +183,7 @@ func TestEveryProfileTreatsAStringHeldDataSetAsTheFile(t *testing.T) {
 		compared++
 		for _, name := range names {
 			fromFile, _ := readDataset(t, path)
-			inMemory := heldAsStrings(t, fromFile)
+			inMemory := heldvalue.AsGoValues(fromFile)
 			original := map[string][]byte{}
 			originalValues(fromFile, "", original)
 

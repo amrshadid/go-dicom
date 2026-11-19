@@ -231,20 +231,11 @@ func (a *Association) popPending() (pendingMessage, bool) {
 }
 
 // handleCStoreStream serves a C-STORE to a handler that reads its data set as
-// it arrives. See CStoreStreamer for what happens when.
+// it arrives. See CStoreStreamer for what happens when. handleCStore has
+// already refused a request that says no data set follows, for both kinds of
+// handler.
 func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, streamer CStoreStreamer,
-	ctxID byte, messageID uint16, cmdDS *dataset.Dataset) {
-
-	req := cstoreRequest(messageID, cmdDS)
-	if !HasDataSet(cmdDS) {
-		// Nothing to store, and nothing to hand the handler that would not
-		// read as an empty instance stored. A data set the peer sends anyway
-		// is not this message's: the next read takes it as stray data.
-		DefaultLogger.Warn("refusing a C-STORE of %s that says no data set follows (PS3.7 9.3.1.1)",
-			req.AffectedSOPInstance)
-		s.sendCStoreRSP(ctx, assoc, ctxID, req, StatusUnableToProcess)
-		return
-	}
+	ctxID byte, req *CStoreRequest) {
 
 	stream := newDataSetStream(ctx, assoc, ctxID)
 	resp, err := streamer.HandleCStoreStream(ctx, req, assoc.TransferSyntaxFor(ctxID), stream)
@@ -253,9 +244,9 @@ func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, stream
 		// did. A timeout or a canceled context has not: the association is
 		// left partway through a message no response can follow, so it is
 		// aborted here (PS3.8 9.1.5 for the timeout).
-		DefaultLogger.Error("C-STORE of %s: %v", req.AffectedSOPInstance, stream.err)
+		s.log().Error("C-STORE of %s: %v", req.AffectedSOPInstance, stream.err)
 		if assoc.State() == StateAssociated {
-			_ = assoc.Abort(ctx, AbortSourceServiceProvider, 0)
+			_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, 0, streamAbort(stream.err))
 		}
 		return
 	}
@@ -264,7 +255,7 @@ func (s *SCP) handleCStoreStream(ctx context.Context, assoc *Association, stream
 	if err == nil && resp != nil {
 		status = resp.Status
 	} else if err != nil {
-		DefaultLogger.Error("C-STORE handler failed for %s: %v", req.AffectedSOPInstance, err)
+		s.log().Error("C-STORE handler failed for %s: %v", req.AffectedSOPInstance, err)
 	}
 	s.sendCStoreRSP(ctx, assoc, ctxID, req, status)
 }
@@ -274,7 +265,7 @@ func (s *SCP) sendCStoreRSP(ctx context.Context, assoc *Association, ctxID byte,
 	rspBytes, err := EncodeCommandDataset(BuildCStoreRSP(req.MessageID, req.AffectedSOPClass,
 		req.AffectedSOPInstance, status))
 	if err != nil {
-		DefaultLogger.Error("failed to encode C-STORE-RSP: %v", err)
+		s.log().Error("failed to encode C-STORE-RSP: %v", err)
 		return
 	}
 	_ = assoc.SendPData(ctx, ctxID, rspBytes, true)
@@ -417,4 +408,23 @@ func shortened(err error) string {
 		return text[:limit] + "..."
 	}
 	return err.Error()
+}
+
+// streamAbort is why a streamed C-STORE that did not arrive whole is
+// aborted: its peer went quiet, or the server's context ended, which is the
+// server stopping. Anything else that ends the read aborts the association
+// where it happens.
+func streamAbort(err error) *LocalAbort {
+	cause := err
+	if incomplete, ok := err.(*incompleteDataSetError); ok {
+		cause = incomplete.cause
+	}
+	var timeout *TimeoutError
+	if errors.As(cause, &timeout) {
+		return abortedBy(AbortCauseTimeout, cause)
+	}
+	if errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return abortedBy(AbortCauseStopping, cause)
+	}
+	return abortedBy(AbortCauseProtocolViolation, cause)
 }

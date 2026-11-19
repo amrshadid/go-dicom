@@ -363,28 +363,6 @@ func GetVRInfo(vr VR) *VRInfo {
 	return nil
 }
 
-// IsValidVR checks if a VR string is valid.
-func IsValidVR(vr VR) bool {
-	return GetVRInfo(vr) != nil
-}
-
-// IsTextVR checks if a VR is text-based.
-func IsTextVR(vr VR) bool {
-	info := GetVRInfo(vr)
-	return info != nil && info.IsText
-}
-
-// IsCharacterSetVR reports whether Specific Character Set (0008,0005) applies
-// to values of the VR: SH, LO, UC, ST, LT, UT and PN (PS3.5 6.1.2.3, Table
-// 6.2-1). The other text VRs are in the default repertoire whatever it says.
-func IsCharacterSetVR(vr VR) bool {
-	switch vr {
-	case SH, LO, UC, ST, LT, UT, PN:
-		return true
-	}
-	return false
-}
-
 // IsNumericVR checks if a VR represents numeric values.
 func IsNumericVR(vr VR) bool {
 	info := GetVRInfo(vr)
