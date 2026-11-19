@@ -3768,8 +3768,19 @@ def psnr(a, b, bits):
 exact = near = lossy = 0
 lowest = math.inf
 refused = []
+# The examples_*.dcm files came with pydicom 3 (pydicom.examples) and are
+# not in pydicom 2's test data, where opening one failed this check with
+# FileNotFoundError and nothing wrong in the frames. There a file of the same
+# kind that both have takes its place, and the result says which.
+STAND_IN = {"examples_overlay.dcm": "image_dfl.dcm",           # gray, unsigned, native
+            "examples_rgb_color.dcm": "SC_rgb_jpeg_dcmd.dcm",  # RGB, 8 bits, native
+            "examples_jpeg2k.dcm": "GDCMJ2K_TextGBR.dcm"}      # JPEG 2000 Lossless, YBR_RCT
+stood_in = []
 for name in ("CT_small.dcm", "examples_overlay.dcm", "examples_rgb_color.dcm", "SC_rgb_small_odd.dcm",
              "SC_rgb_rle_2frame.dcm", "MR_small_jpeg_ls_lossless.dcm", "examples_jpeg2k.dcm"):
+    if not os.path.exists(os.path.join(corpus, name)) and name in STAND_IN:
+        stood_in.append("%s in place of %s, which this pydicom does not have" % (STAND_IN[name], name))
+        name = STAND_IN[name]
     path_ = os.path.join(corpus, name)
     ds = pydicom.dcmread(path_)
     with open(path_, "rb") as f:
@@ -3851,7 +3862,8 @@ if exact < 30 or lossy < 10 or near < 4:
     sys.exit("only %d lossless, %d near-lossless and %d lossy encodings checked" % (exact, near, lossy))
 print("%d lossless encodings, every frame decoded by pylibjpeg and pydicom to the stored pixels; %d JPEG-LS near-lossless within 2; "
       "%d JPEG Baseline, Extended and lossy JPEG 2000 at %.1f dB or better; %d lossy encodings refused by the coder; "
-      "a JPEG frame is not coded again (406)" % (exact, near, lossy, lowest, len(refused)))
+      "a JPEG frame is not coded again (406)" % (exact, near, lossy, lowest, len(refused))
+      + "".join("; " + s for s in stood_in))
 PY
     ); then
       pass "qrscp -web frames encoded on request — $encoded"

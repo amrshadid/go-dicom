@@ -21,17 +21,21 @@
 // fields of filereader.DICOMFile, and DataElementValue, ReadOptions and the
 // rest are filereader's under aliases, so a value from one package is a value
 // of the other. Text is in the file's character set; TextEncodings and
-// DecodeText give it as UTF-8, by the rules GetDataset applies.
+// DecodeText give it as UTF-8, by the rules GetDataset applies, and
+// TextEncodingsWithContext and DecodeTextWithContext do the same logging to
+// the read's logger.
 //
+//	logger := slog.New(slog.NewTextHandler(os.Stderr, nil)) // this read's own
 //	f, _ := os.Open(path)
 //	file, err := attributes.Read(filebase.NewFileReader(f), attributes.ReadOptions{
 //		SkipBulkData:   true,    // leave Pixel Data in the file
 //		MaxValueLength: 1 << 20, // refuse a longer value
-//		Logger:         slog.New(slog.DiscardHandler),
+//		Logger:         logger,
 //	})
-//	encodings := attributes.TextEncodings(file.DataElements, nil)
+//	ctx := config.WithLogger(context.Background(), logger) // decoding logs there too
+//	encodings := attributes.TextEncodingsWithContext(ctx, file.DataElements, nil)
 //	for _, e := range file.DataElements {
-//		fmt.Println(e.Tag, e.VR, attributes.DecodeText(e.VR, e.Value, encodings))
+//		fmt.Println(e.Tag, e.VR, attributes.DecodeTextWithContext(ctx, e.VR, e.Value, encodings))
 //	}
 package attributes
 
@@ -99,4 +103,34 @@ func TextEncodings(elements []*DataElementValue, inherited []string) []string {
 // as it is.
 func DecodeText(vr string, value []byte, encodings []string) string {
 	return fileparse.DecodeText(vr, value, encodings)
+}
+
+// TextEncodingsWithContext is TextEncodings, logging to the logger ctx
+// carries (config.WithLogger) instead of config.Logger.
+//
+// What is logged is what is wrong with a declaration: a misspelled term,
+// read as the one it plainly means, or one this library does not know, read
+// as the default repertoire. TextEncodings logs it to config.Logger whatever
+// logger the read was given (ReadOptions.Logger), so a program keeping each
+// read's lines apart found the declaration's lines on the global logger.
+// Give it the read's logger the way a read carries one:
+//
+//	ctx := config.WithLogger(ctx, logger) // the logger in ReadOptions.Logger
+//	encodings := attributes.TextEncodingsWithContext(ctx, file.DataElements, nil)
+func TextEncodingsWithContext(ctx context.Context, elements []*DataElementValue, inherited []string) []string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	encodings, _ := fileparse.EncodingsFor(ctx, elements, inherited)
+	return encodings
+}
+
+// DecodeTextWithContext is DecodeText, logging to the logger ctx carries
+// (config.WithLogger) instead of config.Logger: a value that does not decode
+// under its encodings is logged when the validation mode is WARN.
+func DecodeTextWithContext(ctx context.Context, vr string, value []byte, encodings []string) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return string(fileparse.DecodeTextValue(ctx, vr, value, encodings))
 }

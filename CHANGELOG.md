@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Which transfer syntax each coder writes is one table** (#534). A send,
+  the `compress` command and a frame encoded over DICOMweb each kept their
+  own map from a syntax to a `Dataset.Compress…InPlace` method, with which
+  of them lose detail and what each takes, so a coder added to one was
+  missing from the other two. `dataset.PixelEncoders` and
+  `PixelEncoderFor` are that table, with each syntax's name, whether it is
+  lossy and its parameter (JPEG quality, JPEG-LS NEAR, a JPEG 2000 rate),
+  and all three read it. Nothing they accept, refuse or write changed: for
+  every transfer syntax in the dictionary, each of the three gives the same
+  answer, message and bytes as before.
+
 - **A query can be matched against a data set** (#515). C-FIND matching
   lived only inside `dcmstore`, unexported and written against its index, so
   a program with entries of its own, a worklist for one, had nothing to call:
@@ -840,6 +851,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second font at three sizes, four kinds of blur, over six real scans of the
   corpus (51 of 164 lines found, from 50, and no more of any scan marked).
 
+- **The text of a file read for its attributes is decoded to the read's
+  logger** (#539). `attributes.TextEncodings` and `DecodeText` take no
+  logger, so what decoding logs, a misspelled Specific Character Set read
+  as the term it means, an unknown one read as the default repertoire, a
+  value that does not decode, went to `config.Logger` even for a read
+  given a logger of its own (`ReadOptions.Logger`).
+  `TextEncodingsWithContext` and `DecodeTextWithContext` log to the logger
+  the context carries (`config.WithLogger`), as the rest of a read does.
+  Every corpus file and two made from charset files with a misspelled and
+  an unknown term decode with nothing reaching the global logger.
+
 ### Changed
 
 - **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk
@@ -943,27 +965,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`-redact auto` no longer blacks out half of a scan with no text in it**
-  (#536). On pydicom's `examples_overlay.dcm`, an abdominal MR, smoothed as
-  a picture resampled by half a pixel is, the text detector took three
-  blobs of anatomy at a quarter of the picture's size for large lettering
-  and grew the line over the scan: one region of 46.6% of the picture, which
-  `anonymize -redact auto` and `share -redact auto` filled with black. Taken
-  at sixteen offsets and five kinds of smoothing, the same scan is marked
-  over 38% in 40 of 80 pictures, up to 86.5%. No rule of the detector was
-  found that tells those blobs from large lettering at every offset without
-  losing lettering, so the detector is unchanged and the redaction is
-  guarded instead: when the regions found cover more than a quarter of the
-  picture, nothing is filled, the command fails naming the share, and in a
-  directory the other files are still written. On every scan of the corpus
-  without text the detector marks either 1.6% or less or 38.7% or more; on
-  the real screens it marks at most 17.8%, and on the scans the tests draw
-  labels over at most 20.0%. A picture that is nothing but large lettering
-  is over a quarter too and is refused, which destroys nothing: its regions
-  can be given with `-redact x,y,w,h`. `-detect` and `share -preview` still
-  show everything found. In Go, `RedactDetectedText` returns an error
-  wrapping `ErrImplausibleRedaction`, and `CheckDetectedShare` applies the
-  same bound to a caller's own regions.
+- **A refusal is logged once where a server has its own logger** (#537).
+  `LoggingEventHandlers` leaves out a refusal the SCP has already logged to
+  the same log, and asked `DefaultLogger` whether it had; since a server can
+  have its own logger (`SCPConfig.Logger`), the SCP's line goes there. A
+  server with its own logger, logging its events to `server.Logger`, had
+  each refusal in its log twice, and one logging its events to the global
+  log with `DefaultLogger` at the info level had the refusal in neither.
+  The event now carries where the SCP logged its line and at what level,
+  and the handler gives way only where that line reached its own log. A
+  stopping server's refusal of an association on a connection it had
+  already accepted was logged by nothing at all; the SCP logs it, at the
+  info level, as it logs every refusal it decides.
+
+- **A JPEG 2000 codestream of a few hundred bytes no longer costs
+  gigabytes to decode** (#526). The decoder sized its work from the header
+  before it read a packet: a list of every code-block of the image, a state
+  for each block of a precinct as soon as a packet named the precinct, and a
+  visit to each of those blocks in every packet. A codestream of 244 bytes
+  declaring 185 million samples in 4x4 code-blocks made `Decode` allocate
+  4.3 GB, and `Dataset.PixelArray` and rendering decode `.90` and `.91`
+  unasked, so a small file or a C-STORE was enough. Now a tile must hold a
+  byte for each precinct it declares, which the 244 bytes do not, and is
+  refused with less than a megabyte allocated. Code-blocks are found by
+  arithmetic rather than listed, a block has state only once a packet
+  includes it, and the blocks a tag tree answers for together are stepped
+  over together, so reading packet headers costs what their bits say: the
+  120 bytes of an empty 2048 by 2048 image in 4x4 blocks and 20 layers took
+  475 MB to read and take under 4 MB. The image limit of 2^28 samples now
+  counts every component. Nothing sized by the image is allocated until
+  every tile's packets are read. A codestream within these bounds still
+  decodes at the size it declares, which JPEG 2000 can describe in very few
+  bytes; the package documentation states the rule. Every Part 1 codestream
+  that decoded before decodes to the same samples.
 
 - **A C-GET goes on past an instance it cannot encode** (#518). A C-GET
   sub-operation sent its C-STORE-RQ, which says a data set follows, and
@@ -1474,6 +1508,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1237 generated frames at 2 to 16 bits in all three interleave modes decode
   as libjpeg decodes them. A marker missing, out of order or where the DRI
   does not put it is refused with an error saying so.
+
+- **`-redact auto` no longer blacks out half of a scan with no text in it**
+  (#536). On pydicom's `examples_overlay.dcm`, an abdominal MR, smoothed as
+  a picture resampled by half a pixel is, the text detector took three
+  blobs of anatomy at a quarter of the picture's size for large lettering
+  and grew the line over the scan: one region of 46.6% of the picture, which
+  `anonymize -redact auto` and `share -redact auto` filled with black. Taken
+  at sixteen offsets and five kinds of smoothing, the same scan is marked
+  over 38% in 40 of 80 pictures, up to 86.5%. No rule of the detector was
+  found that tells those blobs from large lettering at every offset without
+  losing lettering, so the detector is unchanged and the redaction is
+  guarded instead: when the regions found cover more than a quarter of the
+  picture, nothing is filled, the command fails naming the share, and in a
+  directory the other files are still written. On every scan of the corpus
+  without text the detector marks either 1.6% or less or 38.7% or more; on
+  the real screens it marks at most 17.8%, and on the scans the tests draw
+  labels over at most 20.0%. A picture that is nothing but large lettering
+  is over a quarter too and is refused, which destroys nothing: its regions
+  can be given with `-redact x,y,w,h`. `-detect` and `share -preview` still
+  show everything found. In Go, `RedactDetectedText` returns an error
+  wrapping `ErrImplausibleRedaction`, and `CheckDetectedShare` applies the
+  same bound to a caller's own regions.
 
 ## [1.10.0] - 2026-11-17
 

@@ -749,10 +749,7 @@ func htTranscode(t testing.TB, part1 []byte, options htTranscodeOptions) []byte 
 			blocks[k] = &coded{layers: segs, data: append(append([]byte{}, ht.cleanup...), ht.refinement...), skipped: ht.skipped}
 		}
 
-		precincts, err := c.tilePrecincts(tile, data.Components, 1<<30)
-		if err != nil {
-			t.Fatal(err)
-		}
+		precincts := c.tilePrecincts(tile, data.Components)
 		type bandState struct {
 			inclusion, zero *tagTreeEncoder
 			blocks          []*coded
@@ -788,7 +785,7 @@ func htTranscode(t testing.TB, part1 []byte, options htTranscodeOptions) []byte 
 						if indexes != nil {
 							index = indexes[i]
 						}
-						blk := band.Blocks[index]
+						blk := codeBlockAt(band, res.CodeBlockW, res.CodeBlockH, index)
 						cb := blocks[key{step.component, step.resolution, band.Type, blk.X0, blk.Y0}]
 						st.blocks[i] = cb
 						st.lblock[i] = initialLblock
