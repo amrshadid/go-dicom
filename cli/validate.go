@@ -95,24 +95,55 @@ func (vc *ValidateCommand) Execute(args []string) error {
 	return nil
 }
 
-// validateFile reads a file and checks it. The IOD is the data set's SOP
-// Class UID's, or the file meta's when the data set has none, which is then
-// reported as missing like any other Type 1 attribute.
+// validateBulkThreshold is the longest binary value validate still reads into
+// memory. The checker needs a bulk value's presence and length, never its
+// bytes, so Pixel Data and long OB, OW, OF... values stay in the file. Short
+// ones are read, as a few binary attributes have values to check.
+const validateBulkThreshold = 1024
+
+// validateFile reads a file and checks it, with its bulk values left in the
+// file: memory follows the metadata and not the image. A 200 MB CT took 240
+// MB to check when it was read whole.
 func validateFile(path string) (*validate.Report, error) {
+	return checkFile(path, true)
+}
+
+// checkFile reads a file, with its bulk values left in it or not, and checks
+// it. The IOD is the data set's SOP Class UID's, or the file meta's when the
+// data set has none, which is then reported as missing like any other Type 1
+// attribute.
+//
+// A deflated file is read whole: its values are in the inflated bytes, not in
+// the file as written (PS3.5 A.5).
+func checkFile(path string, skipBulk bool) (*validate.Report, error) {
+	df, err := readForValidation(path, skipBulk)
+	if err != nil {
+		return nil, err
+	}
+	if df.Deflated && skipBulk {
+		return checkFile(path, false)
+	}
+	ds := df.GetDataset()
+	if skipBulk {
+		if ds, err = df.GetDatasetWithValuesInFile(); err != nil {
+			return nil, err
+		}
+	}
+	if datasetText(ds, tag.New(0x0008, 0x0016)) == "" && df.FileMetaInfo != nil && df.FileMetaInfo.MediaStorageSOPClassUID != "" {
+		return validate.DatasetAs(ds, df.FileMetaInfo.MediaStorageSOPClassUID)
+	}
+	return validate.Dataset(ds)
+}
+
+// readForValidation reads a file, with its bulk values left in it or not.
+func readForValidation(path string, skipBulk bool) (*filereader.DICOMFile, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(f))
-	if err != nil {
-		return nil, err
-	}
-	ds := df.GetDataset()
-	if datasetText(ds, tag.New(0x0008, 0x0016)) == "" && df.FileMetaInfo != nil && df.FileMetaInfo.MediaStorageSOPClassUID != "" {
-		return validate.DatasetAs(ds, df.FileMetaInfo.MediaStorageSOPClassUID)
-	}
-	return validate.Dataset(ds)
+	return filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f),
+		filereader.ReadOptions{SkipBulkData: skipBulk, BulkDataThreshold: validateBulkThreshold})
 }
 
 // printReport prints a report as text: what it was checked as, each finding
@@ -153,7 +184,22 @@ USAGE:
   table forbids it, and each is checked like a module.
 
   The rules are generated from the standard (the edition is printed), not
-  written by hand.
+  written by hand. Pixel Data and other bulk values are left in the file:
+  their presence and length are checked, not their bytes.
+
+  A condition PS3.3 states in a fixed form naming one attribute ("Required
+  if Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES") is evaluated: a Type 1C or 2C attribute, or a
+  Conditional module, absent where its condition holds is an error, and so
+  is one present where it does not, unless PS3.3 says "May be present
+  otherwise".
+
+  A condition PS3.3 states in a fixed form naming one attribute ("Required
+  if Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES") is evaluated: a Type 1C or 2C attribute, or a
+  Conditional module, absent where its condition holds is an error, and so
+  is one present where it does not, unless PS3.3 says "May be present
+  otherwise".
 
   A condition PS3.3 states in a fixed form naming one attribute ("Required
   if Pixel Data Provider URL (0028,7FE0) is not present", "... is present",

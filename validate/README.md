@@ -22,6 +22,11 @@ for _, f := range report.Findings {
 }
 ```
 
+A data set read with `filereader.ReadOptions{SkipBulkData: true}` and
+`GetDatasetWithValuesInFile` is checked the same as one read whole: the
+checker needs a bulk value's length, never its bytes. `go-dicom validate`
+reads that way, so memory follows the metadata and not the image.
+
 From the command line:
 
 ```
@@ -33,6 +38,69 @@ broken_ct.dcm: 1.2.840.10008.5.1.4.1.1.2, checked as the CT Image IOD (PS3.3 A.3
   not checked Synchronization: Usage C: absent; whether it is required was not checked: Required if time synchronization was applied. [...]
 8 error(s), 0 warning(s), 36 not checked
 ```
+
+## Conditions
+
+A condition PS3.3 states in one of a few fixed sentence forms, naming one
+attribute by its tag, is generated as data (`Condition`) and evaluated:
+
+| Form | Example (PS3.3 2026d) |
+|---|---|
+| `IsPresent` | Required if Extended Offset Table (7FE0,0001) is present. |
+| `IsAbsent` | Required if Pixel Data Provider URL (0028,7FE0) is not present. |
+| `HasValue` | Required if Multi-energy CT Acquisition (0018,9361) is YES. / Image Type (0008,0008) Value 1 is ORIGINAL or MIXED. |
+| `IsPresentWithValue` | Required if Partial View (0028,1350) is present with a Value of YES. |
+
+each optionally followed by "May be present otherwise." (`Otherwise`). An
+attribute or module whose condition holds and that is absent is an error, and
+so is one present where its condition does not hold and PS3.3 does not say it
+may be present otherwise (PS3.5 7.4.2, 7.4.4; PS3.3 A.1.3.2).
+
+The generator reads a condition so only when the whole of what the
+description says about presence is that one sentence. A sentence that matches
+a form in part ("has a Value greater than 1"), two tests joined, a condition
+another sentence qualifies, or a name that does not agree with its tag, is
+prose. The numbers, from the tables generated from PS3.3 2026d:
+
+| | Conditions | IsPresent | IsAbsent | HasValue | IsPresentWithValue | Prose |
+|---|---|---|---|---|---|---|
+| Type 1C and 2C attributes | 1681 | 99 | 67 | 402 | 12 | 1101 |
+| Conditional modules | 316 | 0 | 0 | 23 | 2 | 291 |
+
+`scripts/iod-tables.py` prints them on standard error, with why each prose
+condition was not read.
+
+## Conditions
+
+A condition PS3.3 states in one of a few fixed sentence forms, naming one
+attribute by its tag, is generated as data (`Condition`) and evaluated:
+
+| Form | Example (PS3.3 2026d) |
+|---|---|
+| `IsPresent` | Required if Extended Offset Table (7FE0,0001) is present. |
+| `IsAbsent` | Required if Pixel Data Provider URL (0028,7FE0) is not present. |
+| `HasValue` | Required if Multi-energy CT Acquisition (0018,9361) is YES. / Image Type (0008,0008) Value 1 is ORIGINAL or MIXED. |
+| `IsPresentWithValue` | Required if Partial View (0028,1350) is present with a Value of YES. |
+
+each optionally followed by "May be present otherwise." (`Otherwise`). An
+attribute or module whose condition holds and that is absent is an error, and
+so is one present where its condition does not hold and PS3.3 does not say it
+may be present otherwise (PS3.5 7.4.2, 7.4.4; PS3.3 A.1.3.2).
+
+The generator reads a condition so only when the whole of what the
+description says about presence is that one sentence. A sentence that matches
+a form in part ("has a Value greater than 1"), two tests joined, a condition
+another sentence qualifies, or a name that does not agree with its tag, is
+prose. The numbers, from the tables generated from PS3.3 2026d:
+
+| | Conditions | IsPresent | IsAbsent | HasValue | IsPresentWithValue | Prose |
+|---|---|---|---|---|---|---|
+| Type 1C and 2C attributes | 1867 | 104 | 73 | 455 | 13 | 1222 |
+| Conditional modules | 316 | 0 | 0 | 23 | 2 | 291 |
+| Conditional Functional Group Macros | 171 | 2 | 0 | 43 | 0 | 126 |
+
+`scripts/iod-tables.py` prints them on standard error, with why each prose
+condition was not read.
 
 ## Conditions
 
