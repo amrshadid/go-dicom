@@ -27,19 +27,29 @@ var mediaDefault = map[string]string{
 	"image/jls":  compress.JPEGLSLossless,
 	"image/jp2":  compress.JPEG2000Lossless,
 	"image/jpx":  "1.2.840.10008.1.2.4.92",
+	// HTJ2K is decoded and not encoded, so a frame not already held in it
+	// is refused as image/jpx is.
+	"image/jphc": compress.HTJ2KLossless,
 	mediaRLE:     compress.RLELossless,
 }
 
 // lossySyntaxes are the syntaxes that may lose detail. A frame stored in one
 // is not encoded into another compressed syntax: the copy would carry a loss
-// its syntax does not say, or add a second one.
-var lossySyntaxes = map[string]bool{
-	compress.JPEGBaseline:       true,
-	compress.JPEGExtended:       true,
-	compress.JPEGLSNearLossless: true,
-	compress.JPEG2000Lossy:      true,
-	"1.2.840.10008.1.2.4.93":    true,
-}
+// its syntax does not say, or add a second one. They are the lossy syntaxes
+// of the library's table of coders, and the ones it reads but does not
+// write: JPEG 2000 Part 2, lossy, and High-Throughput JPEG 2000, lossy.
+var lossySyntaxes = func() map[string]bool {
+	lossy := map[string]bool{
+		"1.2.840.10008.1.2.4.93": true,
+		compress.HTJ2K:           true,
+	}
+	for _, e := range dataset.PixelEncoders() {
+		if e.Lossy {
+			lossy[e.UID] = true
+		}
+	}
+	return lossy
+}()
 
 // FrameEncoding is how much a frame encoded on request into a lossy syntax
 // may lose. A request names the syntax; the amount is the server's.
@@ -69,19 +79,16 @@ func WithFrameEncoding(encoding FrameEncoding) ServerOption {
 	}
 }
 
-// frameEncoders are the coders a frame can be encoded with, by syntax.
-var frameEncoders = map[string]func(*dataset.Dataset, FrameEncoding) error{
-	compress.RLELossless:             func(ds *dataset.Dataset, _ FrameEncoding) error { return ds.CompressRLELosslessInPlace() },
-	compress.JPEGLSLossless:          func(ds *dataset.Dataset, _ FrameEncoding) error { return ds.CompressJPEGLSLosslessInPlace() },
-	compress.JPEG2000Lossless:        func(ds *dataset.Dataset, _ FrameEncoding) error { return ds.CompressJPEG2000LosslessInPlace() },
-	compress.JPEGLosslessNonHierarch: func(ds *dataset.Dataset, _ FrameEncoding) error { return ds.CompressJPEGLosslessInPlace() },
-	compress.JPEGLossless:            func(ds *dataset.Dataset, _ FrameEncoding) error { return ds.CompressJPEGLosslessSV1InPlace() },
-	compress.JPEGLSNearLossless: func(ds *dataset.Dataset, e FrameEncoding) error {
-		return ds.CompressJPEGLSNearLosslessInPlace(e.JPEGLSNear)
-	},
-	compress.JPEG2000Lossy: func(ds *dataset.Dataset, e FrameEncoding) error { return ds.CompressJPEG2000InPlace(e.JPEG2000Rate) },
-	compress.JPEGBaseline:  func(ds *dataset.Dataset, e FrameEncoding) error { return ds.CompressJPEGBaselineInPlace(e.JPEGQuality) },
-	compress.JPEGExtended:  func(ds *dataset.Dataset, e FrameEncoding) error { return ds.CompressJPEGExtendedInPlace(e.JPEGQuality) },
+// frameEncoder is the coder a frame can be encoded into syntax with: the
+// library's one table (dataset.PixelEncoderFor), the coders compress and a
+// send use.
+func frameEncoder(syntax string) (dataset.PixelEncoder, bool) {
+	return dataset.PixelEncoderFor(syntax)
+}
+
+// encoderParams are what a lossy coder is asked with: the server's encoding.
+func (e FrameEncoding) encoderParams() dataset.EncoderParams {
+	return dataset.EncoderParams{JPEGQuality: e.JPEGQuality, JPEGLSNear: e.JPEGLSNear, JPEG2000Rate: e.JPEG2000Rate}
 }
 
 // tagLossyImageCompression is Lossy Image Compression (0028,2110), "01"
@@ -98,7 +105,7 @@ func (f *frameSource) encodeTo(want frameWant) (string, error) {
 	if target == "" || frameMedia[target] != want.media {
 		return "", fmt.Errorf("%s is not a transfer syntax of %s", target, want.media)
 	}
-	if frameEncoders[target] == nil {
+	if _, ok := frameEncoder(target); !ok {
 		return "", fmt.Errorf("this server does not encode %s", target)
 	}
 	if lossySyntaxes[f.syntax] || strings.TrimSpace(text(f.attributes, tagLossyImageCompression)) == "01" {
@@ -125,7 +132,10 @@ func (f *frameSource) encode(n int, syntax string, encoding FrameEncoding) ([]by
 			return nil, err
 		}
 	}
-	if err := frameEncoders[syntax](ds, encoding); err != nil {
+	// encodeTo has found the coder; one that is not there refuses through
+	// EncodeInPlace rather than being called.
+	encoder, _ := frameEncoder(syntax)
+	if err := encoder.EncodeInPlace(ds, encoding.encoderParams()); err != nil {
 		return nil, refuse(http.StatusNotAcceptable, "frame %d cannot be encoded as %s: %v", n, syntax, err)
 	}
 	return ds.GetEncapsulatedFrame(0)

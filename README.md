@@ -516,7 +516,7 @@ Known gaps, stated plainly so you can judge fit before adopting:
 | **Move destination resolution** | A C-MOVE names its destination only by AE title, so the SCP must be told how to reach it via `SCPConfig.MoveDestinations` or `SCPConfig.ResolveMoveDestination`. An unresolvable title is answered with `StatusMoveDestUnknown` rather than guessed at. |
 | **Asynchronous operations** | Enforced as an SCU: a negotiated window bounds how many operations are outstanding, each matched to its response by Message ID. C-MOVE and C-GET take the association exclusively. **As an SCP, dispatch is still one message at a time** — `MaxOperationsPerformed` does not yet bound concurrent dispatch, which is the other half. |
 | **Cancelling a slice handler** | A C-FIND, C-GET or C-MOVE handler that returns a slice cannot be interrupted while it builds one. Implement `CFindStreamer`, `CGetStreamer` or `CMoveStreamer` to stop on C-CANCEL; sub-operations are abandoned on cancel either way. |
-| **Compressing pixel data** | Nine syntaxes are compressed *to*, on a send and in a data set: **RLE Lossless** (`Dataset.CompressRLELosslessInPlace`), **JPEG-LS Lossless** (`Dataset.CompressJPEGLSLosslessInPlace`), **JPEG-LS Near-Lossless** (`.81`, with the error allowed in `NetworkConfig.JPEGLSNear`, losslessly when none is, or `Dataset.CompressJPEGLSNearLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, `Dataset.CompressJPEG2000LosslessInPlace`), **JPEG Lossless** (`.57` and `.70`, `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`), **JPEG Baseline** for 8-bit images and **JPEG Extended** (`.51`) for unsigned images of 8 or up to 12 bits, both when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace` and `CompressJPEGExtendedInPlace`), and **lossy JPEG 2000** (`.91`) at the ratio or PSNR in `NetworkConfig.JPEG2000Rate` (or with `Dataset.CompressJPEG2000InPlace`). Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline and Extended need a quality, JPEG-LS Near-Lossless an allowed error, lossy JPEG 2000 a rate. |
+| **Compressing pixel data** | Nine syntaxes are compressed *to*, on a send and in a data set: **RLE Lossless** (`Dataset.CompressRLELosslessInPlace`), **JPEG-LS Lossless** (`Dataset.CompressJPEGLSLosslessInPlace`), **JPEG-LS Near-Lossless** (`.81`, with the error allowed in `NetworkConfig.JPEGLSNear`, losslessly when none is, or `Dataset.CompressJPEGLSNearLosslessInPlace`), **JPEG 2000 Lossless** (`.90`, `Dataset.CompressJPEG2000LosslessInPlace`), **JPEG Lossless** (`.57` and `.70`, `Dataset.CompressJPEGLosslessInPlace` and `CompressJPEGLosslessSV1InPlace`), **JPEG Baseline** for 8-bit images and **JPEG Extended** (`.51`) for unsigned images of 8 or up to 12 bits, both when `NetworkConfig.JPEGQuality` is set (or with `Dataset.CompressJPEGBaselineInPlace` and `CompressJPEGExtendedInPlace`), and **lossy JPEG 2000** (`.91`) at the ratio or PSNR in `NetworkConfig.JPEG2000Rate` (or with `Dataset.CompressJPEG2000InPlace`). `dataset.PixelEncoders` lists the nine, with whether each is lossy and what it takes. Every other compressed target fails rather than sending bytes described as something they are not. Nothing lossy is written unasked: JPEG Baseline and Extended need a quality, JPEG-LS Near-Lossless an allowed error, lossy JPEG 2000 a rate. |
 | **Concurrent use of one SCU** | Safe to share: operations on one `SCU` are serialized, so several goroutines may use it and each waits its turn. Serialized is not pipelined — sharing bounds the number of associations rather than raising throughput. |
 
 ### Interoperability
@@ -705,13 +705,17 @@ which is enough for an archive or a router, and not enough for a viewer.
 | JPEG Lossless (`.57`, `.70`) | Read/Write | **Yes** | Yes |
 | JPEG-LS Lossless / Near-Lossless (`.80`, `.81`) | Read/Write | **Yes** | Yes |
 | JPEG 2000 Lossless / Lossy (`.90`, `.91`) | Read/Write | **Yes** | Yes |
-| HTJ2K (`.201`-`.203`), JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
+| HTJ2K (`.201`-`.203`) | Read/Write | **Yes** (not encoded) | As it is |
+| JPEG XL (`.110`-`.112`) | Read/Write | No: refused by name | As it is |
 
 Pixel data is returned in the color space the Photometric Interpretation names, so a
 `YBR_FULL` instance yields YBR rather than RGB — the same as pydicom — and a JPEG
 whose attribute says `RGB` is not converted from YCbCr, whatever its stream's markers
 say, as in dcmtk. Both planar configurations, 1 to 64 bits, and subsampled
 `YBR_FULL_422` are handled.
+
+High-Throughput JPEG 2000 (ITU-T T.814) decodes through the same decoder: its
+HT code-blocks, cleanup and refinement passes, beside everything below.
 
 JPEG 2000 decodes both wavelets at 1 to 16 bits, signed or unsigned, with any
 number of tiles and quality layers.
@@ -802,7 +806,7 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 - **Clean Descriptors** - Remove text descriptions
 - **Clean Graphics** - Remove overlays and graphic annotations held as attributes
 
-Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. `share -preview` and `-detect` show what it finds before anything is changed.
+Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. When what it finds covers more than a quarter of the picture, which on the measured scans means it took anatomy for lettering, `-redact auto` refuses by name and writes nothing rather than black out the scan. `share -preview` and `-detect` show what it finds before anything is changed.
 - **Retain Long Full Dates** - Keep dates for longitudinal studies
 - **Retain Patient Characteristics** - Keep age, sex, size, weight
 - **Retain Device Identity** - Keep device information

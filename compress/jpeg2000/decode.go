@@ -42,6 +42,19 @@ func Decode(c *Codestream) (*Image, error) {
 	width := int(c.Width) - int(c.XOffset)
 	height := int(c.Height) - int(c.YOffset)
 
+	// Every tile's packets first, and the image only after them. What the
+	// packets cost is held to the bytes that carry them (ReadTilePackets);
+	// the image and the coefficients are sized by the header, and are not
+	// allocated until every tile has shown the data the header promised.
+	tiles := make([]*TileData, c.NumTiles())
+	for tile, bytes := range c.tileData() {
+		data, err := c.readTilePackets(tile, bytes)
+		if err != nil {
+			return nil, err
+		}
+		tiles[tile] = data
+	}
+
 	img := &Image{Width: width, Height: height}
 	for _, comp := range c.Components {
 		img.Components = append(img.Components, make([]int32, width*height))
@@ -49,17 +62,26 @@ func Decode(c *Codestream) (*Image, error) {
 		img.Signed = append(img.Signed, comp.Signed)
 	}
 
-	for tile := 0; tile < c.NumTiles(); tile++ {
-		if err := c.decodeTile(tile, img); err != nil {
+	for tile, data := range tiles {
+		if err := c.decodeTile(tile, data, img); err != nil {
 			return nil, err
 		}
+		tiles[tile] = nil // its coefficients are in the image now
 	}
 	return img, nil
 }
 
+// maxImageSamples is the most samples Decode returns, counted over every
+// component: 1 GiB of int32 planes. A side is held to 2^16 as well.
+const maxImageSamples = 1 << 28
+
 // checkImageSize refuses an image too large to decode. The parser applies it
 // as well as Decode, because the packet reader sizes its precincts from the
 // same dimensions.
+//
+// The samples are counted over every component, since each is a plane of its
+// own. A SIZ costs three bytes a component and may declare 16384, so a limit
+// on one plane let a header of 50 KB ask for 16384 of them.
 func checkImageSize(c *Codestream) error {
 	width := int(c.Width) - int(c.XOffset)
 	height := int(c.Height) - int(c.YOffset)
@@ -67,19 +89,20 @@ func checkImageSize(c *Codestream) error {
 		return errorf("an image of %dx%d samples", width, height)
 	}
 	// The product in 64 bits: 65536 squared is 0 in a 32-bit int (#258).
-	if width > 1<<16 || height > 1<<16 || int64(width)*int64(height) > 1<<28 {
+	if width > 1<<16 || height > 1<<16 || int64(width)*int64(height) > maxImageSamples {
 		return errorf("an image of %dx%d samples is larger than this decoder accepts",
 			width, height)
+	}
+	if n := int64(len(c.Components)); n > 1 && int64(width)*int64(height)*n > maxImageSamples {
+		return errorf("an image of %dx%d samples in %d components is larger than this decoder accepts",
+			width, height, n)
 	}
 	return nil
 }
 
-// decodeTile decodes one tile and writes its samples into the image.
-func (c *Codestream) decodeTile(tile int, img *Image) error {
-	data, err := c.ReadTilePackets(tile)
-	if err != nil {
-		return err
-	}
+// decodeTile decodes one tile from its packets and writes its samples into the
+// image.
+func (c *Codestream) decodeTile(tile int, data *TileData, img *Image) error {
 
 	planes := make([][]float32, len(c.Components))
 	for comp := range c.Components {
@@ -210,11 +233,15 @@ func (c *Codestream) decodeBlockInto(bands map[int]map[int]*subbandGrid, tc Tile
 	if err != nil {
 		return err
 	}
-	decoded, err := decodeBlock(block, magnitudeBits+roiShift)
+	if block.Style&BlockStyleHT != 0 && roiShift > 0 {
+		// T.814 allows it (A.5, 8.4) and nothing here can check it: no
+		// codestream available has one, and OpenJPEG refuses it.
+		return &ErrUnsupported{Feature: "a region of interest in HT code-blocks"}
+	}
+	coefficients, err := DecodeBlock(*block, magnitudeBits+roiShift)
 	if err != nil {
 		return err
 	}
-	coefficients := decoded.data
 	if roiShift > 0 {
 		descaleRegionOfInterest(coefficients, roiShift)
 	}

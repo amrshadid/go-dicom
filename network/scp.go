@@ -361,6 +361,11 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	// connection it accepted before the stop: rejected-transient, so the
 	// caller tries again later (PS3.8 Table 9-21, temporary-congestion).
 	if s.draining() {
+		// Logged like every refusal the SCP decides. Nothing logged this one
+		// but LoggingEventHandlers, and those gave way to an SCP line that
+		// was never written.
+		s.refusing(transport, LogLevelInfo, "refusing %q from %s: the server is stopping",
+			rq.CallingAE, transport.RemoteAddr())
 		r := RejectBusy()
 		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return

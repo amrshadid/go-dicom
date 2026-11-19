@@ -326,6 +326,17 @@ jobs:
           grep -E "comparing with|agree on" openjpeg-decode.log
           grep -q "OpenJPEG and this decoder agree on" openjpeg-decode.log
 
+      # The High-Throughput block decoder (#403): opj_compress writes the
+      # matrix, the tests transcode each codestream to HT code-blocks, and
+      # this decoder must return what opj_decompress returns for them; the
+      # committed HT fixtures are checked against OpenJPEG's digests too.
+      # Skipped without OpenJPEG, so required here.
+      - name: Verify the HTJ2K decoder against OpenJPEG
+        run: |
+          go test ./compress/jpeg2000 -run 'TestHTDecodeMatchesOpenJPEG|TestDecodeHTFixtures' -v > openjpeg-ht.log
+          grep -E "comparing with|agree on|^(---|ok|FAIL)" openjpeg-ht.log
+          grep -q "OpenJPEG and this decoder agree on .* HT codestreams" openjpeg-ht.log
+
       - name: Build CLI
         run: go build -o go-dicom .
 

@@ -133,12 +133,20 @@
 //     [Anonymizer.RedactDetectedText] fills what it finds. It is detection,
 //     not recognition, in pure Go, and it can miss: text that is faint, very
 //     small, hand written, or drawn over a busy part of the picture, and
-//     blurred lettering whose characters run together: short labels of two
-//     or three characters, and a clock. So an automatic
+//     blurred lettering whose characters run together into one shape. Soft
+//     lettering of a fixed-pitch font whose characters stay apart, a clock
+//     or a short label on a screen, is found by the grid its characters
+//     stand on, from three characters up. So an automatic
 //     redaction is recorded as automatic and unverified, Burned In
 //     Annotation is not set to NO, and an image is clean when a person has
 //     looked at it. A program with a better detector supplies it through
 //     the [TextDetector] interface.
+//
+//     It can also be wrong the other way: on a smoothed scan, anatomy taken
+//     at a reduced scale can line up like large lettering. When it is wrong
+//     so, it is wrong by a great deal, so an automatic redaction whose
+//     regions cover more than [MaxDetectedShare] of the picture is refused
+//     with [ErrImplausibleRedaction] and nothing is filled.
 //
 //   - Private tags that were deliberately retained. The basic profile removes
 //     private attributes outside the safe list, but one kept on purpose may
