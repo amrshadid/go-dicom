@@ -95,10 +95,7 @@ func printDataSet(out io.Writer, ds *dataset.Dataset, indent string) {
 		if t, ok := elem.GetTag().(tag.Tag); ok {
 			name = t.GetName()
 		}
-		switch value := elem.GetValue().(type) {
-		case []byte:
-			fmt.Fprintf(out, "%s%-40s %s\n", indent, name, string(value))
-		case *sequence.Sequence:
+		if value, isSeq := elem.GetValue().(*sequence.Sequence); isSeq {
 			fmt.Fprintf(out, "%s%s\n", indent, name)
 			for i := 0; i < value.Length(); i++ {
 				raw, err := value.Get(i)
@@ -112,6 +109,12 @@ func printDataSet(out io.Writer, ds *dataset.Dataset, indent string) {
 				fmt.Fprintf(out, "%s  Item %d\n", indent, i+1)
 				printDataSet(out, item, indent+"    ")
 			}
+			continue
+		}
+		// Through Bytes: a value held as anything but []byte was left out
+		// of the line altogether (#420).
+		if raw, ok := elem.Bytes(); ok {
+			fmt.Fprintf(out, "%s%-40s %s\n", indent, name, string(raw))
 		}
 	}
 }

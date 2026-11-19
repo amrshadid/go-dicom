@@ -945,6 +945,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frame shorter than the image is now an error from `DecodedPixelData` too,
   as it already was from `DecompressInPlace`.
 
+- **A value held as a Go string or number is read in every package**
+  (#420). `validate`, `fileset`, `network`, `sr`, `dcmstore` and the
+  commands read a value only when it was held as `[]byte`, so a data set
+  built in memory read differently from the same data set read from a file:
+  a file-set of such data sets could not be indexed (its UIDs read as
+  absent), a storage commitment report read as no instances, a UPS state
+  as none, a command set built with numbers could not be encoded, a SOP
+  Instance UID held as a `[]string` was sent as `[1.2.3]`, an SR lost its
+  text and its by-reference items, and the store indexed a person name with
+  its other groups as the alphabetic group alone. Each now reads through
+  `DataElement.Bytes`. Files read from disk hold `[]byte` and read as
+  before; `show --json` is unchanged.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

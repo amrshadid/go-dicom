@@ -640,7 +640,7 @@ func (s *SCP) handleCMove(ctx context.Context, assoc *Association, handler Handl
 
 	moveDest := ""
 	if elem, ok := cmdDS.Get(tagMoveDestination); ok {
-		moveDest = extractStringValue(elem.GetValue())
+		moveDest = extractStringValue(elem)
 	}
 
 	req := &CMoveRequest{
@@ -1012,8 +1012,8 @@ func instanceUIDs(ds *dataset.Dataset) (sopClassUID, sopInstanceUID string, ok b
 		return "", "", false
 	}
 
-	sopClassUID = extractStringValue(classElem.GetValue())
-	sopInstanceUID = extractStringValue(instElem.GetValue())
+	sopClassUID = extractStringValue(classElem)
+	sopInstanceUID = extractStringValue(instElem)
 	if sopClassUID == "" || sopInstanceUID == "" {
 		return "", "", false
 	}
