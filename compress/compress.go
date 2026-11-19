@@ -1030,9 +1030,15 @@ func (d *RLEDecompressor) CanDecompress(data []byte) bool {
 type JPEGDecompressor struct {
 	mu sync.RWMutex
 
-	// KeepYCbCr leaves a color-transformed JPEG in its own color space rather
-	// than converting to RGB. Set it when the instance's Photometric
-	// Interpretation is one of the YBR forms.
+	// KeepYCbCr returns the three components of a color frame as the stream
+	// stores them, with no YCbCr to RGB conversion. Without it the decoder
+	// guesses the color space from the stream the way libjpeg does (a JFIF or
+	// Adobe marker, else the component identifiers) and converts a frame it
+	// takes for YCbCr.
+	//
+	// The name is older than the rule: NewJPEGDecompressorForPhotometric sets
+	// it for RGB as well as for the YBR forms, because once a data set says
+	// what the components are, the stream is not asked.
 	KeepYCbCr bool
 }
 
@@ -1041,15 +1047,24 @@ func NewJPEGDecompressor() *JPEGDecompressor {
 	return &JPEGDecompressor{}
 }
 
-// NewJPEGDecompressorForPhotometric returns a decompressor that leaves the
-// samples in the color space the Photometric Interpretation names.
+// NewJPEGDecompressorForPhotometric returns a decompressor whose color frames
+// come back in the color space the Photometric Interpretation names: the
+// components as stored, never converted.
 //
-// A JPEG carrying YCbCr is normally converted to RGB on decode. That is right
-// for an instance whose attribute says RGB and wrong for one that says
-// YBR_FULL, where the attribute describes the samples as stored and a reader
-// will convert them itself.
+// The JPEG Interchange Format does not say what color space its components
+// are in, and PS3.5 8.2.1 has the data set say it instead: RGB means no color
+// transform was applied when the frame was compressed, YBR_FULL and
+// YBR_FULL_422 that one was. A JFIF or Adobe marker, or component identifiers
+// spelling R, G, B, are what a JPEG decoder without a data set guesses from;
+// with one they do not overrule it. Guessing made a JPEG whose attribute says
+// RGB, and whose stream carries no marker, come out as if it were YCbCr: a
+// gray picture turned magenta. dcmtk decodes by the same rule by default. A
+// YBR frame stays YBR, described as such, for the reader to convert.
+//
+// Any other value, MONOCHROME2 or none, leaves the guess to the stream, as
+// NewJPEGDecompressor does.
 func NewJPEGDecompressorForPhotometric(photometric string) *JPEGDecompressor {
-	return &JPEGDecompressor{KeepYCbCr: strings.HasPrefix(photometric, "YBR")}
+	return &JPEGDecompressor{KeepYCbCr: photometric == "RGB" || strings.HasPrefix(photometric, "YBR")}
 }
 
 // Decompress decompresses JPEG data and returns raw pixel data, one byte a
@@ -1100,6 +1115,9 @@ func (d *JPEGDecompressor) decode(data []byte) ([]byte, int, error) {
 		return img.pack(), img.precision, nil
 	}
 
+	if d.KeepYCbCr {
+		data = withJFIFMarker(data)
+	}
 	reader := bytes.NewReader(data)
 	img, err := jpeg.Decode(reader)
 	if err != nil {
@@ -1115,6 +1133,28 @@ func (d *JPEGDecompressor) decode(data []byte) ([]byte, int, error) {
 	return samplesFromImage(img, d.KeepYCbCr), 8, nil
 }
 
+// withJFIFMarker returns data with a JFIF APP0 segment after its SOI.
+//
+// image/jpeg makes the color decision itself: an Adobe marker with transform 0,
+// or component identifiers R, G, B, give an RGBA image of the components as
+// stored, and anything else a YCbCr image converted on the way out. Where the
+// data set has already said what the components are, a JFIF marker is how to
+// tell image/jpeg not to decide: it rules out RGB before the other two are
+// looked at, so the frame always comes back as its three stored planes, and
+// subsampled chroma is upsampled the one way samplesFromImage does it, not by
+// image/jpeg's RGB path, which repeats it along a row and not at all down a
+// column. The marker carries nothing else the decoder uses.
+func withJFIFMarker(data []byte) []byte {
+	if len(data) < 2 {
+		return data
+	}
+	jfif := []byte{0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00}
+	out := make([]byte, 0, len(data)+len(jfif))
+	out = append(out, data[:2]...)
+	out = append(out, jfif...)
+	return append(out, data[2:]...)
+}
+
 // samplesFromImage flattens a decoded JPEG to DICOM pixel data.
 //
 // The sample count has to follow the image, not a guess. This emitted three
@@ -1124,10 +1164,11 @@ func (d *JPEGDecompressor) decode(data []byte) ([]byte, int, error) {
 // third of the rows, each pixel smeared across three, and nothing reported a
 // problem.
 //
-// keepYCbCr leaves a color-transformed JPEG in its own color space. A DICOM
+// keepYCbCr returns the components of a color frame as stored. A DICOM
 // instance whose Photometric Interpretation is YBR_FULL describes the samples
 // as stored, and converting them to RGB while the attribute still says YBR
-// leaves a reader to apply the conversion a second time.
+// leaves a reader to apply the conversion a second time; one that says RGB
+// was never transformed, and converting it invents a transform.
 func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 	bounds := img.Bounds()
 	width := bounds.Dx()
@@ -1158,21 +1199,22 @@ func samplesFromImage(img image.Image, keepYCbCr bool) []byte {
 						out = append(out, c.Y, c.Cb, c.Cr)
 						continue
 					}
-					r, g, b, _ := c.RGBA()
-					out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+					r, g, b := yccToRGB(c.Y, c.Cb, c.Cr)
+					out = append(out, r, g, b)
 				}
 			}
 			return out
 		}
 		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 			for x := bounds.Min.X; x < bounds.Max.X; x++ {
+				c := src.YCbCrAt(x, y)
 				if keepYCbCr {
-					c := src.YCbCrAt(x, y)
 					out = append(out, c.Y, c.Cb, c.Cr)
 					continue
 				}
-				r, g, b, _ := src.At(x, y).RGBA()
-				out = append(out, byte(r>>8), byte(g>>8), byte(b>>8))
+				// Converted as libjpeg converts, not by image/color; see ycc.go.
+				r, g, b := yccToRGB(c.Y, c.Cb, c.Cr)
+				out = append(out, r, g, b)
 			}
 		}
 		return out

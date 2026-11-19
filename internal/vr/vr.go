@@ -108,8 +108,18 @@ func OffersChoice(entry string) bool {
 }
 
 // MatchesDictionary reports whether an element's VR is one the dictionary's
-// entry allows for its tag: one of the choices Choices gives.
+// entry allows for its tag: the entry itself, or one of the choices Choices
+// gives.
+//
+// The entry itself matches because that is what an element read from an
+// Implicit VR file carries: its VR comes from the dictionary, and where the
+// dictionary offers a choice the reader keeps the whole of it, "OB or OW" for
+// Pixel Data. Compared with each choice only, such an element was reported as
+// a mismatch with itself (#483).
 func MatchesDictionary(actual, entry string) bool {
+	if actual == entry {
+		return true
+	}
 	for _, choice := range Choices(entry) {
 		if actual == choice {
 			return true

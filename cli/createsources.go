@@ -255,7 +255,7 @@ func rawBytes(ds *dataset.Dataset, t tag.Tag) []byte {
 	if !ok {
 		return nil
 	}
-	b, _ := elem.GetValue().([]byte)
+	b, _ := elem.Bytes()
 	return b
 }
 

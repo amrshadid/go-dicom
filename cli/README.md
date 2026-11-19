@@ -52,7 +52,7 @@ go-dicom diff a.dcm b.dcm --json --ignore-meta --ignore SOPInstanceUID
 go-dicom dicomdir study/                     # Write study/DICOMDIR; refuses file names that are not File IDs
 go-dicom dicomdir --copy-to media/ export/   # ...or copy the files as DICOM/IM000001... and index those
 go-dicom dicomdir --list study/DICOMDIR      # The records as a tree
-go-dicom sr report.dcm                       # A structured report's content tree, indented
+go-dicom sr report.dcm                       # A structured report's content tree, indented, with its verifiers and predecessors
 go-dicom sr report.dcm --json                # ...with each item's position
 go-dicom convert ct.dcm ct.png --format png  # Render as PNG (or jpeg), windowed
 go-dicom convert cine.dcm f.png --format png --frame all   # f-0001.png, f-0002.png, ...
@@ -61,6 +61,7 @@ go-dicom tag-doc -keyword PatientName        # Tag documentation
 go-dicom qido -match "PatientName=Doe*" https://pacs.example.org/dicom-web   # Search a DICOMweb service
 go-dicom wado -study 1.2.840.1 https://pacs.example.org/dicom-web study/     # Download a study
 go-dicom stow https://pacs.example.org/dicom-web study/                      # Upload files
+go-dicom storescp -allow PRISMA1@10.0.0.5 -allow-file modalities.txt         # Admit a title only from its address; a list in a file
 ```
 
 ## The library's log

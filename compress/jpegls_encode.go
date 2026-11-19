@@ -101,7 +101,9 @@ func EncodeJPEGLSNearLossless(samples []byte, width, height, components, bitsSto
 			near, min(255, maxVal/2), bitsStored)
 	}
 	params := &jpeglsParams{maxVal: maxVal, near: near}
-	params.computeDefaults(false)
+	if err := params.computeDefaults(); err != nil {
+		return nil, err
+	}
 
 	out := make([]byte, 0, len(samples)/2+64)
 	out = appendMarker(out, markerSOI)
