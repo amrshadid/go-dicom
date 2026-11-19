@@ -190,6 +190,30 @@ func TestConformingCorpusFilesHaveNoFindings(t *testing.T) {
 	}
 }
 
+// A value a reader left in the file (dataelem.ValueInFile) is judged by its
+// length: Pixel Data of some bytes is a Type 1C value that is there, and a
+// Type 1 value of no bytes is empty. The checker needs no value's bytes for
+// that, which is what lets a file be checked without its pixels in memory.
+func TestAValueLeftInTheFileIsJudgedByItsLength(t *testing.T) {
+	ds := corpusFile(t, "CT_small.dcm")
+	ds.Remove(tag.New(0x7FE0, 0x0010))
+	if err := ds.Add(dataelem.NewDataElement(tag.New(0x7FE0, 0x0010), dataelem.OW,
+		dataelem.ValueInFile{Offset: 1000, Length: 32768})); err != nil {
+		t.Fatal(err)
+	}
+	if got := errorsAndWarnings(check(t, ds)); len(got) != 0 {
+		t.Errorf("Pixel Data left in the file: %v", got)
+	}
+	ds.Remove(tag.New(0x0008, 0x0060))
+	if err := ds.Add(dataelem.NewDataElement(tag.New(0x0008, 0x0060), dataelem.CS,
+		dataelem.ValueInFile{Offset: 1000, Length: 0})); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(errorsAndWarnings(check(t, ds)), "\n"); got != "error (0008,0060) Type 1" {
+		t.Errorf("Modality of no bytes left in the file: %q; want it empty", got)
+	}
+}
+
 // A data set with no SOP Class UID, or one this package has no rules for, is
 // refused by name rather than passed.
 func TestAnUnknownSOPClassIsRefused(t *testing.T) {

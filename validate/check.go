@@ -628,6 +628,10 @@ func isEmpty(elem *dataelem.DataElement, isSeq bool, seq *sequence.Sequence) boo
 	switch v := elem.GetValue().(type) {
 	case nil:
 		return true
+	case dataelem.ValueInFile:
+		// Left in the file by a reader that skips bulk data: its length is
+		// all the Type needs.
+		return v.Length == 0
 	case []byte:
 		if dataelem.IsTextVR(elem.GetVR()) {
 			return strings.Trim(string(v), " \x00") == ""

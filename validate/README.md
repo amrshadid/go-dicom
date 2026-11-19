@@ -22,6 +22,11 @@ for _, f := range report.Findings {
 }
 ```
 
+A data set read with `filereader.ReadOptions{SkipBulkData: true}` and
+`GetDatasetWithValuesInFile` is checked the same as one read whole: the
+checker needs a bulk value's length, never its bytes. `go-dicom validate`
+reads that way, so memory follows the metadata and not the image.
+
 From the command line:
 
 ```
