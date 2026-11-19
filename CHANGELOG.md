@@ -759,8 +759,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back in its own syntax and in Implicit VR reads in pydicom to the elements
   of the original, the three files with private sequences included,
   except two truncated files whose cut-off element this library does not
-  read. The network codec has the same defect, and refuses such a sequence
-  on receipt (#424).
+  read. The network codec had the same defect (#424, below).
+
+- **A private sequence crosses an association as a sequence** (#424). The
+  network codec sent every sequence with its byte count, so in Implicit VR a
+  vendor's private sequence reached the peer as one opaque value: dcmtk's
+  `storescp +B` stored `nested_priv_SQ.dcm`'s `(0001,0001)` as
+  `?? fe\ff\00\e0...`, 66 bytes. On receipt it read an undefined-length
+  element the dictionary does not call a sequence as encapsulated pixel data,
+  so the same instance from pynetdicom's `storescu` was refused with 0110
+  ("a pixel data fragment declares 4294967295 bytes but only 179 remain"), on
+  every path that hands a handler the decoded data set: `storescp`, `qrscp`,
+  queries and storage commitment. Inside an item such an element silently
+  ended the item. Sending now follows the file writer's rule, undefined
+  length and a delimiter for a sequence the dictionary does not know in
+  Implicit VR, and receiving follows the file reader's: undefined length on
+  anything but pixel data is a sequence, and a UN element's items are
+  Implicit VR Little Endian (PS3.5 6.2.2). Both writers and both readers ask
+  `tag.Tag` the same two questions, `SequenceNeedsUndefinedLength` and
+  `IsPixelData`. `nested_priv_SQ.dcm` and `UN_sequence.dcm` now cross in
+  Implicit VR from pynetdicom to `storescp`, and from `storescu` to dcmtk's
+  `storescp` and to pynetdicom, and read in pydicom element for element like
+  the original. dcmtk's own `storescu` still sends a private sequence with its
+  byte count, which no receiver can tell from a value; dcmtk's `storescp`
+  stores it so too.
 
 - **A file-set does not take in a data set with no File Meta Information**
   (#394). `FileSet.AddFile` and `ScanDirectory` accepted a bare data set,
