@@ -3,6 +3,7 @@ package network
 import (
 	"encoding/binary"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/dataset"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -57,6 +58,23 @@ func attributeIdentifierList(cmd *dataset.Dataset) ([]tag.Tag, error) {
 		tags = append(tags, tag.New(binary.LittleEndian.Uint16(data[i:]), binary.LittleEndian.Uint16(data[i+2:])))
 	}
 	return tags, nil
+}
+
+// addAttributeIdentifierList writes an N-GET-RQ's Attribute Identifier List
+// (0000,1005), the inverse of attributeIdentifierList: each tag a group then
+// an element, little endian. An empty list is not written, since its absence
+// already means every attribute (PS3.7 10.1.2.1.4) and an AT value of VM 1-n
+// holds at least one tag.
+func addAttributeIdentifierList(cmd *dataset.Dataset, attributes []tag.Tag) error {
+	if len(attributes) == 0 {
+		return nil
+	}
+	data := make([]byte, 0, 4*len(attributes))
+	for _, t := range attributes {
+		data = binary.LittleEndian.AppendUint16(data, t.Group())
+		data = binary.LittleEndian.AppendUint16(data, t.Element())
+	}
+	return cmd.Add(dataelem.NewDataElement(tagAttributeIdentifierList, dataelem.AT, data))
 }
 
 // NEventReportRequest represents an N-EVENT-REPORT-RQ message.
