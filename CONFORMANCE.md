@@ -401,7 +401,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Supported transfer syntaxes | `SCPConfig.TransferSyntaxes`, the same way, or `SetSupportedTransferSyntaxes` |
 | C-MOVE destinations | `MoveDestinations`, `ResolveMoveDestination` |
 | Commitment requestors | `CommitmentRequestors`, `ResolveCommitmentRequestor` |
-| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, apart from the data set validation warnings of #503 |
+| Logging destination and format | `config.SetLogger`, for the whole library; `SCPConfig.Logger` and `SCUConfig.Logger` (a `*slog.Logger`, nil meaning the global one) for one server or client, which then logs nothing to the global one, the validation warnings of the data sets it decodes included |
 | Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
 
 Everything the library reports goes through `config.Logger`, so one call
