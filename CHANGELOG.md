@@ -1372,6 +1372,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   N-SET, go to the server's logger too. With no logger given, nothing
   changes. Never in a release.
 
+- **A JPEG-LS frame with restart markers decodes** (#452). A frame coded with
+  a restart interval, a DRI segment and an RSTm marker every so many lines
+  as T.87 allows, was refused as corrupt at the first marker: the scan was
+  read straight through it, without starting the decoder again or moving to
+  the byte after it. A frame whose only marker came near the end could
+  decode with no error to a wrong last few lines. CharLS's restart test
+  files now decode to the T.87 test images, as libjpeg decodes them, and
+  1237 generated frames at 2 to 16 bits in all three interleave modes decode
+  as libjpeg decodes them. A marker missing, out of order or where the DRI
+  does not put it is refused with an error saying so.
+
 ## [1.10.0] - 2026-11-17
 
 Three things the library could only do from the other side, it now does

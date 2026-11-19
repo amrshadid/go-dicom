@@ -27,6 +27,18 @@ func FuzzJPEGLSDecompress(f *testing.F) {
 			f.Add(data)
 		}
 	}
+	// Frames with restart intervals, in each interleave mode and with Ri of
+	// 2, 3 and 4 bytes: the DRI segment and the RSTm markers are read
+	// from attacker data too, and a restart moves the reader and resets the
+	// decoder partway through a scan.
+	for _, name := range []string{
+		"p8_rgb_ilv0_ri7.jls", "p8_rgb_ilv1_ri7.jls", "p8_rgb_ilv2_near2_ri7.jls",
+		"p2_near1_ri3.jls", "p16_near255_ri1.jls", "p7_ri10.jls",
+	} {
+		if data, err := os.ReadFile("testdata/jpegls/restart/" + name); err == nil {
+			f.Add(data)
+		}
+	}
 	// A frame header claiming an enormous image, and an LSE with thresholds
 	// that are not ordered.
 	f.Add([]byte{0xFF, 0xD8, 0xFF, 0xF7, 0x00, 0x0B, 0x10, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x01, 0x11, 0x00})
