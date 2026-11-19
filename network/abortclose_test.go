@@ -15,10 +15,11 @@ import (
 // and the reset discards what the peer has not yet read: the A-ABORT. The
 // peer saw a broken connection in place of an abort (#513).
 //
-// The peer here is associated and then sends, in one write, a PDU of a type
-// that does not exist and a megabyte after it. The SCP aborts at the first
-// six bytes with the rest unread. The peer must still read a whole A-ABORT,
-// the ten bytes of PS3.8 9.3.8, before the connection ends.
+// The peer here is associated and then sends a PDU of a type that does not
+// exist and a megabyte after it, and only then reads, as a client reads
+// after it has sent its request. The SCP aborts at the first six bytes with
+// the rest unread. The peer must still read a whole A-ABORT, the ten bytes of
+// PS3.8 9.3.8, before the connection ends.
 func TestAbortReachesAPeerThatIsStillSending(t *testing.T) {
 	server, err := StartServer(context.Background(), SCPConfig{AETitle: "ARCHIVE", Port: 0, BindAddress: "127.0.0.1"}, &EchoHandler{})
 	if err != nil {
@@ -49,11 +50,11 @@ func TestAbortReachesAPeerThatIsStillSending(t *testing.T) {
 		}
 
 		// A PDU of type 0x7F, which is none, and a megabyte the SCP will
-		// not read. Written on a goroutine: the write may not finish once
-		// the SCP has stopped reading.
-		go func() {
-			_, _ = conn.Write(append([]byte{0x7F, 0, 0, 0, 0, 4, 1, 2, 3, 4}, bytes.Repeat([]byte{0xAA}, 1<<20)...))
-		}()
+		// not read, written before anything is read: a client sends its
+		// request and then waits for the answer. The write may fail once the
+		// SCP has stopped reading, and what it reports is not the point.
+		_, _ = conn.Write(append([]byte{0x7F, 0, 0, 0, 0, 4, 1, 2, 3, 4}, bytes.Repeat([]byte{0xAA}, 1<<20)...))
+		time.Sleep(50 * time.Millisecond)
 
 		abort := make([]byte, 10)
 		if _, err := io.ReadFull(conn, abort); err != nil {
