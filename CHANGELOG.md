@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An N-GET can ask for the attributes it wants** (#486). An SCP has read
+  the Attribute Identifier List (0000,1005) since #380, but `SCU.NGet` could
+  not send one, so a requester always asked for every attribute.
+  `SCU.NGetAttributes` takes the tags wanted and sends them in that order
+  (PS3.7 10.1.2.1.4). `NGet` is unchanged and sends no list. It is a new
+  method, not a parameter added to `NGet`, so that a method value or an
+  interface written against `NGet` keeps compiling. Against pynetdicom's
+  N-GET SCP, `NGetAttributes` with Manufacturer and Device Serial Number
+  receives those two of the five attributes, and pynetdicom reports the two
+  tags as the list it was given.
+
 - **`modify` takes a binary value from a file, and changes or removes an
   attribute everywhere it occurs** (#439). `-set-file` and `-insert-file`
   (dcmodify's `-mf` and `-if`) give an OB, OW, OF, OD, OL, OV or UN attribute

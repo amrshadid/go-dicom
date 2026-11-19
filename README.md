@@ -469,7 +469,7 @@ go-dicom's `network` package provides feature parity with [pynetdicom](https://g
 | C-MOVE (Retrieve) | Yes | Yes | `scu.Move(ctx, ds, dest)`; SCP opens an association to the destination AE and transfers via C-STORE sub-operations |
 | C-GET (Get) | Yes | Yes | `scu.Get(ctx, ds)` with `SCUConfig.OnCStore`; SCP transfers instances via C-STORE sub-operations |
 | N-EVENT-REPORT | Yes | Yes | Full N-DIMSE service support |
-| N-GET | Yes | Yes | |
+| N-GET | Yes | Yes | `scu.NGet` for every attribute, `scu.NGetAttributes` for those named in the Attribute Identifier List; the SCP gives the list to the handler |
 | N-SET | Yes | Yes | |
 | N-ACTION | Yes | Yes | |
 | N-CREATE | Yes | Yes | |

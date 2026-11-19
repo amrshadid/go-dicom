@@ -966,6 +966,9 @@ checks that pynetdicom receives the attribute list); and an SCP never gave an
 N-GET handler the Attribute Identifier List (#380, fixed: the media creation
 SCP test now asserts the handler is given the two tags pynetdicom asks for, in
 order). The media creation SCP answers N-CREATE without an attribute list.
+The SCU sends an Attribute Identifier List with `SCU.NGetAttributes` (#486);
+pynetdicom's N-GET SCP receives the tags in the order given and returns only
+those attributes. `SCU.NGet` sends none, which asks for every attribute.
 
 Writing those tests found a defect in the documented path.
 `NonPatientObjectPresentationContexts` proposed only the five *storage* classes
