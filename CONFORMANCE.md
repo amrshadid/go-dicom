@@ -266,9 +266,14 @@ These four are the same default pynetdicom uses, and all four are fully
 supported: the data set codec encodes and decodes each, including the byte swap
 for big endian and the deflate stream.
 
-**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns all 37 the
-standard defines; pass it to `SetSupportedTransferSyntaxes` on an SCP, or use it
-when building presentation contexts on an SCU. It is not the default for the
+**Compressed syntaxes are opt-in.** `AllTransferSyntaxes()` returns 37: the
+four above and 33 that carry compressed pixel data. Pass it to
+`SetSupportedTransferSyntaxes` on an SCP, or use it when building presentation
+contexts on an SCU. The three JPEG XL transfer syntaxes (`.110`, `.111`,
+`.112`) are not among the 37, so no server here accepts them unasked. A list
+is used exactly as given, so naming their UIDs in `SCPConfig.TransferSyntaxes`
+or `SetSupportedTransferSyntaxes` beside the others has an SCP accept a JPEG
+XL context, and the instance is then carried as it is, not decoded (§3.2). It is not the default for the
 same reason it is not pynetdicom's: a context list grows with the product of SOP
 classes and transfer syntaxes, and proposing every combination makes an
 association request large enough to matter.
@@ -289,8 +294,8 @@ distribution accept everything:
 
 | Server | Transfer syntaxes |
 |---|---|
-| `go-dicom storescp` | all 37 |
-| `go-dicom qrscp` | all 37, via `dcmstore.SupportedTransferSyntaxes()` |
+| `go-dicom storescp` | the 37 of `AllTransferSyntaxes()` |
+| `go-dicom qrscp` | the same 37, via `dcmstore.SupportedTransferSyntaxes()` |
 | `go-dicom echoscp` | the default four; verification carries no data set |
 | `go-dicom wlmscp` | the default four; a worklist query and its answers carry no pixel data |
 
@@ -422,7 +427,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
 | After an abort | An A-ABORT this side sends is followed by up to one second in which the peer may close the connection, what arrives being read and dropped (PS3.8 9.2, AA-1, AA-6, AA-8); the standard's timer for this is ARTIM, and one second is kept so that a peer that does not close holds only the connection |
-| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp` and `qrscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
+| Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp`, `qrscp` and `wlmscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
 | Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
 | A failed TLS handshake | Reported to `SCPConfig.Events` as `EVTTLSHandshakeFailed`, with the client's address and a `*TLSHandshakeError` naming the check that failed; nothing of the client's certificate is carried |
@@ -437,7 +442,8 @@ of, and does not name a file it could not read; both are counted as refused.
 | Network log verbosity | `network.SetDefaultLogLevel`, `network.DebugLogger` |
 
 Everything the library reports goes through `config.Logger`, so one call
-redirects or silences all of it. Network messages carry a `component=network`
+redirects or silences all of it, but for a server, a client or a read
+(`filereader.ReadOptions.Logger`) given a logger of its own. Network messages carry a `component=network`
 attribute for filtering, and default to warnings and errors only.
 
 ---
@@ -578,31 +584,6 @@ how decoded samples are shaped and coloured, and the one tolerance.
   bits OpenJPEG lands up to two away, and this decoder is the nearer of the two
   to the samples that were encoded: on a generated 70×65 16-bit image written
   by `opj_compress -I`, a mean squared error of 370 against OpenJPEG's 1281.
-
-  **High-Throughput code-blocks (Part 15, ITU-T T.814) decode too**: the HT
-  cleanup pass with its MEL, VLC and MagSgn streams, the HT SigProp pass
-  (with the vertically causal style) and the HT MagRef pass, the CAP marker
-  that declares Part 15, and HT tile-components beside Part 1 ones. Everything
-  around the code-blocks is the Part 1 decoder above, so HT codestreams have
-  every tiling, precinct, progression, layer and filter it has. The CxtVLC
-  tables of Annex C were read out of the ITU-T text by a script and are checked
-  to be complete prefix codes with consistent patterns
-  (`TestCxtVLCTablesAreCompletePrefixCodes`). The third-party HT codestreams
-  that exist, pydicom-data's two HTJ2K files and openjpeg-data's four HT
-  codestreams, all decode to OpenJPEG 2.5.4's samples, exactly where
-  reversible. None of them has a refinement pass, a second layer, tiles, more
-  than 8 bits or the vertically causal style, and nothing available writes HT
-  (OpenJPEG decodes it and does not encode it), so the tests carry an HT
-  encoder of their own written from T.814 Annex F: every codestream of an
-  `opj_compress` matrix like the one above is transcoded to HT code-blocks,
-  cleanup alone or with refinement passes, and OpenJPEG's decoder is the
-  reference (`TestHTDecodeMatchesOpenJPEG`, 390 codestreams, run in CI).
-  Refinement passes in a later layer than their cleanup pass are the one case
-  OpenJPEG 2.5.4 cannot decode: its packet reader adds them to the cleanup
-  segment, where T.814 B.2 makes them a segment of their own. That case is
-  checked to decode exactly as the same blocks in one layer
-  (`TestHTRefinementInLaterLayers`). HTJ2K pixel data in a data set is still
-  refused by name; the decoder is reached through `compress/jpeg2000` alone.
 
   **High-Throughput code-blocks (Part 15, ITU-T T.814) decode too**: the HT
   cleanup pass with its MEL, VLC and MagSgn streams, the HT SigProp pass
@@ -977,12 +958,6 @@ how decoded samples are shaped and coloured, and the one tolerance.
   this library counts the 2 it is stored in, so `-r 7.5` is its 10:1 here.
   CI runs the `opj_decompress` check at 10:1.
 
-  *Verified:* OpenJPEG, which shares no code with this library, decodes what
-  the encoder writes. `opj_decompress` returns every sample of 360 generated
-  images of each depth, sign and shape, and of every uncompressed image in
-  pydicom's corpus after it is written as `.90`; dcmtk reads each file and
-  receives one over the network with its codestream intact. Both run in CI.
-
   **JPEG Lossless (`.57` and `.70`)** is ITU-T T.81 Process 14, in pure Go:
   one scan with every component interleaved at full resolution, Huffman
   tables built for each frame (T.81 K.2), since the example tables of Annex K
@@ -1047,9 +1022,9 @@ how decoded samples are shaped and coloured, and the one tolerance.
   decoder would only show the two agree — which is the failure mode the RLE
   encoder shipped with in 1.3.0.
 
-  Decoding has no gaps of its own: every compressed syntax in the table above
-  decodes here, so an instance stored under any of them can be transcoded onto
-  whichever context a peer accepts.
+  Decoding has one gap of its own: every compressed syntax in the table of
+  §3.2 but JPEG XL decodes here, so an instance stored under any of the
+  others can be transcoded onto whichever context a peer accepts.
 
 ### 8.3 Writing
 
