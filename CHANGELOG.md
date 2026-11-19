@@ -927,6 +927,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dcmtk 3.7.0 and Orthanc 1.13 neither embed nor apply a profile, and
   Orthanc ignores `iccprofile`.
 
+- **`scripts/benchmark.py` times the same jobs with go-dicom, dcmtk and
+  pydicom.** The README had one table, the parser inside one process, and no
+  number for decoding a codec or sending over the network. The script reads a
+  file, decodes RLE, JPEG, JPEG Lossless, JPEG-LS and JPEG 2000, and sends over
+  loopback, each as a whole process with its median of 11 runs, after checking
+  that every program decodes to the samples that were encoded. The README
+  has the table this machine printed, with the date, hardware and versions, and
+  says the machine was loaded (#361).
+
 ### Changed
 
 - **JPEG-LS and lossless JPEG decode faster** (#563). The JPEG-LS decoder
