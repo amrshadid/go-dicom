@@ -201,6 +201,13 @@ USAGE:
   is one present where it does not, unless PS3.3 says "May be present
   otherwise".
 
+  A condition PS3.3 states in a fixed form naming one attribute ("Required
+  if Pixel Data Provider URL (0028,7FE0) is not present", "... is present",
+  "... has a Value of YES") is evaluated: a Type 1C or 2C attribute, or a
+  Conditional module, absent where its condition holds is an error, and so
+  is one present where it does not, unless PS3.3 says "May be present
+  otherwise".
+
 NOT CHECKED:
   A condition PS3.3 states in prose is reported as "not checked", never
   passed. Also not checked: attributes of repeating groups such as

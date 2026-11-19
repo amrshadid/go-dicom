@@ -140,7 +140,7 @@ func (ds *Dataset) uint16Value(t tag.Tag) (uint16, bool) {
 	if !ok {
 		return 0, false
 	}
-	raw, ok := valueBytes(elem)
+	raw, ok := elem.Bytes()
 	if !ok || len(raw) < 2 {
 		return 0, false
 	}

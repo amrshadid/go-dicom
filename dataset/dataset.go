@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -63,6 +64,14 @@ func (ds *Dataset) TransferSyntaxUID() string {
 // Elements are validated against the DICOM dictionary for semantic checks.
 // Validation is non-fatal; warnings are printed but the element is added.
 func (ds *Dataset) Add(elem *dataelem.DataElement) error {
+	return ds.AddWithContext(context.Background(), elem)
+}
+
+// AddWithContext is Add, logging its validation warnings to the logger ctx
+// carries (config.WithLogger) instead of config.Logger. A file read with a
+// logger of its own builds its data set this way, so that nothing the read
+// does reaches the global logger.
+func (ds *Dataset) AddWithContext(ctx context.Context, elem *dataelem.DataElement) error {
 	if elem == nil {
 		return fmt.Errorf("element is nil")
 	}
@@ -84,7 +93,7 @@ func (ds *Dataset) Add(elem *dataelem.DataElement) error {
 	// Perform semantic validation against DICOM dictionary.
 	// Non-fatal; logs a warning through the configurable logger and continues.
 	if err := validateElementSemantics(t, elem); err != nil {
-		config.Logger.Warn("dataset: semantic validation",
+		config.LoggerFromContext(ctx).Warn("dataset: semantic validation",
 			"tag", t.String(), "err", err)
 	}
 
@@ -406,34 +415,13 @@ func (ds *Dataset) String() string {
 		t := tag.FromInt(tagVal)
 		vr := elem.GetVR()
 		var valueLen int
-		if b, ok := valueBytes(elem); ok {
+		if b, ok := elem.Bytes(); ok {
 			valueLen = len(b)
 		}
 		result += fmt.Sprintf("  [%d] %s (%s): %d bytes\n", i, t.Hex(), vr, valueLen)
 	}
 
 	return result
-}
-
-// valueBytes returns the bytes an element's value stands for, whatever Go type
-// it is held as, and false when it holds none (a sequence, a value still in a
-// file, or nothing).
-//
-// Elements read from a file hold []byte, but dataelem.NewDataElement takes any
-// value and the library builds some itself (de-identification records Patient
-// Identity Removed as the string "YES"). An accessor that asserted []byte read
-// those as absent, so every accessor that wants the bytes goes through here, and
-// through dataelem.ValueBytes, which is also what the writer uses: one answer to
-// "what does this element hold" for reading and for writing.
-func valueBytes(elem *dataelem.DataElement) ([]byte, bool) {
-	if elem == nil {
-		return nil, false
-	}
-	b, err := dataelem.ValueBytes(elem.GetVR(), elem.GetValue())
-	if err != nil {
-		return nil, false
-	}
-	return b, true
 }
 
 // Helper function to copy byte slice
@@ -516,7 +504,7 @@ func (ds *Dataset) GetValue(t tag.Tag) []byte {
 		return nil
 	}
 
-	if b, ok := valueBytes(elem); ok {
+	if b, ok := elem.Bytes(); ok {
 		return b
 	}
 	return nil
@@ -620,7 +608,7 @@ func (ds *Dataset) GetStatistics() Statistics {
 		elem := ds.elements[tagVal]
 		vr := elem.GetVR()
 
-		if b, ok := valueBytes(elem); ok {
+		if b, ok := elem.Bytes(); ok {
 			stats.TotalBytes += len(b)
 		}
 		stats.ByVR[string(vr)]++
