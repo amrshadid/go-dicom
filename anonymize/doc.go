@@ -133,8 +133,10 @@
 //     [Anonymizer.RedactDetectedText] fills what it finds. It is detection,
 //     not recognition, in pure Go, and it can miss: text that is faint, very
 //     small, hand written, or drawn over a busy part of the picture, and
-//     blurred lettering whose characters run together: short labels of two
-//     or three characters, and a clock. So an automatic
+//     blurred lettering whose characters run together into one shape. Soft
+//     lettering of a fixed-pitch font whose characters stay apart, a clock
+//     or a short label on a screen, is found by the grid its characters
+//     stand on, from three characters up. So an automatic
 //     redaction is recorded as automatic and unverified, Burned In
 //     Annotation is not set to NO, and an image is clean when a person has
 //     looked at it. A program with a better detector supplies it through

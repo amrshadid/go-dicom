@@ -9,16 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **The text of a file read for its attributes is decoded to the read's
-  logger** (#539). `attributes.TextEncodings` and `DecodeText` take no
-  logger, so what decoding logs, a misspelled Specific Character Set read
-  as the term it means, an unknown one read as the default repertoire, a
-  value that does not decode, went to `config.Logger` even for a read
-  given a logger of its own (`ReadOptions.Logger`).
-  `TextEncodingsWithContext` and `DecodeTextWithContext` log to the logger
-  the context carries (`config.WithLogger`), as the rest of a read does.
-  Every corpus file and two made from charset files with a misspelled and
-  an unknown term decode with nothing reaching the global logger.
+- **Which transfer syntax each coder writes is one table** (#534). A send,
+  the `compress` command and a frame encoded over DICOMweb each kept their
+  own map from a syntax to a `Dataset.Compress…InPlace` method, with which
+  of them lose detail and what each takes, so a coder added to one was
+  missing from the other two. `dataset.PixelEncoders` and
+  `PixelEncoderFor` are that table, with each syntax's name, whether it is
+  lossy and its parameter (JPEG quality, JPEG-LS NEAR, a JPEG 2000 rate),
+  and all three read it. Nothing they accept, refuse or write changed: for
+  every transfer syntax in the dictionary, each of the three gives the same
+  answer, message and bytes as before.
 
 - **A query can be matched against a data set** (#515). C-FIND matching
   lived only inside `dcmstore`, unexported and written against its index, so
@@ -832,6 +832,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tests with two others, and all three decode to pydicom's samples. Nothing is
   encoded into HTJ2K. JPEG XL stays refused by name.
 
+- **The text detector finds a clock and short labels in a small fixed-pitch
+  font** (#535). On the ultrasound screen in pydicom's corpus,
+  `examples_rgb_color.dcm`, the clock and the `PWR` labels beside the color
+  bars were not found: their glyphs are 4 by 6 pixels with soft edges, and
+  measured one by one a soft glyph is drawn like a blob (a `W` fills its
+  box, a `0` has a stroke 4 pixels wide), so what was left of each label was
+  two shapes. A screen's character generator puts every glyph in a cell of
+  one size, so its glyphs have identical boxes a whole number of cells apart
+  however soft their strokes; the detector now looks for three or more on
+  such a grid, on a plain ground, and adds what it finds where nothing else
+  was. On that screen 15 of 17 lines are covered whole, from 11; the fourth
+  `PWR` touches its color bar and is still missed. Every other region over
+  the 79 files of the corpus, and on every picture the tests draw, is
+  unchanged. Lettering blurred until its characters run together is still
+  not found (the 7 drawn known misses), and `auto` stays not the default.
+  A new test measures the detector on lettering it was not shaped by: a
+  second font at three sizes, four kinds of blur, over six real scans of the
+  corpus (51 of 164 lines found, from 50, and no more of any scan marked).
+
+- **The text of a file read for its attributes is decoded to the read's
+  logger** (#539). `attributes.TextEncodings` and `DecodeText` take no
+  logger, so what decoding logs, a misspelled Specific Character Set read
+  as the term it means, an unknown one read as the default repertoire, a
+  value that does not decode, went to `config.Logger` even for a read
+  given a logger of its own (`ReadOptions.Logger`).
+  `TextEncodingsWithContext` and `DecodeTextWithContext` log to the logger
+  the context carries (`config.WithLogger`), as the rest of a read does.
+  Every corpus file and two made from charset files with a misspelled and
+  an unknown term decode with nothing reaching the global logger.
+
 ### Changed
 
 - **dcmtk reads this library's JPEG-LS frames below 8 bits** (#521). dcmtk
@@ -934,6 +964,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than read without its log.
 
 ### Fixed
+
+- **A refusal is logged once where a server has its own logger** (#537).
+  `LoggingEventHandlers` leaves out a refusal the SCP has already logged to
+  the same log, and asked `DefaultLogger` whether it had; since a server can
+  have its own logger (`SCPConfig.Logger`), the SCP's line goes there. A
+  server with its own logger, logging its events to `server.Logger`, had
+  each refusal in its log twice, and one logging its events to the global
+  log with `DefaultLogger` at the info level had the refusal in neither.
+  The event now carries where the SCP logged its line and at what level,
+  and the handler gives way only where that line reached its own log. A
+  stopping server's refusal of an association on a connection it had
+  already accepted was logged by nothing at all; the SCP logs it, at the
+  info level, as it logs every refusal it decides.
 
 - **A C-GET goes on past an instance it cannot encode** (#518). A C-GET
   sub-operation sent its C-STORE-RQ, which says a data set follows, and
