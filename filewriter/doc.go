@@ -154,6 +154,18 @@
 //	_ = w.AddDataElements(filewriter.ElementsFromDataset(ds))
 //	err = w.Write()
 //
+// # Values Made As They Are Written
+//
+// A dataelem.StreamedValue is a value that is produced as the element is
+// written, and ElementsFromDataset sets DataElement.Stream for it. Redacting
+// the pixels of an image left in its file (dataset.Dataset.RedactPixelRegions,
+// anonymize.Anonymizer.CleanPixelData) makes one: the writer calls its
+// WriteValue with the value source, and what it writes is the Pixel Data with
+// the regions filled, native, a part at a time, so the image is never in
+// memory. The bytes are little endian, as a data set holds them, and are
+// reversed for a big endian target. A value that does not come to its stated
+// length is an error, and a target that encapsulates Pixel Data refuses one.
+//
 // # Thread Safety
 //
 // DCMFileWriter is not thread-safe. Each goroutine must have its own writer

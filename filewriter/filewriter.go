@@ -110,6 +110,14 @@ type DataElement struct {
 	// set read with filereader.ReadOptions.SkipBulkData is written back whole:
 	// see filereader.DICOMFile.GetDatasetWithValuesInFile.
 	InFile *dataelem.ValueInFile
+
+	// Stream, when set, says the value is made as it is written: the writer
+	// calls its WriteValue, with the value source (SetValueSource), and what
+	// it writes is the value, as a data set holds it, little endian. Value
+	// and Length are then ignored. It is how an image whose pixels are
+	// redacted while they are copied from the file is written: see
+	// dataset.Dataset.RedactPixelRegions.
+	Stream *dataelem.StreamedValue
 }
 
 // SequenceItem is one item within a Sequence (SQ) element.
@@ -357,6 +365,9 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 	if elem.InFile != nil {
 		return dfw.writeValueInFile(elem, forceExplicitVR)
 	}
+	if elem.Stream != nil {
+		return dfw.writeStreamed(elem, forceExplicitVR)
+	}
 
 	// Bits Allocated decides the width Pixel Data is byte-swapped in below, and
 	// precedes it in tag order. A nested writer has its own, so an icon inside a
@@ -569,6 +580,108 @@ func (dfw *DCMFileWriter) writeValueInFile(elem *DataElement, forceExplicitVR bo
 
 	if pad {
 		// The VR's padding byte, as padValueForVR gives a value in memory.
+		if err := dfw.writer.WriteBytes(padValueForVR(vr, []byte{0})[1:]); err != nil {
+			return fmt.Errorf("failed to write data element value: %w", err)
+		}
+		dfw.position++
+	}
+	return nil
+}
+
+// streamWriter is where a streamed value is written: it reverses what it is
+// given to the byte order of the target, in whole numbers, and passes it on.
+type streamWriter struct {
+	dfw *DCMFileWriter
+	// swap is the width numbers are reversed at, or 0 for none; held is the
+	// start of a number whose end has not come yet.
+	swap    int
+	held    []byte
+	written int64
+	err     error
+}
+
+func (s *streamWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if s.swap > 1 {
+		// Reversed on a copy: the producer may reuse what it passed.
+		whole := append(append([]byte(nil), s.held...), p...)
+		keep := len(whole) % s.swap
+		s.held = append(s.held[:0], whole[len(whole)-keep:]...)
+		whole = whole[:len(whole)-keep]
+		dataelem.SwapBytes(whole, s.swap)
+		p = whole
+	}
+	return n, s.put(p)
+}
+
+// put writes bytes to the output.
+func (s *streamWriter) put(p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	if err := s.dfw.writer.WriteBytes(p); err != nil {
+		s.err = fmt.Errorf("failed to write data element value: %w", err)
+		return s.err
+	}
+	s.written += int64(len(p))
+	s.dfw.position += int64(len(p))
+	return nil
+}
+
+// writeStreamed writes an element whose value is made as it is written. It
+// makes the choices writeValueInFile makes, in the same order: the VR, the
+// byte order, and padding.
+func (dfw *DCMFileWriter) writeStreamed(elem *DataElement, forceExplicitVR bool) error {
+	stream := elem.Stream
+	if stream.WriteValue == nil || stream.Length < 0 || stream.Length >= int64(undefinedLength) {
+		return fmt.Errorf("element %s: %s cannot be written as one value", elem.Tag.String(), stream)
+	}
+	if dfw.encapsulated && elem.Tag == pixelDataTag {
+		// A streamed value is the samples themselves. Written as fragments
+		// it would be an image that decodes to nothing.
+		return fmt.Errorf("element %s: %s is native samples, and the target transfer syntax encapsulates Pixel Data",
+			elem.Tag.String(), stream)
+	}
+
+	vr := elem.VR
+	if len(vr) != 2 {
+		vr = "UN"
+	}
+	// The value arrives little endian, as a data set holds it.
+	swapWidth := 0
+	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(vr)) {
+		swapWidth = dataelem.PixelDataSwapWidth(dataelem.VR(vr), 0)
+		if elem.Tag == pixelDataTag {
+			swapWidth = dataelem.PixelDataSwapWidth(dataelem.VR(vr), dfw.bitsAllocated)
+		}
+	}
+
+	length := uint32(stream.Length)
+	pad := length%2 != 0
+	if pad {
+		length++
+	}
+	if err := dfw.writeHeader(elem.Tag, vr, length, dfw.explicitVR || forceExplicitVR); err != nil {
+		return err
+	}
+
+	out := &streamWriter{dfw: dfw, swap: swapWidth}
+	if err := stream.WriteValue(dfw.source, dfw.sourceLittleEndian, out); err != nil {
+		if out.err != nil {
+			return out.err
+		}
+		return fmt.Errorf("element %s: making its value: %w", elem.Tag.String(), err)
+	}
+	// A number that did not end is written as it is, which is what reversing
+	// a value does to bytes short of a whole number.
+	if err := out.put(out.held); err != nil {
+		return err
+	}
+	if out.written != stream.Length {
+		return fmt.Errorf("element %s: its value is %d bytes and %d were made", elem.Tag.String(), stream.Length, out.written)
+	}
+
+	if pad {
 		if err := dfw.writer.WriteBytes(padValueForVR(vr, []byte{0})[1:]); err != nil {
 			return fmt.Errorf("failed to write data element value: %w", err)
 		}

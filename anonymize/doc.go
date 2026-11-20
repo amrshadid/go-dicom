@@ -155,7 +155,12 @@
 //     an attribute, and Anonymize does not look for it. [BurnedInRisk] says
 //     whether an image is of a kind that commonly carries it, and
 //     [Anonymizer.CleanPixelData] fills the rectangles the caller names and
-//     records the Clean Pixel Data Option.
+//     records the Clean Pixel Data Option. It works a frame at a time: a
+//     data set read with filereader.ReadOptions.SkipBulkData keeps its
+//     pixels in the file, and the regions are filled, and a compressed image
+//     decoded, as filewriter copies them to the output, so a multi-gigabyte
+//     image is redacted holding about one frame ([DetectBurnedInTextFrom] and
+//     [Anonymizer.RedactDetectedTextFrom] look for text the same way).
 //
 //     [NewTextDetector] finds lettering in the pixels, and
 //     [Anonymizer.RedactDetectedText] fills what it finds. It is detection,

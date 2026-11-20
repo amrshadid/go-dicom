@@ -50,22 +50,64 @@ func NewTextDetector() TextDetector { return strokeDetector{} }
 // means the detector found nothing, which is not the same as there being
 // nothing: see the note on what a detector can miss.
 func DetectBurnedInText(ds *dataset.Dataset, detector TextDetector) ([]dataset.PixelRegion, error) {
+	var found []image.Rectangle
 	if detector == nil {
 		detector = NewTextDetector()
 	}
-	frames, err := ds.RenderFrames(nil)
+	// A frame at a time: the detector has looked at one when the next is
+	// rendered, so the frames of an image are not all pictures in memory
+	// at once.
+	err := ds.RenderEachFrame(nil, func(_ int, frame image.Image) error {
+		found = append(found, detector.DetectText(frame)...)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	var found []image.Rectangle
-	for _, frame := range frames {
-		found = append(found, detector.DetectText(frame)...)
+	return mergedRegions(found), nil
+}
+
+// DetectBurnedInTextFrom is DetectBurnedInText for an image whose Pixel Data
+// the data set does not hold: frames reads it, a frame at a time, from where
+// it is kept (filereader.DICOMFile.FrameReader), and the data set, read with
+// filereader.ReadOptions.SkipBulkData, says the rest. The regions are those
+// DetectBurnedInText finds in the same image; memory follows a frame and not
+// the image (see dataset.Dataset.RenderFramesFrom).
+//
+// It looks at the image as it will be written: when regions have already
+// been filled in the data set (CleanPixelData), they are filled in what the
+// detector sees, as they are in a data set that holds its pixels.
+func DetectBurnedInTextFrom(ds *dataset.Dataset, frames dataset.FrameReader, detector TextDetector) ([]dataset.PixelRegion, error) {
+	if detector == nil {
+		detector = NewTextDetector()
 	}
+	frames, ds = ds.FramesAsWritten(frames)
+	info, err := ds.GetPixelDataInfo()
+	if err != nil {
+		return nil, err
+	}
+	list := make([]int, info.NumberOfFrames)
+	for i := range list {
+		list[i] = i
+	}
+	var found []image.Rectangle
+	err = ds.RenderFramesFrom(frames, list, nil, func(_ int, frame image.Image) error {
+		found = append(found, detector.DetectText(frame)...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return mergedRegions(found), nil
+}
+
+// mergedRegions joins the rectangles a detector found into regions.
+func mergedRegions(found []image.Rectangle) []dataset.PixelRegion {
 	regions := make([]dataset.PixelRegion, 0, len(found))
 	for _, r := range mergeRectangles(found) {
 		regions = append(regions, dataset.PixelRegion{X: r.Min.X, Y: r.Min.Y, Width: r.Dx(), Height: r.Dy()})
 	}
-	return regions, nil
+	return regions
 }
 
 // MaxDetectedShare is the largest share of a picture that a detector's
