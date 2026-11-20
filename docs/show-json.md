@@ -45,7 +45,7 @@ Arrays keep file order: `fileMeta`, `dataSet`, `items`, `fragments` and
 | `offsetsRelativeTo` | string | `file`, or `inflatedDataSet` for a deflated data set, whose elements are read after inflating it and whose offsets count from the start of the inflated bytes. |
 | `fileMeta` | array | The elements of the file meta group, starting with Group Length (0002,0000) when the file has one. Empty for a bare data set. |
 | `dataSet` | array | The elements of the data set. |
-| `warnings` | array of strings | What the reader noticed and recovered from. Empty for a clean file. |
+| `warnings` | array of strings | What the reader noticed and recovered from, such as a truncated file, an element written without a VR, or a data element whose tag repeats the one before it or is lower (PS3.5 7.1). Empty for a clean file. |
 
 All of these are always present. All offsets are byte offsets, from the start
 of the file unless `offsetsRelativeTo` says otherwise, and every `endOffset` is

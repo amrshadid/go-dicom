@@ -116,7 +116,7 @@ func TestAutomaticNoteSurvivesAnonymize(t *testing.T) {
 		t.Fatalf("Anonymize: %v", err)
 	}
 	method := textOf(ds, tagMethod)
-	if !strings.Contains(method, AutomaticRedactionNote) || !strings.Contains(method, basicProfileCode.meaning) {
+	if !strings.Contains(method, AutomaticRedactionNote) || !strings.Contains(method, basicProfileCode.Meaning) {
 		t.Errorf("De-identification Method is %q", method)
 	}
 	// And once is enough.

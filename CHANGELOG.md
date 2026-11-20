@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PS3.15 Table E.1-1 as data.** `anonymize.ProfileTable`,
+  `ProfileEntries` and `LookupProfileEntry` return every attribute of the
+  table with its name, its code in the Basic Profile column and its code in
+  each option column (`ProfileColumn`: retain safe private, UIDs, device
+  identity, institution identity, patient characteristics, longitudinal
+  temporal information with full or modified dates, clean descriptors, clean
+  structured content, clean graphics), as the standard writes them: `X/Z/D`,
+  `X/D`, `Z/D`, `X/Z` and `X/Z/U*` are not resolved. `ProfileTableEdition`
+  names the edition the table was generated from (2026d). The option columns
+  come from the standard's own DocBook source, through the new
+  `scripts/ps315-table.py`, and not from the library's option switches. What
+  comes back is a copy.
+- **PS3.15 Table E.3.10-1, the safe private attributes, as a lookup.**
+  `anonymize.LookupSafePrivate(group, creator, element)` reports whether the
+  table lists a private attribute as safe and gives its value representation,
+  and `SafePrivateEntries` iterates the 479 rows. The table already held the
+  value representation, in a comment; it is now data (empty for five
+  SIEMENS Ultrasound SC2000 rows whose VR the standard leaves blank).
+  `SafePrivateEdition` names the edition (2026d).
+- **The de-identification method record, exported.**
+  `anonymize.RecordDeidentificationMethod(ds, codes, record)` writes Patient
+  Identity Removed (0012,0062), De-identification Method (0012,0063),
+  De-identification Method Code Sequence (0012,0064) and, when the
+  `MethodRecord` names them, Burned In Annotation (0028,0301) and
+  Longitudinal Temporal Information Modified (0028,0303). The 13 codes of
+  PS3.16 CID 7050 are the constants `MethodBasicProfile` ...
+  `MethodRetainInstitutionIdentity` (type `MethodCodeValue`, with `Meaning()`
+  and `Code()` giving the scheme DCM and the meaning), checked against
+  pydicom's table. `Anonymize` and `CleanPixelData` record through it, so the
+  library has one implementation.
+
+- **A repeated or out-of-order data element is warned of.** PS3.5 7.1 puts
+  the data elements of a data set in increasing tag order, each tag once. When
+  the reader meets an element whose tag is not greater than the one before it,
+  in the data set or inside the same item of a sequence, it adds a warning to
+  `DICOMFile.Warnings` naming both tags and the offset (the first ten of a file,
+  then a count of the rest). The elements are kept as read. `show --json` shows
+  it in `warnings`, which stays an array of strings at `schemaVersion` 1.
+  None of the 78 `.dcm` files of pydicom's corpus gets one.
+
+- **Text hidden in a JPEG stream is found and removed.** A comment (COM) or
+  application (APPn) segment in the frames of encapsulated JPEG Pixel Data is
+  neither an attribute nor a pixel, so no profile touched it.
+  `anonymize.JPEGSegmentText` reads those segments of every frame of Baseline,
+  Extended, Lossless and JPEG-LS data and returns their text, and the bytes
+  after the end-of-image marker; `RemoveJPEGText` (and
+  `Anonymizer.SetRemoveJPEGText`, which makes `Anonymize` call it) removes
+  them without decoding or encoding the image data. APP0 JFIF (without its
+  thumbnail), APP14 Adobe and, in JPEG-LS, the APP8 `mrfx` color transform
+  stay, since they decide how the samples are read. Checked on ten corpus files
+  and four dcmtk encodings: the cleaned frames decode, in this library, in
+  dcmtk's `dcmdjpeg` and `dcmdjpls` and in pydicom, to the same samples as the
+  untouched file, and the image data is the same bytes. JPEG 2000 is not
+  searched and returns `ErrJPEGSegmentsNotSearched`.
+
+### Fixed
+
+- **`BasicProfileTemplate` and the templates built on it de-identified far less
+  than the Basic Profile.** The template held 39 attributes, and an
+  `Anonymizer` applies a template's actions before the profile's own table, so
+  a program that gave one to `ApplyTemplate` or `SetTemplate` kept Patient's
+  Sex, Age, Size and Weight, among others. Over pydicom's corpus the template
+  kept Patient's Sex in 52 files, Age in 26, Weight in 17 and Size in 7 that
+  the Basic Profile empties or removes (53 of 79 files differed). The
+  template, and `CleanDescriptorsTemplate`, `RetainDatesTemplate` and
+  `RetainDeviceTemplate`, now hold every attribute of Table E.1-1 with the
+  action the profile applies; Patient's Name and ID are now emptied, as the
+  profile does, and no longer replaced by `ANONYMOUS` and a random identifier.
+
 ## [1.11.0] - 2026-11-19
 
 The largest release so far. The library now writes every compressed syntax

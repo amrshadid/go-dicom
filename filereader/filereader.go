@@ -294,8 +294,10 @@ type DICOMFile struct {
 	Deflated bool
 
 	// Warnings collects non-fatal issues found while parsing (unknown tags,
-	// retired tags, VR mismatches, truncated meta elements). Parsing continues
-	// past these; inspect the slice to surface them.
+	// retired tags, VR mismatches, truncated meta elements, and data elements
+	// that repeat the tag before them or follow a greater one, which PS3.5 7.1
+	// does not allow, in the data set and in each sequence item). Parsing
+	// continues past these; inspect the slice to surface them.
 	Warnings []string
 
 	// ctx carries the logger the file was read with; see context.

@@ -69,6 +69,34 @@
 // [Anonymizer.SetRetainPatientName] and [Anonymizer.SetRetainPatientID] are
 // shorthands for the two most commonly overridden attributes.
 //
+// # The standard's table as data
+//
+// [ProfileTable] returns PS3.15 Table E.1-1 for a program that builds its own
+// profiles: every attribute with its name and its code in the Basic Profile
+// column and in each option column, left as the standard writes them, so a
+// combined code such as X/Z/D is not resolved for the caller. [ProfileEntries]
+// iterates the rows, [LookupProfileEntry] finds one, and [ProfileTableEdition]
+// names the edition of the standard the table came from. What they return is
+// a copy. [BasicProfileTemplate] and the templates built on it hold the action
+// this package applies for each of those attributes, so an [Anonymizer] given
+// one de-identifies as strongly as one built with [BasicProfile].
+//
+// The private attributes that [RetainSafePrivateProfile] keeps are PS3.15
+// Table E.3.10-1, and [LookupSafePrivate] reads it: given the group, the private
+// creator and the element within the creator's block, it says whether the
+// table lists the attribute as safe and gives its value representation.
+// [SafePrivateEntries] iterates the whole table.
+//
+// # Recording the method
+//
+// A program that de-identifies by its own rules records what it did the same
+// way [Anonymizer.Anonymize] does, with [RecordDeidentificationMethod]: it
+// writes Patient Identity Removed (0012,0062), De-identification Method
+// (0012,0063), De-identification Method Code Sequence (0012,0064), Burned In
+// Annotation (0028,0301) and Longitudinal Temporal Information Modified
+// (0028,0303) for a list of PS3.16 CID 7050 codes, the [MethodCodeValue]
+// constants. The library's own path calls that function.
+//
 // # UID remapping
 //
 // Study, series, and SOP Instance UIDs identify a patient across data sets even
@@ -147,6 +175,17 @@
 //     so, it is wrong by a great deal, so an automatic redaction whose
 //     regions cover more than [MaxDetectedShare] of the picture is refused
 //     with [ErrImplausibleRedaction] and nothing is filled.
+//
+//   - Text in the JPEG stream itself. A comment (COM) or application (APPn)
+//     segment inside the fragments of encapsulated Pixel Data is neither an
+//     attribute nor a pixel, and it travels with the image. [JPEGSegmentText]
+//     reads those segments of every frame of Baseline, Extended, Lossless and
+//     JPEG-LS data and gives their text; [RemoveJPEGText], or
+//     [Anonymizer.SetRemoveJPEGText] for Anonymize, removes them without
+//     decoding or encoding the image, keeping the JFIF and Adobe headers and
+//     the JPEG-LS mrfx extension that decide how the samples are read. The
+//     frames decode to the same samples afterwards. JPEG 2000 is not
+//     searched, and says so with [ErrJPEGSegmentsNotSearched].
 //
 //   - Private tags that were deliberately retained. The basic profile removes
 //     private attributes outside the safe list, but one kept on purpose may
