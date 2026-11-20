@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -333,5 +334,44 @@ func TestStoppingServerDoesNotBlameTheFunction(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "the server is stopping") {
 		t.Errorf("the refusal on shutdown was not logged as one:\n%s", log.String())
+	}
+}
+
+// TestStoppingServerAdmitsNoCallerWhateverTheFunctionAnswers proves a server
+// that is stopping refuses a caller even when its admission function has
+// answered "admit". A function that returns once its context ends, as it
+// should, makes its answer and the stop ready together, and the server took
+// either at random, so it admitted a caller to a server that was stopping
+// about half the time; on a loaded machine (CI) that showed. Here the stop
+// has already happened and the function answers at once, so both are ready
+// on every round, and two hundred rounds make the old coin toss certain to
+// show.
+func TestStoppingServerAdmitsNoCallerWhateverTheFunctionAnswers(t *testing.T) {
+	// The decision is waited for only once the function has answered and the
+	// server has stopped: both ready at once, so the old code chose between
+	// them at random.
+	testHookBeforeAdmitDecision = func(answered func() bool) {
+		for !answered() {
+			runtime.Gosched()
+		}
+	}
+	defer func() { testHookBeforeAdmitDecision = nil }()
+
+	req := &AssociationRequest{CallingAE: "SCANNER", CalledAE: "ARCHIVE"}
+	admitted := 0
+	for round := 0; round < 200; round++ {
+		parent, stop := context.WithCancel(context.Background())
+		s := NewSCP(SCPConfig{AETitle: "ARCHIVE",
+			Admit: func(context.Context, *AssociationRequest) *AssociationRejection {
+				stop()     // the server stops
+				return nil // as the function answers "admit"
+			}})
+		if r := s.admit(parent, &Transport{}, req); r == nil {
+			admitted++
+		}
+		stop()
+	}
+	if admitted > 0 {
+		t.Errorf("a stopping server admitted the caller in %d of 200 rounds", admitted)
 	}
 }

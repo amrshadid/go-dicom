@@ -238,6 +238,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A server that is stopping admits no caller, whatever its admission
+  function answers.** An admission function that returns once its context
+  ends, as it should, made its answer and the stop ready at the same moment,
+  and the server took either at random: about half the time it admitted the
+  caller to a server that was stopping, whose association then failed as a
+  receive error instead of being refused. Stopping now wins. Seen as a rare
+  failure of `TestStoppingServerDoesNotBlameTheFunction` on a loaded CI
+  machine; `TestStoppingServerAdmitsNoCallerWhateverTheFunctionAnswers` makes
+  the two ready together and admitted the caller in 85 of 200 rounds before.
+
 - **`StoreStream` no longer sends a truncated data set as complete.** It took
   a reader's `io.ErrUnexpectedEOF`, the usual word of a reader whose source
   was cut short, for the end of the data set, and sent the bytes it had as the

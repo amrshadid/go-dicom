@@ -247,6 +247,12 @@ func (s *SCP) decideAdmission(ctx context.Context, transport *Transport, rq *Ass
 // ignores that holds only its own goroutine, until it returns. A panic in it
 // is recovered there, so it refuses the association and does not take the
 // server down.
+// testHookBeforeAdmitDecision, when set by a test, runs before the admission
+// answer and the end of the context are waited for, and is given whether the
+// answer is already in. A test uses it to have both ready at once, the order
+// in which a loaded machine can deliver them.
+var testHookBeforeAdmitDecision func(answered func() bool)
+
 func (s *SCP) admit(parent context.Context, transport *Transport, req *AssociationRequest) *AssociationRejection {
 	decide := s.config.Admit
 	if decide == nil {
@@ -276,8 +282,21 @@ func (s *SCP) admit(parent context.Context, transport *Transport, req *Associati
 		answers <- answer{rejection: decide(ctx, req)}
 	}()
 
+	if testHookBeforeAdmitDecision != nil {
+		testHookBeforeAdmitDecision(func() bool { return len(answers) > 0 })
+	}
 	select {
 	case a := <-answers:
+		if parent.Err() != nil {
+			// The server stopped while the function was deciding. Its answer
+			// and the stop can be ready at the same moment, and select picks
+			// either: a function that returns once its context ends, as one
+			// should, then had a caller admitted to a server that is
+			// stopping. Stopping wins, whatever the answer.
+			r := rejectAfterTimeout
+			s.refusing(transport, LogLevelDebug, "refusing %q from %s: the server is stopping", req.CallingAE, req.RemoteAddr)
+			return &r
+		}
 		if a.panicked != nil {
 			s.refusing(transport, LogLevelError, "refusing %q from %s: the admission function panicked: %v",
 				req.CallingAE, req.RemoteAddr, a.panicked)
