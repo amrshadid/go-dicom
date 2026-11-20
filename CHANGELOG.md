@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The order of a data set's tags is reported as values.**
+  `DICOMFile.TagOrderViolations` lists each data element whose tag is not
+  greater than the one before it in its data set or sequence item (PS3.5 7.1),
+  with both tags, its offset, whether it is in an item and whether it repeats,
+  up to a thousand; `TagOrderViolationCount` counts them all. The warning in
+  `Warnings` is unchanged; a program acts on these instead of matching its
+  words.
+- **A private sequence that arrives as UN can be walked.**
+  `network.DecodeUNSequence` reads the value of a UN element as the items of a
+  sequence, in Implicit VR Little Endian as PS3.5 6.2.2 has it, and refuses
+  bytes that are not items. The reader keeps a defined-length UN value as
+  bytes, since it cannot tell items from other bytes; a caller that knows the
+  tag holds a sequence now reads it. Checked against pydicom's own conversion
+  of the same value.
+
 - **`SCU.StoreStream` sends a stored file as it is.** `Store` encodes a data
   set and may transcode it to a syntax the peer accepted, so a program that
   keeps instances as files could not send the bytes it had stored. `StoreStream`
@@ -114,6 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A received data fragment is no longer copied out of its PDU.** Each
+  fragment of a P-DATA-TF is a slice of the PDU's body, capped at its own end.
+  A 64 KiB PDU cost 139,529 bytes to read and costs 73,992, and reads at
+  twice the rate.
+
 - **`Server.Shutdown` refuses a new caller as transient, as it documents.**
   Shutdown closed the listener at once, so a caller arriving while the
   associations in progress finished met a refused TCP connection, and only a
@@ -131,6 +151,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostic 1.
 
 ### Fixed
+
+- **`StoreStream` no longer sends a truncated data set as complete.** It took
+  a reader's `io.ErrUnexpectedEOF`, the usual word of a reader whose source
+  was cut short, for the end of the data set, and sent the bytes it had as the
+  whole: the peer then refused a data set it could not parse. Only `io.EOF`
+  ends it now; any other error is answered with an A-ABORT before the last
+  fragment, like every reader failure.
+- **Overlay and curve data are matched in their own groups only.** The
+  profile's (60xx,3000), (60xx,4000) and (50xx,xxxx) matched a private odd
+  group such as 6001 too, in `LookupProfileEntry` and in the anonymizer's own
+  rules. PS3.5 7.6 numbers the repeating groups xx00 to xx1E, even only; an
+  odd group is private (PS3.5 7.8).
+- **`valuerep.IsValidVR` takes OV, SV and UV.** The three 64-bit VRs of PS3.5
+  6.2 were missing from its table, though the rest of the library knows them.
 
 - **An invalid first PDU is answered with an A-ABORT, not a closed
   connection.** An SCP waiting for the A-ASSOCIATE-RQ closed the connection in
