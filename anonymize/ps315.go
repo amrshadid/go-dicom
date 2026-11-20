@@ -197,10 +197,18 @@ func LookupProfileEntry(t tag.Tag) (ProfileEntry, bool) {
 // names: "(50xx,xxxx)" is any element of an even group 5000 to 50FF, and
 // "(60xx,3000)" one element of the groups 6000 to 60FF.
 func patternMatches(r ps315Row, t tag.Tag) bool {
-	if t.Group()&0xFF00 != r.tag.Group() {
+	if !inRepeatingGroup(t.Group(), r.tag.Group()) {
 		return false
 	}
 	return strings.HasSuffix(r.pattern, "xxxx)") || t.Element() == r.tag.Element()
+}
+
+// inRepeatingGroup reports whether group is one of the repeating groups that
+// base (0x5000 or 0x6000) stands for: PS3.5 7.6 numbers them xx00 to xx1E,
+// even only. An odd group is private (PS3.5 7.8), so (6001,3000) is a private
+// element and not Overlay Data, whatever its element number says.
+func inRepeatingGroup(group, base uint16) bool {
+	return group&0xFF00 == base && group&0x0001 == 0 && group&0x00FF <= 0x1E
 }
 
 // repeatingGroupRule matches a family of tags that differ only in part of the
@@ -213,7 +221,7 @@ type repeatingGroupRule struct {
 
 // matches reports whether the rule covers a tag.
 func (r repeatingGroupRule) matches(t tag.Tag) bool {
-	return t.Group()&r.groupMask == r.group&r.groupMask &&
+	return inRepeatingGroup(t.Group(), r.group&r.groupMask) &&
 		t.Element()&r.elementMask == r.element&r.elementMask
 }
 

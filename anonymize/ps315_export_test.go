@@ -161,4 +161,17 @@ func TestLookupProfileEntryMatchesRangesOfGroups(t *testing.T) {
 	if _, ok := anonymize.LookupProfileEntry(tag.New(0x7FE0, 0x0010)); ok {
 		t.Error("Pixel Data is not in the table")
 	}
+	// PS3.5 7.6: the repeating groups are xx00 to xx1E, even only. An odd
+	// group is private (PS3.5 7.8), and past xx1E the group is not one of them.
+	if e, ok := anonymize.LookupProfileEntry(tag.New(0x601E, 0x3000)); !ok || e.Name != "Overlay Data" {
+		t.Errorf("(601E,3000) = %+v, %v; want Overlay Data, the last overlay group", e, ok)
+	}
+	for _, private := range []tag.Tag{
+		tag.New(0x6001, 0x3000), tag.New(0x6001, 0x4000), tag.New(0x601F, 0x3000),
+		tag.New(0x5001, 0x1234), tag.New(0x6020, 0x3000), tag.New(0x50FE, 0x0010),
+	} {
+		if e, ok := anonymize.LookupProfileEntry(private); ok {
+			t.Errorf("%s matched %q; it is not in a repeating group", private, e.Name)
+		}
+	}
 }
