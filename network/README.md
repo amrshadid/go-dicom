@@ -118,6 +118,22 @@ server, err := network.StartServer(ctx, network.SCPConfig{
 for associations negotiated after they are called; on a `Server` that is after
 `StartServer` has begun accepting.
 
+A program that must bind the socket itself, for instance to choose which of
+IPv4 and IPv6 a wildcard address covers, gives the server its listener:
+`StartServerOn(ctx, config, handler, listener)`, or `scp.Serve(ctx, listener)`
+for an `SCP`. There is then no moment between the bind and the serving, the
+listener is wrapped for TLS when the configuration has TLS (pass the plain
+one), and `Stop`, `Close` and `Shutdown` close it as they close their own.
+`Port` and `BindAddress` are not used.
+
+```go
+l, err := net.Listen("tcp4", "0.0.0.0:11112") // the caller's choice of family
+if err != nil {
+    return err
+}
+server, err := network.StartServerOn(ctx, network.SCPConfig{AETitle: "ARCHIVE"}, handler, l)
+```
+
 A `Server` (from `StartServer`) can also stop without cutting the work in
 progress. `Shutdown` goes on accepting connections while it drains, and
 refuses every association asked for, on a new connection or one already open,

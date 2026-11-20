@@ -39,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body was read by aiohttp's HTTP and multipart parsers and each part by
   pydicom, byte for byte.
 
+- **A server can take a listener the caller made.** `ListenAndServe` and
+  `StartServer` bind the address from `BindAddress` and `Port` themselves, so
+  a program that has to choose how the socket is made, which of IPv4 and IPv6
+  a wildcard covers or a descriptor handed to it, could not, and one that
+  bound a probe socket to find a free port left a window in which another
+  process could take it. `SCP.Serve(ctx, listener)` and
+  `StartServerOn(ctx, config, handler, listener)` serve on a listener the
+  caller bound, so there is no window between the bind and the serving: a
+  caller that connected before `Serve` began is answered when it does.
+  A TLS configuration wraps the listener as it does one the server made, and
+  `Close`, `Stop` and the end of a `Shutdown` drain close it. Checked with
+  dcmtk's `echoscu` and pynetdicom, on the loopback and on the IPv4
+  wildcard; neither takes an IPv6 literal, so an IPv6 loopback listener is
+  checked in the package's own tests only.
+
 ### Changed
 
 - **`Server.Shutdown` refuses a new caller as transient, as it documents.**

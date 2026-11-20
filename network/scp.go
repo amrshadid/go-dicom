@@ -2,8 +2,10 @@ package network
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -137,6 +139,64 @@ func (s *SCP) ListenAndServe(ctx context.Context) error {
 	}()
 
 	return s.serve(ctx, ln, s.log(), nil)
+}
+
+// Serve serves associations on a listener the caller made, until ctx is
+// canceled, returning the context's error, or until Close is called or the
+// listener is closed, returning nil.
+//
+// ListenAndServe binds the address itself, from SCPConfig.BindAddress and Port,
+// and a caller that needs to decide how the socket is made has no way to say
+// so: which of IPv4 and IPv6 a wildcard address covers, the socket options, a
+// descriptor handed over by a service manager. Binding it itself and passing
+// it here also leaves no window between the bind and the serving in which
+// another process could take the port, or a caller connect to a socket nobody
+// is accepting on yet.
+//
+// When SCPConfig.TLS is set the listener is wrapped for TLS as ListenTLS does,
+// so l is the plain TCP listener, not one that has been wrapped already.
+// Close, and the end of Serve, close l, as they close a listener of the SCP's
+// own; so does Server.Shutdown once its drain has ended. A TLS configuration
+// that cannot be used is returned before anything is done with l, which
+// stays the caller's to close.
+//
+// BindAddress and Port are not used.
+func (s *SCP) Serve(ctx context.Context, l net.Listener) error {
+	ln, err := wrapListener(l, s.config.TLS)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	s.listener = ln
+	s.running = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
+		ln.Close()
+		s.wg.Wait()
+	}()
+
+	return s.serve(ctx, ln, s.log(), nil)
+}
+
+// wrapListener makes the accept loop's listener of one the caller made: wrapped
+// for TLS when tlsCfg is set, as ListenTLS does for the one it makes.
+func wrapListener(l net.Listener, tlsCfg *TLSConfig) (*Listener, error) {
+	if l == nil {
+		return nil, NewCommunicationError("LISTEN", "no listener was given", nil)
+	}
+	if tlsCfg != nil {
+		config, err := tlsCfg.buildTLSConfig(true)
+		if err != nil {
+			return nil, err
+		}
+		l = tls.NewListener(l, config)
+	}
+	return &Listener{listener: l}, nil
 }
 
 // The pause before retrying a failed accept doubles from acceptRetryMin to

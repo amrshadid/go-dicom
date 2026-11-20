@@ -123,6 +123,11 @@
 //
 // A [Server] from [StartServer] stops in one of two ways. [Server.Stop] cancels
 // the context every handler was given, cutting what is in flight.
+// A program that has to bind the socket itself, to choose which of IPv4 and
+// IPv6 a wildcard covers, or to hand the server a descriptor it was given,
+// passes the listener to [SCP.Serve] or [StartServerOn]; the server wraps it
+// for TLS when it has a TLS configuration, and closes it when it stops.
+//
 // [Server.Shutdown] refuses new associations and lets the operations in
 // progress finish, until the context it is given ends; it returns a
 // [*ShutdownError] counting the associations it then had to abort. The

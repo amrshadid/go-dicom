@@ -434,7 +434,7 @@ of, and does not name a file it could not read; both are counted as refused.
 | Setting | Where |
 |---|---|
 | AE title | `SCPConfig.AETitle`, `SCUConfig.CallingAE` / `CalledAE` |
-| Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
+| Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress`. A program that must decide how the socket is made (which of IPv4 and IPv6 a wildcard covers, a descriptor handed to it) binds it itself and gives it to `SCP.Serve(ctx, listener)` or `StartServerOn(ctx, config, handler, listener)`: Port and BindAddress are then not used, a TLS configuration wraps the listener as it does one the server made, and `Close`, `Stop` and the end of a `Shutdown` drain close it |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
