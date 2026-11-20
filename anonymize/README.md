@@ -113,6 +113,22 @@ value representation, `SafePrivateEntries()` iterates the 479 rows, and
 `SafePrivateEdition` names the edition (`scripts/safe-private-table.py`
 regenerates it).
 
+## Recording the Method
+
+`RecordDeidentificationMethod(ds, codes, record)` writes Patient Identity
+Removed, De-identification Method, De-identification Method Code Sequence,
+and, as `MethodRecord` says, Burned In Annotation and Longitudinal Temporal
+Information Modified. The codes are PS3.16 CID 7050, the `MethodCodeValue`
+constants (`MethodBasicProfile`, `MethodCleanPixelData`, `MethodRetainUIDs` and
+the rest); `Code()` gives the code with its scheme (`DCM`) and meaning.
+`Anonymize` and `CleanPixelData` record through the same function.
+
+```go
+err := anonymize.RecordDeidentificationMethod(ds,
+    []anonymize.MethodCode{anonymize.MethodBasicProfile.Code(), anonymize.MethodCleanPixelData.Code()},
+    anonymize.MethodRecord{IdentityRemoved: true, BurnedInAnnotation: "NO"})
+```
+
 ## Custom Per-Tag Actions
 
 ```go

@@ -18,7 +18,7 @@ import (
 
 var (
 	tagBurnedInAnnotation = tag.New(0x0028, 0x0301)
-	cleanPixelDataCode    = methodCode{"113101", "Clean Pixel Data Option"}
+	cleanPixelDataCode    = MethodCleanPixelData.Code()
 )
 
 // CleanPixelData fills the regions with black in every frame, sets Burned In
@@ -45,15 +45,27 @@ func (a *Anonymizer) CleanPixelData(ds *dataset.Dataset, regions ...dataset.Pixe
 		return err
 	}
 
-	ds.Remove(tagBurnedInAnnotation)
-	if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
-		return fmt.Errorf("setting Burned In Annotation: %w", err)
-	}
+	// Patient Identity Removed is the profile's to say: it is rewritten only
+	// where it is already there. A method already recorded is not rewritten,
+	// which would drop the words of an automatic redaction beside it.
+	_, identityRemoved := ds.Get(tagIdentityRemoved)
+	codes := recordedMethodCodes(ds)
 	if hasMethodCode(ds, cleanPixelDataCode) {
+		codes = nil
+	} else {
+		codes = append(codes, cleanPixelDataCode)
+	}
+	if codes == nil {
+		ds.Remove(tagBurnedInAnnotation)
+		if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
+			return fmt.Errorf("setting Burned In Annotation: %w", err)
+		}
 		return nil
 	}
-	_, identityRemoved := ds.Get(tag.New(0x0012, 0x0062))
-	return writeMethod(ds, append(recordedMethodCodes(ds), cleanPixelDataCode), identityRemoved)
+	return RecordDeidentificationMethod(ds, codes, MethodRecord{
+		IdentityRemoved:    identityRemoved,
+		BurnedInAnnotation: "NO",
+	})
 }
 
 // redactRegions fills the regions with black in every frame of ds,
@@ -152,7 +164,7 @@ func noteAutomaticRedaction(ds *dataset.Dataset) error {
 }
 
 // recordedMethodCodes returns the methods ds already records.
-func recordedMethodCodes(ds *dataset.Dataset) []methodCode {
+func recordedMethodCodes(ds *dataset.Dataset) []MethodCode {
 	elem, ok := ds.Get(tagMethodCodes)
 	if !ok {
 		return nil
@@ -161,12 +173,13 @@ func recordedMethodCodes(ds *dataset.Dataset) []methodCode {
 	if !ok {
 		return nil
 	}
-	var codes []methodCode
+	var codes []MethodCode
 	for _, item := range seq.Items() {
 		if recorded, ok := item.(*dataset.Dataset); ok {
-			codes = append(codes, methodCode{
-				value:   textOf(recorded, tag.New(0x0008, 0x0100)),
-				meaning: textOf(recorded, tag.New(0x0008, 0x0104)),
+			codes = append(codes, MethodCode{
+				Value:   textOf(recorded, tag.New(0x0008, 0x0100)),
+				Scheme:  textOf(recorded, tag.New(0x0008, 0x0102)),
+				Meaning: textOf(recorded, tag.New(0x0008, 0x0104)),
 			})
 		}
 	}

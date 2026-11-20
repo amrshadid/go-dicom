@@ -87,6 +87,16 @@
 // table lists the attribute as safe and gives its value representation.
 // [SafePrivateEntries] iterates the whole table.
 //
+// # Recording the method
+//
+// A program that de-identifies by its own rules records what it did the same
+// way [Anonymizer.Anonymize] does, with [RecordDeidentificationMethod]: it
+// writes Patient Identity Removed (0012,0062), De-identification Method
+// (0012,0063), De-identification Method Code Sequence (0012,0064), Burned In
+// Annotation (0028,0301) and Longitudinal Temporal Information Modified
+// (0028,0303) for a list of PS3.16 CID 7050 codes, the [MethodCodeValue]
+// constants. The library's own path calls that function.
+//
 // # UID remapping
 //
 // Study, series, and SOP Instance UIDs identify a patient across data sets even

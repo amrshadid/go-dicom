@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value representation, in a comment; it is now data (empty for five
   SIEMENS Ultrasound SC2000 rows whose VR the standard leaves blank).
   `SafePrivateEdition` names the edition (2026d).
+- **The de-identification method record, exported.**
+  `anonymize.RecordDeidentificationMethod(ds, codes, record)` writes Patient
+  Identity Removed (0012,0062), De-identification Method (0012,0063),
+  De-identification Method Code Sequence (0012,0064) and, when the
+  `MethodRecord` names them, Burned In Annotation (0028,0301) and
+  Longitudinal Temporal Information Modified (0028,0303). The 13 codes of
+  PS3.16 CID 7050 are the constants `MethodBasicProfile` ...
+  `MethodRetainInstitutionIdentity` (type `MethodCodeValue`, with `Meaning()`
+  and `Code()` giving the scheme DCM and the meaning), checked against
+  pydicom's table. `Anonymize` and `CleanPixelData` record through it, so the
+  library has one implementation.
 
 ### Fixed
 
