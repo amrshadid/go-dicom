@@ -183,11 +183,18 @@ func TestStoreStreamAbortsWhenTheReaderFails(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		n    int64
+		err  error
 	}{
-		{"before the first fragment is full", 100},
-		{"on a fragment boundary", 4084 * 5},
-		{"many fragments in", 200_000},
-		{"before any byte", 0},
+		{"before the first fragment is full", 100, boom},
+		{"on a fragment boundary", 4084 * 5, boom},
+		{"many fragments in", 200_000, boom},
+		{"before any byte", 0, boom},
+		// io.ErrUnexpectedEOF is what a reader says when its own source was
+		// cut short. It was taken for the end of the data set, and a
+		// truncated data set was sent as complete.
+		{"cut short, mid-fragment", 100, io.ErrUnexpectedEOF},
+		{"cut short, on a fragment boundary", 4084 * 5, io.ErrUnexpectedEOF},
+		{"cut short, many fragments in", 200_000, io.ErrUnexpectedEOF},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -197,9 +204,9 @@ func TestStoreStreamAbortsWhenTheReaderFails(t *testing.T) {
 
 			status, err := scu.StoreStream(ctx, StoreStreamRequest{
 				SOPClassUID: CTImageStorageUID, SOPInstanceUID: "1.2.3", TransferSyntaxUID: ExplicitVRLittleEndianUID,
-				DataSet: &failingReader{patternReader{n: c.n}, boom},
+				DataSet: &failingReader{patternReader{n: c.n}, c.err},
 			})
-			if !errors.Is(err, boom) || status != 0 {
+			if !errors.Is(err, c.err) || status != 0 {
 				t.Fatalf("StoreStream returned 0x%04X, %v; want the reader's error", status, err)
 			}
 			if st := scu.Association().State(); st == StateAssociated {

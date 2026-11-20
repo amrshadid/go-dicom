@@ -159,6 +159,11 @@ func exactStoreContext(accepted map[byte]*PresentationContext, sopClassUID, tran
 	return best, found
 }
 
+// maxZeroReads bounds how many reads in a row may return no bytes and no
+// error before the reader is taken to have stopped, as io.ReadFull's bufio
+// relatives do.
+const maxZeroReads = 100
+
 // streamSourceError marks an error as the data set reader's, as opposed to
 // the connection's: the two are handled differently, since only the first
 // leaves a message half sent that an abort must disown.
@@ -194,17 +199,33 @@ func (a *Association) sendDataSetStream(ctx context.Context, contextID byte, r i
 		size = maxStreamFragment
 	}
 
+	zeroReads := 0
+	// fill reads until buf is full or the reader ends. Only io.EOF is the end
+	// of the data set. io.ReadFull is not used: it reports a short read that
+	// ended in io.EOF as io.ErrUnexpectedEOF, which cannot then be told from a
+	// reader's own io.ErrUnexpectedEOF, the usual word of a reader whose source
+	// was cut short; taken for the end, that sent a truncated data set as
+	// complete.
 	fill := func(buf []byte) (n int, ended bool, err error) {
-		n, err = io.ReadFull(r, buf)
-		switch {
-		case err == nil:
-			return n, false, nil
-		case err == io.EOF, errors.Is(err, io.ErrUnexpectedEOF):
-			// ReadFull's own words for "the reader ended": io.EOF with nothing
-			// read, or io.ErrUnexpectedEOF with a partial buffer.
-			return n, true, nil
+		for n < len(buf) {
+			m, err := r.Read(buf[n:])
+			n += m
+			switch {
+			case err == io.EOF:
+				return n, true, nil
+			case err != nil:
+				return n, false, &streamSourceError{err: err}
+			case m == 0:
+				// A reader may return 0, nil now and then; one that does so
+				// forever would spin here, so it is given a bound.
+				if zeroReads++; zeroReads > maxZeroReads {
+					return n, false, &streamSourceError{err: io.ErrNoProgress}
+				}
+			default:
+				zeroReads = 0
+			}
 		}
-		return n, false, &streamSourceError{err: err}
+		return n, false, nil
 	}
 	send := func(data []byte, last bool) error {
 		return a.transport.WritePDU(ctx, &PDataTF{PDVItems: []PDVItem{{
