@@ -264,6 +264,12 @@
 // an untrusted source writes what it likes there. What a program should act
 // on is in DICOMFile.Warnings as well.
 //
+// A data element whose tag is not greater than the one before it, in the data
+// set or in the same item of a sequence, is warned of there: PS3.5 7.1 puts
+// the data elements of a data set in increasing tag order, each tag once. The
+// warning names both tags and the offset, the first ten of a file are given
+// one by one and the rest counted, and the elements are kept exactly as read.
+//
 // ReadOptions.MaxValueLength is the longest value the read holds in memory.
 // A longer one ends the read with a *ValueTooLongError naming its attribute,
 // tag, offset and stated length, before any of it is allocated, from a file

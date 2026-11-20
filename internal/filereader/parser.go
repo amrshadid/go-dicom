@@ -47,6 +47,12 @@ type Reader struct {
 	implicitElements int
 	firstImplicit    string
 
+	// orderViolations counts the elements, in a data set or in the items of
+	// a sequence, whose tag is not greater than the one before it. The first
+	// maxOrderWarnings are warned about each; a file out of order throughout
+	// has thousands.
+	orderViolations int
+
 	// insideUnknown is how many elements of VR UN and undefined length the
 	// reader is inside. What such an element holds is implicit VR by rule
 	// (PS3.5 6.2.2 Note 5), so an element without a VR there is as it
@@ -941,6 +947,56 @@ func (dfr *Reader) readValue(n uint32) ([]byte, error) {
 	return value, nil
 }
 
+// maxOrderWarnings is how many elements out of tag order a read warns about
+// one by one.
+const maxOrderWarnings = 10
+
+// tagOrder follows the tags of one data set, a top-level one or an item of a
+// sequence, as they are read.
+type tagOrder struct {
+	last uint32
+	any  bool
+}
+
+// checkTagOrder warns when an element's tag is not greater than the tag of
+// the element before it in the same data set. PS3.5 7.1 puts the data
+// elements of a data set in increasing tag order, each tag once. The element
+// is kept as read: the warning is the only effect, as a file written this way
+// is common enough and its elements are all there.
+func (dfr *Reader) checkTagOrder(o *tagOrder, t tag.Tag, offset int64, inItem bool) {
+	defer func() { o.last, o.any = uint32(t), true }()
+	if !o.any || uint32(t) > o.last {
+		return
+	}
+	dfr.orderViolations++
+	if dfr.orderViolations > maxOrderWarnings {
+		return
+	}
+	before := tag.Tag(o.last)
+	where := "of the data set"
+	if inItem {
+		where = "of a sequence item"
+	}
+	if t == before {
+		dfr.warn("data element %s at offset %d repeats %s, the tag of the element before it; "+
+			"PS3.5 7.1 puts the data elements %s in increasing tag order, each once; both are kept",
+			t, offset, before, where)
+		return
+	}
+	dfr.warn("data element %s at offset %d follows %s, a greater tag; "+
+		"PS3.5 7.1 puts the data elements %s in increasing tag order; kept as read",
+		t, offset, before, where)
+}
+
+// orderSummary says how many elements beyond the ones warned about were out
+// of tag order, once the read is done.
+func (dfr *Reader) orderSummary() {
+	if dfr.orderViolations > maxOrderWarnings {
+		dfr.warn("%d more data elements are out of increasing tag order (PS3.5 7.1); "+
+			"%d in all", dfr.orderViolations-maxOrderWarnings, dfr.orderViolations)
+	}
+}
+
 // warn records a non-fatal problem found while reading the data set.
 func (dfr *Reader) warn(format string, args ...any) {
 	dfr.metaWarnings = append(dfr.metaWarnings, fmt.Sprintf(format, args...))
@@ -1106,6 +1162,7 @@ func (dfr *Reader) readSequenceItem(explicitVR bool, depth int, declaredLength u
 	}
 	start := dfr.position
 
+	var order tagOrder
 	for {
 		if !undefined && dfr.position-start >= int64(declaredLength) {
 			return item, nil
@@ -1130,6 +1187,7 @@ func (dfr *Reader) readSequenceItem(explicitVR bool, depth int, declaredLength u
 			return item, nil
 		}
 
+		dfr.checkTagOrder(&order, elem.Tag, elem.Position.Offset, true)
 		item.Elements = append(item.Elements, elem)
 	}
 }
@@ -1544,6 +1602,7 @@ func Read(ctx context.Context, reader filebase.Reader, options ReadOptions) (*Fi
 		reader.SetByteOrder(filebase.BigEndian)
 	}
 
+	var topOrder tagOrder
 	for {
 		element, err := dfr.ReadDataElement(dicomFile.ExplicitVR)
 		if err != nil {
@@ -1607,8 +1666,10 @@ func Read(ctx context.Context, reader filebase.Reader, options ReadOptions) (*Fi
 			break
 		}
 
+		dfr.checkTagOrder(&topOrder, element.Tag, element.Position.Offset, false)
 		dicomFile.DataElements = append(dicomFile.DataElements, element)
 	}
+	dfr.orderSummary()
 
 	// A file that declares explicit VR and holds elements without one is
 	// not conformant, and readable: the reader took each as implicit, with

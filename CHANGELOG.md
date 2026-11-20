@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pydicom's table. `Anonymize` and `CleanPixelData` record through it, so the
   library has one implementation.
 
+- **A repeated or out-of-order data element is warned of.** PS3.5 7.1 puts
+  the data elements of a data set in increasing tag order, each tag once. When
+  the reader meets an element whose tag is not greater than the one before it,
+  in the data set or inside the same item of a sequence, it adds a warning to
+  `DICOMFile.Warnings` naming both tags and the offset (the first ten of a file,
+  then a count of the rest). The elements are kept as read. `show --json` shows
+  it in `warnings`, which stays an array of strings at `schemaVersion` 1.
+  None of the 78 `.dcm` files of pydicom's corpus gets one.
+
 ### Fixed
 
 - **`BasicProfileTemplate` and the templates built on it de-identified far less
