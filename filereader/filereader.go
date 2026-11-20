@@ -3,6 +3,8 @@ package filereader
 import (
 	"context"
 	"fmt"
+	"io"
+	"math"
 
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -10,6 +12,7 @@ import (
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/hooks"
 	fileparse "github.com/amrshadid/go-dicom/internal/filereader"
+	"github.com/amrshadid/go-dicom/internal/inflate"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -329,14 +332,60 @@ func (df *DICOMFile) GetDataset() *dataset.Dataset {
 // as its value source, writes the data set back whole with the bytes copied
 // from the file, so an image can be rewritten without its pixels in memory.
 //
-// A deflated file is refused: its values are in the inflated bytes, which are
-// not in the file to be copied from (PS3.5 A.5).
+// A deflated file is refused: the offsets of its values count inflated bytes,
+// which are not in the file to be copied from (PS3.5 A.5), and a writer given
+// the file as its source would copy the wrong bytes. GetDatasetWithValuesIn
+// takes the file and returns the source to give the writer, which for a
+// deflated file inflates the stream as the values are asked for.
 func (df *DICOMFile) GetDatasetWithValuesInFile() (*dataset.Dataset, error) {
 	if df.Deflated {
 		return nil, fmt.Errorf("the data set is deflated (%s), so its values are not in the file "+
-			"to be copied from; read it whole", DeflatedExplicitVRLittleEndianUID)
+			"to be copied from; use GetDatasetWithValuesIn, which gives the source that has them",
+			DeflatedExplicitVRLittleEndianUID)
 	}
 	return df.dataset(true), nil
+}
+
+// GetDatasetWithValuesIn is GetDatasetWithValuesInFile for a file of either
+// kind: file is the file the data set was read from with
+// ReadOptions.SkipBulkData, and the second result is the source to give
+// filewriter's SetValueSource, which holds the bytes the values in the data set
+// refer to.
+//
+// For a file that is not deflated the source is file itself. For a deflated
+// one it is a source of the inflated data set, the bytes the offsets count
+// (DICOMFile.Deflated), made by inflating the file's DEFLATE stream when a
+// range is asked for. A writer copying values in increasing order, as filewriter
+// does, inflates the stream once, whatever the number of values, and the memory
+// is a window of the stream and not the data set: a deflated file with a 200 MB
+// value is rewritten in a few megabytes. A range that lies behind the current
+// position starts the inflating again from the start of the data set. The
+// source is safe for one call at a time, so concurrent use serializes.
+//
+//	df, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(in),
+//		filereader.ReadOptions{SkipBulkData: true})
+//	ds, source, err := df.GetDatasetWithValuesIn(in)
+//	// ... change the attributes of ds ...
+//	w.SetValueSource(source, df.IsLittleEndian)
+func (df *DICOMFile) GetDatasetWithValuesIn(file io.ReaderAt) (*dataset.Dataset, io.ReaderAt, error) {
+	if file == nil {
+		return nil, nil, fmt.Errorf("the file the data set was read from is needed to copy its values from")
+	}
+	return df.dataset(true), df.ValueSource(file), nil
+}
+
+// ValueSource returns where the bytes that the offsets of the file's elements
+// count are, given the file it was read from: file itself, or for a deflated
+// file a source of the inflated data set that reads it by inflating the
+// stream (see GetDatasetWithValuesIn). It is what FrameRanges and FrameReader
+// take as src, and what a program that reads values by Position.ValueOffset
+// reads them from.
+func (df *DICOMFile) ValueSource(file io.ReaderAt) io.ReaderAt {
+	if !df.Deflated {
+		return file
+	}
+	section := io.NewSectionReader(file, df.DataSetOffset, math.MaxInt64-df.DataSetOffset)
+	return inflate.NewSource(inflate.OpenUnmeasured(section, 0, MaxInflatedDatasetSize))
 }
 
 // dataset builds the data set, with values left in the file as references

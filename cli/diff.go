@@ -252,25 +252,13 @@ func openDiffFile(path string) (*diffFile, error) {
 		_ = f.Close()
 		return nil, fmt.Errorf("failed to read %s: %v", path, err)
 	}
-	// A deflated data set is read after inflating it, and its positions are
-	// in the inflated bytes, which are not on disk to go back to.
-	if df.Deflated {
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("failed to read %s: %v", path, err)
-		}
-		if df, err = filereader.ReadDICOMFile(filebase.NewFileReader(f)); err != nil {
-			_ = f.Close()
-			return nil, fmt.Errorf("failed to read %s: %v", path, err)
-		}
-	}
 	// As show does: a file that yielded nothing is a mistyped name, and
 	// would compare equal to any other.
 	if len(df.MetaElements)+len(df.DataElements) == 0 {
 		_ = f.Close()
 		return nil, fmt.Errorf("%s does not look like a DICOM file: no data elements could be read from it", path)
 	}
-	root := &displayScope{deciding: dataset.NewDataset(), source: f, bigEndian: !df.IsLittleEndian && !df.Deflated}
+	root := &displayScope{deciding: dataset.NewDataset(), source: df.ValueSource(f), bigEndian: !df.IsLittleEndian && !df.Deflated}
 	return &diffFile{f: f, df: df, scope: root}, nil
 }
 

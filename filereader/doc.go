@@ -246,8 +246,15 @@
 // gives it as a dataelem.ValueInFile, where its bytes are, and filewriter,
 // given the file with SetValueSource, copies them from there as it writes:
 // a data set can be changed and written back without its pixels in memory,
-// byte for byte as if it had been read whole. A deflated file is refused,
-// since its values are not in the file.
+// byte for byte as if it had been read whole. A deflated file is the same
+// problem with the values in the inflated bytes, which are not in the file:
+// GetDatasetWithValuesInFile refuses it by name, and GetDatasetWithValuesIn,
+// given the file, returns the source to give the writer, which inflates the
+// file's DEFLATE stream as the values are asked for (ValueSource). A read with
+// SkipBulkData does not hold the inflated data set either: it measures the
+// stream once, so that the bound against a deflate bomb is the same, and reads
+// it forward, dropping what it skips. A 200 MB value in a deflated file is
+// read, and rewritten, in a few megabytes.
 //
 // ReadOptions.Logger is where the read logs. Everything the read does logs
 // there: the reader itself, the character set decisions, and the validation

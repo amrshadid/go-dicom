@@ -56,8 +56,10 @@ const (
 // (a big endian file written little endian, a little endian one written big
 // endian). The lengths, the group lengths, the sequences that were of
 // undefined length and the fragments of encapsulated pixel data are all in
-// what is compared. A deflated file is refused by name: its values are not in
-// the file.
+// what is compared. A deflated file is copied from in the same way: its values
+// are in the inflated data set, which the source GetDatasetWithValuesIn gives
+// inflates as they are asked for, and the method that has no file to make that
+// source refuses it by name.
 func TestValuesCopiedFromTheFileAcrossThePydicomCorpus(t *testing.T) {
 	dir := os.Getenv("GODICOM_PYDICOM_DATA")
 	if dir == "" {
@@ -85,16 +87,20 @@ func TestValuesCopiedFromTheFileAcrossThePydicomCorpus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read whole, and not with bulk data skipped: %v", err)
 			}
-			referenced, err := skipped.GetDatasetWithValuesInFile()
+			// The value source is the file for a file that is not deflated, and
+			// for one that is, the inflated data set its offsets count.
+			referenced, source, err := skipped.GetDatasetWithValuesIn(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
 			if whole.Deflated {
-				if err == nil || !strings.Contains(err.Error(), "deflated") {
+				// The method that takes no file cannot give the source, and a
+				// writer given the file itself would copy the wrong bytes: it
+				// is refused by name.
+				if _, err := skipped.GetDatasetWithValuesInFile(); err == nil || !strings.Contains(err.Error(), "deflated") {
 					t.Fatalf("a deflated file gave %v, want it refused by name", err)
 				}
 				deflated++
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
 			}
 			copied += countInFile(referenced)
 
@@ -102,8 +108,10 @@ func TestValuesCopiedFromTheFileAcrossThePydicomCorpus(t *testing.T) {
 			targets := []string{own}
 			if !compress.IsEncapsulated(own) {
 				targets = []string{implicitLittle, explicitLittle, explicitBig}
+				if whole.Deflated {
+					targets = append(targets, own)
+				}
 			}
-			source := bytes.NewReader(raw)
 			for _, syntax := range targets {
 				if syntax == "" {
 					continue
@@ -120,9 +128,9 @@ func TestValuesCopiedFromTheFileAcrossThePydicomCorpus(t *testing.T) {
 		})
 	}
 	if deflated == 0 {
-		t.Error("no deflated file in the corpus was refused")
+		t.Error("no deflated file in the corpus was copied from")
 	}
-	t.Logf("%d writes compared in %d syntaxes, %d values copied from the file, %d deflated files refused",
+	t.Logf("%d writes compared in %d syntaxes, %d values copied from the file, %d of the files deflated",
 		compared, len(syntaxes), copied, deflated)
 }
 

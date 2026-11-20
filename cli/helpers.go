@@ -6,7 +6,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"unicode"
@@ -98,18 +97,10 @@ func readDICOMElements(filename string, how listing) ([]DicomElement, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read DICOM file: %w", err)
 	}
-	// A deflated data set is read after inflating it, and its positions are
-	// in the inflated bytes, which are not on disk to go back to.
-	if how.skipBulk && df.Deflated {
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
-		}
-		if df, err = filereader.ReadDICOMFile(filebase.NewFileReader(file)); err != nil {
-			return nil, fmt.Errorf("failed to read DICOM file: %w", err)
-		}
-	}
-	// Where the start of a value left in the file is read from.
-	root := &displayScope{deciding: dataset.NewDataset(), source: file, whole: how.whole}
+	// Where the start of a value left in the file is read from: the file, or for
+	// a deflated data set, whose positions count inflated bytes, a source that
+	// inflates the stream up to the value.
+	root := &displayScope{deciding: dataset.NewDataset(), source: df.ValueSource(file), whole: how.whole}
 
 	// The file meta header first, as it appears in the file, then the data set.
 	elements := make([]DicomElement, 0, 1+len(df.MetaElements)+len(df.DataElements))

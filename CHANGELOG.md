@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A deflated file can be read and rewritten with its values left in it.**
+  `GetDatasetWithValuesInFile` refused a deflated file, because its values are
+  in the inflated bytes and not in the file to be copied from, so a program
+  that rewrote files in place (de-identifying them, say) had to read a deflated
+  one whole, or refuse it. `DICOMFile.GetDatasetWithValuesIn(file)` returns the
+  data set with its values left, and the source to give `filewriter`'s
+  `SetValueSource`: the file itself, or for a deflated file a source of the
+  inflated data set that inflates the file's DEFLATE stream as values are asked
+  for, forward only and starting again from the start of the data set when a
+  range lies behind. A writer copying values in increasing order inflates the
+  stream once. `DICOMFile.ValueSource(file)` is that source alone, for
+  `FrameReader` and for a program that reads values by position. The old method
+  still refuses a deflated file, now naming the new one, since a writer given
+  the file itself would copy the wrong bytes. The output is the same bytes a
+  whole read writes: checked for pydicom's deflated file and for deflated files
+  made with dcmtk's `dcmconv +td` from corpus images, and read back the same by
+  `dcmdump` and pydicom.
 - **The DICOM JSON of a header can be written without linking the codecs.**
   The only DICOM JSON writer (PS3.18 Annex F) was `Dataset.ToDICOMJSON`, so a
   program that read a file with `filereader/attributes` to avoid the image
@@ -147,6 +164,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   searched and returns `ErrJPEGSegmentsNotSearched`.
 
 ### Changed
+
+- **A deflated file is no longer inflated into memory to be read in place.**
+  A read with `SkipBulkData` of a deflated file inflated the whole data set into
+  one slice to find where the values end, so a 200 MB value cost 200 MB, and
+  the file writer encoded a deflated data set whole before compressing it.
+  Both are streams now: the read measures the DEFLATE stream once, so
+  `MaxInflatedDatasetSize` and the ratio bound refuse a deflate bomb with the
+  same error as before, then reads it forward, inflating and dropping a value it
+  skips; the writer compresses each element as it is reached. `go-dicom
+  anonymize` of a deflated file with a 200 MB value took 848 MB of resident
+  memory and takes 32 MB, with the same output byte for byte; `show`, `diff`,
+  `validate`, `image` and the DICOMweb frame and bulk data resources of a
+  deflated file no longer read it whole either.
 
 - **A received data fragment is no longer copied out of its PDU.** Each
   fragment of a P-DATA-TF is a slice of the PDU's body, capped at its own end.
