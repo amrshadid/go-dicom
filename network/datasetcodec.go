@@ -117,6 +117,42 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 	return decodeDataset(context.Background(), data, transferSyntax)
 }
 
+// DecodeUNSequence parses the value of an element whose VR is UN as the items
+// of a sequence, for a private sequence that arrives as UN with a defined
+// length: a sender that did not know the tag sends its value as it found it,
+// and PS3.5 6.2.2 says such a value is encoded in Implicit VR Little Endian,
+// whatever the transfer syntax around it. The reader keeps a defined-length
+// UN value as bytes, as it cannot tell items from other bytes; a caller that
+// knows the tag is a sequence walks it with this.
+//
+// The value must be items and nothing else: it starts with an Item tag
+// (FFFE,E000), each item is of defined or undefined length, and the items end
+// where the value does (a Sequence Delimitation Item there is accepted). Bytes
+// that are not so are refused with an error rather than read as whatever they
+// happen to resemble. Nesting is bounded as for a received data set.
+func DecodeUNSequence(value []byte) (*sequence.Sequence, error) {
+	return decodeUNSequence(context.Background(), value)
+}
+
+func decodeUNSequence(ctx context.Context, value []byte) (*sequence.Sequence, error) {
+	if len(value) == 0 {
+		return sequence.New(), nil
+	}
+	order := binary.LittleEndian
+	if len(value) < 8 || order.Uint16(value[0:]) != tag.ItemTag.Group() || order.Uint16(value[2:]) != tag.ItemTag.Element() {
+		return nil, NewPDUErrorf("DECODE_DS", "the value does not begin with an item (FFFE,E000); it is not a sequence")
+	}
+	r := bytes.NewReader(value)
+	seq, err := readSequence(ctx, r, transferSyntaxEncoding{}, order, uint32(len(value)), 0)
+	if err != nil {
+		return nil, err
+	}
+	if r.Len() != 0 {
+		return nil, NewPDUErrorf("DECODE_DS", "%d bytes after the last item; the value is not a sequence", r.Len())
+	}
+	return seq, nil
+}
+
 // decodeDataset is DecodeDataset building the data set under ctx: the
 // validation warnings of each element go to the logger ctx carries
 // (config.WithLogger), which is the receiving server's or client's own when
