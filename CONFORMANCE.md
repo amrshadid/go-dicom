@@ -387,7 +387,7 @@ below.
 |---------|-----------|---------------|
 | QIDO-RS | Search for studies, series and instances, with matching, `includefield`, `limit`, `offset` and `fuzzymatching`; results as DICOM JSON | XML results |
 | WADO-RS | Study, series and instance as `application/dicom` in `multipart/related`, in a named transfer syntax or as stored; metadata as DICOM JSON | Frames, rendered images, thumbnails and bulk data retrieved on their own |
-| STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons | Metadata with separate bulk data |
+| STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons. `Client.Store` builds the body in memory; `Client.StoreStream` writes it through a pipe as it reads each instance from a reader, a part for each and no Content-Length (chunked), so memory does not grow with the study: 2,000 instances of 1 MB are sent with the heap under 16 MiB. An error from a reader ends the body without its closing boundary, so the server never takes it for a whole request | Metadata with separate bulk data |
 
 As an origin server (`dicomweb.NewServer`, `qrscp -web`):
 

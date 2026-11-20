@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its File Meta Information for the UIDs, the syntax and where the data set
   begins. Checked against dcmtk's `storescp` and a pynetdicom SCP: the data
   set each stored equals the file's, byte for byte, in seven transfer syntaxes.
+- **`dicomweb.Client.StoreStream` sends a study that is not in memory.**
+  `Store` takes every file as a byte slice and builds the whole request body
+  before sending it, so an archive storing a study to another server had to
+  hold the study twice. `StoreStream` takes a function that returns each
+  instance's Part 10 bytes as a reader, and `io.EOF` after the last, and
+  writes the multipart/related body through a pipe as they are read, a part
+  for each reader and the body chunked: 2,000 instances of 1 MB (2 GB) are
+  sent with the heap under 16 MiB, to this library's server and to one that
+  only reads. The result is `Store`'s. An error from a reader ends the body
+  without its closing boundary, so the server cannot take it for a whole
+  request. No STOW-RS server of another project was available; the chunked
+  body was read by aiohttp's HTTP and multipart parsers and each part by
+  pydicom, byte for byte.
 
 ## [1.11.0] - 2026-11-19
 
