@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/binary"
 	"net"
 	"testing"
 	"time"
@@ -104,5 +105,33 @@ func TestReceivedPDUBytesAreCopiedOnlyForAHandlerThatWantsThem(t *testing.T) {
 	if copied < none+pduSize {
 		t.Errorf("a handler of EVTPDURecv was given the PDU with %d bytes allocated, against %d with none: it is not a copy of %d bytes",
 			copied, none, pduSize)
+	}
+}
+
+// TestDataFragmentsAreSlicesOfTheBody proves a P-DATA-TF's fragments are read
+// out of the PDU's body without a copy, and that each is capped at its own
+// end, so a caller that appends to one cannot write over the next.
+func TestDataFragmentsAreSlicesOfTheBody(t *testing.T) {
+	pdv := func(ctx byte, mch byte, data string) []byte {
+		b := binary.BigEndian.AppendUint32(nil, uint32(len(data)+2))
+		return append(append(b, ctx, mch), data...)
+	}
+	body := append(pdv(1, 0x00, "first"), pdv(1, 0x02, "second")...)
+	pdu, err := decodeDataTF(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pdu.PDVItems) != 2 || string(pdu.PDVItems[0].Data) != "first" || string(pdu.PDVItems[1].Data) != "second" {
+		t.Fatalf("decoded %+v", pdu.PDVItems)
+	}
+	if &pdu.PDVItems[0].Data[0] != &body[6] {
+		t.Error("the first fragment was copied out of the body")
+	}
+	if cap(pdu.PDVItems[0].Data) != len("first") {
+		t.Errorf("the first fragment has capacity %d, want %d", cap(pdu.PDVItems[0].Data), len("first"))
+	}
+	_ = append(pdu.PDVItems[0].Data, "XXXXXXXXXX"...)
+	if string(pdu.PDVItems[1].Data) != "second" {
+		t.Errorf("appending to the first fragment changed the second: %q", pdu.PDVItems[1].Data)
 	}
 }
