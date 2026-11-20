@@ -47,6 +47,11 @@ type SequenceItemValue = fileparse.SequenceItemValue
 // ReadOptions.MaxValueLength.
 type ValueTooLongError = fileparse.ValueTooLongError
 
+// TagOrderViolation is a data element whose tag is not greater than the tag of
+// the element before it in the same data set (PS3.5 7.1), as
+// DICOMFile.TagOrderViolations lists them.
+type TagOrderViolation = fileparse.TagOrderViolation
+
 // ErrValueTooLong is what a read refused by ReadOptions.MaxValueLength
 // matches with errors.Is.
 var ErrValueTooLong = fileparse.ErrValueTooLong
@@ -173,6 +178,9 @@ func ReadDICOMFileWithOptions(reader filebase.Reader, options ReadOptions) (*DIC
 		Deflated:        parsed.Deflated,
 		Warnings:        parsed.Warnings,
 		ctx:             ctx,
+
+		TagOrderViolations:     parsed.TagOrderViolations,
+		TagOrderViolationCount: parsed.TagOrderViolationCount,
 	}, nil
 }
 
@@ -299,6 +307,15 @@ type DICOMFile struct {
 	// does not allow, in the data set and in each sequence item). Parsing
 	// continues past these; inspect the slice to surface them.
 	Warnings []string
+
+	// TagOrderViolations are the data elements, up to a thousand, whose tag is
+	// not greater than the tag of the element before them in the same data set
+	// or sequence item (PS3.5 7.1), in the order read; TagOrderViolationCount
+	// counts them all, so a count above the length means some were not kept.
+	// Each is also among Warnings, in words. A program that acts on the order
+	// reads these and not the text of a warning.
+	TagOrderViolations     []TagOrderViolation
+	TagOrderViolationCount int
 
 	// ctx carries the logger the file was read with; see context.
 	ctx context.Context

@@ -53,6 +53,10 @@ type Reader struct {
 	// has thousands.
 	orderViolations int
 
+	// orderKept holds the first maxOrderKept of those violations, for
+	// File.TagOrderViolations.
+	orderKept []TagOrderViolation
+
 	// insideUnknown is how many elements of VR UN and undefined length the
 	// reader is inside. What such an element holds is implicit VR by rule
 	// (PS3.5 6.2.2 Note 5), so an element without a VR there is as it
@@ -951,6 +955,28 @@ func (dfr *Reader) readValue(n uint32) ([]byte, error) {
 // one by one.
 const maxOrderWarnings = 10
 
+// maxOrderKept is how many violations File.TagOrderViolations holds; the
+// count beyond them is in File.TagOrderViolationCount. A file out of order
+// throughout would otherwise cost memory in proportion to its elements.
+const maxOrderKept = 1000
+
+// TagOrderViolation is a data element whose tag is not greater than the tag
+// of the element before it in the same data set, which PS3.5 7.1 does not
+// allow. The element is kept as read; this records where the order broke.
+type TagOrderViolation struct {
+	// Tag is the element's tag and Previous the tag of the element before it.
+	Tag, Previous tag.Tag
+	// Offset is where the element begins, in the file, or in the inflated
+	// data set of a deflated file.
+	Offset int64
+	// InItem reports that the two are in a sequence item, not the top-level
+	// data set.
+	InItem bool
+	// Repeated reports that Tag equals Previous: the same tag twice. Otherwise
+	// Tag is the smaller.
+	Repeated bool
+}
+
 // tagOrder follows the tags of one data set, a top-level one or an item of a
 // sequence, as they are read.
 type tagOrder struct {
@@ -969,10 +995,15 @@ func (dfr *Reader) checkTagOrder(o *tagOrder, t tag.Tag, offset int64, inItem bo
 		return
 	}
 	dfr.orderViolations++
+	before := tag.Tag(o.last)
+	if len(dfr.orderKept) < maxOrderKept {
+		dfr.orderKept = append(dfr.orderKept, TagOrderViolation{
+			Tag: t, Previous: before, Offset: offset, InItem: inItem, Repeated: t == before,
+		})
+	}
 	if dfr.orderViolations > maxOrderWarnings {
 		return
 	}
-	before := tag.Tag(o.last)
 	where := "of the data set"
 	if inItem {
 		where = "of a sequence item"
@@ -1687,6 +1718,8 @@ func Read(ctx context.Context, reader filebase.Reader, options ReadOptions) (*Fi
 	if len(dfr.metaWarnings) > metaWarningCount {
 		dicomFile.Warnings = append(dicomFile.Warnings, dfr.metaWarnings[metaWarningCount:]...)
 	}
+	dicomFile.TagOrderViolations = dfr.orderKept
+	dicomFile.TagOrderViolationCount = dfr.orderViolations
 
 	return dicomFile, nil
 }

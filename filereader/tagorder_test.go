@@ -11,6 +11,7 @@ import (
 
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // PS3.5 7.1 puts the data elements of a data set in increasing tag order,
@@ -193,12 +194,65 @@ func TestTagOrderWarningsStayOutOfTheCorpus(t *testing.T) {
 			continue // a file this reader refuses has no warnings to speak of
 		}
 		read++
-		if got := orderWarnings(file); len(got) > 0 {
-			t.Errorf("%s: %q", filepath.Base(path), got)
+		if got := orderWarnings(file); len(got) > 0 || file.TagOrderViolationCount != 0 {
+			t.Errorf("%s: %d violations: %q", filepath.Base(path), file.TagOrderViolationCount, got)
 		}
 	}
 	if read == 0 {
 		t.Fatal("no file was read")
 	}
 	t.Logf("%d files read, none with a tag order warning", read)
+}
+
+// TestTagOrderViolationsAreTyped proves each element out of order is given to
+// a program as a value, its tag, the tag before it, its offset, whether it is
+// in an item and whether it repeats, so that no caller has to match on the
+// words of a warning; and that the count goes on past the warnings' cap.
+func TestTagOrderViolationsAreTyped(t *testing.T) {
+	file := readFile(t, buildFile("1.2.840.10008.1.2.1", explicitDataSet(
+		tagElement(0x0008, 0x0070),
+		tagElement(0x0010, 0x0020),
+		tagElement(0x0010, 0x0020),
+		tagElement(0x0008, 0x0090),
+		sequenceOf(0x0008, 0x1111,
+			item(tagElement(0x0010, 0x0030), tagElement(0x0010, 0x0020)),
+		),
+	), false))
+
+	want := []filereader.TagOrderViolation{
+		{Tag: tag.New(0x0010, 0x0020), Previous: tag.New(0x0010, 0x0020), Repeated: true},
+		{Tag: tag.New(0x0008, 0x0090), Previous: tag.New(0x0010, 0x0020)},
+		{Tag: tag.New(0x0010, 0x0020), Previous: tag.New(0x0010, 0x0030), InItem: true},
+	}
+	got := file.TagOrderViolations
+	if len(got) != len(want) || file.TagOrderViolationCount != len(want) {
+		t.Fatalf("%d violations, count %d; want %d: %+v", len(got), file.TagOrderViolationCount, len(want), got)
+	}
+	for i := range want {
+		g := got[i]
+		g.Offset = 0
+		if g != want[i] {
+			t.Errorf("violation %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if got[0].Offset != file.DataElements[2].Position.Offset || got[1].Offset != file.DataElements[3].Position.Offset {
+		t.Errorf("offsets %d and %d, want %d and %d", got[0].Offset, got[1].Offset,
+			file.DataElements[2].Position.Offset, file.DataElements[3].Position.Offset)
+	}
+
+	var elements [][]byte
+	for e := uint16(40); e > 0; e -= 2 {
+		elements = append(elements, tagElement(0x0010, e))
+	}
+	many := readFile(t, buildFile("1.2.840.10008.1.2.1", explicitDataSet(elements...), false))
+	if many.TagOrderViolationCount != 19 || len(many.TagOrderViolations) != 19 {
+		t.Errorf("%d violations, count %d; want all 19, past the cap of ten warnings",
+			len(many.TagOrderViolations), many.TagOrderViolationCount)
+	}
+
+	inOrder := readFile(t, buildFile("1.2.840.10008.1.2.1", explicitDataSet(
+		tagElement(0x0008, 0x0070), tagElement(0x0010, 0x0020)), false))
+	if inOrder.TagOrderViolationCount != 0 || inOrder.TagOrderViolations != nil {
+		t.Errorf("a data set in order has %d violations", inOrder.TagOrderViolationCount)
+	}
 }
