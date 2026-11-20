@@ -3,6 +3,7 @@ package network
 import (
 	"context"
 	"fmt"
+	"net"
 	"sync"
 )
 
@@ -72,7 +73,54 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 		cancel()
 		return nil, err
 	}
+	s.run(serverCtx, ln)
+	return s, nil
+}
 
+// StartServerOn is StartServer for a listener the caller made: the server
+// accepts on l and does not bind an address of its own, so the caller decides
+// how the socket is made, which of IPv4 and IPv6 a wildcard covers for one,
+// and there is no moment between the bind and the serving in which the port
+// can be taken or a connection find nothing accepting. config.BindAddress and
+// config.Port are not used.
+//
+// When config.TLS is set, l is wrapped for TLS as StartServer does for the
+// listener it makes, so l is the plain TCP listener. Stop closes l, and so
+// does Shutdown when its drain ends. When StartServerOn returns an error, for
+// a TLS configuration that cannot be used, l has not been touched and is
+// still the caller's to close.
+func StartServerOn(ctx context.Context, config SCPConfig, handler Handler, l net.Listener) (*Server, error) {
+	config.applyDefaults()
+
+	scp := NewSCP(config)
+	scp.SetHandler(handler)
+
+	ln, err := wrapListener(l, config.TLS)
+	if err != nil {
+		return nil, err
+	}
+	serverCtx, cancel := context.WithCancel(ctx)
+
+	s := &Server{
+		scp:    scp,
+		cancel: cancel,
+		Events: NewEventManager(),
+		Logger: NewLogger(LogLevelInfo, nil),
+	}
+	if lg := loggerFor(config.Logger); lg != nil {
+		s.Logger = lg
+	}
+	if config.Events != nil {
+		s.Events = config.Events
+	}
+	s.run(serverCtx, ln)
+	return s, nil
+}
+
+// run starts the accept loop of a server on a listener that is open, and
+// reports the server started.
+func (s *Server) run(serverCtx context.Context, ln *Listener) {
+	scp, config := s.scp, s.scp.config
 	scp.mu.Lock()
 	scp.listener = ln
 	scp.running = true
@@ -94,8 +142,6 @@ func StartServer(ctx context.Context, config SCPConfig, handler Handler) (*Serve
 
 		_ = scp.serve(serverCtx, ln, s.Logger, s.Events)
 	}()
-
-	return s, nil
 }
 
 // StartServerTLS creates and starts a TLS-encrypted DICOM SCP server.

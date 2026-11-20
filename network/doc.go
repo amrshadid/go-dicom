@@ -123,9 +123,18 @@
 //
 // A [Server] from [StartServer] stops in one of two ways. [Server.Stop] cancels
 // the context every handler was given, cutting what is in flight.
-// [Server.Shutdown] stops taking new associations and lets the operations in
+// A program that has to bind the socket itself, to choose which of IPv4 and
+// IPv6 a wildcard covers, or to hand the server a descriptor it was given,
+// passes the listener to [SCP.Serve] or [StartServerOn]; the server wraps it
+// for TLS when it has a TLS configuration, and closes it when it stops.
+//
+// [Server.Shutdown] refuses new associations and lets the operations in
 // progress finish, until the context it is given ends; it returns a
-// [*ShutdownError] counting the associations it then had to abort.
+// [*ShutdownError] counting the associations it then had to abort. The
+// listener stays open while it drains, so a caller is answered with an
+// A-ASSOCIATE-RJ, rejected-transient, temporary congestion, which tells it to
+// try again later, rather than refused at the TCP level; it is closed when
+// the drain ends.
 //
 // The handler runs on the association's goroutine, so a slow handler holds that
 // association open; hand long work to a queue. Handlers may be called
@@ -142,6 +151,12 @@
 // instead of a decoded copy assembled in memory. Memory stays bounded whatever
 // the instance's size, and [WriteCStoreFile] writes the bytes as a Part 10 file
 // untouched, so what is stored is what was sent.
+//
+// [SCU.StoreStream] is the same for sending: the data set goes out as a reader
+// holds it, on the presentation context for the SOP class in exactly that
+// transfer syntax, in two PDUs of memory, and the peer's status comes back
+// whatever it is. [StoreStreamRequestFromFile] builds the request for a Part 10
+// file.
 //
 // [AssociationInfoFromContext] gives a handler the calling AE title, peer
 // address, negotiated contexts, and peer implementation details without

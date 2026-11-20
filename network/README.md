@@ -118,13 +118,32 @@ server, err := network.StartServer(ctx, network.SCPConfig{
 for associations negotiated after they are called; on a `Server` that is after
 `StartServer` has begun accepting.
 
+A program that must bind the socket itself, for instance to choose which of
+IPv4 and IPv6 a wildcard address covers, gives the server its listener:
+`StartServerOn(ctx, config, handler, listener)`, or `scp.Serve(ctx, listener)`
+for an `SCP`. There is then no moment between the bind and the serving, the
+listener is wrapped for TLS when the configuration has TLS (pass the plain
+one), and `Stop`, `Close` and `Shutdown` close it as they close their own.
+`Port` and `BindAddress` are not used.
+
+```go
+l, err := net.Listen("tcp4", "0.0.0.0:11112") // the caller's choice of family
+if err != nil {
+    return err
+}
+server, err := network.StartServerOn(ctx, network.SCPConfig{AETitle: "ARCHIVE"}, handler, l)
+```
+
 A `Server` (from `StartServer`) can also stop without cutting the work in
-progress. `Shutdown` closes the listener, refuses an association asked for on a
-connection already open (rejected-transient, so the caller tries again), aborts
-an association waiting for its next request (everything it sent was
-answered), and lets one in the middle of an operation finish it and release.
-When the context ends first, what is left is aborted, and the error says how
-many associations were cut short:
+progress. `Shutdown` goes on accepting connections while it drains, and
+refuses every association asked for, on a new connection or one already open,
+with rejected-transient, temporary-congestion, so a caller told to try again
+later does; a caller met with a refused TCP connection has no such word.
+It aborts an association waiting for its next request (everything it sent was
+answered), lets one in the middle of an operation finish it and release, and
+closes the listener when none is left. When the context ends first, what is
+left is aborted, the listener is closed, and the error says how many
+associations were cut short:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -283,6 +302,32 @@ The command's UIDs are not compared with the data set's own SOP Class and SOP
 Instance UIDs: the data set is copied, not parsed. An archive that indexes the
 file finds a disagreement there. The SCP puts no timeout on the handler, so one
 that waits on a disk or a database waits on `ctx` as well.
+
+### Sending a Stored File as It Is
+
+`SCU.Store` encodes a data set and may transcode it to what the peer accepted.
+An archive that sends the bytes it stored wants neither. `SCU.StoreStream` sends
+the data set from a reader, as it is, on the presentation context for the SOP
+class in exactly that transfer syntax (the error names both when the peer
+accepted none), and holds two PDUs of it however large it is. It returns the
+peer's status word, a warning or a refusal included, with a nil error: the error
+is for a failed transport or a failed reader. A reader that fails before its end
+gets an A-ABORT, never a last fragment, so the peer is not handed a data set cut
+short.
+
+```go
+f, _ := os.Open(path)
+st, _ := f.Stat()
+req, err := network.StoreStreamRequestFromFile(f, st.Size()) // UIDs and syntax from the file meta
+if err != nil {
+    return err
+}
+// Propose exactly what the file is in; the peer may refuse it.
+err = scu.Associate(ctx, []network.PresentationContextItem{{
+    ID: 1, AbstractSyntax: req.SOPClassUID, TransferSyntaxes: []string{req.TransferSyntaxUID},
+}})
+status, err := scu.StoreStream(ctx, req)
+```
 
 ### Query/Retrieve Server
 

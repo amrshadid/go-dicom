@@ -179,10 +179,52 @@ func TestShutdownAbortsAStoreThatOutlivesItsBound(t *testing.T) {
 	goroutinesSettle(t, base)
 }
 
-// TestShutdownRefusesNewAssociations: once Shutdown has begun the listener is
-// closed, so a new connection is refused, and an A-ASSOCIATE-RQ on a
-// connection opened before is answered rejected-transient, service-provider
-// (presentation), temporary-congestion (PS3.8 Table 9-21).
+// requestAssociation sends an A-ASSOCIATE-RQ on conn and returns the ten bytes
+// of the answer.
+func requestAssociation(t *testing.T, conn net.Conn) []byte {
+	t.Helper()
+	raw, err := EncodePDU(associateRQ("SCANNER", "ARCHIVE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	rj := make([]byte, 10)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(conn, rj); err != nil {
+		t.Fatalf("reading the answer to the A-ASSOCIATE-RQ: %v", err)
+	}
+	return rj
+}
+
+// wantTransientRefusal fails unless rj is an A-ASSOCIATE-RJ rejected-transient,
+// service-provider (presentation), temporary-congestion (PS3.8 Table 9-21).
+func wantTransientRefusal(t *testing.T, who string, rj []byte) {
+	t.Helper()
+	if rj[0] != 0x03 || rj[7] != RJResultRejectedTransient || rj[8] != RJSourceServiceProviderPresentation || rj[9] != RJReasonTemporaryCongestion {
+		t.Errorf("%s: answered % x, want an A-ASSOCIATE-RJ 02 03 01", who, rj)
+	}
+}
+
+// waitDraining waits until a Shutdown has begun.
+func waitDraining(t *testing.T, server *Server) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !server.scp.draining() {
+		if time.Now().After(deadline) {
+			t.Fatal("the server never began draining")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestShutdownRefusesNewAssociations: while Shutdown drains, a caller that
+// connects is answered rejected-transient, service-provider (presentation),
+// temporary-congestion (PS3.8 Table 9-21), as one whose connection was
+// already open is, so that a caller told to try later does. It was met with
+// a refused TCP connection, which a modality may take for a failure. The
+// listener is closed when the drain ends, and no goroutine is left.
 func TestShutdownRefusesNewAssociations(t *testing.T) {
 	base := runtime.NumGoroutine()
 	handler := newGatedStore(time.Second)
@@ -195,11 +237,8 @@ func TestShutdownRefusesNewAssociations(t *testing.T) {
 	}
 	defer early.Close()
 	// Dial returns when the kernel has the connection, which is before the
-	// server has accepted it. One still waiting to be accepted when Shutdown
-	// closes the listener is dropped with it, and this test, which is about a
-	// connection the server is already serving, then failed on its write with
-	// a broken pipe (#525). So it waits until the server serves two: the
-	// SCU's and this one.
+	// server has accepted it, and the server counts the connections it serves
+	// when it has: the SCU's and this one.
 	served := func() int {
 		d := server.scp.drain()
 		d.mu.Lock()
@@ -212,7 +251,7 @@ func TestShutdownRefusesNewAssociations(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	// A store in flight keeps the server draining while the two are tried.
+	// A store in flight keeps the server draining while the callers are tried.
 	stored := make(chan error, 1)
 	go func() { stored <- scu.Store(context.Background(), corpusInstance(t)) }()
 	<-handler.started
@@ -222,32 +261,30 @@ func TestShutdownRefusesNewAssociations(t *testing.T) {
 		defer cancel()
 		stopped <- server.Shutdown(ctx)
 	}()
-	deadline := time.Now().Add(5 * time.Second)
-	for !server.scp.draining() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitDraining(t, server)
 
-	if late, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+	// A caller that connects now, in the drain, is accepted and told to come
+	// back; each of several is.
+	for i := 0; i < 3; i++ {
+		late, err := net.DialTimeout("tcp", addr, 5*time.Second)
+		if err != nil {
+			t.Fatalf("a connection made while Shutdown drains was refused: %v", err)
+		}
+		wantTransientRefusal(t, "a caller during the drain", requestAssociation(t, late))
 		late.Close()
-		t.Error("a connection made after Shutdown began was accepted")
 	}
-
-	raw, err := EncodePDU(associateRQ("SCANNER", "ARCHIVE"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := early.Write(raw); err != nil {
-		t.Fatal(err)
-	}
-	rj := make([]byte, 10)
-	_ = early.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if _, err := io.ReadFull(early, rj); err != nil {
-		t.Fatalf("reading the answer to the A-ASSOCIATE-RQ: %v", err)
-	}
-	if rj[0] != 0x03 || rj[7] != RJResultRejectedTransient || rj[8] != RJSourceServiceProviderPresentation || rj[9] != RJReasonTemporaryCongestion {
-		t.Errorf("answered % x, want an A-ASSOCIATE-RJ 02 03 01", rj)
-	}
+	wantTransientRefusal(t, "a connection opened before Shutdown", requestAssociation(t, early))
 	early.Close()
+
+	// The same through an SCU, which is how a modality asks: it learns the
+	// refusal is transient, not that the connection failed.
+	retry := NewSCU(SCUConfig{CallingAE: "SCANNER", CalledAE: "ARCHIVE", Address: addr})
+	var rejected *AssociationError
+	err = retry.Associate(context.Background(), DefaultVerificationContexts())
+	if !errors.As(err, &rejected) || rejected.Result != RJResultRejectedTransient ||
+		rejected.Source != RJSourceServiceProviderPresentation || rejected.Reason != RJReasonTemporaryCongestion {
+		t.Errorf("an SCU associating during the drain got %v, want the refusal with its three values", err)
+	}
 
 	if err := <-stored; err != nil {
 		t.Errorf("the store in flight: %v", err)
@@ -255,6 +292,71 @@ func TestShutdownRefusesNewAssociations(t *testing.T) {
 	_ = scu.Release(context.Background())
 	if err := <-stopped; err != nil {
 		t.Errorf("Shutdown returned %v", err)
+	}
+	// The drain is over, so the listener is closed.
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		conn.Close()
+		t.Error("a connection made after the drain ended was accepted")
+	}
+	goroutinesSettle(t, base)
+}
+
+// TestShutdownClosesTheListenerWhenNothingIsLeft: a server with no
+// association closes its listener as soon as Shutdown begins, which returns
+// nil at once, and the accept loop is gone.
+func TestShutdownClosesTheListenerWhenNothingIsLeft(t *testing.T) {
+	base := runtime.NumGoroutine()
+	server, err := StartServer(context.Background(), SCPConfig{AETitle: "ARCHIVE", Port: 0, BindAddress: "127.0.0.1"}, newGatedStore(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Stop)
+	addr := server.Addr()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown returned %v", err)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		conn.Close()
+		t.Error("the listener was left open")
+	}
+	server.Wait()
+	goroutinesSettle(t, base)
+}
+
+// TestShutdownAtItsBoundClosesTheListener: when the bound ends the drain, the
+// callers refused up to then are the last, the associations left are aborted,
+// and the listener is closed.
+func TestShutdownAtItsBoundClosesTheListener(t *testing.T) {
+	base := runtime.NumGoroutine()
+	handler := newGatedStore(time.Minute)
+	server, scu, _ := shutdownServer(t, handler)
+	addr := server.Addr()
+	stored := make(chan error, 1)
+	go func() { stored <- scu.Store(context.Background(), corpusInstance(t)) }()
+	<-handler.started
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.Shutdown(ctx) }()
+	waitDraining(t, server)
+	late, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("a connection made while Shutdown drains was refused: %v", err)
+	}
+	wantTransientRefusal(t, "a caller before the bound", requestAssociation(t, late))
+	late.Close()
+
+	var cut *ShutdownError
+	if err := <-stopped; !errors.As(err, &cut) || cut.Aborted != 1 {
+		t.Errorf("Shutdown returned %v, want a *ShutdownError counting 1 association", err)
+	}
+	<-stored
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		conn.Close()
+		t.Error("the listener was left open after the bound")
 	}
 	goroutinesSettle(t, base)
 }

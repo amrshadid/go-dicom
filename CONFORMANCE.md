@@ -66,6 +66,18 @@ UID. It does not compare those UIDs with the data set's own (0008,0016) and
 (0008,0018), which PS3.10 7.1 requires to be equal: the data set is copied, not
 parsed.
 
+As an SCU, `SCU.StoreStream` sends a data set from an `io.Reader` as the bytes
+it holds, with no encoding and no transcoding: it uses the accepted presentation
+context whose abstract syntax is the SOP class and whose transfer syntax is the
+one named, and fails, naming both, when the peer accepted none. The data set is
+cut into P-DATA-TF fragments within the peer's Maximum Length (at most 1 MiB),
+two of them held at a time. The peer's status is returned whatever it is,
+warnings 0xB000, 0xB006 and 0xB007 included. A reader that fails before its end
+is answered with an A-ABORT (source service-user, reason not specified) and not
+with a last fragment, so the peer is never given a data set that was cut short.
+`StoreStreamRequestFromFile` reads a Part 10 file's File Meta Information for the
+UIDs, the transfer syntax and where the data set begins.
+
 ### 1.3 Sequencing
 
 The library imposes no ordering beyond what the standard requires. An
@@ -375,7 +387,7 @@ below.
 |---------|-----------|---------------|
 | QIDO-RS | Search for studies, series and instances, with matching, `includefield`, `limit`, `offset` and `fuzzymatching`; results as DICOM JSON | XML results |
 | WADO-RS | Study, series and instance as `application/dicom` in `multipart/related`, in a named transfer syntax or as stored; metadata as DICOM JSON | Frames, rendered images, thumbnails and bulk data retrieved on their own |
-| STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons | Metadata with separate bulk data |
+| STOW-RS | `application/dicom` parts, to the service or into a study; the response's stored and failed instances, with their reasons. `Client.Store` builds the body in memory; `Client.StoreStream` writes it through a pipe as it reads each instance from a reader, a part for each and no Content-Length (chunked), so memory does not grow with the study: 2,000 instances of 1 MB are sent with the heap under 16 MiB. An error from a reader ends the body without its closing boundary, so the server never takes it for a whole request | Metadata with separate bulk data |
 
 As an origin server (`dicomweb.NewServer`, `qrscp -web`):
 
@@ -422,14 +434,15 @@ of, and does not name a file it could not read; both are counted as refused.
 | Setting | Where |
 |---|---|
 | AE title | `SCPConfig.AETitle`, `SCUConfig.CallingAE` / `CalledAE` |
-| Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress` |
+| Port and bind address | `SCPConfig.Port`, `SCPConfig.BindAddress`. A program that must decide how the socket is made (which of IPv4 and IPv6 a wildcard covers, a descriptor handed to it) binds it itself and gives it to `SCP.Serve(ctx, listener)` or `StartServerOn(ctx, config, handler, listener)`: Port and BindAddress are then not used, a TLS configuration wraps the listener as it does one the server made, and `Close`, `Stop` and the end of a `Shutdown` drain close it |
 | Maximum PDU size | `SCPConfig.Network.MaxPDUSize` |
 | Concurrent association limit | `SCPConfig.MaxAssociations`; a caller over it is refused rejected-transient, service-provider (presentation), local-limit-exceeded |
 | After a rejection | An A-ASSOCIATE-RJ is followed by a wait for the caller to close the connection, up to `NetworkConfig.ARTIMTimeout` (PS3.8 9.2, AE-8 and AA-2); nothing that arrives meanwhile is answered |
+| Before an association | A connection whose first PDU is not an A-ASSOCIATE-RQ is answered as Sta2 answers it (PS3.8 Table 9-10, AA-1): an A-ABORT with the service-provider as source, reason 1 (unrecognized PDU) for a PDU type that is not defined, 2 (unexpected PDU) for an A-ASSOCIATE-AC, A-ASSOCIATE-RJ, P-DATA-TF, A-RELEASE-RQ or A-RELEASE-RP, and 6 (invalid PDU parameter value) for an A-ASSOCIATE-RQ whose items, length or fixed fields cannot be accepted. The same at the association limit. An A-ABORT received is not answered (AA-2). A PDU cut short by the connection closing, or never completed before ARTIM, gets nothing: there is no complete PDU to call invalid. dcmtk 3.7 `storescp` answers an A-ASSOCIATE-AC, P-DATA-TF or A-RELEASE-RQ with an A-ABORT (source 0, reason 0) and an unrecognized or malformed PDU with no PDU, leaving the connection open; pynetdicom 2.1 answers all of these with an A-ABORT (source 0, reason 0) |
 | After an abort | An A-ABORT this side sends is followed by up to one second in which the peer may close the connection, what arrives being read and dropped (PS3.8 9.2, AA-1, AA-6, AA-8); the standard's timer for this is ARTIM, and one second is kept so that a peer that does not close holds only the connection |
 | Who may associate | `SCPConfig.Admit`: called before anything is negotiated, with the calling and called AE titles, the remote address and the verified TLS chains; refuses with the result, source and reason it chooses (PS3.8 Table 9-21). A request whose calling or called AE title is not well formed (PS3.5 6.2) is refused before it is asked, and the called AE title must still be `AETitle` unless `SCPConfig.AcceptAnyCalledAE` is set. Without `Admit`, any caller asking for `AETitle` is admitted. On the command line, `storescp`, `qrscp` and `wlmscp` take `-allow` (calling AE titles, IP addresses, CIDR ranges, and `TITLE@ADDRESS` to admit a title only from an address) and `-allow-file` (the same entries, one to a line, `#` for comments) |
 | AE title padding | Leading and trailing spaces of the calling and called AE titles are not significant (PS3.8 Table 9-11) and are removed from both ends before a title is compared |
-| Stopping a server | `Server.Shutdown(ctx)`: no new connection is accepted, an A-ASSOCIATE-RQ on a connection already open is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
+| Stopping a server | `Server.Shutdown(ctx)`: connections are still accepted while it drains, and each A-ASSOCIATE-RQ, on a new connection or one already open, is refused rejected-transient, service-provider (presentation), temporary-congestion (PS3.8 Table 9-21), an association waiting for its next request is aborted at once (A-ABORT source 0, service-user), and one in an operation finishes it, has its next PDU waited for (an A-RELEASE-RQ is answered, anything else aborted unstarted), all until `ctx` ends; the listener is closed when no association is left, or at `ctx`, and what is left then is aborted and counted in the `*ShutdownError` returned. `Server.Stop` cancels at once |
 | A failed TLS handshake | Reported to `SCPConfig.Events` as `EVTTLSHandshakeFailed`, with the client's address and a `*TLSHandshakeError` naming the check that failed; nothing of the client's certificate is carried |
 | A fault in a handler | A panic in a DIMSE handler ends that association with an A-ABORT (source 2, service-provider; reason 0) and is logged; no status is sent for the message in progress. Other associations are not affected |
 | Why this side aborted | The events of an A-ABORT this side sends carry `Event.LocalAbort`: the cause (`AbortCauseTimeout`, `AbortCauseProtocolViolation`, `AbortCauseHandlerPanic`, `AbortCauseStopping`, `AbortCauseRequested`) and the error behind it. The PDU is unchanged |

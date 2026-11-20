@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -78,16 +80,28 @@ func (c *Client) Store(ctx context.Context, studyUID string, files ...[]byte) (*
 		return nil, fmt.Errorf("dicomweb: %w", err)
 	}
 
-	segments := []string{"studies"}
-	if studyUID != "" {
-		segments = append(segments, studyUID)
-	}
-	contentType := `multipart/related; type="application/dicom"; boundary=` + writer.Boundary()
-	u := c.resource(segments...)
+	u, contentType := c.storeTarget(studyUID, writer.Boundary())
 	response, err := c.send(ctx, http.MethodPost, u, jsonMedia, contentType, &body)
 	if err != nil {
 		return nil, err
 	}
+	return c.storeResponse(u, response)
+}
+
+// storeTarget is the URL a store request goes to and the Content-Type that
+// names the boundary of its body.
+func (c *Client) storeTarget(studyUID, boundary string) (*url.URL, string) {
+	segments := []string{"studies"}
+	if studyUID != "" {
+		segments = append(segments, studyUID)
+	}
+	contentType := `multipart/related; type="application/dicom"; boundary=` + boundary
+	return c.resource(segments...), contentType
+}
+
+// storeResponse reads the server's answer to a store request, however it was
+// sent, and closes it.
+func (c *Client) storeResponse(u *url.URL, response *http.Response) (*StoreResult, error) {
 	defer func() { _ = response.Body.Close() }()
 
 	// Read whole whatever the status: a refusal carries the same account as
@@ -118,6 +132,121 @@ func (c *Client) Store(ctx context.Context, studyUID string, files ...[]byte) (*
 		result = nil
 	}
 	return result, statusError(u, response, data)
+}
+
+// errBodyNotWanted is what the producer of a streamed request body is told
+// when the request no longer needs it.
+var errBodyNotWanted = errors.New("dicomweb: the request no longer needs its body")
+
+// StoreStream is Store for instances that are not in memory: the request
+// body is written as the instances are read, through a pipe, and never holds
+// more than a buffer of them, so an archive can send a study of any size.
+//
+// next is called for each instance in turn and returns its Part 10 file as a
+// reader, or io.EOF when there are no more. A reader that is also an
+// io.Closer is closed once it has been read, or when the request ends
+// without reading it. Each reader becomes one part of the multipart/related
+// body, which is sent with no Content-Length (chunked), so a service has to
+// accept that, as every HTTP/1.1 server does.
+//
+// What comes back is what Store returns: the server's account of each
+// instance, and a *StatusError, with the result when the server gave one,
+// for a refusal.
+//
+// An error from next, from a reader, or an empty instance ends the request
+// without its closing boundary, so the server sees a body that is not well
+// formed and keeps nothing of the part in progress; instances it had
+// received whole before it may be kept. The error is returned, wrapped.
+// StoreStream does not return until next and the readers it was given are no
+// longer being called.
+func (c *Client) StoreStream(ctx context.Context, studyUID string, next func() (io.Reader, error)) (*StoreResult, error) {
+	first, err := next()
+	if err == io.EOF {
+		return nil, fmt.Errorf("dicomweb: nothing to store")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("dicomweb: the first instance: %w", err)
+	}
+
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
+
+	var sourceErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sourceErr = writeParts(writer, first, next)
+		// A nil error closes the pipe cleanly, which is the end of the body.
+		// An error aborts it, which makes the transport fail the request
+		// instead of finishing a body that is short of what was meant.
+		_ = pipeWriter.CloseWithError(sourceErr)
+	}()
+
+	u, contentType := c.storeTarget(studyUID, writer.Boundary())
+	response, err := c.send(ctx, http.MethodPost, u, jsonMedia, contentType, pipeReader)
+	// The body is no longer wanted, whatever came back: a server may answer
+	// before it has read it all. Closing makes the producer's next write fail
+	// so that it stops, and waiting makes sure it has.
+	_ = pipeReader.CloseWithError(errBodyNotWanted)
+	<-done
+	// The stop this asked for is not a failure of the instances: a server that
+	// refused the request early has said so in its response.
+	if sourceErr != nil && !errors.Is(sourceErr, errBodyNotWanted) {
+		if err == nil {
+			_ = response.Body.Close()
+		}
+		return nil, fmt.Errorf("dicomweb: the instances to store: %w", sourceErr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c.storeResponse(u, response)
+}
+
+// writeParts writes each instance next gives as a part of the body, and the
+// closing boundary after the last. The first is passed in because
+// StoreStream asked for it before starting the request.
+func writeParts(writer *multipart.Writer, first io.Reader, next func() (io.Reader, error)) error {
+	reader := first
+	for i := 1; ; i++ {
+		if err := writePart(writer, reader, i); err != nil {
+			return err
+		}
+		var err error
+		reader, err = next()
+		if err == io.EOF {
+			return writer.Close()
+		}
+		if err != nil {
+			return fmt.Errorf("instance %d: %w", i+1, err)
+		}
+	}
+}
+
+// writePart writes one instance as one part.
+func writePart(writer *multipart.Writer, reader io.Reader, number int) (err error) {
+	if reader == nil {
+		return fmt.Errorf("instance %d: no reader", number)
+	}
+	if closer, ok := reader.(io.Closer); ok {
+		defer func() {
+			if closeErr := closer.Close(); err == nil {
+				err = closeErr
+			}
+		}()
+	}
+	part, err := writer.CreatePart(textproto.MIMEHeader{"Content-Type": {"application/dicom"}})
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(part, reader)
+	if err != nil {
+		return fmt.Errorf("instance %d: %w", number, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("instance %d is empty", number)
+	}
+	return nil
 }
 
 // StoreDatasets is Store for data sets, each written as a Part 10 file in

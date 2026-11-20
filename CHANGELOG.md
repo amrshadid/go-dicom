@@ -9,6 +9,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`SCU.StoreStream` sends a stored file as it is.** `Store` encodes a data
+  set and may transcode it to a syntax the peer accepted, so a program that
+  keeps instances as files could not send the bytes it had stored. `StoreStream`
+  takes a `StoreStreamRequest` (the SOP class, the SOP instance, the transfer
+  syntax and an `io.Reader` over the encoded data set), uses only the accepted
+  presentation context with exactly that SOP class and transfer syntax (the
+  error names both when there is none), and sends the fragments as the reader
+  yields them, holding two at a time: a 512 MB data set is sent with the heap
+  under 16 MB. It returns the peer's status word, a warning (0xB000, 0xB006,
+  0xB007) or a refusal included, with a nil error; the error is for a failed
+  transport or reader. A reader that fails partway gets an A-ABORT before any
+  fragment is marked last, so the peer never receives a data set cut short.
+  `StoreStreamRequestFromFile` builds the request from a Part 10 file, reading
+  its File Meta Information for the UIDs, the syntax and where the data set
+  begins. Checked against dcmtk's `storescp` and a pynetdicom SCP: the data
+  set each stored equals the file's, byte for byte, in seven transfer syntaxes.
+
+- **`dicomweb.Client.StoreStream` sends a study that is not in memory.**
+  `Store` takes every file as a byte slice and builds the whole request body
+  before sending it, so an archive storing a study to another server had to
+  hold the study twice. `StoreStream` takes a function that returns each
+  instance's Part 10 bytes as a reader, and `io.EOF` after the last, and
+  writes the multipart/related body through a pipe as they are read, a part
+  for each reader and the body chunked: 2,000 instances of 1 MB (2 GB) are
+  sent with the heap under 16 MiB, to this library's server and to one that
+  only reads. The result is `Store`'s. An error from a reader ends the body
+  without its closing boundary, so the server cannot take it for a whole
+  request. No STOW-RS server of another project was available; the chunked
+  body was read by aiohttp's HTTP and multipart parsers and each part by
+  pydicom, byte for byte.
+
+- **A server can take a listener the caller made.** `ListenAndServe` and
+  `StartServer` bind the address from `BindAddress` and `Port` themselves, so
+  a program that has to choose how the socket is made, which of IPv4 and IPv6
+  a wildcard covers or a descriptor handed to it, could not, and one that
+  bound a probe socket to find a free port left a window in which another
+  process could take it. `SCP.Serve(ctx, listener)` and
+  `StartServerOn(ctx, config, handler, listener)` serve on a listener the
+  caller bound, so there is no window between the bind and the serving: a
+  caller that connected before `Serve` began is answered when it does.
+  A TLS configuration wraps the listener as it does one the server made, and
+  `Close`, `Stop` and the end of a `Shutdown` drain close it. Checked with
+  dcmtk's `echoscu` and pynetdicom, on the loopback and on the IPv4
+  wildcard; neither takes an IPv6 literal, so an IPv6 loopback listener is
+  checked in the package's own tests only.
+
 - **PS3.15 Table E.1-1 as data.** `anonymize.ProfileTable`,
   `ProfileEntries` and `LookupProfileEntry` return every attribute of the
   table with its name, its code in the Basic Profile column and its code in
@@ -21,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   come from the standard's own DocBook source, through the new
   `scripts/ps315-table.py`, and not from the library's option switches. What
   comes back is a copy.
+
 - **PS3.15 Table E.3.10-1, the safe private attributes, as a lookup.**
   `anonymize.LookupSafePrivate(group, creator, element)` reports whether the
   table lists a private attribute as safe and gives its value representation,
@@ -28,6 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value representation, in a comment; it is now data (empty for five
   SIEMENS Ultrasound SC2000 rows whose VR the standard leaves blank).
   `SafePrivateEdition` names the edition (2026d).
+
 - **The de-identification method record, exported.**
   `anonymize.RecordDeidentificationMethod(ds, codes, record)` writes Patient
   Identity Removed (0012,0062), De-identification Method (0012,0063),
@@ -64,7 +112,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   untouched file, and the image data is the same bytes. JPEG 2000 is not
   searched and returns `ErrJPEGSegmentsNotSearched`.
 
+### Changed
+
+- **`Server.Shutdown` refuses a new caller as transient, as it documents.**
+  Shutdown closed the listener at once, so a caller arriving while the
+  associations in progress finished met a refused TCP connection, and only a
+  connection already open was answered with the A-ASSOCIATE-RJ,
+  rejected-transient, service-provider (presentation), temporary-congestion,
+  that tells a caller to try again later. A modality treats a refused
+  connection as a failure and may not retry; one that is told to retry later
+  does, which is what PS3.8 Table 9-21 provides the reason for and what the
+  documentation of `Shutdown` has always said. The server now keeps accepting
+  while it drains and refuses each new association that way, and closes the
+  listener when the drain ends: when no association is left, at once for an
+  idle server, or at the bound of the context. A server that is not draining
+  is unchanged, and so is what happens to an association in progress.
+  Checked with pynetdicom, which read the refusal as result 2, source 3,
+  diagnostic 1.
+
 ### Fixed
+
+- **An invalid first PDU is answered with an A-ABORT, not a closed
+  connection.** An SCP waiting for the A-ASSOCIATE-RQ closed the connection in
+  silence on a PDU type that does not exist and on an A-ASSOCIATE-RQ whose
+  items or length were bad, so the sender learned only that the connection was
+  gone. PS3.8 Table 9-10 has the acceptor in Sta2 send an A-ABORT with the
+  service-provider as source for these (AA-1) and wait for the peer to close:
+  now reason 1 (unrecognized PDU), 2 (unexpected PDU) for a P-DATA-TF,
+  A-ASSOCIATE-AC, A-ASSOCIATE-RJ or A-RELEASE, or 6 (invalid PDU parameter
+  value), the same for a connection turned away at the association limit.
+  An A-ABORT as the first PDU, which was answered with an A-ABORT of the SCP's
+  own, now closes the connection and nothing else (AA-2). A PDU cut short by
+  the connection closing gets nothing, as before: it is not yet an invalid
+  PDU. dcmtk 3.7 `storescp` leaves an unrecognized or malformed first PDU
+  unanswered; pynetdicom 2.1 answers it with an A-ABORT.
 
 - **`BasicProfileTemplate` and the templates built on it de-identified far less
   than the Basic Profile.** The template held 39 attributes, and an
