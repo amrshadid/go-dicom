@@ -70,9 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than the Basic Profile.** The template held 39 attributes, and an
   `Anonymizer` applies a template's actions before the profile's own table, so
   a program that gave one to `ApplyTemplate` or `SetTemplate` kept Patient's
-  Sex, Age, Size and Weight, among others. Over pydicom's corpus, the Basic
-  Profile left Patient's Sex in none of the files where the template kept it in
-  52, Age in 26, Weight in 17 and Size in 7 (53 of 79 files differed). The
+  Sex, Age, Size and Weight, among others. Over pydicom's corpus the template
+  kept Patient's Sex in 52 files, Age in 26, Weight in 17 and Size in 7 that
+  the Basic Profile empties or removes (53 of 79 files differed). The
   template, and `CleanDescriptorsTemplate`, `RetainDatesTemplate` and
   `RetainDeviceTemplate`, now hold every attribute of Table E.1-1 with the
   action the profile applies; Patient's Name and ID are now emptied, as the
