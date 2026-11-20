@@ -266,7 +266,7 @@ func (e *ShutdownError) Unwrap() error { return e.Err }
 // Stop is unchanged: it cancels at once, and closes the listener at once.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.scp.drain().begin()
-	s.Logger.Info("Server %s stopping: refusing new associations, waiting for those in progress", s.scp.config.AETitle)
+	s.Logger.Info("Server %s stopping: no new associations, waiting for those in progress", s.scp.config.AETitle)
 
 	// The drain: the listener stays open so that a caller is refused with a
 	// reason, until nothing is left to wait for.
