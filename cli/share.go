@@ -255,13 +255,16 @@ func (sc *ShareCommand) shareRedactedInFile(input, output string, opts imageOpti
 	defer func() { _ = f.Close() }()
 	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f),
 		filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: math.MaxUint32})
-	if err != nil || df.Deflated {
+	if err != nil {
 		return nil, -1, false, nil
 	}
 	if pixels := df.PixelDataElement(); pixels == nil || pixels.Tag != tag.New(0x7FE0, 0x0010) {
 		return nil, -1, false, nil
 	}
-	ds, err := df.GetDatasetWithValuesInFile()
+	// The values are read through source: the file, or for a deflated data
+	// set a source that inflates it again as each is asked for, since the
+	// reader's offsets then count inflated bytes.
+	ds, source, err := df.GetDatasetWithValuesIn(f)
 	if err != nil {
 		return nil, -1, false, nil
 	}
@@ -273,7 +276,7 @@ func (sc *ShareCommand) shareRedactedInFile(input, output string, opts imageOpti
 		(compress.IsEncapsulated(syntax) && err != nil) {
 		return nil, -1, false, nil
 	}
-	frames, err := df.FrameReader(f)
+	frames, err := df.FrameReader(source)
 	if err != nil {
 		return nil, -1, false, nil
 	}

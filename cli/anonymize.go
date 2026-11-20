@@ -289,9 +289,13 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 				// nothing here says the image is now clean.
 				var regions []dataset.PixelRegion
 				var err error
-				if inFile {
+				if source != nil {
+					// The frames are read through the source the values are
+					// copied from: the file, or for a deflated data set the
+					// inflating source, whose offsets are the ones the reader
+					// recorded.
 					var frames *filereader.FrameReader
-					if frames, err = df.FrameReader(in); err == nil {
+					if frames, err = df.FrameReader(source); err == nil {
 						regions, err = anonymizer.RedactDetectedTextFrom(ds, frames, nil)
 					}
 				} else {

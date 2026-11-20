@@ -7,6 +7,7 @@ import (
 	"github.com/amrshadid/go-dicom/compress"
 	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/encaps"
+	"github.com/amrshadid/go-dicom/tag"
 )
 
 // pendingRedaction is Pixel Data that is left in the file and has regions to
@@ -35,6 +36,10 @@ type pendingRedaction struct {
 }
 
 // pendingOf returns the redaction an element's value is, or nil.
+// pixelDataTag is Pixel Data (7FE0,0010), the element a pending redaction is
+// applied to as it is written.
+var pixelDataTag = tag.New(0x7FE0, 0x0010)
+
 func pendingOf(elem *dataelem.DataElement) *pendingRedaction {
 	if stream, ok := elem.GetValue().(*dataelem.StreamedValue); ok {
 		if p, ok := stream.Origin.(*pendingRedaction); ok {
