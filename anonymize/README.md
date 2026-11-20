@@ -129,6 +129,26 @@ err := anonymize.RecordDeidentificationMethod(ds,
     anonymize.MethodRecord{IdentityRemoved: true, BurnedInAnnotation: "NO"})
 ```
 
+## Text Inside the JPEG Stream
+
+A comment (COM) or application (APPn) segment of an encapsulated JPEG frame is
+not an attribute and not a pixel, and travels with the image: an Exif block, an
+XMP packet, a note a program left. `JPEGSegmentText(ds)` lists those segments
+of every frame of Baseline, Extended, Lossless and JPEG-LS data with the text
+they hold, and the bytes after a frame's end-of-image marker.
+`RemoveJPEGText(ds)` removes them without decoding the image, so the samples
+are exactly the same afterwards; the JFIF and Adobe headers and the JPEG-LS
+`mrfx` extension stay, because they decide how the samples are read.
+`Anonymizer.SetRemoveJPEGText(true)` does it inside `Anonymize`. JPEG 2000 is
+not searched and returns `ErrJPEGSegmentsNotSearched`.
+
+```go
+segments, _ := anonymize.JPEGSegmentText(ds)
+for _, s := range segments {
+    fmt.Printf("frame %d %s: %q\n", s.Frame, s.Name(), s.Text)
+}
+```
+
 ## Custom Per-Tag Actions
 
 ```go

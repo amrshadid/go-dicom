@@ -49,6 +49,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it in `warnings`, which stays an array of strings at `schemaVersion` 1.
   None of the 78 `.dcm` files of pydicom's corpus gets one.
 
+- **Text hidden in a JPEG stream is found and removed.** A comment (COM) or
+  application (APPn) segment in the frames of encapsulated JPEG Pixel Data is
+  neither an attribute nor a pixel, so no profile touched it.
+  `anonymize.JPEGSegmentText` reads those segments of every frame of Baseline,
+  Extended, Lossless and JPEG-LS data and returns their text, and the bytes
+  after the end-of-image marker; `RemoveJPEGText` (and
+  `Anonymizer.SetRemoveJPEGText`, which makes `Anonymize` call it) removes
+  them without decoding or encoding the image data. APP0 JFIF (without its
+  thumbnail), APP14 Adobe and, in JPEG-LS, the APP8 `mrfx` color transform
+  stay, since they decide how the samples are read. Checked on ten corpus files
+  and four dcmtk encodings: the cleaned frames decode, in this library, in
+  dcmtk's `dcmdjpeg` and `dcmdjpls` and in pydicom, to the same samples as the
+  untouched file, and the image data is the same bytes. JPEG 2000 is not
+  searched and returns `ErrJPEGSegmentsNotSearched`.
+
 ### Fixed
 
 - **`BasicProfileTemplate` and the templates built on it de-identified far less

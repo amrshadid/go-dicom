@@ -176,6 +176,17 @@
 //     regions cover more than [MaxDetectedShare] of the picture is refused
 //     with [ErrImplausibleRedaction] and nothing is filled.
 //
+//   - Text in the JPEG stream itself. A comment (COM) or application (APPn)
+//     segment inside the fragments of encapsulated Pixel Data is neither an
+//     attribute nor a pixel, and it travels with the image. [JPEGSegmentText]
+//     reads those segments of every frame of Baseline, Extended, Lossless and
+//     JPEG-LS data and gives their text; [RemoveJPEGText], or
+//     [Anonymizer.SetRemoveJPEGText] for Anonymize, removes them without
+//     decoding or encoding the image, keeping the JFIF and Adobe headers and
+//     the JPEG-LS mrfx extension that decide how the samples are read. The
+//     frames decode to the same samples afterwards. JPEG 2000 is not
+//     searched, and says so with [ErrJPEGSegmentsNotSearched].
+//
 //   - Private tags that were deliberately retained. The basic profile removes
 //     private attributes outside the safe list, but one kept on purpose may
 //     carry identity.

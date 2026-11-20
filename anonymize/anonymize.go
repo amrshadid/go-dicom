@@ -64,6 +64,7 @@ type Anonymizer struct {
 	profile           Profile
 	retainPatientName bool
 	retainPatientID   bool
+	removeJPEGText    bool
 	customActions     map[tag.Tag]Action
 	uidMap            map[string]string // maps original UIDs to replacement UIDs
 	mu                sync.RWMutex
@@ -128,6 +129,15 @@ func (a *Anonymizer) ResetUIDMapping() {
 func (a *Anonymizer) Anonymize(ds *dataset.Dataset) error {
 	if ds == nil {
 		return fmt.Errorf("dataset is nil")
+	}
+	// Before the attributes, so that a refusal leaves the data set as it was.
+	a.mu.RLock()
+	removeText := a.removeJPEGText
+	a.mu.RUnlock()
+	if removeText {
+		if _, err := RemoveJPEGText(ds); err != nil {
+			return err
+		}
 	}
 	if err := a.anonymizeDataset(ds, 0); err != nil {
 		return err
