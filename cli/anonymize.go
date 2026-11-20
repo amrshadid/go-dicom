@@ -228,16 +228,21 @@ type anonymizeRead struct {
 
 // anonymizeFile reads input, de-identifies it and writes it to output.
 //
-// Unless the pixels are to be changed, they are not read (#331): Pixel Data,
-// and any binary value over a megabyte, stays in the input file and is copied
-// from there into the output as it is written, so memory follows the
-// attributes and not the image. The output is the same, byte for byte, as
-// when the file is read whole: the values left behind are ones the profiles
-// keep or remove whole, never read or replace, and an element the
-// anonymizer removes or replaces takes its reference with it.
+// The pixels are not read (#331): Pixel Data, and any binary value over a
+// megabyte, stays in the input file and is copied from there into the output
+// as it is written, so memory follows the attributes and not the image. The
+// output is the same, byte for byte, as when the file is read whole: the
+// values left behind are ones the profiles keep or remove whole, never read
+// or replace, and an element the anonymizer removes or replaces takes its
+// reference with it.
+//
+// That holds when the pixels are redacted. The regions are filled, and a
+// compressed image decoded to fill them, as the output is written, a frame
+// at a time, and what a detector is asked about is read from the file the
+// same way: memory is a frame, not the image.
 func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error {
 	return ac.anonymizeFileAs(anonymizer, input, output,
-		anonymizeRead{whole: ac.redact.asked(), threshold: leftInFileAbove})
+		anonymizeRead{threshold: leftInFileAbove})
 }
 
 // anonymizeFileAs is anonymizeFile, reading as read says.
@@ -282,7 +287,16 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 			if ac.redact.auto {
 				// The detector's regions, filled and recorded as its own:
 				// nothing here says the image is now clean.
-				regions, err := anonymizer.RedactDetectedText(ds, nil)
+				var regions []dataset.PixelRegion
+				var err error
+				if inFile {
+					var frames *filereader.FrameReader
+					if frames, err = df.FrameReader(in); err == nil {
+						regions, err = anonymizer.RedactDetectedTextFrom(ds, frames, nil)
+					}
+				} else {
+					regions, err = anonymizer.RedactDetectedText(ds, nil)
+				}
 				if err != nil {
 					return implausibleHint(err)
 				}

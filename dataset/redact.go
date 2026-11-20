@@ -3,6 +3,7 @@ package dataset
 import (
 	"fmt"
 
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -20,8 +21,15 @@ type PixelRegion struct {
 //
 // A region is clipped to the image, and one that covers no pixel is an
 // error. The pixel data has to be native: an encapsulated frame is a
-// codestream, not samples, and is refused. Nothing else in the data set
-// changes.
+// codestream, not samples, and is refused (DecompressRedactingRegions decodes
+// and fills in one pass). Nothing else in the data set changes.
+//
+// When the data set was read with filereader.ReadOptions.SkipBulkData and
+// built with filereader.DICOMFile.GetDatasetWithValuesInFile, its Pixel Data
+// is not read: it becomes a dataelem.StreamedValue, and filewriter, given the
+// file as its value source, fills the regions as it copies the pixels into
+// the output, a chunk at a time. Regions asked for after others are added to
+// them.
 //
 // Black is the lowest value the samples can hold, or the highest under
 // MONOCHROME1, where high is dark. For YBR it is zero luminance with neutral
@@ -39,6 +47,12 @@ func (ds *Dataset) RedactFrameRegions(frame int, regions ...PixelRegion) error {
 }
 
 // redact fills regions in one frame, or in all of them when frame is -1.
+//
+// Pixel Data in memory is filled on a copy and replaces the element. Pixel
+// Data left in the file the data set was read from (dataelem.ValueInFile) is
+// not read here: the element becomes a value that fills the regions as a
+// writer copies it from the file, a chunk at a time, so no more than a chunk
+// of the image is ever held.
 func (ds *Dataset) redact(frame int, regions []PixelRegion) error {
 	if len(regions) == 0 {
 		return fmt.Errorf("redact: no region given")
@@ -52,6 +66,33 @@ func (ds *Dataset) redact(frame int, regions []PixelRegion) error {
 	if !ok {
 		return fmt.Errorf("redact: the data set has no Pixel Data (7FE0,0010)")
 	}
+	if p := pendingOf(elem); p != nil {
+		// Already to be filled as it is written, and now with more.
+		fill, err := newRegionFill(p.view, p.infoAfter, frame, regions, p.size())
+		if err != nil {
+			return err
+		}
+		elem.SetValue(p.withFill(fill).stream())
+		return nil
+	}
+	if ref, inFile := elem.GetValue().(dataelem.ValueInFile); inFile {
+		if err := ds.refuseEncapsulatedInFile(); err != nil {
+			return fmt.Errorf("redact: %w", err)
+		}
+		fill, err := newRegionFill(ds, info, frame, regions, ref.Length)
+		if err != nil {
+			return err
+		}
+		vr := ds.ResolveVR(pixelData, elem)
+		as := ds.cloneWithoutPixelData()
+		p := &pendingRedaction{
+			ref: ref, vr: vr, before: as, view: as,
+			infoBefore: info, infoAfter: info, fills: []*regionFill{fill},
+		}
+		elem.SetVR(vr)
+		elem.SetValue(p.stream())
+		return nil
+	}
 	stored, err := extractBytesValue(elem)
 	if err != nil {
 		return fmt.Errorf("redact: %w", err)
@@ -63,63 +104,121 @@ func (ds *Dataset) redact(frame int, regions []PixelRegion) error {
 		return fmt.Errorf("redact: the pixel data is compressed (%s); "+
 			"it has to be decompressed before a region of it can be filled", compression)
 	}
-	if frame >= info.NumberOfFrames {
-		return fmt.Errorf("redact: frame %d does not exist; the image has %d, counted from 0",
-			frame, info.NumberOfFrames)
-	}
-
-	fill, err := blackSamples(ds, info)
+	fill, err := newRegionFill(ds, info, frame, regions, int64(len(stored)))
 	if err != nil {
 		return err
 	}
-	width := info.BitsAllocated / 8
-	if len(stored) < info.BytesPerFrame*info.NumberOfFrames {
-		return fmt.Errorf("redact: Pixel Data holds %d bytes and the image needs %d",
-			len(stored), info.BytesPerFrame*info.NumberOfFrames)
-	}
+	// A copy: the caller may still hold the slice the element was built from.
+	out := append([]byte(nil), stored...)
+	fill.apply(out, 0)
+	elem.SetValue(out)
+	return nil
+}
 
-	clipped := make([]PixelRegion, 0, len(regions))
+// regionFill is where regions lie in the bytes of native Pixel Data, and
+// what to write there. It fills any run of those bytes, given where in the
+// value the run starts, so a frame, a chunk or a whole image is filled by
+// the same code.
+type regionFill struct {
+	info *PixelDataInfo
+	// regions are clipped to the image.
+	regions []PixelRegion
+	width   int
+	// pixel is the bytes of one pixel's samples, adjacent; planes holds the
+	// bytes of each sample alone, for an image with a plane for each
+	// sample (Planar Configuration 1).
+	pixel     []byte
+	planes    [][]byte
+	byPlane   bool
+	planeSize int
+	// first and last are the frames filled.
+	first, last int
+}
+
+// newRegionFill works out where regions lie in an image of info, in frame
+// (counted from 0) or in every frame when it is -1, and refuses what cannot
+// be filled. stored is how many bytes of Pixel Data there are.
+func newRegionFill(ds *Dataset, info *PixelDataInfo, frame int, regions []PixelRegion, stored int64) (*regionFill, error) {
+	if frame >= info.NumberOfFrames {
+		return nil, fmt.Errorf("redact: frame %d does not exist; the image has %d, counted from 0",
+			frame, info.NumberOfFrames)
+	}
+	black, err := blackSamples(ds, info)
+	if err != nil {
+		return nil, err
+	}
+	if need := int64(info.BytesPerFrame) * int64(info.NumberOfFrames); stored < need {
+		return nil, fmt.Errorf("redact: Pixel Data holds %d bytes and the image needs %d", stored, need)
+	}
+	f := &regionFill{
+		info:      info,
+		width:     info.BitsAllocated / 8,
+		byPlane:   info.SamplesPerPixel > 1 && info.PlanarConfiguration == 1,
+		planeSize: info.Rows * info.Columns * (info.BitsAllocated / 8),
+		first:     0,
+		last:      info.NumberOfFrames - 1,
+	}
+	if frame >= 0 {
+		f.first, f.last = frame, frame
+	}
 	for _, r := range regions {
 		c, ok := clip(r, info.Columns, info.Rows)
 		if !ok {
-			return fmt.Errorf("redact: the region at (%d,%d), %d by %d, covers no pixel of a %d by %d image",
+			return nil, fmt.Errorf("redact: the region at (%d,%d), %d by %d, covers no pixel of a %d by %d image",
 				r.X, r.Y, r.Width, r.Height, info.Columns, info.Rows)
 		}
-		clipped = append(clipped, c)
+		f.regions = append(f.regions, c)
 	}
+	// Little endian, as the data set holds every sample whatever byte order
+	// the file was in.
+	for s := 0; s < info.SamplesPerPixel; s++ {
+		sample := make([]byte, f.width)
+		for b := range sample {
+			sample[b] = byte(black[s] >> (8 * b))
+		}
+		f.planes = append(f.planes, sample)
+		f.pixel = append(f.pixel, sample...)
+	}
+	return f, nil
+}
 
-	// A copy: the caller may still hold the slice the element was built from.
-	out := append([]byte(nil), stored...)
-	first, last := 0, info.NumberOfFrames-1
-	if frame >= 0 {
-		first, last = frame, frame
+// apply fills the regions in buf, which holds the bytes of Pixel Data from
+// byte start on. Bytes of a region that lie outside buf are left to the run
+// that holds them.
+func (f *regionFill) apply(buf []byte, start int64) {
+	if len(buf) == 0 {
+		return
 	}
-	planeSize := info.Rows * info.Columns * width
-	byPlane := info.SamplesPerPixel > 1 && info.PlanarConfiguration == 1
-	for f := first; f <= last; f++ {
-		base := f * info.BytesPerFrame
-		for _, r := range clipped {
-			for y := r.Y; y < r.Y+r.Height; y++ {
-				for x := r.X; x < r.X+r.Width; x++ {
-					pixel := y*info.Columns + x
-					for s := 0; s < info.SamplesPerPixel; s++ {
-						// Samples of a pixel are adjacent, or each sample has
-						// a plane of its own (Planar Configuration 1).
-						off := base + (pixel*info.SamplesPerPixel+s)*width
-						if byPlane {
-							off = base + s*planeSize + pixel*width
-						}
-						// Little endian, as the data set holds every sample
-						// whatever byte order the file was in.
-						for b := 0; b < width; b++ {
-							out[off+b] = byte(fill[s] >> (8 * b))
-						}
-					}
+	end := start + int64(len(buf))
+	perFrame := int64(f.info.BytesPerFrame)
+	cols, spp, width := int64(f.info.Columns), int64(f.info.SamplesPerPixel), int64(f.width)
+	for frame := max(f.first, int(start/perFrame)); frame <= min(f.last, int((end-1)/perFrame)); frame++ {
+		base := int64(frame) * perFrame
+		for _, r := range f.regions {
+			for y := int64(r.Y); y < int64(r.Y+r.Height); y++ {
+				if !f.byPlane {
+					// The samples of a pixel are adjacent.
+					at := base + (y*cols+int64(r.X))*spp*width
+					fillRun(buf, start, at, int64(r.Width)*spp*width, f.pixel)
+					continue
+				}
+				for s := int64(0); s < spp; s++ {
+					at := base + s*int64(f.planeSize) + (y*cols+int64(r.X))*width
+					fillRun(buf, start, at, int64(r.Width)*width, f.planes[s])
 				}
 			}
 		}
 	}
-	return ds.SetValue(pixelData, out)
+}
+
+// fillRun writes pattern, over and over from its start, into the length
+// bytes that begin at byte at of the value, wherever they lie in buf, which
+// holds the value from byte start on.
+func fillRun(buf []byte, start, at, length int64, pattern []byte) {
+	lo, hi := max(at, start), min(at+length, start+int64(len(buf)))
+	for i := lo; i < hi; i++ {
+		buf[i-start] = pattern[(i-at)%int64(len(pattern))]
+	}
 }
 
 // clip returns the part of r inside a cols by rows image.

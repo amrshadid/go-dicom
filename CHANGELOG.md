@@ -129,6 +129,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Redacting the pixels of an image holds a frame, not the image.**
+  `CleanPixelData`, `RedactDetectedText` and the `-redact` options of
+  `anonymize` and `share` decoded every frame of the image, filled a copy of
+  it, and held a clone of the data set under that: 500 frames of 1024 by 1024
+  16-bit samples (1 GB) took 3.4 GB peak resident to redact when native and
+  5.9 GB when RLE Lossless or JPEG-LS compressed. The pixels now stay in the
+  input file and are filled as the output is written, a frame at a time: native
+  samples are read and written a megabyte at a time with the region's bytes
+  worked out from Rows, Columns, Bits Allocated, Samples per Pixel and Planar
+  Configuration, and a compressed frame is read, decoded, filled and written
+  before the next is read. `anonymize` takes 24 MB for the native image and
+  45 to 49 MB for the compressed ones. What is written is unchanged: the same
+  bytes for every file of pydicom's corpus, with regions, with `-redact auto`
+  and with both, and the same pictures from `share`. The image still comes
+  out native (a compressed image is decoded, not encoded again), so Lossy
+  Image Compression and the method recorded are as they were. An image whose
+  frames will not decode is refused when it is written, no longer when it is
+  read, and no file is left.
+
+  For a program, `CleanPixelData` and `RedactPixelRegions` work on a data set
+  read with `GetDatasetWithValuesInFile`: the Pixel Data becomes a
+  `dataelem.StreamedValue` that `filewriter` fills as it copies the pixels from
+  the file given to `SetValueSource`. `Dataset.DecompressRedactingRegions`
+  does `DecompressInPlace` and `RedactPixelRegions` in one pass, a frame at a
+  time, and for a data set in memory needs the decoded image once and not
+  twice. `RedactDetectedTextFrom` and `DetectBurnedInTextFrom` look for text in
+  frames read from the file, and `Dataset.FramesAsWritten` is the frames of an
+  image with regions filled for `RenderFramesFrom` to render.
+  `DetectBurnedInText` renders a frame at a time too.
+
 - **A received data fragment is no longer copied out of its PDU.** Each
   fragment of a P-DATA-TF is a slice of the PDU's body, capped at its own end.
   A 64 KiB PDU cost 139,529 bytes to read and costs 73,992, and reads at
