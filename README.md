@@ -664,7 +664,7 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
 | DICOM PS3.15 - Security (TLS, de-identification) | Supported — the Basic Profile covers every attribute in Table E.1-1, verified to leave none of them unchanged across pydicom's corpus |
-| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. A private attribute whose VR the file does not state takes GDCM's, resolved through the file's own private creator, and is UN with its value as InlineBinary when that is unknown or does not fit |
+| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. `filereader/attributes.DICOMJSON` writes the same document, byte for byte, from a file's elements without linking `dataset` or the codecs, and gives a `BulkDataURI` for the values a caller chooses. A private attribute whose VR the file does not state takes GDCM's, resolved through the file's own private creator, and is UN with its value as InlineBinary when that is unknown or does not fit |
 | ISO 2022 - Character set escape sequences | Supported |
 
 ### Performance

@@ -3,7 +3,6 @@ package filereader
 import (
 	"context"
 	"fmt"
-	"unicode/utf8"
 
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
@@ -81,9 +80,6 @@ const DeflatedExplicitVRLittleEndianUID = fileparse.DeflatedExplicitVRLittleEndi
 // otherwise expand without limit. 256 MiB is far above any legitimate DICOM
 // data set while keeping a hostile one cheap to reject.
 const MaxInflatedDatasetSize int64 = fileparse.MaxInflatedDatasetSize
-
-// specificCharacterSetTag is (0008,0005).
-const specificCharacterSetTag = fileparse.SpecificCharacterSetTag
 
 // DCMFileReader reads DICOM files.
 type DCMFileReader struct {
@@ -371,144 +367,42 @@ func (df *DICOMFile) dataset(inFile bool) *dataset.Dataset {
 // elementsToDataset builds a Dataset from parsed elements, descending into
 // sequence items and decoding text into UTF-8.
 //
-// inherited is the character set in force from the enclosing data set, which an
-// item may override: PS3.5 allows Specific Character Set inside a sequence item,
-// and it applies to that item and anything below it. Passing nil at the top
-// level means "read it from these elements".
+// The decoding, and what the data set then declares, is fileparse.DecodeItem,
+// which attributes.DICOMJSON reads the same elements through, so a data set and
+// the JSON of the same file cannot disagree about the text.
 //
-// inFile keeps a skipped value as a dataelem.ValueInFile. warn records a
-// decision the caller should know about; it may be nil.
+// inherited is the character set in force from the enclosing data set, which an
+// item may override. Passing nil at the top level means "read it from these
+// elements". inFile keeps a skipped value as a dataelem.ValueInFile. warn records
+// a decision the caller should know about; it may be nil.
 func elementsToDataset(ctx context.Context, elements []*DataElementValue, inherited []string, inFile bool, warn func(string)) *dataset.Dataset {
 	ds := dataset.NewDataset()
+	item := fileparse.DecodeItem(ctx, elements, inherited, warn)
 
-	encodings, fellBack := fileparse.EncodingsFor(ctx, elements, inherited)
-
-	// Decode first, decide afterwards. Whether this data set may declare UTF-8
-	// depends on how the values came out, and the declaration has to be written
-	// in tag order, before the values it describes.
-	type decodedElement struct {
-		elem  *DataElementValue
-		value []byte
-	}
-	decoded := make([]decodedElement, 0, len(elements))
-	guessed, allUTF8 := false, true
-	for _, elem := range elements {
-		if elem.Items != nil || fileparse.IsSequenceVR(elem.VR) || elem.Tag == specificCharacterSetTag {
-			decoded = append(decoded, decodedElement{elem, elem.Value})
-			continue
-		}
-		value := fileparse.DecodeTextValue(ctx, elem.VR, elem.Value, encodings)
-		if dataelem.IsTextVR(dataelem.VR(elem.VR)) {
-			if fellBack && !isASCII(elem.Value) {
-				// Latin-1 is a guess: the file did not say, or named something
-				// this build does not know, and another single-byte set is
-				// possible. The caller is told rather than left to notice.
-				guessed = true
-			}
-			if !utf8.Valid(value) {
-				allUTF8 = false
-			}
-		}
-		decoded = append(decoded, decodedElement{elem, value})
-	}
-
-	if guessed && warn != nil {
-		warn("text with no usable Specific Character Set (0008,0005) was decoded as ISO-8859-1, " +
-			"which is a guess; the default repertoire is ASCII (PS3.5 6.1.2.3)")
-	}
-	// Reached when a decoder returns an error and decodeTextValue keeps the
-	// bytes as they were found. The decoders here substitute U+FFFD for input
-	// they cannot map, so this is insurance rather than a path a corpus file
-	// takes today — and it is the difference between a data set that is wrong
-	// and one that lies about being right.
-	if !allUTF8 && warn != nil {
-		warn("keeping the declared Specific Character Set (0008,0005): some text did not decode, " +
-			"so the data set cannot claim ISO_IR 192 over it")
-	}
-
-	// A declaration is added when text was converted and the file had none.
-	// Without it, writing the data set back produces UTF-8 bytes that a reader
-	// decodes as the default repertoire — the same corruption, one file later.
-	addDeclaration := guessed && allUTF8 && !hasSpecificCharacterSet(elements)
-
-	for _, d := range decoded {
-		if addDeclaration && d.elem.Tag > specificCharacterSetTag {
-			_ = ds.AddWithContext(ctx, dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
-				[]byte(utf8CharacterSet)))
-			addDeclaration = false
-		}
-
-		if d.elem.Items != nil || fileparse.IsSequenceVR(d.elem.VR) {
+	for _, d := range item.Elements {
+		if d.Source != nil && fileparse.IsSequenceElement(d.Source) {
 			seq := sequence.New()
-			for _, item := range d.elem.Items {
-				_ = seq.Append(elementsToDataset(ctx, item.Elements, encodings, inFile, warn))
+			for _, child := range d.Source.Items {
+				_ = seq.Append(elementsToDataset(ctx, child.Elements, item.Encodings, inFile, warn))
 			}
-			_ = ds.AddSequenceWithContext(ctx, d.elem.Tag, seq)
+			_ = ds.AddSequenceWithContext(ctx, d.Tag, seq)
 			continue
 		}
 
-		if inFile && d.elem.ValueSkipped {
-			_ = ds.AddWithContext(ctx, dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), valueInFile(d.elem)))
+		if inFile && d.Source != nil && d.Source.ValueSkipped {
+			_ = ds.AddWithContext(ctx, dataelem.NewDataElement(d.Tag, dataelem.VR(d.VR), valueInFile(d.Source)))
 			continue
 		}
 
-		value := d.value
-		if d.elem.Tag == specificCharacterSetTag && allUTF8 {
-			// The values below are UTF-8 now, so the attribute has to say so or
-			// the data set contradicts itself — and anything writing it back out
-			// would label UTF-8 bytes as something else. Only when they really
-			// are UTF-8: this used to be unconditional, so a file whose text did
-			// not decode was labeled ISO_IR 192 over the bytes it came with.
-			value = []byte(utf8CharacterSet)
-		}
-		_ = ds.AddWithContext(ctx, dataelem.NewDataElement(d.elem.Tag, dataelem.VR(d.elem.VR), value))
+		_ = ds.AddWithContext(ctx, dataelem.NewDataElement(d.Tag, dataelem.VR(d.VR), d.Value))
 	}
-	if addDeclaration {
-		_ = ds.AddWithContext(ctx, dataelem.NewDataElement(specificCharacterSetTag, dataelem.CS,
-			[]byte(utf8CharacterSet)))
-	}
-
 	return ds
 }
 
-// valueInFile is where a skipped value's bytes are. Encapsulated Pixel Data
-// runs from its first item to the delimiter that closes it, or to where the
-// reader stopped in a file that ends without one: the bytes a whole read puts
-// in the value.
+// valueInFile is where a skipped value's bytes are.
 func valueInFile(elem *DataElementValue) dataelem.ValueInFile {
-	if !elem.UndefinedLength {
-		return dataelem.ValueInFile{Offset: elem.Position.ValueOffset, Length: int64(elem.Length)}
-	}
-	end := elem.Position.DelimiterOffset
-	if end == 0 {
-		end = elem.Position.End
-	}
-	return dataelem.ValueInFile{Offset: elem.Position.ValueOffset, Length: end - elem.Position.ValueOffset}
-}
-
-// utf8CharacterSet is the defined term for UTF-8, which every decoded data set
-// declares.
-const utf8CharacterSet = "ISO_IR 192"
-
-// isASCII reports whether every byte is in the default repertoire, which needs
-// no decoding whatever the declaration says.
-func isASCII(value []byte) bool {
-	for _, b := range value {
-		if b > 0x7F {
-			return false
-		}
-	}
-	return true
-}
-
-// hasSpecificCharacterSet reports whether (0008,0005) is present at all.
-func hasSpecificCharacterSet(elements []*DataElementValue) bool {
-	for _, elem := range elements {
-		if elem.Tag == specificCharacterSetTag {
-			return true
-		}
-	}
-	return false
+	offset, length := fileparse.ValueExtent(elem)
+	return dataelem.ValueInFile{Offset: offset, Length: length}
 }
 
 // ReadDICOMFile reads an entire DICOM file.

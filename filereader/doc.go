@@ -12,7 +12,9 @@
 // pixels, waveforms, dataset). The parser lives in an internal package both
 // share; FileMetaInfo, ReadOptions, DataElementValue and the other element
 // types here are its types under aliases, so a value from one package is a
-// value of the other.
+// value of the other. Its DICOMJSON writes the DICOM JSON Model of a file's
+// elements, the document dataset.Dataset.ToDICOMJSON writes for GetDataset of
+// the same file, without that package.
 //
 // # Core Concepts
 //

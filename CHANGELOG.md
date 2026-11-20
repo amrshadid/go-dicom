@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The DICOM JSON of a header can be written without linking the codecs.**
+  The only DICOM JSON writer (PS3.18 Annex F) was `Dataset.ToDICOMJSON`, so a
+  program that read a file with `filereader/attributes` to avoid the image
+  codecs linked them all again as soon as it wanted the JSON of what it read.
+  `attributes.DICOMJSON` (and `DICOMJSONWithContext`) writes the document from
+  the elements `attributes.Read` returns: text decoded under the Specific
+  Character Set as `GetDataset` decodes it, nested sequences, PN as
+  Alphabetic, Ideographic and Phonetic, numbers for IS, DS and the binary
+  numeric VRs, AT, InlineBinary. `JSONOptions.BulkData` is a hook called for
+  each value with its VR, tag, the sequences it is in, and its offset and
+  length in the file; it returns a `BulkDataURI` for the values it chooses or
+  leaves them out, which is how a header of a file read with `SkipBulkData` is
+  written with its pixels left where they are. There is one implementation,
+  not two: `dataset` writes through the same code, so for every file of
+  pydicom's corpus and of the repository's test data (180 files) the two
+  documents are equal byte for byte, and a test holds them to it. The package
+  still links none of `dataset`, `dataelem` or the codecs, which its existing
+  test checks. `dataset.DICOMJSONElement` is now an alias of the type
+  `attributes.JSONElement` names; its fields and methods are unchanged.
 - **The order of a data set's tags is reported as values.**
   `DICOMFile.TagOrderViolations` lists each data element whose tag is not
   greater than the one before it in its data set or sequence item (PS3.5 7.1),

@@ -1,20 +1,10 @@
 package dataset
 
 import (
-	"encoding/binary"
-	"strings"
-
 	"github.com/amrshadid/go-dicom/dataelem"
+	"github.com/amrshadid/go-dicom/internal/vr"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
-)
-
-var (
-	bitsAllocatedTag       = tag.New(0x0028, 0x0100)
-	pixelRepresentationTag = tag.New(0x0028, 0x0103)
-	lutDescriptorTag       = tag.New(0x0028, 0x3002)
-	lutDataTag             = tag.New(0x0028, 0x3006)
-	pixelDataTag           = tag.New(0x7FE0, 0x0010)
 )
 
 // ResolveVR settles on the one value representation an element is written with.
@@ -51,98 +41,36 @@ var (
 // them the parents recorded by the sequence helpers are used, which a data set
 // read from a file does not have.
 func (ds *Dataset) ResolveVR(t tag.Tag, elem *dataelem.DataElement, enclosing ...*Dataset) dataelem.VR {
-	if _, ok := elem.GetValue().(*sequence.Sequence); ok {
-		return dataelem.SQ
-	}
+	_, isSequence := elem.GetValue().(*sequence.Sequence)
+	stored := elem.GetVR()
 
-	vr := elem.GetVR()
-	if vr == "" {
-		if private := ds.privateVR(t, elem); private != "" {
-			return private
-		}
-		vr = dataelem.VR(t.GetVR())
-		if vr == dataelem.SQ {
-			// The value is bytes, not items. Claiming SQ would describe a
-			// structure nobody parsed.
-			return dataelem.UN
-		}
+	// What the rules read of the element and of the data sets around it is
+	// only needed for an element with no VR of its own or one whose
+	// dictionary VR offers a choice, so it is not gathered for the rest.
+	var raw []byte
+	var rawOK bool
+	var outers []vr.Scope
+	if !isSequence && (stored == "" || dataelem.OffersVRChoice(string(stored))) {
+		raw, rawOK = elem.Bytes()
+		outers = ds.outerScopes(enclosing)
 	}
-
-	if dataelem.OffersVRChoice(string(vr)) {
-		vr = ds.resolveAmbiguousVR(t, vr, enclosing)
-	}
-	if len(vr) != 2 {
-		return dataelem.UN
-	}
-	return vr
+	return dataelem.VR(vr.Resolve(t, string(stored), isSequence, raw, rawOK, datasetScope{ds}, outers))
 }
 
-// resolveAmbiguousVR applies the rules ResolveVR describes to a dictionary VR
-// that offers a choice.
-func (ds *Dataset) resolveAmbiguousVR(t tag.Tag, vr dataelem.VR, enclosing []*Dataset) dataelem.VR {
-	switch {
-	case t == pixelDataTag:
-		if bits, ok := ds.uint16Value(bitsAllocatedTag); ok && bits <= 8 {
-			return dataelem.OB
-		}
-		return dataelem.OW
-
-	case t == lutDataTag:
-		if entries, ok := ds.uint16Value(lutDescriptorTag); ok && entries == 1 {
-			return dataelem.US
-		}
-		return dataelem.OW
-
-	case vr == "US or SS":
-		if ds.unsignedPixelValues(enclosing) {
-			return dataelem.US
-		}
-		return dataelem.SS
-
-	case strings.Contains(string(vr), "OW"):
-		return dataelem.OW
-
-	case vr == "OB or OD":
-		return dataelem.OB
-	}
-	return vr
-}
-
-// unsignedPixelValues reports what Pixel Representation says, taken from the
-// nearest data set that has it. Absent everywhere, it is 0 — unsigned — which is
-// the standard's default and the common case.
-func (ds *Dataset) unsignedPixelValues(enclosing []*Dataset) bool {
-	if v, ok := ds.uint16Value(pixelRepresentationTag); ok {
-		return v == 0
-	}
+// outerScopes lists the data sets this one is an item of, nearest first: the
+// ones given, or when none is the parents the sequence helpers recorded.
+func (ds *Dataset) outerScopes(enclosing []*Dataset) []vr.Scope {
+	var outers []vr.Scope
 	if len(enclosing) > 0 {
 		for _, outer := range enclosing {
-			if outer == nil {
-				continue
-			}
-			if v, ok := outer.uint16Value(pixelRepresentationTag); ok {
-				return v == 0
+			if outer != nil {
+				outers = append(outers, datasetScope{outer})
 			}
 		}
-		return true
+		return outers
 	}
 	for outer := ds.Parent(); outer != nil; outer = outer.Parent() {
-		if v, ok := outer.uint16Value(pixelRepresentationTag); ok {
-			return v == 0
-		}
+		outers = append(outers, datasetScope{outer})
 	}
-	return true
-}
-
-// uint16Value reads the first value of a two-byte unsigned element.
-func (ds *Dataset) uint16Value(t tag.Tag) (uint16, bool) {
-	elem, ok := ds.Get(t)
-	if !ok {
-		return 0, false
-	}
-	raw, ok := elem.Bytes()
-	if !ok || len(raw) < 2 {
-		return 0, false
-	}
-	return binary.LittleEndian.Uint16(raw), true
+	return outers
 }

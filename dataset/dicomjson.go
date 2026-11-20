@@ -12,6 +12,8 @@ import (
 
 	"github.com/amrshadid/go-dicom/config"
 	"github.com/amrshadid/go-dicom/dataelem"
+	"github.com/amrshadid/go-dicom/internal/dicomjson"
+	"github.com/amrshadid/go-dicom/internal/vr"
 	"github.com/amrshadid/go-dicom/sequence"
 	"github.com/amrshadid/go-dicom/tag"
 )
@@ -30,60 +32,29 @@ import (
 // is, but nothing outside this library can consume it, and the documentation
 // used to call it Part 18 support. It is not.
 //
-// The specified encoding is per VR:
-//
-//   - DS, IS, FL, FD, SL, SS, UL, US, SV, UV are JSON numbers, not strings.
-//   - PN is an object with Alphabetic, Ideographic and Phonetic members, taken
-//     from the three groups a stored person name separates with "=".
-//   - AT is a string of eight hexadecimal digits.
-//   - OB, OD, OF, OL, OV, OW and UN are base64 in InlineBinary.
-//   - SQ holds an array of nested objects.
-//   - Everything else is a string, and a multi-valued one becomes an array.
-//
-// An element with no value has no Value member at all, rather than an empty
-// array — the standard distinguishes them, and a consumer checking for the key
-// is entitled to rely on it.
-
-// jsonBinaryVRs are the value representations carried as InlineBinary.
-var jsonBinaryVRs = map[dataelem.VR]bool{
-	dataelem.OB: true, dataelem.OD: true, dataelem.OF: true,
-	dataelem.OL: true, dataelem.OV: true, dataelem.OW: true,
-	dataelem.UN: true,
-}
+// The writing is internal/dicomjson, which attributes.DICOMJSON uses as well,
+// so a program that only reads a header and wants its JSON gets the same
+// document without linking this package and the codecs it brings. The
+// encoding per VR is described there; reading it back is below.
 
 // DICOMJSONElement is one element in the DICOM JSON Model.
 //
 // Exactly one of Value, InlineBinary and BulkDataURI is present, or none when
 // the element is empty.
-type DICOMJSONElement struct {
-	VR string `json:"vr"`
-	// Value is nil for an element with no value and non-nil for one with a
-	// value, which for a sequence includes one with no items. A sequence that
-	// is present and empty is not the same as an absent value, and a consumer
-	// reading the two apart is entitled to see the difference.
-	Value        []any  `json:"Value,omitempty"`
-	InlineBinary string `json:"InlineBinary,omitempty"`
-	BulkDataURI  string `json:"BulkDataURI,omitempty"`
-}
-
-// MarshalJSON writes the element, keeping an empty Value that is present.
 //
-// The struct tag alone cannot: omitempty drops an empty slice and a nil one
-// alike, which would turn a sequence with no items into an element with no
-// value.
-func (e DICOMJSONElement) MarshalJSON() ([]byte, error) {
-	out := make(map[string]any, 2)
-	out["vr"] = e.VR
-	switch {
-	case e.InlineBinary != "":
-		out["InlineBinary"] = e.InlineBinary
-	case e.BulkDataURI != "":
-		out["BulkDataURI"] = e.BulkDataURI
-	case e.Value != nil:
-		out["Value"] = e.Value
-	}
-	return json.Marshal(out)
-}
+//	type DICOMJSONElement struct {
+//		VR           string `json:"vr"`
+//		Value        []any  `json:"Value,omitempty"`
+//		InlineBinary string `json:"InlineBinary,omitempty"`
+//		BulkDataURI  string `json:"BulkDataURI,omitempty"`
+//	}
+//
+// Value is nil for an element with no value and non-nil for one with a value,
+// which for a sequence includes one with no items: a sequence that is present
+// and empty is not the same as an absent value. MarshalJSON keeps that
+// difference, which the struct tags alone would lose. The type is the one
+// attributes.JSONElement names, so the two writers' results are the same type.
+type DICOMJSONElement = dicomjson.Element
 
 // DICOMJSONOptions controls how a data set is converted.
 type DICOMJSONOptions struct {
@@ -110,27 +81,74 @@ func (ds *Dataset) ToDICOMJSON() (map[string]DICOMJSONElement, error) {
 // ToDICOMJSONWithOptions converts the data set, holding large binary values out
 // of line when asked.
 func (ds *Dataset) ToDICOMJSONWithOptions(opts DICOMJSONOptions) (map[string]DICOMJSONElement, error) {
-	return ds.toDICOMJSON(opts, nil)
-}
-
-// toDICOMJSON converts the data set as an item of enclosing, nearest first, so
-// an element can take its VR from the image the item describes.
-func (ds *Dataset) toDICOMJSON(opts DICOMJSONOptions, enclosing []*Dataset) (map[string]DICOMJSONElement, error) {
-	out := make(map[string]DICOMJSONElement)
-
-	for _, elem := range ds.GetAll() {
-		t, ok := elem.Tag()
-		if !ok {
-			return nil, fmt.Errorf("dataset: an element has an unreadable tag (%T); "+
-				"refusing to write JSON with it omitted", elem)
+	var bulk func(dicomjson.BulkValue) dicomjson.BulkDecision
+	if opts.BulkDataThreshold > 0 && opts.BulkDataURIFunc != nil {
+		bulk = func(v dicomjson.BulkValue) dicomjson.BulkDecision {
+			if vr.IsBinary(v.VR) && v.Length >= int64(opts.BulkDataThreshold) {
+				return dicomjson.BulkDecision{URI: opts.BulkDataURIFunc(v.Tag)}
+			}
+			return dicomjson.BulkDecision{}
 		}
-		converted, err := ds.elementToDICOMJSON(t, elem, opts, enclosing)
-		if err != nil {
-			return nil, err
-		}
-		out[dicomJSONKey(t)] = converted
+	}
+	item, err := ds.jsonItem()
+	if err != nil {
+		return nil, fmt.Errorf("dataset: %w", err)
+	}
+	out, err := dicomjson.Convert(item, dicomjson.Options{Bulk: bulk})
+	if err != nil {
+		return nil, fmt.Errorf("dataset: %w", err)
 	}
 	return out, nil
+}
+
+// jsonItem gives the data set, and the items below it, to the writer in the
+// one shape it reads. Nothing is copied but the descriptions: a value's bytes
+// are the element's own.
+func (ds *Dataset) jsonItem() (*dicomjson.Item, error) {
+	elements := ds.GetAll()
+	attrs := make([]dicomjson.Attribute, 0, len(elements))
+	for _, elem := range elements {
+		t, ok := elem.Tag()
+		if !ok {
+			return nil, fmt.Errorf("an element has an unreadable tag (%T); "+
+				"refusing to write JSON with it omitted", elem)
+		}
+		a := dicomjson.Attribute{Tag: t, VR: string(elem.GetVR())}
+
+		if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
+			a.Sequence = true
+			for i := 0; i < seq.Length(); i++ {
+				got, _ := seq.Get(i)
+				inner, ok := got.(*Dataset)
+				if !ok {
+					continue
+				}
+				child, err := inner.jsonItem()
+				if err != nil {
+					return nil, err
+				}
+				a.Items = append(a.Items, child)
+			}
+			attrs = append(attrs, a)
+			continue
+		}
+
+		// The file reader holds a value as bytes; an element built in memory
+		// holds a Go value. ValueBytes is what the file writer and the network
+		// encoder render it with, so the three agree on what a value is, and
+		// one that does not fit its VR is refused here as it is there (#295).
+		// The bytes depend on the VR it is written as, which is settled later.
+		value := elem.GetValue()
+		a.Value, ok = elem.Bytes()
+		a.NoBytes = !ok
+		if _, isBytes := value.([]byte); !isBytes {
+			a.Encode = func(vr string) ([]byte, error) {
+				return dataelem.ValueBytes(dataelem.VR(vr), value)
+			}
+		}
+		attrs = append(attrs, a)
+	}
+	return dicomjson.NewItem(attrs), nil
 }
 
 // ToDICOMJSONString renders the data set as DICOM JSON Model text.
@@ -149,345 +167,19 @@ func (ds *Dataset) ToDICOMJSONString() (string, error) {
 // dicomJSONKey renders a tag as the eight uppercase hexadecimal digits the
 // standard uses as the member name.
 func dicomJSONKey(t tag.Tag) string {
-	return fmt.Sprintf("%04X%04X", t.Group(), t.Element())
+	return dicomjson.Key(t)
 }
 
-// elementToDICOMJSON converts one element.
-func (ds *Dataset) elementToDICOMJSON(t tag.Tag, elem *dataelem.DataElement,
-	opts DICOMJSONOptions, enclosing []*Dataset) (DICOMJSONElement, error) {
+// datasetScope is a data set as the VR rules read it.
+type datasetScope struct{ ds *Dataset }
 
-	vr := ds.resolveJSONVR(t, elem, enclosing)
-	out := DICOMJSONElement{VR: string(vr)}
-
-	if seq, ok := elem.GetValue().(*sequence.Sequence); ok {
-		out.VR = string(dataelem.SQ)
-		out.Value = []any{} // present, even with no items
-		for i := 0; i < seq.Length(); i++ {
-			item, _ := seq.Get(i)
-			inner, ok := item.(*Dataset)
-			if !ok {
-				continue
-			}
-			nested, err := inner.toDICOMJSON(opts, append([]*Dataset{ds}, enclosing...))
-			if err != nil {
-				return out, err
-			}
-			out.Value = append(out.Value, nested)
-		}
-		return out, nil
-	}
-
-	// The file reader holds a value as bytes; an element built in memory holds
-	// a Go value. ValueBytes is what the file writer and the network encoder
-	// render it with, so the three agree on what a value is, and one that does
-	// not fit its VR is refused here as it is there (#295).
-	raw, err := dataelem.ValueBytes(vr, elem.GetValue())
-	if err != nil {
-		return out, fmt.Errorf("dataset: %s: %w", dicomJSONKey(t), err)
-	}
-	if len(raw) == 0 {
-		return out, nil // no Value member at all, which is what empty means here
-	}
-
-	if jsonBinaryVRs[vr] {
-		if opts.BulkDataThreshold > 0 && len(raw) >= opts.BulkDataThreshold &&
-			opts.BulkDataURIFunc != nil {
-			out.BulkDataURI = opts.BulkDataURIFunc(t)
-			return out, nil
-		}
-		out.InlineBinary = base64.StdEncoding.EncodeToString(raw)
-		return out, nil
-	}
-
-	values, err := dicomJSONValues(vr, raw)
-	if err != nil {
-		return out, fmt.Errorf("dataset: %s %s: %w", dicomJSONKey(t), vr, err)
-	}
-	out.Value = values
-	return out, nil
-}
-
-// resolveJSONVR is ResolveVR with one restriction, on an element nobody typed.
-//
-// An absent value representation and an explicit UN mean the same thing to a
-// reader: nobody said what this is. They were handled differently, so a private
-// creator stored without a VR — which is how an implicit VR file stores
-// everything — came out as UN where the same element with an explicit UN came
-// out as LO.
-//
-// PS3.5 6.2.2 lets a sender write UN when it does not know the value
-// representation, and lets a receiver look the tag up instead. Carrying UN into
-// JSON would base64 a date or a patient name, which is a valid document that no
-// consumer can use — pydicom, dcm4che and dcmtk all resolve it, and a document
-// that disagrees with all three is not interchange.
-//
-// Only for text: the bytes of a UN element already are the text, so reading them
-// as the dictionary VR needs no reinterpretation. A UN that the dictionary calls
-// SQ holds an encoded sequence, and claiming SQ without parsing it would produce
-// a Value that is not there.
-func (ds *Dataset) resolveJSONVR(t tag.Tag, elem *dataelem.DataElement, enclosing []*Dataset) dataelem.VR {
-	if _, ok := elem.GetValue().(*sequence.Sequence); ok {
-		return dataelem.SQ
-	}
-
-	if vr := elem.GetVR(); vr == "" || vr == dataelem.UN {
-		if private := ds.privateVR(t, elem); private != "" {
-			return private
-		}
-		if known := dataelem.VR(t.GetVR()); known != "" && known != dataelem.UN {
-			if !jsonBinaryVRs[known] && known != dataelem.SQ &&
-				!dataelem.OffersVRChoice(string(known)) {
-				return known
-			}
-		}
-		return dataelem.UN
-	}
-	return ds.ResolveVR(t, elem, enclosing...)
-}
-
-// privateVR resolves a private tag through the private dictionary.
-//
-// The dictionary is GDCM's, generated by scripts/private-dictionary.py. The
-// table it replaced was itself generated, with VRs given in rotation, and
-// trusting that one relabeled real data, so for a while nothing was trusted
-// and every private attribute was UN (#186). An entry with an unambiguous VR
-// is used again; anything else stays UN (#188).
-//
-// Private tags cannot be looked up by their stored tag, because the block they
-// sit in is assigned per file. PS3.5 7.8.1 gives a vendor a group and lets it
-// claim any block from 0x10 to 0xFF within it; the block is named by a private
-// creator at (gggg,00xx), and the vendor's attributes then live at (gggg,xxee).
-// The same attribute is (0019,1002) in one file and (0019,4302) in the next.
-//
-// So the creator is read to learn the vendor, and the tag is normalized to the
-// block the dictionary stores it under before the lookup. Without that step a
-// dictionary of 6883 private attributes answers nothing except for files that
-// happen to have chosen block 0x10.
-func (ds *Dataset) privateVR(t tag.Tag, elem *dataelem.DataElement) dataelem.VR {
-	if t.Group()%2 == 0 {
-		return ""
-	}
-
-	element := t.Element()
-
-	// A private creator is LO by definition — its value is the vendor's own
-	// name, so no dictionary is needed or possible.
-	if element >= 0x0010 && element <= 0x00FF {
-		return dataelem.LO
-	}
-
-	block := element >> 8
-	if block < 0x10 {
-		return "" // not a private data element of any block
-	}
-	creator, ok := ds.Get(tag.New(t.Group(), block))
+// Bytes is the bytes of the element at t, and false when there is none.
+func (s datasetScope) Bytes(t tag.Tag) ([]byte, bool) {
+	elem, ok := s.ds.Get(t)
 	if !ok {
-		return "" // the block was never claimed, so nothing can say what this is
+		return nil, false
 	}
-	raw, ok := creator.Bytes()
-	if !ok {
-		return ""
-	}
-	vendor := strings.TrimRight(string(raw), " \x00")
-	if vendor == "" {
-		return ""
-	}
-
-	canonical := tag.New(t.Group(), 0x1000|(element&0x00FF))
-	if info := canonical.GetPrivateTagInfo(vendor); info != nil {
-		if known := dataelem.VR(info.VR); known != "" && known != dataelem.UN &&
-			known != dataelem.SQ && !jsonBinaryVRs[known] &&
-			!dataelem.OffersVRChoice(string(known)) && fitsVR(known, elem) {
-			return known
-		}
-	}
-	return ""
-}
-
-// fitsVR reports whether the element's value is a whole number of values of a
-// fixed-size VR, or the VR is not fixed-size. A dictionary can be wrong for one
-// device's software version, and labeling 2 bytes FL is the file pydicom
-// refuses that #186 produced; such a value stays UN.
-func fitsVR(vr dataelem.VR, elem *dataelem.DataElement) bool {
-	info := dataelem.GetVRInfo(vr)
-	if info == nil || info.ByteLength <= 0 || elem == nil {
-		return true
-	}
-	raw, ok := elem.Bytes()
-	return !ok || len(raw)%info.ByteLength == 0
-}
-
-// dicomJSONValues renders a non-sequence, non-binary value.
-func dicomJSONValues(vr dataelem.VR, raw []byte) ([]any, error) {
-	switch vr {
-	case dataelem.AT:
-		return attributeTagValues(raw)
-	case dataelem.US, dataelem.SS, dataelem.UL, dataelem.SL,
-		dataelem.SV, dataelem.UV, dataelem.FL, dataelem.FD:
-		return binaryNumberValues(vr, raw)
-	}
-
-	text := strings.TrimRight(string(raw), "\x00 ")
-
-	// Padding alone is an element with no value, and the model says that by
-	// leaving Value out. It was written as [""], one value that happens to be
-	// empty, which neither pydicom nor dcm4che produces (#121).
-	if text == "" {
-		return nil, nil
-	}
-
-	// LT, ST, UT and UR hold one value, and a backslash in them is a
-	// character, not a separator (PS3.5 6.2). Splitting them turned the XML in
-	// examples_ybr_color.dcm's private UT into 17 values with every backslash
-	// gone, and trimming the pieces changed the text besides (#121).
-	switch vr {
-	case dataelem.LT, dataelem.ST, dataelem.UT, dataelem.UR:
-		return []any{text}, nil
-	}
-
-	// The rest are text, multi-valued by backslash.
-	parts := strings.Split(text, "\\")
-
-	switch vr {
-	case dataelem.PN:
-		out := make([]any, 0, len(parts))
-		for _, p := range parts {
-			out = append(out, personNameJSON(p))
-		}
-		return out, nil
-
-	case dataelem.DS, dataelem.IS:
-		out := make([]any, 0, len(parts))
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				// A present but empty item. The standard has null for this, and
-				// it has to stay distinguishable from a missing one.
-				out = append(out, nil)
-				continue
-			}
-			if vr == dataelem.IS {
-				if n, err := strconv.ParseInt(p, 10, 64); err == nil {
-					out = append(out, n)
-					continue
-				}
-			} else if f, err := strconv.ParseFloat(p, 64); err == nil {
-				if math.IsInf(f, 0) || math.IsNaN(f) {
-					// Not representable in JSON, and silently turning it into
-					// null would lose the distinction from an empty value.
-					out = append(out, p)
-					continue
-				}
-				out = append(out, f)
-				continue
-			}
-			// Not a number. The standard has no encoding for that, and files
-			// carrying one exist — pydicom's badVR.dcm has an IS of "1A". The
-			// string is kept rather than dropped: a consumer can see what was
-			// there, where null would say the element was empty.
-			out = append(out, p)
-		}
-		return out, nil
-	}
-
-	out := make([]any, 0, len(parts))
-	for _, p := range parts {
-		out = append(out, strings.TrimRight(p, " "))
-	}
-	return out, nil
-}
-
-// attributeTagValues renders AT, which holds tags rather than text.
-func attributeTagValues(raw []byte) ([]any, error) {
-	if len(raw)%4 != 0 {
-		return nil, fmt.Errorf("an AT value of %d bytes is not a whole number of tags", len(raw))
-	}
-	out := make([]any, 0, len(raw)/4)
-	for i := 0; i+4 <= len(raw); i += 4 {
-		group := binary.LittleEndian.Uint16(raw[i:])
-		element := binary.LittleEndian.Uint16(raw[i+2:])
-		out = append(out, fmt.Sprintf("%04X%04X", group, element))
-	}
-	return out, nil
-}
-
-// binaryNumberValues renders the fixed-width numeric VRs.
-func binaryNumberValues(vr dataelem.VR, raw []byte) ([]any, error) {
-	width := map[dataelem.VR]int{
-		dataelem.US: 2, dataelem.SS: 2,
-		dataelem.UL: 4, dataelem.SL: 4, dataelem.FL: 4,
-		dataelem.SV: 8, dataelem.UV: 8, dataelem.FD: 8,
-	}[vr]
-	if width == 0 {
-		return nil, fmt.Errorf("no width known for %s", vr)
-	}
-	if len(raw)%width != 0 {
-		return nil, fmt.Errorf("a %s value of %d bytes is not a whole number of %d-byte values",
-			vr, len(raw), width)
-	}
-
-	out := make([]any, 0, len(raw)/width)
-	for i := 0; i+width <= len(raw); i += width {
-		chunk := raw[i : i+width]
-		switch vr {
-		case dataelem.US:
-			out = append(out, binary.LittleEndian.Uint16(chunk))
-		case dataelem.SS:
-			out = append(out, int16(binary.LittleEndian.Uint16(chunk)))
-		case dataelem.UL:
-			out = append(out, binary.LittleEndian.Uint32(chunk))
-		case dataelem.SL:
-			out = append(out, int32(binary.LittleEndian.Uint32(chunk)))
-		case dataelem.UV:
-			out = append(out, binary.LittleEndian.Uint64(chunk))
-		case dataelem.SV:
-			out = append(out, int64(binary.LittleEndian.Uint64(chunk)))
-		case dataelem.FL:
-			f := float64(math.Float32frombits(binary.LittleEndian.Uint32(chunk)))
-			out = append(out, jsonSafeFloat(f))
-		case dataelem.FD:
-			f := math.Float64frombits(binary.LittleEndian.Uint64(chunk))
-			out = append(out, jsonSafeFloat(f))
-		}
-	}
-	return out, nil
-}
-
-// jsonSafeFloat keeps a value JSON can carry.
-//
-// Infinity and NaN are legal IEEE values and appear in real data sets, but JSON
-// has no literal for either. They become their DICOM text spellings rather than
-// null, which would be indistinguishable from an empty value.
-func jsonSafeFloat(f float64) any {
-	switch {
-	case math.IsNaN(f):
-		return "NaN"
-	case math.IsInf(f, 1):
-		return "inf"
-	case math.IsInf(f, -1):
-		return "-inf"
-	}
-	return f
-}
-
-// personNameJSON splits a stored person name into the three groups the standard
-// gives separate members.
-//
-// A stored name separates them with "=" in the order alphabetic, ideographic,
-// phonetic, and trailing empty groups are omitted rather than written as empty
-// members — the standard treats an absent member and an empty one differently.
-func personNameJSON(value string) map[string]string {
-	groups := strings.Split(value, "=")
-	out := make(map[string]string, 3)
-	for i, name := range []string{"Alphabetic", "Ideographic", "Phonetic"} {
-		if i >= len(groups) {
-			break
-		}
-		if g := strings.TrimRight(groups[i], " "); g != "" {
-			out[name] = g
-		}
-	}
-	return out
+	return elem.Bytes()
 }
 
 // FromDICOMJSON replaces the data set's contents with a DICOM JSON Model object.
