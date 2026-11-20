@@ -259,17 +259,19 @@ func (s *SCP) rejectOverLimit(ctx context.Context, transport *Transport) {
 	transport.setCloseWait(s.config.Network.ARTIMTimeout)
 
 	// Only an A-ASSOCIATE-RQ can be answered with an A-ASSOCIATE-RJ; anything
-	// else gets the connection closed.
+	// else is answered as Sta2 answers it, as handleConnection does.
+	assoc := NewAssociation(transport)
+	assoc.logger = s.ownLog
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
+		s.abortBeforeAssociation(ctx, assoc, nil, err)
 		return
 	}
 	if _, ok := pdu.(*AssociateRQ); !ok {
+		s.abortBeforeAssociation(ctx, assoc, pdu, nil)
 		return
 	}
 
-	assoc := NewAssociation(transport)
-	assoc.logger = s.ownLog
 	// Rejected-transient, so the caller tries again later, from the DICOM UL
 	// service-provider (presentation related function) with reason 2,
 	// local-limit-exceeded (PS3.8 Table 9-21). A reason means something only
@@ -300,6 +302,54 @@ func (s *SCP) rejectAndAwaitClose(ctx context.Context, assoc *Association, trans
 	_, _ = transport.ReadPDU(ctx)
 }
 
+// abortBeforeAssociation answers what a connection sent when the first PDU was
+// due and an A-ASSOCIATE-RQ was not it. It reports whether the connection has
+// been dealt with: pdu and err are what ReadPDU returned, and an err that is
+// not a PDU the peer sent, the connection ending or going quiet, is left to
+// the caller.
+//
+// The acceptor in Sta2, with the transport connection open and awaiting the
+// A-ASSOCIATE-RQ, answers an A-ASSOCIATE-AC, an A-ASSOCIATE-RJ, a P-DATA-TF,
+// an A-RELEASE-RQ or an A-RELEASE-RP, and a PDU that is unrecognized or
+// invalid (Evt19), with AA-1: an A-ABORT with the service-provider as its
+// source, then ARTIM and the peer's close (PS3.8 Table 9-10, 9.2). The reason
+// says which: unrecognized-PDU (1), unexpected-PDU (2), or
+// invalid-PDU-parameter value (6) for a PDU whose type is known and whose
+// contents or length are not acceptable (Table 9-26). The connection was
+// closed in silence for an unrecognized or invalid PDU, so a peer sending one
+// learned nothing but that the connection was gone.
+//
+// An A-ABORT is not answered: it is AA-2, which closes the connection. The
+// connection ending (AA-5) or ARTIM expiring (AA-2) leaves nothing to answer
+// with either, and a PDU that stops short of its stated length is neither an
+// invalid PDU nor a complete one until one of those happens.
+func (s *SCP) abortBeforeAssociation(ctx context.Context, assoc *Association, pdu PDU, err error) bool {
+	var reason byte
+	var why error
+	switch {
+	case err != nil:
+		var pduErr *PDUError
+		if !errors.As(err, &pduErr) || ctx.Err() != nil {
+			return false
+		}
+		reason, why = abortInvalidPDUParameter, err
+		if pduErr.Code == "UNKNOWN_TYPE" {
+			reason = abortUnrecognizedPDU
+		}
+	default:
+		switch pdu.(type) {
+		case *AssociateRQ:
+			return false
+		case *AbortPDU:
+			return true
+		}
+		reason, why = abortUnexpectedPDU, fmt.Errorf("expected A-ASSOCIATE-RQ, got %T", pdu)
+	}
+	s.log().Warn("aborting the connection from %s before an association: %v", assoc.transport.RemoteAddr(), why)
+	_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, reason, abortedBy(AbortCauseProtocolViolation, why))
+	return true
+}
+
 func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	defer transport.Close()
 
@@ -327,6 +377,10 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 	transport.SetReceiveLimit(s.config.Network.MaxPDUSize)
 	pdu, err := transport.ReadPDU(ctx)
 	if err != nil {
+		// A PDU that is there and is not valid is answered, not dropped.
+		if s.abortBeforeAssociation(ctx, assoc, nil, err) {
+			return
+		}
 		// On a TLS server the handshake ran inside that read. A client it
 		// turned away is reported as such, not only logged.
 		if failure := handshakeFailure(transport, err); failure != nil && ctx.Err() == nil {
@@ -351,9 +405,7 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 
 	rq, ok := pdu.(*AssociateRQ)
 	if !ok {
-		s.log().Warn("expected A-ASSOCIATE-RQ, got %T", pdu)
-		_ = assoc.abortWhy(ctx, AbortSourceServiceProvider, abortUnexpectedPDU,
-			abortedBy(AbortCauseProtocolViolation, fmt.Errorf("expected A-ASSOCIATE-RQ, got %T", pdu)))
+		s.abortBeforeAssociation(ctx, assoc, pdu, nil)
 		return
 	}
 

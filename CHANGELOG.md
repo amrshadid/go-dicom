@@ -39,6 +39,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body was read by aiohttp's HTTP and multipart parsers and each part by
   pydicom, byte for byte.
 
+### Fixed
+
+- **An invalid first PDU is answered with an A-ABORT, not a closed
+  connection.** An SCP waiting for the A-ASSOCIATE-RQ closed the connection in
+  silence on a PDU type that does not exist and on an A-ASSOCIATE-RQ whose
+  items or length were bad, so the sender learned only that the connection was
+  gone. PS3.8 Table 9-10 has the acceptor in Sta2 send an A-ABORT with the
+  service-provider as source for these (AA-1) and wait for the peer to close:
+  now reason 1 (unrecognized PDU), 2 (unexpected PDU) for a P-DATA-TF,
+  A-ASSOCIATE-AC, A-ASSOCIATE-RJ or A-RELEASE, or 6 (invalid PDU parameter
+  value), the same for a connection turned away at the association limit.
+  An A-ABORT as the first PDU, which was answered with an A-ABORT of the SCP's
+  own, now closes the connection and nothing else (AA-2). A PDU cut short by
+  the connection closing gets nothing, as before: it is not yet an invalid
+  PDU. dcmtk 3.7 `storescp` leaves an unrecognized or malformed first PDU
+  unanswered; pynetdicom 2.1 answers it with an A-ABORT.
+
 ## [1.11.0] - 2026-11-19
 
 The largest release so far. The library now writes every compressed syntax
