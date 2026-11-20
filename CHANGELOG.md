@@ -58,7 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A private sequence that arrives as UN can be walked.**
   `network.DecodeUNSequence` reads the value of a UN element as the items of a
   sequence, in Implicit VR Little Endian as PS3.5 6.2.2 has it, and refuses
-  bytes that are not items. The reader keeps a defined-length UN value as
+  bytes that are not items: a value that does not start with an item, bytes
+  after the last one, an item or element cut short or running past the length
+  of what holds it, an item or nested sequence of undefined length with no
+  delimiter before the end, and a Sequence Delimitation Item inside an item.
+  A received data set is still read leniently, as far as it goes. The reader keeps a defined-length UN value as
   bytes, since it cannot tell items from other bytes; a caller that knows the
   tag holds a sequence now reads it. Checked against pydicom's own conversion
   of the same value.

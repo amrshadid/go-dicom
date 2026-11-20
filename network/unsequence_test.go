@@ -98,3 +98,72 @@ func TestDecodeUNSequenceRefusesWhatIsNotItems(t *testing.T) {
 		t.Errorf("an empty value: %v, %v; want a sequence of no items", seq, err)
 	}
 }
+
+// TestDecodeUNSequenceRefusesAValueCutShort proves a value cut short or
+// overrunning what holds it is refused, where a received data set would be
+// read as far as it goes: an item cut inside an element, an element whose
+// length runs past its item, an item or nested sequence of undefined length
+// with no delimiter before the end, an item header cut short, a Sequence
+// Delimitation Item inside an item, and an item whose length runs past the
+// value. Each is a value a caller must not take for a sequence.
+func TestDecodeUNSequenceRefusesAValueCutShort(t *testing.T) {
+	whole := itemOf(true, implicitElement(0x0009, 0x0010, "ACME 1.0"), implicitElement(0x0009, 0x1001, "VALUE1"))
+
+	// An element whose length says 12 inside an item whose length leaves 6.
+	overrun := itemOf(true, implicitElement(0x0009, 0x1001, "VALUE1"))
+	binary.LittleEndian.PutUint32(overrun[8+4:], 12)
+	overrun = append(overrun, implicitElement(0x0009, 0x1002, "XX")...)
+
+	undefinedItem := itemOf(false, implicitElement(0x0009, 0x1001, "VALUE1"))
+	undefinedItem = undefinedItem[:len(undefinedItem)-8] // its delimiter gone
+
+	nested := binary.LittleEndian.AppendUint16(nil, 0x0009)
+	nested = binary.LittleEndian.AppendUint16(nested, 0x1003)
+	nested = binary.LittleEndian.AppendUint32(nested, 0xFFFFFFFF)
+	nested = append(nested, itemOf(true, implicitElement(0x0010, 0x0020, "IN"))...) // no delimiter
+	nestedUnclosed := itemOf(false, nested)
+	nestedUnclosed = nestedUnclosed[:len(nestedUnclosed)-8]
+
+	seqDelimInItem := itemOf(false, implicitElement(0x0009, 0x1001, "VALUE1"))
+	copy(seqDelimInItem[len(seqDelimInItem)-8:], []byte{0xFE, 0xFF, 0xDD, 0xE0})
+
+	pastValue := append([]byte(nil), whole...)
+	binary.LittleEndian.PutUint32(pastValue[4:], uint32(len(whole)))
+
+	for name, v := range map[string][]byte{
+		"cut inside an element":               whole[:len(whole)-3],
+		"cut inside an element header":        whole[:8+5],
+		"an element past its item":            overrun,
+		"an item with no delimiter":           undefinedItem,
+		"a nested sequence with no delimiter": nestedUnclosed,
+		"an item header cut short":            append(append([]byte(nil), whole...), 0xFE, 0xFF, 0x00, 0xE0, 0x10),
+		"a sequence delimiter in an item":     seqDelimInItem,
+		"an item past the value":              pastValue,
+	} {
+		if seq, err := DecodeUNSequence(v); err == nil {
+			t.Errorf("%s: read as %d items, want an error", name, seq.Length())
+		}
+	}
+	if _, err := DecodeUNSequence(whole); err != nil {
+		t.Errorf("the whole value: %v", err)
+	}
+}
+
+// TestReceivedDataSetIsStillReadLeniently proves the strict reading is
+// DecodeUNSequence's alone: a received data set whose sequence is cut short
+// still decodes as far as it goes, as it did before.
+func TestReceivedDataSetIsStillReadLeniently(t *testing.T) {
+	item := itemOf(true, implicitElement(0x0010, 0x0020, "ID1"))
+	sq := binary.LittleEndian.AppendUint16(nil, 0x0008)
+	sq = binary.LittleEndian.AppendUint16(sq, 0x1115)
+	sq = binary.LittleEndian.AppendUint32(sq, 0xFFFFFFFF)
+	sq = append(sq, item...) // no Sequence Delimitation Item
+	data := append(implicitElement(0x0008, 0x0060, "CT"), sq...)
+	ds, err := DecodeDataset(data, ImplicitVRLittleEndianUID)
+	if err != nil {
+		t.Fatalf("a received data set with an unclosed sequence: %v", err)
+	}
+	if _, err := ds.GetSequence(tag.New(0x0008, 0x1115)); err != nil {
+		t.Errorf("the unclosed sequence was not read: %v", err)
+	}
+}
