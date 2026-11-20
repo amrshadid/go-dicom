@@ -143,6 +143,12 @@
 // the instance's size, and [WriteCStoreFile] writes the bytes as a Part 10 file
 // untouched, so what is stored is what was sent.
 //
+// [SCU.StoreStream] is the same for sending: the data set goes out as a reader
+// holds it, on the presentation context for the SOP class in exactly that
+// transfer syntax, in two PDUs of memory, and the peer's status comes back
+// whatever it is. [StoreStreamRequestFromFile] builds the request for a Part 10
+// file.
+//
 // [AssociationInfoFromContext] gives a handler the calling AE title, peer
 // address, negotiated contexts, and peer implementation details without
 // changing the Handler signature. It returns nil outside an association.

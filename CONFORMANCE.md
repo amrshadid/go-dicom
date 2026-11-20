@@ -66,6 +66,18 @@ UID. It does not compare those UIDs with the data set's own (0008,0016) and
 (0008,0018), which PS3.10 7.1 requires to be equal: the data set is copied, not
 parsed.
 
+As an SCU, `SCU.StoreStream` sends a data set from an `io.Reader` as the bytes
+it holds, with no encoding and no transcoding: it uses the accepted presentation
+context whose abstract syntax is the SOP class and whose transfer syntax is the
+one named, and fails, naming both, when the peer accepted none. The data set is
+cut into P-DATA-TF fragments within the peer's Maximum Length (at most 1 MiB),
+two of them held at a time. The peer's status is returned whatever it is,
+warnings 0xB000, 0xB006 and 0xB007 included. A reader that fails before its end
+is answered with an A-ABORT (source service-user, reason not specified) and not
+with a last fragment, so the peer is never given a data set that was cut short.
+`StoreStreamRequestFromFile` reads a Part 10 file's File Meta Information for the
+UIDs, the transfer syntax and where the data set begins.
+
 ### 1.3 Sequencing
 
 The library imposes no ordering beyond what the standard requires. An

@@ -284,6 +284,32 @@ Instance UIDs: the data set is copied, not parsed. An archive that indexes the
 file finds a disagreement there. The SCP puts no timeout on the handler, so one
 that waits on a disk or a database waits on `ctx` as well.
 
+### Sending a Stored File as It Is
+
+`SCU.Store` encodes a data set and may transcode it to what the peer accepted.
+An archive that sends the bytes it stored wants neither. `SCU.StoreStream` sends
+the data set from a reader, as it is, on the presentation context for the SOP
+class in exactly that transfer syntax (the error names both when the peer
+accepted none), and holds two PDUs of it however large it is. It returns the
+peer's status word, a warning or a refusal included, with a nil error: the error
+is for a failed transport or a failed reader. A reader that fails before its end
+gets an A-ABORT, never a last fragment, so the peer is not handed a data set cut
+short.
+
+```go
+f, _ := os.Open(path)
+st, _ := f.Stat()
+req, err := network.StoreStreamRequestFromFile(f, st.Size()) // UIDs and syntax from the file meta
+if err != nil {
+    return err
+}
+// Propose exactly what the file is in; the peer may refuse it.
+err = scu.Associate(ctx, []network.PresentationContextItem{{
+    ID: 1, AbstractSyntax: req.SOPClassUID, TransferSyntaxes: []string{req.TransferSyntaxUID},
+}})
+status, err := scu.StoreStream(ctx, req)
+```
+
 ### Query/Retrieve Server
 
 ```go

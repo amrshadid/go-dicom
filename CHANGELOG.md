@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SCU.StoreStream` sends a stored file as it is.** `Store` encodes a data
+  set and may transcode it to a syntax the peer accepted, so a program that
+  keeps instances as files could not send the bytes it had stored. `StoreStream`
+  takes a `StoreStreamRequest` (the SOP class, the SOP instance, the transfer
+  syntax and an `io.Reader` over the encoded data set), uses only the accepted
+  presentation context with exactly that SOP class and transfer syntax (the
+  error names both when there is none), and sends the fragments as the reader
+  yields them, holding two at a time: a 512 MB data set is sent with the heap
+  under 16 MB. It returns the peer's status word, a warning (0xB000, 0xB006,
+  0xB007) or a refusal included, with a nil error; the error is for a failed
+  transport or reader. A reader that fails partway gets an A-ABORT before any
+  fragment is marked last, so the peer never receives a data set cut short.
+  `StoreStreamRequestFromFile` builds the request from a Part 10 file, reading
+  its File Meta Information for the UIDs, the syntax and where the data set
+  begins. Checked against dcmtk's `storescp` and a pynetdicom SCP: the data
+  set each stored equals the file's, byte for byte, in seven transfer syntaxes.
+
 ## [1.11.0] - 2026-11-19
 
 The largest release so far. The library now writes every compressed syntax
