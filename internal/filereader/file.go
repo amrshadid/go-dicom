@@ -39,6 +39,13 @@ type File struct {
 	// retired tags, VR mismatches, truncated meta elements). Parsing continues
 	// past these; inspect the slice to surface them.
 	Warnings []string
+
+	// TagOrderViolations are the data elements, up to a thousand, whose tag
+	// is not greater than the one before them in the same data set (PS3.5
+	// 7.1), in the order read; TagOrderViolationCount counts them all. Each
+	// is also among Warnings, in words; these are for a program to act on.
+	TagOrderViolations     []TagOrderViolation
+	TagOrderViolationCount int
 }
 
 // ParseSpecificCharacterSet splits a Specific Character Set (0008,0005)

@@ -664,7 +664,7 @@ scp.SetHandler(&network.StorageHandler{
 | DICOM PS3.8 - Network Communication (Upper Layer) | Supported |
 | DICOM PS3.10 - Media Storage and File Format | Supported |
 | DICOM PS3.15 - Security (TLS, de-identification) | Supported — the Basic Profile covers every attribute in Table E.1-1, verified to leave none of them unchanged across pydicom's corpus |
-| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. A private attribute whose VR the file does not state takes GDCM's, resolved through the file's own private creator, and is UN with its value as InlineBinary when that is unknown or does not fit |
+| DICOM JSON Model (Part 18) | Supported — `dataset.ToDICOMJSON`, `FromDICOMJSON`, verified against pydicom's `to_json` across its corpus. `filereader/attributes.DICOMJSON` writes the same document, byte for byte, from a file's elements without linking `dataset` or the codecs, and gives a `BulkDataURI` for the values a caller chooses. A private attribute whose VR the file does not state takes GDCM's, resolved through the file's own private creator, and is UN with its value as InlineBinary when that is unknown or does not fit |
 | ISO 2022 - Character set escape sequences | Supported |
 
 ### Performance
@@ -896,7 +896,7 @@ The `anonymize` package supports multiple de-identification profiles per DICOM P
 - **Retain UIDs** - Keep original UIDs
 - **Retain Safe Private** - Keep safe private tags
 
-Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. When what it finds covers more than a quarter of the picture, which on the measured scans means it took anatomy for lettering, `-redact auto` refuses by name and writes nothing rather than black out the scan. `share -preview` and `-detect` show what it finds before anything is changed.
+Text drawn into the pixels is not an attribute. `-redact x,y,w,h` blacks out rectangles you name, and `-redact auto` blacks out what a built-in detector finds (`anonymize.NewTextDetector`, pure Go, no OCR engine). The detector is not a promise: it misses text that is faint, very small, hand written or drawn over a busy part of the picture, so an automatic redaction is recorded as unverified and the image is never marked as free of burned-in text by it. When what it finds covers more than a quarter of the picture, which on the measured scans means it took anatomy for lettering, `-redact auto` refuses by name and writes nothing rather than black out the scan. `share -preview` and `-detect` show what it finds before anything is changed. Redaction works a frame at a time, with the pixels left in the input file: a 1 GB, 500-frame image is redacted in about 25 MB, and a compressed one in under 50 MB, however large the image.
 
 ## Building
 

@@ -3,6 +3,7 @@ package network_test
 import (
 	"context"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -105,5 +106,111 @@ func TestDcmtkStoreFinishesWhileTheServerShutsDown(t *testing.T) {
 	info, err := os.Stat(written[0])
 	if err != nil || info.Size() < 96<<20 {
 		t.Errorf("the written file is %v bytes (%v), want the whole 96 MiB data set", info.Size(), err)
+	}
+}
+
+// refusedScript associates as pynetdicom, which does not retry, and prints how
+// the association was answered: the result, source and reason of the
+// A-ASSOCIATE-RJ as pynetdicom read them.
+const refusedScript = `
+import sys
+from pynetdicom import AE
+from pynetdicom.sop_class import CTImageStorage
+
+ae = AE(ae_title="SCANNER")
+ae.add_requested_context(CTImageStorage)
+assoc = ae.associate(sys.argv[1], int(sys.argv[2]), ae_title="ARCHIVE")
+p = assoc.acceptor.primitive
+print("rejected=%s result=%s source=%s diagnostic=%s" % (assoc.is_rejected, p.result, p.result_source, p.diagnostic))
+`
+
+// blockedReader yields a few bytes and then waits to be told to end.
+type blockedReader struct {
+	first   []byte
+	release chan struct{}
+}
+
+func (r *blockedReader) Read(p []byte) (int, error) {
+	if len(r.first) > 0 {
+		n := copy(p, r.first)
+		r.first = r.first[n:]
+		return n, nil
+	}
+	<-r.release
+	return 0, io.EOF
+}
+
+// TestPynetdicomIsRefusedTransientlyDuringShutdown: a store is in flight when
+// Shutdown begins, and pynetdicom, requesting an association during the drain,
+// is accepted by the listener and answered with an A-ASSOCIATE-RJ rejected
+// transient (2), service-provider presentation (3), temporary congestion (1),
+// as PS3.8 Table 9-21 numbers them. It was refused at the TCP level. The store
+// finishes, Shutdown returns nil, and the listener is then closed.
+func TestPynetdicomIsRefusedTransientlyDuringShutdown(t *testing.T) {
+	requirePynetdicom(t)
+	writer := &startedWriter{fileWriter: &fileWriter{dir: t.TempDir()}, started: make(chan struct{}, 1)}
+	server, err := network.StartServer(context.Background(), network.SCPConfig{
+		AETitle: "ARCHIVE", Port: 0, BindAddress: "127.0.0.1",
+	}, writer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(server.Stop)
+	addr := server.Addr()
+	host, port, _ := strings.Cut(addr, ":")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	scu := network.NewSCU(network.SCUConfig{CallingAE: "SENDER", CalledAE: "ARCHIVE", Address: addr})
+	if err := scu.Associate(ctx, []network.PresentationContextItem{{
+		ID: 1, AbstractSyntax: network.CTImageStorageUID, TransferSyntaxes: []string{network.ExplicitVRLittleEndianUID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	reader := &blockedReader{first: []byte("not a whole data set"), release: make(chan struct{})}
+	sent := make(chan error, 1)
+	go func() {
+		_, err := scu.StoreStream(ctx, network.StoreStreamRequest{
+			SOPClassUID: network.CTImageStorageUID, SOPInstanceUID: "1.2.3.4",
+			TransferSyntaxUID: network.ExplicitVRLittleEndianUID, DataSet: reader,
+		})
+		sent <- err
+	}()
+	select {
+	case <-writer.started:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the store never began")
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- server.Shutdown(ctx) }()
+	// Shutdown has begun once a new caller is told to come back; until then
+	// the server is still taking associations, so the script is run again.
+	var out []byte
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		out, err = exec.Command("python3", "-c", refusedScript, host, port).CombinedOutput()
+		if err != nil {
+			t.Fatalf("pynetdicom: %v\n%s", err, out)
+		}
+		if strings.Contains(string(out), "rejected=True") || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Logf("pynetdicom, requesting an association during the drain: %s", strings.TrimSpace(string(out)))
+	want := "rejected=True result=2 source=3 diagnostic=1"
+	if !strings.Contains(string(out), want) {
+		t.Errorf("pynetdicom read %q, want %q", strings.TrimSpace(string(out)), want)
+	}
+
+	close(reader.release)
+	<-sent
+	_ = scu.Release(ctx)
+	if err := <-stopped; err != nil {
+		t.Errorf("Shutdown returned %v, want nil", err)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		conn.Close()
+		t.Error("the listener was left open after the drain")
 	}
 }

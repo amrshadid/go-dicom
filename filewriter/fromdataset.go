@@ -73,6 +73,12 @@ func elementsFromDataset(ds *dataset.Dataset, enclosing []*dataset.Dataset) []*D
 			continue
 		}
 
+		// Made as it is written: redacted pixels, for one.
+		if stream, streamed := elem.GetValue().(*dataelem.StreamedValue); streamed {
+			out = append(out, &DataElement{Tag: t, VR: string(vr), Stream: stream})
+			continue
+		}
+
 		value, err := dataelem.ValueBytes(vr, elem.GetValue())
 		if err != nil {
 			// A value that cannot be rendered is reported rather than written as

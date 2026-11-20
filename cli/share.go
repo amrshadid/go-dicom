@@ -3,10 +3,17 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"image"
+	"math"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/amrshadid/go-dicom/anonymize"
+	"github.com/amrshadid/go-dicom/compress"
+	"github.com/amrshadid/go-dicom/dataset"
+	"github.com/amrshadid/go-dicom/filebase"
+	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
 )
 
@@ -91,59 +98,21 @@ func (sc *ShareCommand) Execute(args []string) error {
 		return fmt.Errorf("share: %v", err)
 	}
 
-	ds, err := readImageDataset(input)
-	if err != nil {
-		return fmt.Errorf("share: %v", err)
-	}
-	if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); !hasPixels {
-		return fmt.Errorf("share: %s has no image", input)
-	}
-
-	// The pixels are all that leaves, so they are all that is checked: the
-	// same rule as anonymize, applied before anything is rendered.
+	// Left in the file and redacted as the pictures are made, a frame at a
+	// time, when the file can be read that way.
+	var written []string
 	detected := -1
-	switch {
-	case sc.preview:
-		// For looking at, not for handing on: the text is all still there.
-		regions, err := anonymize.DetectBurnedInText(ds, nil)
+	handled := false
+	if sc.redact.asked() {
+		written, detected, handled, err = sc.shareRedactedInFile(input, output, opts)
 		if err != nil {
-			return fmt.Errorf("share: %v", err)
-		}
-		opts.outline, detected = regions, len(regions)
-	case sc.redact.asked():
-		// Compressed pixel data is decoded first; nothing is written back,
-		// so the input keeps its form.
-		if err := ds.DecompressInPlace(); err != nil {
-			return fmt.Errorf("share: %v", err)
-		}
-		regions := sc.redact.regions
-		if sc.redact.auto {
-			found, err := anonymize.DetectBurnedInText(ds, nil)
-			if err != nil {
-				return fmt.Errorf("share: %v", err)
-			}
-			if err := checkDetectedShare(ds, found); err != nil {
-				return fmt.Errorf("share: %s: %w", input, err)
-			}
-			regions, detected = append(regions, found...), len(found)
-		}
-		if len(regions) > 0 {
-			if err := ds.RedactPixelRegions(regions...); err != nil {
-				return fmt.Errorf("share: %v", err)
-			}
-		}
-	case !sc.allowBurnedIn:
-		if risk, reason := anonymize.BurnedInRisk(ds); risk {
-			return fmt.Errorf("share: %s may hold text burned into the pixels: %s. "+
-				"Give -redact x,y,width,height for where the text is, -redact auto to fill "+
-				"what a detector finds, -preview to see what it finds, "+
-				"or -allow-burned-in if there is none", input, reason)
+			return fmt.Errorf("share: %w", err)
 		}
 	}
-
-	written, err := writeImages(ds, output, opts)
-	if err != nil {
-		return fmt.Errorf("share: %v", err)
+	if !handled {
+		if written, detected, err = sc.shareWhole(input, output, opts); err != nil {
+			return err
+		}
 	}
 	for _, name := range written {
 		fmt.Printf("Wrote %s\n", name)
@@ -209,4 +178,135 @@ EXAMPLES:
   go-dicom share -redact auto ultrasound.dcm ultrasound.png
   go-dicom share cine.dcm frame.jpg --frame all
 `)
+}
+
+// shareWhole renders input after reading all of it, which is how a file that
+// cannot be read a frame at a time is shared, and how a picture of an image
+// that is not redacted is made. It returns what was written and how many
+// regions a detector found, or -1 when none was asked for.
+func (sc *ShareCommand) shareWhole(input, output string, opts imageOptions) ([]string, int, error) {
+	ds, err := readImageDataset(input)
+	if err != nil {
+		return nil, -1, fmt.Errorf("share: %v", err)
+	}
+	if _, hasPixels := ds.Get(tag.New(0x7FE0, 0x0010)); !hasPixels {
+		return nil, -1, fmt.Errorf("share: %s has no image", input)
+	}
+
+	// The pixels are all that leaves, so they are all that is checked: the
+	// same rule as anonymize, applied before anything is rendered.
+	detected := -1
+	switch {
+	case sc.preview:
+		// For looking at, not for handing on: the text is all still there.
+		regions, err := anonymize.DetectBurnedInText(ds, nil)
+		if err != nil {
+			return nil, -1, fmt.Errorf("share: %v", err)
+		}
+		opts.outline, detected = regions, len(regions)
+	case sc.redact.asked():
+		// Compressed pixel data is decoded first; nothing is written back,
+		// so the input keeps its form.
+		if err := ds.DecompressInPlace(); err != nil {
+			return nil, -1, fmt.Errorf("share: %v", err)
+		}
+		regions := sc.redact.regions
+		if sc.redact.auto {
+			found, err := anonymize.DetectBurnedInText(ds, nil)
+			if err != nil {
+				return nil, -1, fmt.Errorf("share: %v", err)
+			}
+			if err := checkDetectedShare(ds, found); err != nil {
+				return nil, -1, fmt.Errorf("share: %s: %w", input, err)
+			}
+			regions, detected = append(regions, found...), len(found)
+		}
+		if len(regions) > 0 {
+			if err := ds.RedactPixelRegions(regions...); err != nil {
+				return nil, -1, fmt.Errorf("share: %v", err)
+			}
+		}
+	case !sc.allowBurnedIn:
+		if risk, reason := anonymize.BurnedInRisk(ds); risk {
+			return nil, -1, fmt.Errorf("share: %s may hold text burned into the pixels: %s. "+
+				"Give -redact x,y,width,height for where the text is, -redact auto to fill "+
+				"what a detector finds, -preview to see what it finds, "+
+				"or -allow-burned-in if there is none", input, reason)
+		}
+	}
+
+	written, err := writeImages(ds, output, opts)
+	if err != nil {
+		return nil, -1, fmt.Errorf("share: %v", err)
+	}
+	return written, detected, nil
+}
+
+// shareRedactedInFile renders input redacted without reading the image: its
+// Pixel Data stays in the file, a detector looks at it a frame at a time, and
+// the regions are filled, and a compressed image decoded, in each frame as
+// its picture is made. Memory is a frame and not the image. It reports false
+// when the file cannot be read that way, which is shared whole instead.
+func (sc *ShareCommand) shareRedactedInFile(input, output string, opts imageOptions) (written []string, detected int, handled bool, err error) {
+	f, err := os.Open(input)
+	if err != nil {
+		return nil, -1, false, nil
+	}
+	defer func() { _ = f.Close() }()
+	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f),
+		filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: math.MaxUint32})
+	if err != nil {
+		return nil, -1, false, nil
+	}
+	if pixels := df.PixelDataElement(); pixels == nil || pixels.Tag != tag.New(0x7FE0, 0x0010) {
+		return nil, -1, false, nil
+	}
+	// The values are read through source: the file, or for a deflated data
+	// set a source that inflates it again as each is asked for, since the
+	// reader's offsets then count inflated bytes.
+	ds, source, err := df.GetDatasetWithValuesIn(f)
+	if err != nil {
+		return nil, -1, false, nil
+	}
+	if _, left := ds.Get(tag.New(0x7FE0, 0x0010)); !left {
+		return nil, -1, false, nil
+	}
+	syntax := ds.TransferSyntaxUID()
+	if _, err := compress.TransferSyntaxToCompressionType(syntax); syntax == "" ||
+		(compress.IsEncapsulated(syntax) && err != nil) {
+		return nil, -1, false, nil
+	}
+	frames, err := df.FrameReader(source)
+	if err != nil {
+		return nil, -1, false, nil
+	}
+
+	// What the detector looks at is the image as it is, before the regions
+	// given are filled: the same order as when it was all in memory.
+	detected = -1
+	regions := sc.redact.regions
+	if sc.redact.auto {
+		found, err := anonymize.DetectBurnedInTextFrom(ds, frames, nil)
+		if err != nil {
+			return nil, -1, true, err
+		}
+		if err := checkDetectedShare(ds, found); err != nil {
+			return nil, -1, true, fmt.Errorf("%s: %w", input, err)
+		}
+		regions, detected = append(append([]dataset.PixelRegion(nil), regions...), found...), len(found)
+	}
+	if len(regions) > 0 {
+		if err := ds.DecompressRedactingRegions(regions...); err != nil {
+			return nil, -1, true, err
+		}
+	}
+	read, view := ds.FramesAsWritten(frames)
+	written, err = writeRendered(view, output, opts, func(list []int, render *dataset.RenderOptions,
+		use func(int, image.Image) error) error {
+		return view.RenderFramesFrom(read, list, render, use)
+	})
+	if err != nil {
+		return nil, -1, true, err
+	}
+	return written, detected, true, nil
 }

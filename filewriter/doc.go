@@ -144,15 +144,34 @@
 // with its item, which is encoded there to be measured. Without a value
 // source such an element is an error, never an empty value.
 //
+// A deflated file's values are in its inflated bytes, so the source for it is
+// not the file: DICOMFile.GetDatasetWithValuesIn takes the file and returns
+// the source to give SetValueSource, which inflates the file's DEFLATE stream
+// as values are asked for. The writer asks in increasing order, so the stream
+// is inflated once, and a deflated target is compressed as the elements are
+// written; neither holds the data set.
+//
 //	df, _ := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(in),
 //		filereader.ReadOptions{SkipBulkData: true})
-//	ds, err := df.GetDatasetWithValuesInFile()
+//	ds, source, err := df.GetDatasetWithValuesIn(in) // source is in, or for a deflated file its inflated bytes
 //	// ... change the attributes of ds ...
 //	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
-//	w.SetValueSource(in, df.IsLittleEndian)
+//	w.SetValueSource(source, df.IsLittleEndian)
 //	w.SetFileMetaInfo(meta)
 //	_ = w.AddDataElements(filewriter.ElementsFromDataset(ds))
 //	err = w.Write()
+//
+// # Values Made As They Are Written
+//
+// A dataelem.StreamedValue is a value that is produced as the element is
+// written, and ElementsFromDataset sets DataElement.Stream for it. Redacting
+// the pixels of an image left in its file (dataset.Dataset.RedactPixelRegions,
+// anonymize.Anonymizer.CleanPixelData) makes one: the writer calls its
+// WriteValue with the value source, and what it writes is the Pixel Data with
+// the regions filled, native, a part at a time, so the image is never in
+// memory. The bytes are little endian, as a data set holds them, and are
+// reversed for a big endian target. A value that does not come to its stated
+// length is an error, and a target that encapsulates Pixel Data refuses one.
 //
 // # Thread Safety
 //

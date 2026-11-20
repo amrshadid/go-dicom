@@ -696,8 +696,15 @@ func decodeDataTF(data []byte) (*PDataTF, error) {
 			return nil, NewPDUError("PARSE", "failed to read message control header")
 		}
 
-		pdvData := make([]byte, pdvLen-2)
-		if _, err := io.ReadFull(r, pdvData); err != nil {
+		// The data is a slice of the PDU's body, not a copy of it: the body is
+		// allocated for this PDU alone and never reused, so nothing else
+		// writes to it. Copying each fragment out doubled what a received
+		// byte cost. The capacity is cut at the fragment's end, so a caller
+		// that appends to it cannot write over the next fragment.
+		start := len(data) - r.Len()
+		end := start + int(pdvLen-2)
+		pdvData := data[start:end:end]
+		if _, err := r.Seek(int64(end), io.SeekStart); err != nil {
 			return nil, NewPDUError("PARSE", "failed to read PDV data")
 		}
 

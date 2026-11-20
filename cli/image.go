@@ -71,8 +71,7 @@ func convertToImages(input, output string, opts imageOptions) ([]string, error) 
 
 // openFramesInFile reads a file's attributes, every value but Pixel Data,
 // and a reader of its frames by position. It returns a nil reader for a
-// file whose frames are not read that way, which is then read whole: a
-// deflated file, whose positions count in the inflated data set; one that
+// file whose frames are not read that way, which is then read whole: one that
 // names no transfer syntax, or one with no decoder here, whose refusal is
 // the whole read's; Float or Double Float Pixel Data, which is not
 // rendered; and one whose structure does not read, so that the error is
@@ -80,7 +79,7 @@ func convertToImages(input, output string, opts imageOptions) ([]string, error) 
 func openFramesInFile(f *os.File) (*dataset.Dataset, *filereader.FrameReader) {
 	df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(f),
 		filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: math.MaxUint32})
-	if err != nil || df.Deflated {
+	if err != nil {
 		return nil, nil
 	}
 	if pixels := df.PixelDataElement(); pixels == nil || pixels.Tag != tag.New(0x7FE0, 0x0010) {
@@ -92,7 +91,10 @@ func openFramesInFile(f *os.File) (*dataset.Dataset, *filereader.FrameReader) {
 		(compress.IsEncapsulated(syntax) && err != nil) {
 		return nil, nil
 	}
-	frames, err := df.FrameReader(f)
+	// The frames are read by position from the file, or for a deflated file,
+	// whose positions count inflated bytes, from a source that inflates the
+	// stream up to each.
+	frames, err := df.FrameReader(df.ValueSource(f))
 	if err != nil {
 		return nil, nil
 	}

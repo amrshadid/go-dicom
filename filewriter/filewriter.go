@@ -110,6 +110,14 @@ type DataElement struct {
 	// set read with filereader.ReadOptions.SkipBulkData is written back whole:
 	// see filereader.DICOMFile.GetDatasetWithValuesInFile.
 	InFile *dataelem.ValueInFile
+
+	// Stream, when set, says the value is made as it is written: the writer
+	// calls its WriteValue, with the value source (SetValueSource), and what
+	// it writes is the value, as a data set holds it, little endian. Value
+	// and Length are then ignored. It is how an image whose pixels are
+	// redacted while they are copied from the file is written: see
+	// dataset.Dataset.RedactPixelRegions.
+	Stream *dataelem.StreamedValue
 }
 
 // SequenceItem is one item within a Sequence (SQ) element.
@@ -357,6 +365,9 @@ func (dfw *DCMFileWriter) WriteDataElement(elem *DataElement, forceExplicitVR bo
 	if elem.InFile != nil {
 		return dfw.writeValueInFile(elem, forceExplicitVR)
 	}
+	if elem.Stream != nil {
+		return dfw.writeStreamed(elem, forceExplicitVR)
+	}
 
 	// Bits Allocated decides the width Pixel Data is byte-swapped in below, and
 	// precedes it in tag order. A nested writer has its own, so an icon inside a
@@ -569,6 +580,108 @@ func (dfw *DCMFileWriter) writeValueInFile(elem *DataElement, forceExplicitVR bo
 
 	if pad {
 		// The VR's padding byte, as padValueForVR gives a value in memory.
+		if err := dfw.writer.WriteBytes(padValueForVR(vr, []byte{0})[1:]); err != nil {
+			return fmt.Errorf("failed to write data element value: %w", err)
+		}
+		dfw.position++
+	}
+	return nil
+}
+
+// streamWriter is where a streamed value is written: it reverses what it is
+// given to the byte order of the target, in whole numbers, and passes it on.
+type streamWriter struct {
+	dfw *DCMFileWriter
+	// swap is the width numbers are reversed at, or 0 for none; held is the
+	// start of a number whose end has not come yet.
+	swap    int
+	held    []byte
+	written int64
+	err     error
+}
+
+func (s *streamWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	if s.swap > 1 {
+		// Reversed on a copy: the producer may reuse what it passed.
+		whole := append(append([]byte(nil), s.held...), p...)
+		keep := len(whole) % s.swap
+		s.held = append(s.held[:0], whole[len(whole)-keep:]...)
+		whole = whole[:len(whole)-keep]
+		dataelem.SwapBytes(whole, s.swap)
+		p = whole
+	}
+	return n, s.put(p)
+}
+
+// put writes bytes to the output.
+func (s *streamWriter) put(p []byte) error {
+	if len(p) == 0 {
+		return nil
+	}
+	if err := s.dfw.writer.WriteBytes(p); err != nil {
+		s.err = fmt.Errorf("failed to write data element value: %w", err)
+		return s.err
+	}
+	s.written += int64(len(p))
+	s.dfw.position += int64(len(p))
+	return nil
+}
+
+// writeStreamed writes an element whose value is made as it is written. It
+// makes the choices writeValueInFile makes, in the same order: the VR, the
+// byte order, and padding.
+func (dfw *DCMFileWriter) writeStreamed(elem *DataElement, forceExplicitVR bool) error {
+	stream := elem.Stream
+	if stream.WriteValue == nil || stream.Length < 0 || stream.Length >= int64(undefinedLength) {
+		return fmt.Errorf("element %s: %s cannot be written as one value", elem.Tag.String(), stream)
+	}
+	if dfw.encapsulated && elem.Tag == pixelDataTag {
+		// A streamed value is the samples themselves. Written as fragments
+		// it would be an image that decodes to nothing.
+		return fmt.Errorf("element %s: %s is native samples, and the target transfer syntax encapsulates Pixel Data",
+			elem.Tag.String(), stream)
+	}
+
+	vr := elem.VR
+	if len(vr) != 2 {
+		vr = "UN"
+	}
+	// The value arrives little endian, as a data set holds it.
+	swapWidth := 0
+	if !dfw.littleEndian && dataelem.IsByteOrderSensitive(dataelem.VR(vr)) {
+		swapWidth = dataelem.PixelDataSwapWidth(dataelem.VR(vr), 0)
+		if elem.Tag == pixelDataTag {
+			swapWidth = dataelem.PixelDataSwapWidth(dataelem.VR(vr), dfw.bitsAllocated)
+		}
+	}
+
+	length := uint32(stream.Length)
+	pad := length%2 != 0
+	if pad {
+		length++
+	}
+	if err := dfw.writeHeader(elem.Tag, vr, length, dfw.explicitVR || forceExplicitVR); err != nil {
+		return err
+	}
+
+	out := &streamWriter{dfw: dfw, swap: swapWidth}
+	if err := stream.WriteValue(dfw.source, dfw.sourceLittleEndian, out); err != nil {
+		if out.err != nil {
+			return out.err
+		}
+		return fmt.Errorf("element %s: making its value: %w", elem.Tag.String(), err)
+	}
+	// A number that did not end is written as it is, which is what reversing
+	// a value does to bytes short of a whole number.
+	if err := out.put(out.held); err != nil {
+		return err
+	}
+	if out.written != stream.Length {
+		return fmt.Errorf("element %s: its value is %d bytes and %d were made", elem.Tag.String(), stream.Length, out.written)
+	}
+
+	if pad {
 		if err := dfw.writer.WriteBytes(padValueForVR(vr, []byte{0})[1:]); err != nil {
 			return fmt.Errorf("failed to write data element value: %w", err)
 		}
@@ -922,36 +1035,57 @@ func (dfw *DICOMFileWriter) Write() error {
 // DEFLATE-compressed after the file meta header (PS3.5 Annex A.5).
 const DeflatedExplicitVRLittleEndianUID = "1.2.840.10008.1.2.1.99"
 
-// writeDeflatedDataSet serializes the elements, compresses them, and writes the
-// result after the meta header.
+// writeDeflatedDataSet serializes the elements through a DEFLATE stream onto
+// the file, after the meta header.
 //
-// The elements are encoded to memory first because DEFLATE has to see the whole
-// data set: it is a single stream over the body, not a per-element encoding.
+// DEFLATE is a single stream over the body, not a per-element encoding, but it
+// does not need the body whole: each element is encoded as it is reached and
+// goes through the compressor, so the memory is the compressor's and one
+// element's, and a value copied from a value source (SetValueSource) is a
+// megabyte at a time. The body was encoded to memory first, which made
+// rewriting a deflated file as large as it was inflated.
 func (dfw *DICOMFileWriter) writeDeflatedDataSet() error {
-	raw, err := dfw.writer.encodeElements(dfw.dataElements, false)
-	if err != nil {
-		return fmt.Errorf("failed to encode data set for deflating: %w", err)
-	}
-
-	var compressed bytes.Buffer
-	zw, err := flate.NewWriter(&compressed, flate.DefaultCompression)
+	zw, err := flate.NewWriter(dfw.writer.writer, flate.DefaultCompression)
 	if err != nil {
 		return fmt.Errorf("failed to start the deflate stream: %w", err)
 	}
-	if _, err := zw.Write(raw); err != nil {
-		_ = zw.Close()
-		return fmt.Errorf("failed to deflate the data set: %w", err)
+
+	nested := NewDCMFileWriter(filebase.NewFileWriter(&streamSink{w: zw}))
+	nested.explicitVR = dfw.writer.explicitVR
+	nested.littleEndian = dfw.writer.littleEndian
+	nested.source, nested.sourceLittleEndian = dfw.writer.source, dfw.writer.sourceLittleEndian
+	for _, e := range dfw.dataElements {
+		if e == nil {
+			continue
+		}
+		if err := nested.WriteDataElement(e, false); err != nil {
+			_ = zw.Close()
+			return fmt.Errorf("failed to encode data set for deflating: %w", err)
+		}
 	}
+
 	// Close flushes the final block; a stream left unclosed decompresses short.
 	if err := zw.Close(); err != nil {
 		return fmt.Errorf("failed to finish the deflate stream: %w", err)
 	}
-
-	if err := dfw.writer.writer.WriteBytes(compressed.Bytes()); err != nil {
-		return fmt.Errorf("failed to write the deflated data set: %w", err)
-	}
 	return nil
 }
+
+// streamSink is the io.WriteSeeker a scratch writer writes through onto a
+// stream. Only append-style writing is used, so Seek reports what has been
+// written.
+type streamSink struct {
+	w io.Writer
+	n int64
+}
+
+func (s *streamSink) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	s.n += int64(n)
+	return n, err
+}
+
+func (s *streamSink) Seek(_ int64, _ int) (int64, error) { return s.n, nil }
 
 // Close closes the writer.
 func (dfw *DICOMFileWriter) Close() error {

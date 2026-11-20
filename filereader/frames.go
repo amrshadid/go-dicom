@@ -42,7 +42,8 @@ import (
 // every value and fragment is and reads none of them. Under the Deflated
 // transfer syntax the positions, and so the ranges, count from the first
 // byte of the inflated data set (see DICOMFile.Deflated), and src has to be
-// that.
+// that: DICOMFile.ValueSource(file) gives it, by inflating the file's stream
+// as ranges are read.
 func (df *DICOMFile) FrameRanges(src io.ReaderAt) ([][]encaps.Range, error) {
 	pixelData := df.PixelDataElement()
 	if pixelData == nil {

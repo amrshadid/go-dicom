@@ -34,11 +34,12 @@ package anonymize
 
 // safePrivateAttributes are the private attributes the Retain Safe Private
 // Option keeps (PS3.15 E.3.10): {len(rows)} entries, each a private creator, its
-// group and the element within the creator's block.
-var safePrivateAttributes = map[safePrivateKey]bool{{"""]
+// group and the element within the creator's block, mapped to the value
+// representation the table gives it.
+var safePrivateAttributes = map[safePrivateKey]string{{"""]
 for group, creator, element, vr in rows:
     creator_go = '"' + creator.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    out.append(f"\t{{0x{group:04X}, {creator_go}, 0x{element:02X}}}: true, // {vr}")
+    out.append(f"\t{{0x{group:04X}, {creator_go}, 0x{element:02X}}}: \"{vr}\",")
 out.append("}")
 print("\n".join(out))
 print(f"{len(rows)} safe private attributes", file=sys.stderr)

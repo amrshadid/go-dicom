@@ -933,6 +933,9 @@ func isEmpty(elem *dataelem.DataElement, isSeq bool, seq *sequence.Sequence) boo
 	if v, inFile := elem.GetValue().(dataelem.ValueInFile); inFile {
 		return v.Length == 0
 	}
+	if v, streamed := elem.GetValue().(*dataelem.StreamedValue); streamed {
+		return v.Length == 0
+	}
 	// Through Bytes, so a value held as a []string or a number is judged as the
 	// same value read from a file (#420); a value that holds no bytes is not
 	// empty, it is something this cannot see into.

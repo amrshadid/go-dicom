@@ -7,6 +7,290 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A deflated file can be read and rewritten with its values left in it.**
+  `GetDatasetWithValuesInFile` refused a deflated file, because its values are
+  in the inflated bytes and not in the file to be copied from, so a program
+  that rewrote files in place (de-identifying them, say) had to read a deflated
+  one whole, or refuse it. `DICOMFile.GetDatasetWithValuesIn(file)` returns the
+  data set with its values left, and the source to give `filewriter`'s
+  `SetValueSource`: the file itself, or for a deflated file a source of the
+  inflated data set that inflates the file's DEFLATE stream as values are asked
+  for, forward only and starting again from the start of the data set when a
+  range lies behind. A writer copying values in increasing order inflates the
+  stream once. `DICOMFile.ValueSource(file)` is that source alone, for
+  `FrameReader` and for a program that reads values by position. The old method
+  still refuses a deflated file, now naming the new one, since a writer given
+  the file itself would copy the wrong bytes. The output is the same bytes a
+  whole read writes: checked for pydicom's deflated file and for deflated files
+  made with dcmtk's `dcmconv +td` from corpus images, and read back the same by
+  `dcmdump` and pydicom.
+
+- **The DICOM JSON of a header can be written without linking the codecs.**
+  The only DICOM JSON writer (PS3.18 Annex F) was `Dataset.ToDICOMJSON`, so a
+  program that read a file with `filereader/attributes` to avoid the image
+  codecs linked them all again as soon as it wanted the JSON of what it read.
+  `attributes.DICOMJSON` (and `DICOMJSONWithContext`) writes the document from
+  the elements `attributes.Read` returns: text decoded under the Specific
+  Character Set as `GetDataset` decodes it, nested sequences, PN as
+  Alphabetic, Ideographic and Phonetic, numbers for IS, DS and the binary
+  numeric VRs, AT, InlineBinary. `JSONOptions.BulkData` is a hook called for
+  each value with its VR, tag, the sequences it is in, and its offset and
+  length in the file; it returns a `BulkDataURI` for the values it chooses or
+  leaves them out, which is how a header of a file read with `SkipBulkData` is
+  written with its pixels left where they are. There is one implementation,
+  not two: `dataset` writes through the same code, so for every file of
+  pydicom's corpus and of the repository's test data (180 files) the two
+  documents are equal byte for byte, and a test holds them to it. The package
+  still links none of `dataset`, `dataelem` or the codecs, which its existing
+  test checks. `dataset.DICOMJSONElement` is now an alias of the type
+  `attributes.JSONElement` names; its fields and methods are unchanged.
+
+- **The order of a data set's tags is reported as values.**
+  `DICOMFile.TagOrderViolations` lists each data element whose tag is not
+  greater than the one before it in its data set or sequence item (PS3.5 7.1),
+  with both tags, its offset, whether it is in an item and whether it repeats,
+  up to a thousand; `TagOrderViolationCount` counts them all. The warning in
+  `Warnings` is unchanged; a program acts on these instead of matching its
+  words.
+
+- **A private sequence that arrives as UN can be walked.**
+  `network.DecodeUNSequence` reads the value of a UN element as the items of a
+  sequence, in Implicit VR Little Endian as PS3.5 6.2.2 has it, and refuses
+  bytes that are not items: a value that does not start with an item, bytes
+  after the last one, an item or element cut short or running past the length
+  of what holds it, an item or nested sequence of undefined length with no
+  delimiter before the end, and a Sequence Delimitation Item inside an item.
+  A received data set is still read leniently, as far as it goes. The reader keeps a defined-length UN value as
+  bytes, since it cannot tell items from other bytes; a caller that knows the
+  tag holds a sequence now reads it. Checked against pydicom's own conversion
+  of the same value.
+
+- **`SCU.StoreStream` sends a stored file as it is.** `Store` encodes a data
+  set and may transcode it to a syntax the peer accepted, so a program that
+  keeps instances as files could not send the bytes it had stored. `StoreStream`
+  takes a `StoreStreamRequest` (the SOP class, the SOP instance, the transfer
+  syntax and an `io.Reader` over the encoded data set), uses only the accepted
+  presentation context with exactly that SOP class and transfer syntax (the
+  error names both when there is none), and sends the fragments as the reader
+  yields them, holding two at a time: a 512 MB data set is sent with the heap
+  under 16 MB. It returns the peer's status word, a warning (0xB000, 0xB006,
+  0xB007) or a refusal included, with a nil error; the error is for a failed
+  transport or reader. A reader that fails partway gets an A-ABORT before any
+  fragment is marked last, so the peer never receives a data set cut short.
+  `StoreStreamRequestFromFile` builds the request from a Part 10 file, reading
+  its File Meta Information for the UIDs, the syntax and where the data set
+  begins. Checked against dcmtk's `storescp` and a pynetdicom SCP: the data
+  set each stored equals the file's, byte for byte, in seven transfer syntaxes.
+
+- **`dicomweb.Client.StoreStream` sends a study that is not in memory.**
+  `Store` takes every file as a byte slice and builds the whole request body
+  before sending it, so an archive storing a study to another server had to
+  hold the study twice. `StoreStream` takes a function that returns each
+  instance's Part 10 bytes as a reader, and `io.EOF` after the last, and
+  writes the multipart/related body through a pipe as they are read, a part
+  for each reader and the body chunked: 2,000 instances of 1 MB (2 GB) are
+  sent with the heap under 16 MiB, to this library's server and to one that
+  only reads. The result is `Store`'s. An error from a reader ends the body
+  without its closing boundary, so the server cannot take it for a whole
+  request. No STOW-RS server of another project was available; the chunked
+  body was read by aiohttp's HTTP and multipart parsers and each part by
+  pydicom, byte for byte.
+
+- **A server can take a listener the caller made.** `ListenAndServe` and
+  `StartServer` bind the address from `BindAddress` and `Port` themselves, so
+  a program that has to choose how the socket is made, which of IPv4 and IPv6
+  a wildcard covers or a descriptor handed to it, could not, and one that
+  bound a probe socket to find a free port left a window in which another
+  process could take it. `SCP.Serve(ctx, listener)` and
+  `StartServerOn(ctx, config, handler, listener)` serve on a listener the
+  caller bound, so there is no window between the bind and the serving: a
+  caller that connected before `Serve` began is answered when it does.
+  A TLS configuration wraps the listener as it does one the server made, and
+  `Close`, `Stop` and the end of a `Shutdown` drain close it. Checked with
+  dcmtk's `echoscu` and pynetdicom, on the loopback and on the IPv4
+  wildcard; neither takes an IPv6 literal, so an IPv6 loopback listener is
+  checked in the package's own tests only.
+
+- **PS3.15 Table E.1-1 as data.** `anonymize.ProfileTable`,
+  `ProfileEntries` and `LookupProfileEntry` return every attribute of the
+  table with its name, its code in the Basic Profile column and its code in
+  each option column (`ProfileColumn`: retain safe private, UIDs, device
+  identity, institution identity, patient characteristics, longitudinal
+  temporal information with full or modified dates, clean descriptors, clean
+  structured content, clean graphics), as the standard writes them: `X/Z/D`,
+  `X/D`, `Z/D`, `X/Z` and `X/Z/U*` are not resolved. `ProfileTableEdition`
+  names the edition the table was generated from (2026d). The option columns
+  come from the standard's own DocBook source, through the new
+  `scripts/ps315-table.py`, and not from the library's option switches. What
+  comes back is a copy.
+
+- **PS3.15 Table E.3.10-1, the safe private attributes, as a lookup.**
+  `anonymize.LookupSafePrivate(group, creator, element)` reports whether the
+  table lists a private attribute as safe and gives its value representation,
+  and `SafePrivateEntries` iterates the 479 rows. The table already held the
+  value representation, in a comment; it is now data (empty for five
+  SIEMENS Ultrasound SC2000 rows whose VR the standard leaves blank).
+  `SafePrivateEdition` names the edition (2026d).
+
+- **The de-identification method record, exported.**
+  `anonymize.RecordDeidentificationMethod(ds, codes, record)` writes Patient
+  Identity Removed (0012,0062), De-identification Method (0012,0063),
+  De-identification Method Code Sequence (0012,0064) and, when the
+  `MethodRecord` names them, Burned In Annotation (0028,0301) and
+  Longitudinal Temporal Information Modified (0028,0303). The 13 codes of
+  PS3.16 CID 7050 are the constants `MethodBasicProfile` ...
+  `MethodRetainInstitutionIdentity` (type `MethodCodeValue`, with `Meaning()`
+  and `Code()` giving the scheme DCM and the meaning), checked against
+  pydicom's table. `Anonymize` and `CleanPixelData` record through it, so the
+  library has one implementation.
+
+- **A repeated or out-of-order data element is warned of.** PS3.5 7.1 puts
+  the data elements of a data set in increasing tag order, each tag once. When
+  the reader meets an element whose tag is not greater than the one before it,
+  in the data set or inside the same item of a sequence, it adds a warning to
+  `DICOMFile.Warnings` naming both tags and the offset (the first ten of a file,
+  then a count of the rest). The elements are kept as read. `show --json` shows
+  it in `warnings`, which stays an array of strings at `schemaVersion` 1.
+  None of the 78 `.dcm` files of pydicom's corpus gets one.
+
+- **Text hidden in a JPEG stream is found and removed.** A comment (COM) or
+  application (APPn) segment in the frames of encapsulated JPEG Pixel Data is
+  neither an attribute nor a pixel, so no profile touched it.
+  `anonymize.JPEGSegmentText` reads those segments of every frame of Baseline,
+  Extended, Lossless and JPEG-LS data and returns their text, and the bytes
+  after the end-of-image marker; `RemoveJPEGText` (and
+  `Anonymizer.SetRemoveJPEGText`, which makes `Anonymize` call it) removes
+  them without decoding or encoding the image data. APP0 JFIF (without its
+  thumbnail), APP14 Adobe and, in JPEG-LS, the APP8 `mrfx` color transform
+  stay, since they decide how the samples are read. Checked on ten corpus files
+  and four dcmtk encodings: the cleaned frames decode, in this library, in
+  dcmtk's `dcmdjpeg` and `dcmdjpls` and in pydicom, to the same samples as the
+  untouched file, and the image data is the same bytes. JPEG 2000 is not
+  searched and returns `ErrJPEGSegmentsNotSearched`.
+
+### Changed
+
+- **A deflated file is no longer inflated into memory to be read in place.**
+  A read with `SkipBulkData` of a deflated file inflated the whole data set into
+  one slice to find where the values end, so a 200 MB value cost 200 MB, and
+  the file writer encoded a deflated data set whole before compressing it.
+  Both are streams now: the read measures the DEFLATE stream once, so
+  `MaxInflatedDatasetSize` and the ratio bound refuse a deflate bomb with the
+  same error as before, then reads it forward, inflating and dropping a value it
+  skips; the writer compresses each element as it is reached. `go-dicom
+  anonymize` of a deflated file with a 200 MB value took 848 MB of resident
+  memory and takes 32 MB, with the same output byte for byte; `show`, `diff`,
+  `validate`, `image` and the DICOMweb frame and bulk data resources of a
+  deflated file no longer read it whole either.
+
+- **A received data fragment is no longer copied out of its PDU.** Each
+  fragment of a P-DATA-TF is a slice of the PDU's body, capped at its own end.
+  A 64 KiB PDU cost 139,529 bytes to read and costs 73,992, and reads at
+  twice the rate.
+
+- **`Server.Shutdown` refuses a new caller as transient, as it documents.**
+  Shutdown closed the listener at once, so a caller arriving while the
+  associations in progress finished met a refused TCP connection, and only a
+  connection already open was answered with the A-ASSOCIATE-RJ,
+  rejected-transient, service-provider (presentation), temporary-congestion,
+  that tells a caller to try again later. A modality treats a refused
+  connection as a failure and may not retry; one that is told to retry later
+  does, which is what PS3.8 Table 9-21 provides the reason for and what the
+  documentation of `Shutdown` has always said. The server now keeps accepting
+  while it drains and refuses each new association that way, and closes the
+  listener when the drain ends: when no association is left, at once for an
+  idle server, or at the bound of the context. A server that is not draining
+  is unchanged, and so is what happens to an association in progress.
+  Checked with pynetdicom, which read the refusal as result 2, source 3,
+  diagnostic 1.
+
+- **Redacting the pixels of an image holds a frame, not the image.**
+  `CleanPixelData`, `RedactDetectedText` and the `-redact` options of
+  `anonymize` and `share` decoded every frame of the image, filled a copy of
+  it, and held a clone of the data set under that: 500 frames of 1024 by 1024
+  16-bit samples (1 GB) took 3.4 GB peak resident to redact when native and
+  5.9 GB when RLE Lossless or JPEG-LS compressed. The pixels now stay in the
+  input file and are filled as the output is written, a frame at a time: native
+  samples are read and written a megabyte at a time with the region's bytes
+  worked out from Rows, Columns, Bits Allocated, Samples per Pixel and Planar
+  Configuration, and a compressed frame is read, decoded, filled and written
+  before the next is read. `anonymize` takes 24 MB for the native image and
+  45 to 49 MB for the compressed ones. What is written is unchanged: the same
+  bytes for every file of pydicom's corpus, with regions, with `-redact auto`
+  and with both, and the same pictures from `share`. The image still comes
+  out native (a compressed image is decoded, not encoded again), so Lossy
+  Image Compression and the method recorded are as they were. An image whose
+  frames will not decode is refused when it is written, no longer when it is
+  read, and no file is left.
+
+  For a program, `CleanPixelData` and `RedactPixelRegions` work on a data set
+  read with `GetDatasetWithValuesInFile`: the Pixel Data becomes a
+  `dataelem.StreamedValue` that `filewriter` fills as it copies the pixels from
+  the file given to `SetValueSource`. `Dataset.DecompressRedactingRegions`
+  does `DecompressInPlace` and `RedactPixelRegions` in one pass, a frame at a
+  time, and for a data set in memory needs the decoded image once and not
+  twice. `RedactDetectedTextFrom` and `DetectBurnedInTextFrom` look for text in
+  frames read from the file, and `Dataset.FramesAsWritten` is the frames of an
+  image with regions filled for `RenderFramesFrom` to render.
+  `DetectBurnedInText` renders a frame at a time too.
+
+### Fixed
+
+- **A server that is stopping admits no caller, whatever its admission
+  function answers.** An admission function that returns once its context
+  ends, as it should, made its answer and the stop ready at the same moment,
+  and the server took either at random: about half the time it admitted the
+  caller to a server that was stopping, whose association then failed as a
+  receive error instead of being refused. Stopping now wins. Seen as a rare
+  failure of `TestStoppingServerDoesNotBlameTheFunction` on a loaded CI
+  machine; `TestStoppingServerAdmitsNoCallerWhateverTheFunctionAnswers` makes
+  the two ready together and admitted the caller in 85 of 200 rounds before.
+
+- **`StoreStream` no longer sends a truncated data set as complete.** It took
+  a reader's `io.ErrUnexpectedEOF`, the usual word of a reader whose source
+  was cut short, for the end of the data set, and sent the bytes it had as the
+  whole: the peer then refused a data set it could not parse. Only `io.EOF`
+  ends it now; any other error is answered with an A-ABORT before the last
+  fragment, like every reader failure.
+
+- **Overlay and curve data are matched in their own groups only.** The
+  profile's (60xx,3000), (60xx,4000) and (50xx,xxxx) matched a private odd
+  group such as 6001 too, in `LookupProfileEntry` and in the anonymizer's own
+  rules. PS3.5 7.6 numbers the repeating groups xx00 to xx1E, even only; an
+  odd group is private (PS3.5 7.8).
+
+- **`valuerep.IsValidVR` takes OV, SV and UV.** The three 64-bit VRs of PS3.5
+  6.2 were missing from its table, though the rest of the library knows them.
+
+- **An invalid first PDU is answered with an A-ABORT, not a closed
+  connection.** An SCP waiting for the A-ASSOCIATE-RQ closed the connection in
+  silence on a PDU type that does not exist and on an A-ASSOCIATE-RQ whose
+  items or length were bad, so the sender learned only that the connection was
+  gone. PS3.8 Table 9-10 has the acceptor in Sta2 send an A-ABORT with the
+  service-provider as source for these (AA-1) and wait for the peer to close:
+  now reason 1 (unrecognized PDU), 2 (unexpected PDU) for a P-DATA-TF,
+  A-ASSOCIATE-AC, A-ASSOCIATE-RJ or A-RELEASE, or 6 (invalid PDU parameter
+  value), the same for a connection turned away at the association limit.
+  An A-ABORT as the first PDU, which was answered with an A-ABORT of the SCP's
+  own, now closes the connection and nothing else (AA-2). A PDU cut short by
+  the connection closing gets nothing, as before: it is not yet an invalid
+  PDU. dcmtk 3.7 `storescp` leaves an unrecognized or malformed first PDU
+  unanswered; pynetdicom 2.1 answers it with an A-ABORT.
+
+- **`BasicProfileTemplate` and the templates built on it de-identified far less
+  than the Basic Profile.** The template held 39 attributes, and an
+  `Anonymizer` applies a template's actions before the profile's own table, so
+  a program that gave one to `ApplyTemplate` or `SetTemplate` kept Patient's
+  Sex, Age, Size and Weight, among others. Over pydicom's corpus the template
+  kept Patient's Sex in 52 files, Age in 26, Weight in 17 and Size in 7 that
+  the Basic Profile empties or removes (53 of 79 files differed). The
+  template, and `CleanDescriptorsTemplate`, `RetainDatesTemplate` and
+  `RetainDeviceTemplate`, now hold every attribute of Table E.1-1 with the
+  action the profile applies; Patient's Name and ID are now emptied, as the
+  profile does, and no longer replaced by `ANONYMOUS` and a random identifier.
+
 ## [1.11.0] - 2026-11-19
 
 The largest release so far. The library now writes every compressed syntax

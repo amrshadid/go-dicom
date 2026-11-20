@@ -65,6 +65,15 @@ func (ds *Dataset) DecompressInPlace() error {
 	if err := ds.SetValue(pixelData, samples); err != nil {
 		return fmt.Errorf("decompress: %w", err)
 	}
+	describeDecompressed(ds, info)
+	return nil
+}
+
+// describeDecompressed makes ds describe the samples DecompressInPlace and
+// DecompressRedactingRegions leave in its Pixel Data: the transfer syntax,
+// Planar Configuration and the photometric interpretation that decoding
+// changes. info is what ds described before.
+func describeDecompressed(ds *Dataset, info *PixelDataInfo) {
 	ds.SetTransferSyntaxUID("1.2.840.10008.1.2.1")
 
 	if info.SamplesPerPixel > 1 {
@@ -78,7 +87,6 @@ func (ds *Dataset) DecompressInPlace() error {
 	case "YBR_RCT", "YBR_ICT":
 		replaceElement(ds, tag.New(0x0028, 0x0004), dataelem.CS, []byte("RGB "))
 	}
-	return nil
 }
 
 // DecodeFrame decodes one compressed frame of this image into its samples:

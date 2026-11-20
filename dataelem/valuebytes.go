@@ -64,6 +64,10 @@ func ValueBytes(vr VR, value any) ([]byte, error) {
 		// reference as nothing would send or write an empty image that
 		// looks complete.
 		return nil, fmt.Errorf("the value is not in memory: %s; only filewriter, given that file, can write it", v)
+	case *StreamedValue:
+		// Made as the element is written, from a file this function cannot
+		// see, for the same reason.
+		return nil, fmt.Errorf("the value is not in memory: %s; only filewriter, given its source, can write it", v)
 	}
 
 	numbers, ok := numericValues(value)

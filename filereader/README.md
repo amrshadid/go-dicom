@@ -2,7 +2,7 @@
 
 DICOM file reading with preamble/DICM validation, file meta information parsing, transfer syntax detection, and data element decoding. Supports both high-level and sequential low-level access.
 
-To read attributes without linking the codecs, use [`filereader/attributes`](attributes/README.md): the same parser and element types, without `compress`, `encaps`, `pixels`, `waveforms` or `dataset`.
+To read attributes without linking the codecs, use [`filereader/attributes`](attributes/README.md): the same parser and element types, without `compress`, `encaps`, `pixels`, `waveforms` or `dataset`. Its `DICOMJSON` writes the DICOM JSON (PS3.18 Annex F) of the elements it reads, the same document `Dataset.ToDICOMJSON` writes, so a header's JSON does not bring the codecs back.
 
 ## Quick Start
 
@@ -64,8 +64,18 @@ type ValueTooLongError struct {
 
 // A file read that way as a data set whose skipped values say where they
 // are (dataelem.ValueInFile), for filewriter to copy them from the file
-// with SetValueSource. A deflated file is refused.
+// with SetValueSource. A deflated file is refused by this one: its offsets
+// count inflated bytes, which are not in the file.
 func (df *DICOMFile) GetDatasetWithValuesInFile() (*dataset.Dataset, error)
+
+// The same for a file of either kind, given the file it was read from, with
+// the source to give SetValueSource: the file, or for a deflated one a source
+// that inflates the file's DEFLATE stream as the values are asked for, once
+// for values copied in increasing order, in the memory of a window of it and
+// not of the data set. ValueSource is the source alone, for FrameReader and
+// for a program that reads values by Position.ValueOffset.
+func (df *DICOMFile) GetDatasetWithValuesIn(file io.ReaderAt) (*dataset.Dataset, io.ReaderAt, error)
+func (df *DICOMFile) ValueSource(file io.ReaderAt) io.ReaderAt
 
 // Where each frame lies in the file, and a reader of them by position: a
 // frame, or part of a native one. A FrameReader is a dataset.FrameReader,

@@ -42,6 +42,11 @@
 // A server answers for each instance, and may keep some and refuse others:
 // the [StoreResult] says which, and why.
 //
+// [Client.StoreStream] sends instances that are not in memory: it is given a
+// function that returns each instance's Part 10 bytes as a reader, and writes
+// the request body through a pipe as they are read, so memory does not grow
+// with the study. The body goes out chunked, one part for each reader.
+//
 // # Limits
 //
 // A response is read up to [DefaultMaxResponseBytes] unless

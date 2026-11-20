@@ -228,16 +228,21 @@ type anonymizeRead struct {
 
 // anonymizeFile reads input, de-identifies it and writes it to output.
 //
-// Unless the pixels are to be changed, they are not read (#331): Pixel Data,
-// and any binary value over a megabyte, stays in the input file and is copied
-// from there into the output as it is written, so memory follows the
-// attributes and not the image. The output is the same, byte for byte, as
-// when the file is read whole: the values left behind are ones the profiles
-// keep or remove whole, never read or replace, and an element the
-// anonymizer removes or replaces takes its reference with it.
+// The pixels are not read (#331): Pixel Data, and any binary value over a
+// megabyte, stays in the input file and is copied from there into the output
+// as it is written, so memory follows the attributes and not the image. The
+// output is the same, byte for byte, as when the file is read whole: the
+// values left behind are ones the profiles keep or remove whole, never read
+// or replace, and an element the anonymizer removes or replaces takes its
+// reference with it.
+//
+// That holds when the pixels are redacted. The regions are filled, and a
+// compressed image decoded to fill them, as the output is written, a frame
+// at a time, and what a detector is asked about is read from the file the
+// same way: memory is a frame, not the image.
 func (ac *AnonymizeCommand) anonymizeFile(anonymizer *anonymize.Anonymizer, input, output string) error {
 	return ac.anonymizeFileAs(anonymizer, input, output,
-		anonymizeRead{whole: ac.redact.asked(), threshold: leftInFileAbove})
+		anonymizeRead{threshold: leftInFileAbove})
 }
 
 // anonymizeFileAs is anonymizeFile, reading as read says.
@@ -250,7 +255,7 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 	// from it then.
 	defer in.Close()
 
-	df, ds, inFile, err := readForAnonymizing(in, read)
+	df, ds, source, err := readForAnonymizing(in, read)
 	if err != nil {
 		return errNotDICOM
 	}
@@ -282,7 +287,20 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 			if ac.redact.auto {
 				// The detector's regions, filled and recorded as its own:
 				// nothing here says the image is now clean.
-				regions, err := anonymizer.RedactDetectedText(ds, nil)
+				var regions []dataset.PixelRegion
+				var err error
+				if source != nil {
+					// The frames are read through the source the values are
+					// copied from: the file, or for a deflated data set the
+					// inflating source, whose offsets are the ones the reader
+					// recorded.
+					var frames *filereader.FrameReader
+					if frames, err = df.FrameReader(source); err == nil {
+						regions, err = anonymizer.RedactDetectedTextFrom(ds, frames, nil)
+					}
+				} else {
+					regions, err = anonymizer.RedactDetectedText(ds, nil)
+				}
 				if err != nil {
 					return implausibleHint(err)
 				}
@@ -324,8 +342,8 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 		return err
 	}
 	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
-	if inFile {
-		w.SetValueSource(in, df.IsLittleEndian)
+	if source != nil {
+		w.SetValueSource(source, df.IsLittleEndian)
 	}
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    sopClass,
@@ -347,28 +365,30 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 	return nil
 }
 
-// readForAnonymizing reads the input as read asks, and reports whether some
-// values were left in the file. A deflated data set is read whole whatever was
-// asked: its values are in the inflated bytes, not in the file. So is a file
-// that cannot be read the other way, so it fails, or not, as it always did.
-func readForAnonymizing(in *os.File, read anonymizeRead) (*filereader.DICOMFile, *dataset.Dataset, bool, error) {
+// readForAnonymizing reads the input as read asks. It returns the source the
+// values left in the file are copied from, or nil when none were: the file
+// itself, or for a deflated data set, whose offsets count inflated bytes, a
+// source that inflates the stream as the writer asks for each value in turn
+// (DICOMFile.GetDatasetWithValuesIn). A file that cannot be read the other way
+// is read whole, so it fails, or not, as it always did.
+func readForAnonymizing(in *os.File, read anonymizeRead) (*filereader.DICOMFile, *dataset.Dataset, io.ReaderAt, error) {
 	if !read.whole {
 		df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(in),
 			filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: read.threshold})
-		if err == nil && !df.Deflated {
-			if ds, err := df.GetDatasetWithValuesInFile(); err == nil {
-				return df, ds, true, nil
+		if err == nil {
+			if ds, source, err := df.GetDatasetWithValuesIn(in); err == nil {
+				return df, ds, source, nil
 			}
 		}
 		if _, err := in.Seek(0, io.SeekStart); err != nil {
-			return nil, nil, false, err
+			return nil, nil, nil, err
 		}
 	}
 	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(in))
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, err
 	}
-	return df, df.GetDataset(), false, nil
+	return df, df.GetDataset(), nil, nil
 }
 
 // datasetText reads a text value without its padding.

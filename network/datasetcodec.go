@@ -38,6 +38,18 @@ type transferSyntaxEncoding struct {
 	// Encapsulated means Pixel Data is carried as fragments, which PS3.5 A.4
 	// requires be sent with undefined length.
 	Encapsulated bool
+
+	// strict refuses what a received data set is forgiven: a sequence or item
+	// cut short, an undefined length with no delimiter before the end, and an
+	// element or item that runs past the length of what holds it. A received
+	// data set is read leniently, as it always was; DecodeUNSequence, which
+	// must tell items from bytes that only resemble them, reads strictly.
+	strict bool
+}
+
+// errTruncated is the strict reader's refusal of a value cut short.
+func errTruncated(what string) error {
+	return NewPDUErrorf("DECODE_DS", "%s; the value is not a whole sequence", what)
 }
 
 // encodingForTransferSyntax maps a transfer syntax UID onto its wire encoding.
@@ -117,6 +129,45 @@ func DecodeDataset(data []byte, transferSyntax string) (*dataset.Dataset, error)
 	return decodeDataset(context.Background(), data, transferSyntax)
 }
 
+// DecodeUNSequence parses the value of an element whose VR is UN as the items
+// of a sequence, for a private sequence that arrives as UN with a defined
+// length: a sender that did not know the tag sends its value as it found it,
+// and PS3.5 6.2.2 says such a value is encoded in Implicit VR Little Endian,
+// whatever the transfer syntax around it. The reader keeps a defined-length
+// UN value as bytes, as it cannot tell items from other bytes; a caller that
+// knows the tag is a sequence walks it with this.
+//
+// The value must be items and nothing else: it starts with an Item tag
+// (FFFE,E000), each item is of defined or undefined length, and the items end
+// where the value does (a Sequence Delimitation Item there is accepted). It is
+// read strictly, unlike a received data set: an item or element cut short or
+// running past the length of what holds it, an undefined length with no
+// delimiter before the end, and a Sequence Delimitation Item inside an item
+// are each refused with an error rather than read as far as they go. Nesting
+// is bounded as for a received data set.
+func DecodeUNSequence(value []byte) (*sequence.Sequence, error) {
+	return decodeUNSequence(context.Background(), value)
+}
+
+func decodeUNSequence(ctx context.Context, value []byte) (*sequence.Sequence, error) {
+	if len(value) == 0 {
+		return sequence.New(), nil
+	}
+	order := binary.LittleEndian
+	if len(value) < 8 || order.Uint16(value[0:]) != tag.ItemTag.Group() || order.Uint16(value[2:]) != tag.ItemTag.Element() {
+		return nil, NewPDUErrorf("DECODE_DS", "the value does not begin with an item (FFFE,E000); it is not a sequence")
+	}
+	r := bytes.NewReader(value)
+	seq, err := readSequence(ctx, r, transferSyntaxEncoding{strict: true}, order, uint32(len(value)), 0)
+	if err != nil {
+		return nil, err
+	}
+	if r.Len() != 0 {
+		return nil, NewPDUErrorf("DECODE_DS", "%d bytes after the last item; the value is not a sequence", r.Len())
+	}
+	return seq, nil
+}
+
 // decodeDataset is DecodeDataset building the data set under ctx: the
 // validation warnings of each element go to the logger ctx carries
 // (config.WithLogger), which is the receiving server's or client's own when
@@ -185,7 +236,7 @@ func readElementValue(ctx context.Context, ds *dataset.Dataset, r *bytes.Reader,
 		// the VRs inside either.
 		itemEnc := enc
 		if vr == dataelem.UN && enc.ExplicitVR {
-			itemEnc = transferSyntaxEncoding{}
+			itemEnc = transferSyntaxEncoding{strict: enc.strict}
 		}
 		seq, err := readSequence(ctx, r, itemEnc, itemEnc.byteOrder(), length, depth)
 		if err != nil {
@@ -570,15 +621,29 @@ func readSequence(ctx context.Context, r *bytes.Reader, enc transferSyntaxEncodi
 	start := r.Len()
 
 	for {
-		if !undefined && start-r.Len() >= int(declaredLength) {
+		read := start - r.Len()
+		if !undefined && read >= int(declaredLength) {
+			if enc.strict && read > int(declaredLength) {
+				return nil, errTruncated(fmt.Sprintf("an item runs %d bytes past the sequence's length %d",
+					read-int(declaredLength), declaredLength))
+			}
 			return seq, nil
 		}
 		if r.Len() < 8 {
+			if enc.strict && (r.Len() > 0 || undefined) {
+				if undefined && r.Len() == 0 {
+					return nil, errTruncated("a sequence of undefined length ends with no Sequence Delimitation Item")
+				}
+				return nil, errTruncated(fmt.Sprintf("%d bytes are left, too few for an item header", r.Len()))
+			}
 			return seq, nil
 		}
 
 		itemTag, itemLen, err := readItemHeader(r, order)
 		if err != nil {
+			if enc.strict {
+				return nil, errTruncated("an item header is cut short")
+			}
 			return seq, nil //nolint:nilerr // a truncated item ends the sequence
 		}
 
@@ -612,15 +677,26 @@ func readSequenceItem(ctx context.Context, r *bytes.Reader, enc transferSyntaxEn
 	start := r.Len()
 
 	for {
-		if !undefined && start-r.Len() >= int(declaredLength) {
+		read := start - r.Len()
+		if !undefined && read >= int(declaredLength) {
+			if enc.strict && read > int(declaredLength) {
+				return nil, errTruncated(fmt.Sprintf("an element runs %d bytes past the item's length %d",
+					read-int(declaredLength), declaredLength))
+			}
 			return child, nil
 		}
 		if r.Len() == 0 {
+			if enc.strict && undefined {
+				return nil, errTruncated("an item of undefined length ends with no Item Delimitation Item")
+			}
 			return child, nil
 		}
 
 		t, vr, length, err := readElementHeader(r, enc, order)
 		if err != nil {
+			if enc.strict {
+				return nil, errTruncated("an element header inside an item is cut short")
+			}
 			return child, nil //nolint:nilerr // a truncated element ends the item
 		}
 
@@ -629,6 +705,9 @@ func readSequenceItem(ctx context.Context, r *bytes.Reader, enc transferSyntaxEn
 			return child, nil
 		}
 		if t == tag.SequenceDelimiterTag {
+			if enc.strict {
+				return nil, errTruncated("a Sequence Delimitation Item inside an item")
+			}
 			return child, nil
 		}
 

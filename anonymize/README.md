@@ -83,10 +83,71 @@ anon.Anonymize(ds)
 
 ### Pre-built Templates
 
-- `BasicProfileTemplate()` - DICOM PS3.15 basic profile
+- `BasicProfileTemplate()` - every attribute of PS3.15 Table E.1-1, with the action the Basic Profile applies
 - `CleanDescriptorsTemplate()` - Cleans descriptions instead of removing
 - `RetainDatesTemplate()` - Keeps full dates
 - `RetainDeviceTemplate()` - Keeps device identity
+
+## The Standard's Table as Data
+
+A program that builds its own de-identification profiles can read PS3.15
+Table E.1-1 itself: `ProfileTable()` returns every attribute with its name, its
+code in the Basic Profile column and its code in each option column, as the
+standard writes them (`X/Z/D`, `X/D`, `Z/D`, `X/Z` and `X/Z/U*` are not
+resolved). `ProfileEntries()` yields the same rows one at a time,
+`LookupProfileEntry(tag)` finds one, and `ProfileTableEdition` names the
+edition of the standard the table was generated from (`scripts/ps315-table.py`
+regenerates it). What comes back is a copy; changing it does not change the
+library.
+
+```go
+e, _ := anonymize.LookupProfileEntry(tag.New(0x0010, 0x0040)) // Patient's Sex
+fmt.Println(e.Name, e.Basic(), e.Code(anonymize.ColumnRetainPatientCharacteristics))
+// Patient's Sex Z K
+```
+
+The private attributes that `RetainSafePrivateProfile` keeps are PS3.15
+Table E.3.10-1, readable the same way: `LookupSafePrivate(group, creator,
+element)` says whether the table lists an attribute as safe and returns its
+value representation, `SafePrivateEntries()` iterates the 479 rows, and
+`SafePrivateEdition` names the edition (`scripts/safe-private-table.py`
+regenerates it).
+
+## Recording the Method
+
+`RecordDeidentificationMethod(ds, codes, record)` writes Patient Identity
+Removed, De-identification Method, De-identification Method Code Sequence,
+and, as `MethodRecord` says, Burned In Annotation and Longitudinal Temporal
+Information Modified. The codes are PS3.16 CID 7050, the `MethodCodeValue`
+constants (`MethodBasicProfile`, `MethodCleanPixelData`, `MethodRetainUIDs` and
+the rest); `Code()` gives the code with its scheme (`DCM`) and meaning.
+`Anonymize` and `CleanPixelData` record through the same function.
+
+```go
+err := anonymize.RecordDeidentificationMethod(ds,
+    []anonymize.MethodCode{anonymize.MethodBasicProfile.Code(), anonymize.MethodCleanPixelData.Code()},
+    anonymize.MethodRecord{IdentityRemoved: true, BurnedInAnnotation: "NO"})
+```
+
+## Text Inside the JPEG Stream
+
+A comment (COM) or application (APPn) segment of an encapsulated JPEG frame is
+not an attribute and not a pixel, and travels with the image: an Exif block, an
+XMP packet, a note a program left. `JPEGSegmentText(ds)` lists those segments
+of every frame of Baseline, Extended, Lossless and JPEG-LS data with the text
+they hold, and the bytes after a frame's end-of-image marker.
+`RemoveJPEGText(ds)` removes them without decoding the image, so the samples
+are exactly the same afterwards; the JFIF and Adobe headers and the JPEG-LS
+`mrfx` extension stay, because they decide how the samples are read.
+`Anonymizer.SetRemoveJPEGText(true)` does it inside `Anonymize`. JPEG 2000 is
+not searched and returns `ErrJPEGSegmentsNotSearched`.
+
+```go
+segments, _ := anonymize.JPEGSegmentText(ds)
+for _, s := range segments {
+    fmt.Printf("frame %d %s: %q\n", s.Frame, s.Name(), s.Text)
+}
+```
 
 ## Custom Per-Tag Actions
 

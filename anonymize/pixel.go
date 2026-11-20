@@ -18,7 +18,7 @@ import (
 
 var (
 	tagBurnedInAnnotation = tag.New(0x0028, 0x0301)
-	cleanPixelDataCode    = methodCode{"113101", "Clean Pixel Data Option"}
+	cleanPixelDataCode    = MethodCleanPixelData.Code()
 )
 
 // CleanPixelData fills the regions with black in every frame, sets Burned In
@@ -28,12 +28,22 @@ var (
 // that the image holds none once they are filled, so they have to cover all
 // of it.
 //
-// Compressed pixel data is decompressed first, with
-// [dataset.Dataset.DecompressInPlace], and stays native: the images that
-// carry burned-in text are mostly stored compressed (#240). Nothing is
-// encoded again, so cleaning adds no loss of its own, and the data set
-// grows. See [dataset.Dataset.RedactPixelRegions] for the layouts that are
-// refused. On an error the data set is left as it was, compressed if it was.
+// Compressed pixel data is decompressed, as [dataset.Dataset.DecompressInPlace]
+// does, and stays native: the images that carry burned-in text are mostly
+// stored compressed (#240). Nothing is encoded again, so cleaning adds no
+// loss of its own, and the data set grows. See
+// [dataset.Dataset.RedactPixelRegions] for the layouts that are refused. On
+// an error the data set is left as it was, compressed if it was.
+//
+// The image is worked on a frame at a time. Each compressed frame is decoded,
+// filled and kept before the next is decoded, so memory is the native image
+// that results and one frame, and not those and every frame decoded first.
+// Pixel data that was left in the file the data set was read from
+// (filereader.DICOMFile.GetDatasetWithValuesInFile) is not read here at all:
+// the regions are filled, and a compressed image decoded, as filewriter
+// copies the pixels into the output, a frame at a time, so a multi-gigabyte
+// image is redacted while it is written and never held. An image whose frames
+// will not decode is then refused when it is written, and not here.
 //
 // It is independent of Anonymize and may run before or after it. Alone it
 // does not set Patient Identity Removed, which is the profile's to say.
@@ -45,41 +55,36 @@ func (a *Anonymizer) CleanPixelData(ds *dataset.Dataset, regions ...dataset.Pixe
 		return err
 	}
 
-	ds.Remove(tagBurnedInAnnotation)
-	if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
-		return fmt.Errorf("setting Burned In Annotation: %w", err)
-	}
+	// Patient Identity Removed is the profile's to say: it is rewritten only
+	// where it is already there. A method already recorded is not rewritten,
+	// which would drop the words of an automatic redaction beside it.
+	_, identityRemoved := ds.Get(tagIdentityRemoved)
+	codes := recordedMethodCodes(ds)
 	if hasMethodCode(ds, cleanPixelDataCode) {
+		codes = nil
+	} else {
+		codes = append(codes, cleanPixelDataCode)
+	}
+	if codes == nil {
+		ds.Remove(tagBurnedInAnnotation)
+		if err := ds.Add(dataelem.NewDataElement(tagBurnedInAnnotation, dataelem.CS, "NO")); err != nil {
+			return fmt.Errorf("setting Burned In Annotation: %w", err)
+		}
 		return nil
 	}
-	_, identityRemoved := ds.Get(tag.New(0x0012, 0x0062))
-	return writeMethod(ds, append(recordedMethodCodes(ds), cleanPixelDataCode), identityRemoved)
+	return RecordDeidentificationMethod(ds, codes, MethodRecord{
+		IdentityRemoved:    identityRemoved,
+		BurnedInAnnotation: "NO",
+	})
 }
 
 // redactRegions fills the regions with black in every frame of ds,
-// decompressing it first when it is compressed.
+// decompressing it as it goes when it is compressed, one frame at a time
+// (dataset.Dataset.DecompressRedactingRegions). A data set that does not
+// change on an error, and that holds nothing of the decompressed image but
+// the frame being filled.
 func redactRegions(ds *dataset.Dataset, regions []dataset.PixelRegion) error {
-	// On a copy, so a region that turns out to miss the image does not leave
-	// the caller's data set decompressed and uncleaned.
-	work := ds.Clone()
-	if err := work.DecompressInPlace(); err != nil {
-		return err
-	}
-	if err := work.RedactPixelRegions(regions...); err != nil {
-		return err
-	}
-	for _, t := range []tag.Tag{
-		tag.New(0x7FE0, 0x0010), tag.New(0x0028, 0x0004), tag.New(0x0028, 0x0006),
-	} {
-		if elem, ok := work.Get(t); ok {
-			ds.Remove(t)
-			if err := ds.Add(elem); err != nil {
-				return fmt.Errorf("replacing %s: %w", t, err)
-			}
-		}
-	}
-	ds.SetTransferSyntaxUID(work.TransferSyntaxUID())
-	return nil
+	return ds.DecompressRedactingRegions(regions...)
 }
 
 // AutomaticRedactionNote is what De-identification Method (0012,0063) says
@@ -107,6 +112,27 @@ func (a *Anonymizer) RedactDetectedText(ds *dataset.Dataset, detector TextDetect
 		return nil, fmt.Errorf("dataset is nil")
 	}
 	regions, err := DetectBurnedInText(ds, detector)
+	return a.redactDetected(ds, regions, err)
+}
+
+// RedactDetectedTextFrom is RedactDetectedText for a data set that does not
+// hold its Pixel Data: it was read with filereader.ReadOptions.SkipBulkData
+// and filereader.DICOMFile.GetDatasetWithValuesInFile, and frames
+// (filereader.DICOMFile.FrameReader) reads the pixels from the file, a frame
+// at a time, to look for text. What it finds is filled when the data set is
+// written, with filewriter given the file: see CleanPixelData. It finds, and
+// refuses, what RedactDetectedText does.
+func (a *Anonymizer) RedactDetectedTextFrom(ds *dataset.Dataset, frames dataset.FrameReader,
+	detector TextDetector) ([]dataset.PixelRegion, error) {
+	if ds == nil {
+		return nil, fmt.Errorf("dataset is nil")
+	}
+	regions, err := DetectBurnedInTextFrom(ds, frames, detector)
+	return a.redactDetected(ds, regions, err)
+}
+
+// redactDetected fills what a detector found, as RedactDetectedText says.
+func (a *Anonymizer) redactDetected(ds *dataset.Dataset, regions []dataset.PixelRegion, err error) ([]dataset.PixelRegion, error) {
 	if err != nil || len(regions) == 0 {
 		return nil, err
 	}
@@ -152,7 +178,7 @@ func noteAutomaticRedaction(ds *dataset.Dataset) error {
 }
 
 // recordedMethodCodes returns the methods ds already records.
-func recordedMethodCodes(ds *dataset.Dataset) []methodCode {
+func recordedMethodCodes(ds *dataset.Dataset) []MethodCode {
 	elem, ok := ds.Get(tagMethodCodes)
 	if !ok {
 		return nil
@@ -161,12 +187,13 @@ func recordedMethodCodes(ds *dataset.Dataset) []methodCode {
 	if !ok {
 		return nil
 	}
-	var codes []methodCode
+	var codes []MethodCode
 	for _, item := range seq.Items() {
 		if recorded, ok := item.(*dataset.Dataset); ok {
-			codes = append(codes, methodCode{
-				value:   textOf(recorded, tag.New(0x0008, 0x0100)),
-				meaning: textOf(recorded, tag.New(0x0008, 0x0104)),
+			codes = append(codes, MethodCode{
+				Value:   textOf(recorded, tag.New(0x0008, 0x0100)),
+				Scheme:  textOf(recorded, tag.New(0x0008, 0x0102)),
+				Meaning: textOf(recorded, tag.New(0x0008, 0x0104)),
 			})
 		}
 	}

@@ -180,8 +180,9 @@ func TestWriteEmptySequence(t *testing.T) {
 	df := writeAndRead(t, []*filewriter.DataElement{
 		{Tag: seqTag, VR: "SQ", Items: nil},
 		// An element after the empty sequence catches a length written wrongly:
-		// a bad sequence length would swallow or misalign it.
-		{Tag: tag.New(0x0010, 0x0010), VR: "PN", Value: []byte("After^Empty"), Length: 11},
+		// a bad sequence length would swallow or misalign it. Its tag is
+		// greater, as PS3.5 7.1 orders a data set; the reader warns otherwise.
+		{Tag: tag.New(0x0070, 0x0084), VR: "PN", Value: []byte("After^Empty"), Length: 11},
 	})
 
 	ds := df.GetDataset()
@@ -189,7 +190,7 @@ func TestWriteEmptySequence(t *testing.T) {
 		t.Error("the empty sequence is missing")
 	}
 
-	elem, ok := ds.Get(tag.New(0x0010, 0x0010))
+	elem, ok := ds.Get(tag.New(0x0070, 0x0084))
 	if !ok {
 		t.Fatal("the element following the empty sequence is missing")
 	}
