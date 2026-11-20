@@ -53,6 +53,13 @@ type drainState struct {
 
 	mu    sync.Mutex
 	conns map[*liveConnection]struct{}
+
+	// active counts the connections being served that a drain waits for: those
+	// accepted before it began, until each has ended. A connection accepted
+	// during it is only refused, and is not waited for. changed is signaled when
+	// the count falls to zero.
+	active  int
+	changed chan struct{}
 }
 
 // drain returns the SCP's drain state, made on first use so that an SCP
@@ -60,7 +67,8 @@ type drainState struct {
 func (s *SCP) drain() *drainState {
 	s.drainInit.Do(func() {
 		ctx, begin := context.WithCancel(context.Background())
-		s.drainer = &drainState{ctx: ctx, begin: begin, conns: make(map[*liveConnection]struct{})}
+		s.drainer = &drainState{ctx: ctx, begin: begin, conns: make(map[*liveConnection]struct{}),
+			changed: make(chan struct{}, 1)}
 	})
 	return s.drainer
 }
@@ -68,6 +76,62 @@ func (s *SCP) drain() *drainState {
 // draining reports whether a Shutdown has begun.
 func (s *SCP) draining() bool {
 	return s.drain().ctx.Err() != nil
+}
+
+// leaveKey is the context key under which serve gives a connection's
+// handler the function that ends the drain's wait for it.
+type leaveKey struct{}
+
+// countConnection counts a connection the accept loop has just accepted, and returns the
+// function that stops counting it, safe to call more than once. A connection
+// accepted when a Shutdown has already begun is not counted: it is there to be
+// refused, and a Shutdown waiting on a caller that sends nothing would wait
+// for ARTIM.
+func (s *SCP) countConnection() func() {
+	d := s.drain()
+	d.mu.Lock()
+	counted := d.ctx.Err() == nil
+	if counted {
+		d.active++
+	}
+	d.mu.Unlock()
+	if !counted {
+		return func() {}
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			d.mu.Lock()
+			d.active--
+			idle := d.active == 0
+			d.mu.Unlock()
+			if idle {
+				select {
+				case d.changed <- struct{}{}:
+				default:
+				}
+			}
+		})
+	}
+}
+
+// awaitIdle waits until every connection counted by countConnection has ended, or ctx
+// has, and reports which.
+func (s *SCP) awaitIdle(ctx context.Context) bool {
+	d := s.drain()
+	for {
+		d.mu.Lock()
+		idle := d.active == 0
+		d.mu.Unlock()
+		if idle {
+			return true
+		}
+		select {
+		case <-d.changed:
+		case <-ctx.Done():
+			return false
+		}
+	}
 }
 
 // track records a connection being served until the returned function is
@@ -175,16 +239,21 @@ func (e *ShutdownError) Unwrap() error { return e.Err }
 
 // Shutdown stops the server without cutting the work in progress.
 //
-// It closes the listener, so no new connection is accepted, and refuses an
-// association requested on a connection that was already open with
-// rejected-transient, service-provider (presentation), temporary-congestion
-// (PS3.8 Table 9-21), so the caller tries again later. An association
-// waiting for its next request is aborted at once: everything it sent has
-// been answered. One in the middle of an operation finishes it, its
-// responses are sent, and its peer's next PDU is waited for: an
-// A-RELEASE-RQ is answered and the association released, anything else is
-// aborted without being started. Each abort is the service-user's (PS3.8
-// Table 9-26, source 0).
+// The server goes on accepting connections while it drains, and refuses each
+// association requested with rejected-transient, service-provider
+// (presentation), temporary-congestion (PS3.8 Table 9-21), the same as one
+// requested on a connection that was already open, so a caller that was
+// told to try again later does. A caller met with a refused TCP connection
+// has no such word, and a modality may take it for a failure and give up.
+// The listener is closed when the drain ends: when every association that
+// was there when it began has ended, or when ctx is done.
+//
+// An association waiting for its next request is aborted at once:
+// everything it sent has been answered. One in the middle of an operation
+// finishes it, its responses are sent, and its peer's next PDU is waited
+// for: an A-RELEASE-RQ is answered and the association released, anything
+// else is aborted without being started. Each abort is the service-user's
+// (PS3.8 Table 9-26, source 0).
 //
 // It waits for the associations to end until ctx is done, and returns nil
 // once they all have: nothing was cut short. When ctx ends first, each
@@ -194,10 +263,14 @@ func (e *ShutdownError) Unwrap() error { return e.Err }
 // associations cut short and unwraps to ctx.Err(). A handler that ignores its context keeps its
 // goroutine until it returns; Stop waits for it.
 //
-// Stop is unchanged: it cancels at once.
+// Stop is unchanged: it cancels at once, and closes the listener at once.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.scp.drain().begin()
-	s.Logger.Info("Server %s stopping: no new associations, waiting for those in progress", s.scp.config.AETitle)
+	s.Logger.Info("Server %s stopping: refusing new associations, waiting for those in progress", s.scp.config.AETitle)
+
+	// The drain: the listener stays open so that a caller is refused with a
+	// reason, until nothing is left to wait for.
+	drained := s.scp.awaitIdle(ctx)
 	_ = s.scp.Close()
 
 	finished := make(chan struct{})
@@ -207,11 +280,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		close(finished)
 	}()
 
-	select {
-	case <-finished:
-		s.cancel()
-		return nil
-	case <-ctx.Done():
+	if drained {
+		select {
+		case <-finished:
+			s.cancel()
+			return nil
+		case <-ctx.Done():
+		}
 	}
 	aborted := s.scp.abortLeft()
 	s.cancel()

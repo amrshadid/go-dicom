@@ -211,13 +211,17 @@ func (s *SCP) serve(ctx context.Context, ln *Listener, logger *Logger, events *E
 		// Reports the connection opening now, and closing when the
 		// transport is closed.
 		transport.observe(events, s.ownLog)
+		// Counted here, before the goroutine starts, so that a Shutdown cannot
+		// find the server idle with this connection on its way to being served.
+		leave := s.countConnection()
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
+			defer leave()
 			if s.assocSlots != nil {
 				defer func() { <-s.assocSlots }()
 			}
-			s.handleConnection(ctx, transport)
+			s.handleConnection(context.WithValue(ctx, leaveKey{}, leave), transport)
 		}()
 	}
 }
@@ -418,6 +422,11 @@ func (s *SCP) handleConnection(ctx context.Context, transport *Transport) {
 		// was never written.
 		s.refusing(transport, LogLevelInfo, "refusing %q from %s: the server is stopping",
 			rq.CallingAE, transport.RemoteAddr())
+		// A refusal is not the work a drain waits for: it ends when the caller
+		// closes, which may be a moment, or ARTIM.
+		if leave, ok := ctx.Value(leaveKey{}).(func()); ok {
+			leave()
+		}
 		r := RejectBusy()
 		s.rejectAndAwaitClose(ctx, assoc, transport, r.Result, r.Source, r.Reason)
 		return

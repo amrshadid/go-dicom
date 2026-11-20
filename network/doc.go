@@ -123,9 +123,13 @@
 //
 // A [Server] from [StartServer] stops in one of two ways. [Server.Stop] cancels
 // the context every handler was given, cutting what is in flight.
-// [Server.Shutdown] stops taking new associations and lets the operations in
+// [Server.Shutdown] refuses new associations and lets the operations in
 // progress finish, until the context it is given ends; it returns a
-// [*ShutdownError] counting the associations it then had to abort.
+// [*ShutdownError] counting the associations it then had to abort. The
+// listener stays open while it drains, so a caller is answered with an
+// A-ASSOCIATE-RJ, rejected-transient, temporary congestion, which tells it to
+// try again later, rather than refused at the TCP level; it is closed when
+// the drain ends.
 //
 // The handler runs on the association's goroutine, so a slow handler holds that
 // association open; hand long work to a queue. Handlers may be called

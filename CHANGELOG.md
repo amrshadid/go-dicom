@@ -39,6 +39,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   body was read by aiohttp's HTTP and multipart parsers and each part by
   pydicom, byte for byte.
 
+### Changed
+
+- **`Server.Shutdown` refuses a new caller as transient, as it documents.**
+  Shutdown closed the listener at once, so a caller arriving while the
+  associations in progress finished met a refused TCP connection, and only a
+  connection already open was answered with the A-ASSOCIATE-RJ,
+  rejected-transient, service-provider (presentation), temporary-congestion,
+  that tells a caller to try again later. A modality treats a refused
+  connection as a failure and may not retry; one that is told to retry later
+  does, which is what PS3.8 Table 9-21 provides the reason for and what the
+  documentation of `Shutdown` has always said. The server now keeps accepting
+  while it drains and refuses each new association that way, and closes the
+  listener when the drain ends: when no association is left, at once for an
+  idle server, or at the bound of the context. A server that is not draining
+  is unchanged, and so is what happens to an association in progress.
+  Checked with pynetdicom, which read the refusal as result 2, source 3,
+  diagnostic 1.
+
 ### Fixed
 
 - **An invalid first PDU is answered with an A-ABORT, not a closed

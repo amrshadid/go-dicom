@@ -119,12 +119,15 @@ for associations negotiated after they are called; on a `Server` that is after
 `StartServer` has begun accepting.
 
 A `Server` (from `StartServer`) can also stop without cutting the work in
-progress. `Shutdown` closes the listener, refuses an association asked for on a
-connection already open (rejected-transient, so the caller tries again), aborts
-an association waiting for its next request (everything it sent was
-answered), and lets one in the middle of an operation finish it and release.
-When the context ends first, what is left is aborted, and the error says how
-many associations were cut short:
+progress. `Shutdown` goes on accepting connections while it drains, and
+refuses every association asked for, on a new connection or one already open,
+with rejected-transient, temporary-congestion, so a caller told to try again
+later does; a caller met with a refused TCP connection has no such word.
+It aborts an association waiting for its next request (everything it sent was
+answered), lets one in the middle of an operation finish it and release, and
+closes the listener when none is left. When the context ends first, what is
+left is aborted, the listener is closed, and the error says how many
+associations were cut short:
 
 ```go
 ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
