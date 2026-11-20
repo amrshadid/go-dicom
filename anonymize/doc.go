@@ -81,6 +81,12 @@
 // this package applies for each of those attributes, so an [Anonymizer] given
 // one de-identifies as strongly as one built with [BasicProfile].
 //
+// The private attributes that [RetainSafePrivateProfile] keeps are PS3.15
+// Table E.3.10-1, and [LookupSafePrivate] reads it: given the group, the private
+// creator and the element within the creator's block, it says whether the
+// table lists the attribute as safe and gives its value representation.
+// [SafePrivateEntries] iterates the whole table.
+//
 // # UID remapping
 //
 // Study, series, and SOP Instance UIDs identify a patient across data sets even

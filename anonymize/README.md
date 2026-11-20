@@ -106,6 +106,13 @@ fmt.Println(e.Name, e.Basic(), e.Code(anonymize.ColumnRetainPatientCharacteristi
 // Patient's Sex Z K
 ```
 
+The private attributes that `RetainSafePrivateProfile` keeps are PS3.15
+Table E.3.10-1, readable the same way: `LookupSafePrivate(group, creator,
+element)` says whether the table lists an attribute as safe and returns its
+value representation, `SafePrivateEntries()` iterates the 479 rows, and
+`SafePrivateEdition` names the edition (`scripts/safe-private-table.py`
+regenerates it).
+
 ## Custom Per-Tag Actions
 
 ```go

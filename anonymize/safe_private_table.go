@@ -5,485 +5,486 @@ package anonymize
 
 // safePrivateAttributes are the private attributes the Retain Safe Private
 // Option keeps (PS3.15 E.3.10): 479 entries, each a private creator, its
-// group and the element within the creator's block.
-var safePrivateAttributes = map[safePrivateKey]bool{
-	{0x00E1, "ELSCINT1", 0x21}:                                       true, // DS
-	{0x00E1, "ELSCINT1", 0x50}:                                       true, // DS
-	{0x01E1, "ELSCINT1", 0x26}:                                       true, // CS
-	{0x01F1, "ELSCINT1", 0x01}:                                       true, // CS
-	{0x01F1, "ELSCINT1", 0x07}:                                       true, // DS
-	{0x01F1, "ELSCINT1", 0x26}:                                       true, // DS
-	{0x01F1, "ELSCINT1", 0x27}:                                       true, // DS
-	{0x0903, "GEIIS PACS", 0x10}:                                     true, // US
-	{0x0903, "GEIIS PACS", 0x11}:                                     true, // US
-	{0x0903, "GEIIS PACS", 0x12}:                                     true, // US
-	{0x0019, "GEMS_ACQU_01", 0x23}:                                   true, // DS
-	{0x0019, "GEMS_ACQU_01", 0x24}:                                   true, // DS
-	{0x0019, "GEMS_ACQU_01", 0x27}:                                   true, // DS
-	{0x0019, "GEMS_ACQU_01", 0x9E}:                                   true, // LO
-	{0x0045, "GEMS_HELIOS_01", 0x01}:                                 true, // SS
-	{0x0045, "GEMS_HELIOS_01", 0x02}:                                 true, // FL
-	{0x0043, "GEMS_PARM_01", 0x27}:                                   true, // SH
-	{0x0043, "GEMS_PARM_01", 0x39}:                                   true, // IS
-	{0x0043, "GEMS_PARM_01", 0x6F}:                                   true, // DS
-	{0x0025, "GEMS_SERS_01", 0x07}:                                   true, // SL
-	{0x7E01, "HOLOGIC, Inc.", 0x01}:                                  true, // LO
-	{0x7E01, "HOLOGIC, Inc.", 0x02}:                                  true, // SH
-	{0x7E01, "HOLOGIC, Inc.", 0x10}:                                  true, // SQ
-	{0x7E01, "HOLOGIC, Inc.", 0x11}:                                  true, // SQ
-	{0x7E01, "HOLOGIC, Inc.", 0x12}:                                  true, // OB
-	{0x0099, "NQHeader", 0x01}:                                       true, // UI
-	{0x0099, "NQHeader", 0x02}:                                       true, // UI
-	{0x0099, "NQHeader", 0x04}:                                       true, // SS
-	{0x0099, "NQHeader", 0x05}:                                       true, // LT
-	{0x0099, "NQHeader", 0x10}:                                       true, // FL
-	{0x0099, "NQHeader", 0x20}:                                       true, // SH
-	{0x0099, "NQHeader", 0x21}:                                       true, // FL
-	{0x0199, "NQLeft", 0x01}:                                         true, // FL
-	{0x0199, "NQLeft", 0x02}:                                         true, // FL
-	{0x0199, "NQLeft", 0x03}:                                         true, // FL
-	{0x0199, "NQLeft", 0x04}:                                         true, // FL
-	{0x0199, "NQLeft", 0x05}:                                         true, // FL
-	{0x0199, "NQLeft", 0x06}:                                         true, // FL
-	{0x0199, "NQLeft", 0x07}:                                         true, // FL
-	{0x0199, "NQLeft", 0x08}:                                         true, // FL
-	{0x0199, "NQLeft", 0x09}:                                         true, // FL
-	{0x0199, "NQLeft", 0x0A}:                                         true, // FL
-	{0x0199, "NQLeft", 0x0B}:                                         true, // FL
-	{0x0199, "NQLeft", 0x0C}:                                         true, // FL
-	{0x0199, "NQLeft", 0x0D}:                                         true, // FL
-	{0x0199, "NQLeft", 0x0E}:                                         true, // FL
-	{0x0199, "NQLeft", 0x0F}:                                         true, // FL
-	{0x0199, "NQLeft", 0x10}:                                         true, // FL
-	{0x0199, "NQLeft", 0x11}:                                         true, // FL
-	{0x0199, "NQLeft", 0x12}:                                         true, // FL
-	{0x0199, "NQLeft", 0x13}:                                         true, // FL
-	{0x0199, "NQLeft", 0x14}:                                         true, // FL
-	{0x0199, "NQLeft", 0x15}:                                         true, // FL
-	{0x0199, "NQLeft", 0x16}:                                         true, // FL
-	{0x0299, "NQRight", 0x01}:                                        true, // FL
-	{0x0299, "NQRight", 0x02}:                                        true, // FL
-	{0x0299, "NQRight", 0x03}:                                        true, // FL
-	{0x0299, "NQRight", 0x04}:                                        true, // FL
-	{0x0299, "NQRight", 0x05}:                                        true, // FL
-	{0x0299, "NQRight", 0x06}:                                        true, // FL
-	{0x0299, "NQRight", 0x07}:                                        true, // FL
-	{0x0299, "NQRight", 0x08}:                                        true, // FL
-	{0x0299, "NQRight", 0x09}:                                        true, // FL
-	{0x0299, "NQRight", 0x0A}:                                        true, // FL
-	{0x0299, "NQRight", 0x0B}:                                        true, // FL
-	{0x0299, "NQRight", 0x0C}:                                        true, // FL
-	{0x0299, "NQRight", 0x0D}:                                        true, // FL
-	{0x0299, "NQRight", 0x0E}:                                        true, // FL
-	{0x0299, "NQRight", 0x0F}:                                        true, // FL
-	{0x0299, "NQRight", 0x10}:                                        true, // FL
-	{0x0299, "NQRight", 0x11}:                                        true, // FL
-	{0x0299, "NQRight", 0x12}:                                        true, // FL
-	{0x0299, "NQRight", 0x13}:                                        true, // FL
-	{0x0299, "NQRight", 0x14}:                                        true, // FL
-	{0x0299, "NQRight", 0x15}:                                        true, // FL
-	{0x0299, "NQRight", 0x16}:                                        true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x01}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x02}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x03}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x04}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x05}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x06}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x07}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x08}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x09}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x0A}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x0B}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x0C}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x0E}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x0F}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x10}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x11}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x12}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x13}:                         true, // SL
-	{0x2001, "Philips Imaging DD 001", 0x14}:                         true, // SL
-	{0x2001, "Philips Imaging DD 001", 0x15}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x16}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x17}:                         true, // SL
-	{0x2001, "Philips Imaging DD 001", 0x18}:                         true, // SL
-	{0x2001, "Philips Imaging DD 001", 0x19}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x1A}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x1B}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x1C}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x1D}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x1E}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x1F}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x21}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x22}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x23}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x24}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x25}:                         true, // SH
-	{0x2001, "Philips Imaging DD 001", 0x26}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x27}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x28}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x29}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x2A}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x2B}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x2C}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x2D}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x2E}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x2F}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x30}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x31}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0x32}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x33}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x34}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x35}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x36}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x37}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x38}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x39}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x3A}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x3B}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x3C}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x3D}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x3E}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x3F}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x40}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x41}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x42}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x43}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x44}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x45}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x46}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x47}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x48}:                         true, // SS
-	{0x2001, "Philips Imaging DD 001", 0x49}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x4A}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x4B}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x4C}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x4D}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x4E}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x4F}:                         true, // FD
-	{0x2001, "Philips Imaging DD 001", 0x50}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x51}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x53}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x54}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x55}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x56}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x57}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x58}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x59}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x5A}:                         true, // ST
-	{0x2001, "Philips Imaging DD 001", 0x5D}:                         true, // ST
-	{0x2001, "Philips Imaging DD 001", 0x5E}:                         true, // ST
-	{0x2001, "Philips Imaging DD 001", 0x5F}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x60}:                         true, // SL
-	{0x2001, "Philips Imaging DD 001", 0x61}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x62}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x63}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x64}:                         true, // SH
-	{0x2001, "Philips Imaging DD 001", 0x65}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x66}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x67}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x68}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x69}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x6A}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x6B}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x6D}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x6E}:                         true, // SH
-	{0x2001, "Philips Imaging DD 001", 0x6F}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x71}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x72}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x73}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x74}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x75}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x76}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x77}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x79}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x7A}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0x7B}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x7C}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x7D}:                         true, // OW/OB
-	{0x2001, "Philips Imaging DD 001", 0x7E}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0x7F}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0x80}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x81}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x82}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x83}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x84}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x85}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x86}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0x87}:                         true, // SH
-	{0x2001, "Philips Imaging DD 001", 0x88}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x89}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x8A}:                         true, // DS
-	{0x2001, "Philips Imaging DD 001", 0x8B}:                         true, // SH
-	{0x2001, "Philips Imaging DD 001", 0x8C}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0x90}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x91}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x92}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x93}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x94}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x9A}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0x9B}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0x9D}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0x9F}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xA1}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0xA2}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xA3}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xA4}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xA5}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xC0}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xC1}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0xC2}:                         true, // FD
-	{0x2001, "Philips Imaging DD 001", 0xC3}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xC5}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xC6}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xC7}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xCA}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xCB}:                         true, // IS
-	{0x2001, "Philips Imaging DD 001", 0xD0}:                         true, // AT
-	{0x2001, "Philips Imaging DD 001", 0xD1}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD2}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD3}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD4}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD5}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD6}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD7}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD8}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xD9}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xDA}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0xDB}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xDC}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xDD}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xDE}:                         true, // US
-	{0x2001, "Philips Imaging DD 001", 0xDF}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xE9}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xF1}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0xF2}:                         true, // FL
-	{0x2001, "Philips Imaging DD 001", 0xF3}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0xF4}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xF5}:                         true, // CS
-	{0x2001, "Philips Imaging DD 001", 0xF6}:                         true, // UL
-	{0x2001, "Philips Imaging DD 001", 0xF7}:                         true, // LO
-	{0x2001, "Philips Imaging DD 001", 0xF9}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xFB}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xFC}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xFD}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 001", 0xFF}:                         true, // OW/OB
-	{0x2001, "Philips Imaging DD 002", 0x01}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x02}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x03}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x04}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x05}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x06}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x07}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x08}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x09}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x0A}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x0B}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x0C}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x0D}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x0E}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x0F}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x10}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x11}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x12}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x13}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x14}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x15}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x16}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x17}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x18}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x19}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x1A}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x1B}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x1C}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x1D}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x1E}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x1F}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x20}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x21}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x22}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x23}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x24}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x25}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x26}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x27}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x28}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x29}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x2A}:                         true, // US
-	{0x2001, "Philips Imaging DD 002", 0x2B}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x2C}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x2D}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x2E}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x2F}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x30}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x31}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x32}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x33}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x34}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x35}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x36}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x37}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x38}:                         true, // FD
-	{0x2001, "Philips Imaging DD 002", 0x39}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x3A}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x3B}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x3C}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x3D}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x3E}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x3F}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x40}:                         true, // SS
-	{0x2001, "Philips Imaging DD 002", 0x50}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x52}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x53}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x57}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x58}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x5A}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x5C}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x5D}:                         true, // UL
-	{0x2001, "Philips Imaging DD 002", 0x5E}:                         true, // UL
-	{0x2001, "Philips Imaging DD 002", 0x5F}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x63}:                         true, // ST
-	{0x2001, "Philips Imaging DD 002", 0x64}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 002", 0x65}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x66}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x67}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x68}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x6B}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x71}:                         true, // CS
-	{0x2001, "Philips Imaging DD 002", 0x72}:                         true, // FL
-	{0x2001, "Philips Imaging DD 002", 0x73}:                         true, // FL
-	{0x2001, "Philips Imaging DD 002", 0x74}:                         true, // LO
-	{0x2001, "Philips Imaging DD 002", 0x75}:                         true, // SS
-	{0x2001, "Philips Imaging DD 097", 0x01}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x02}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x03}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x04}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x05}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x06}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x07}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x08}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x0A}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x0B}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x0D}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x0E}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x0F}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x12}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x17}:                         true, // US
-	{0x2001, "Philips Imaging DD 097", 0x18}:                         true, // US
-	{0x2001, "Philips Imaging DD 097", 0x19}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x1A}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x1B}:                         true, // UL
-	{0x2001, "Philips Imaging DD 097", 0x1C}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x1D}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x1E}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x1F}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x21}:                         true, // UL
-	{0x2001, "Philips Imaging DD 097", 0x22}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x23}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x24}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x25}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x26}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x27}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x28}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x2A}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x2B}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x2C}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x2D}:                         true, // UL
-	{0x2001, "Philips Imaging DD 097", 0x2E}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x2F}:                         true, // OB
-	{0x2001, "Philips Imaging DD 097", 0x30}:                         true, // SL
-	{0x2001, "Philips Imaging DD 097", 0x31}:                         true, // SL
-	{0x2001, "Philips Imaging DD 097", 0x32}:                         true, // SL
-	{0x2001, "Philips Imaging DD 097", 0x36}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x37}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x38}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x39}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x3A}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x3B}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x3C}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x3D}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0x3E}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x40}:                         true, // UL
-	{0x2001, "Philips Imaging DD 097", 0x41}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x42}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x44}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x45}:                         true, // SL
-	{0x2001, "Philips Imaging DD 097", 0x46}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0x47}:                         true, // OB
-	{0x2001, "Philips Imaging DD 097", 0x49}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0x4A}:                         true, // OB
-	{0x2001, "Philips Imaging DD 097", 0x4B}:                         true, // SL
-	{0x2001, "Philips Imaging DD 097", 0x4C}:                         true, // LO
-	{0x2001, "Philips Imaging DD 097", 0xA1}:                         true, // CS
-	{0x2001, "Philips Imaging DD 097", 0xA2}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0xA3}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0xA4}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0xA5}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0xA6}:                         true, // US
-	{0x2001, "Philips Imaging DD 097", 0xA8}:                         true, // IS
-	{0x2001, "Philips Imaging DD 097", 0xA9}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 097", 0xAA}:                         true, // FD
-	{0x2001, "Philips Imaging DD 097", 0xAB}:                         true, // IS
-	{0x2001, "Philips Imaging DD 129", 0x00}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 129", 0x01}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 129", 0x02}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 129", 0x03}:                         true, // UL
-	{0x2001, "Philips Imaging DD 129", 0x04}:                         true, // SQ
-	{0x2001, "Philips Imaging DD 129", 0x05}:                         true, // FD
-	{0x2001, "Philips Imaging DD 129", 0x06}:                         true, // FD
-	{0x2001, "Philips Imaging DD 129", 0x07}:                         true, // CS
-	{0x2001, "Philips Imaging DD 129", 0x08}:                         true, // CS
-	{0x2001, "Philips Imaging DD 129", 0x09}:                         true, // UL
-	{0x2005, "Philips MR Imaging DD 001", 0x0D}:                      true, // FL
-	{0x2005, "Philips MR Imaging DD 001", 0x0E}:                      true, // FL
-	{0x7053, "Philips PET Private Group", 0x00}:                      true, // DS
-	{0x7053, "Philips PET Private Group", 0x09}:                      true, // DS
-	{0x0025, "Philips ST80i", 0x01}:                                  true, // OW
-	{0x0019, "SIEMENS MR HEADER", 0x0C}:                              true, // IS
-	{0x0019, "SIEMENS MR HEADER", 0x0D}:                              true, // CS
-	{0x0019, "SIEMENS MR HEADER", 0x0E}:                              true, // FD
-	{0x0019, "SIEMENS MR HEADER", 0x27}:                              true, // FD
-	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x01}: true, // OB
-	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x09}: true, // UI
-	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x10}: true, // OB
-	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x11}: true, // OB
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x00}:                      true, // LO
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x01}:                      true, // OB
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x02}:                      true, // SQ
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x03}:                      true, // SQ
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x04}:                      true, // OB
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x05}:                      true, // UL
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x06}:                      true, // UL
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x07}:                      true, // UL
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x08}:                      true, // UL
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x09}:                      true, // SS
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x10}:                      true, // SH
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x11}:                      true, //
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x12}:                      true, //
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x13}:                      true, // IS
-	{0x0119, "SIEMENS Ultrasound SC2000", 0x21}:                      true, // SH
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x00}:                      true, // SQ
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x02}:                      true, // UI
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x03}:                      true, //
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x04}:                      true, //
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x05}:                      true, //
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x06}:                      true, // SQ
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x07}:                      true, // UI
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x08}:                      true, // OB
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x09}:                      true, // SQ
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x10}:                      true, // OB
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x11}:                      true, // SQ
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x12}:                      true, // UI
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x20}:                      true, // SQ
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x21}:                      true, // OB
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x22}:                      true, // OB
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x29}:                      true, // OB
-	{0x0129, "SIEMENS Ultrasound SC2000", 0x30}:                      true, // CS
-	{0x0139, "SIEMENS Ultrasound SC2000", 0x01}:                      true, // SL
-	{0x0149, "SIEMENS Ultrasound SC2000", 0x01}:                      true, // FD
-	{0x0149, "SIEMENS Ultrasound SC2000", 0x02}:                      true, // FD
-	{0x0149, "SIEMENS Ultrasound SC2000", 0x03}:                      true, // FD
-	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x01}:                      true, // OB
-	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x09}:                      true, // UI
-	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x10}:                      true, // OB
-	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x11}:                      true, // OB
+// group and the element within the creator's block, mapped to the value
+// representation the table gives it.
+var safePrivateAttributes = map[safePrivateKey]string{
+	{0x00E1, "ELSCINT1", 0x21}:                                       "DS",
+	{0x00E1, "ELSCINT1", 0x50}:                                       "DS",
+	{0x01E1, "ELSCINT1", 0x26}:                                       "CS",
+	{0x01F1, "ELSCINT1", 0x01}:                                       "CS",
+	{0x01F1, "ELSCINT1", 0x07}:                                       "DS",
+	{0x01F1, "ELSCINT1", 0x26}:                                       "DS",
+	{0x01F1, "ELSCINT1", 0x27}:                                       "DS",
+	{0x0903, "GEIIS PACS", 0x10}:                                     "US",
+	{0x0903, "GEIIS PACS", 0x11}:                                     "US",
+	{0x0903, "GEIIS PACS", 0x12}:                                     "US",
+	{0x0019, "GEMS_ACQU_01", 0x23}:                                   "DS",
+	{0x0019, "GEMS_ACQU_01", 0x24}:                                   "DS",
+	{0x0019, "GEMS_ACQU_01", 0x27}:                                   "DS",
+	{0x0019, "GEMS_ACQU_01", 0x9E}:                                   "LO",
+	{0x0045, "GEMS_HELIOS_01", 0x01}:                                 "SS",
+	{0x0045, "GEMS_HELIOS_01", 0x02}:                                 "FL",
+	{0x0043, "GEMS_PARM_01", 0x27}:                                   "SH",
+	{0x0043, "GEMS_PARM_01", 0x39}:                                   "IS",
+	{0x0043, "GEMS_PARM_01", 0x6F}:                                   "DS",
+	{0x0025, "GEMS_SERS_01", 0x07}:                                   "SL",
+	{0x7E01, "HOLOGIC, Inc.", 0x01}:                                  "LO",
+	{0x7E01, "HOLOGIC, Inc.", 0x02}:                                  "SH",
+	{0x7E01, "HOLOGIC, Inc.", 0x10}:                                  "SQ",
+	{0x7E01, "HOLOGIC, Inc.", 0x11}:                                  "SQ",
+	{0x7E01, "HOLOGIC, Inc.", 0x12}:                                  "OB",
+	{0x0099, "NQHeader", 0x01}:                                       "UI",
+	{0x0099, "NQHeader", 0x02}:                                       "UI",
+	{0x0099, "NQHeader", 0x04}:                                       "SS",
+	{0x0099, "NQHeader", 0x05}:                                       "LT",
+	{0x0099, "NQHeader", 0x10}:                                       "FL",
+	{0x0099, "NQHeader", 0x20}:                                       "SH",
+	{0x0099, "NQHeader", 0x21}:                                       "FL",
+	{0x0199, "NQLeft", 0x01}:                                         "FL",
+	{0x0199, "NQLeft", 0x02}:                                         "FL",
+	{0x0199, "NQLeft", 0x03}:                                         "FL",
+	{0x0199, "NQLeft", 0x04}:                                         "FL",
+	{0x0199, "NQLeft", 0x05}:                                         "FL",
+	{0x0199, "NQLeft", 0x06}:                                         "FL",
+	{0x0199, "NQLeft", 0x07}:                                         "FL",
+	{0x0199, "NQLeft", 0x08}:                                         "FL",
+	{0x0199, "NQLeft", 0x09}:                                         "FL",
+	{0x0199, "NQLeft", 0x0A}:                                         "FL",
+	{0x0199, "NQLeft", 0x0B}:                                         "FL",
+	{0x0199, "NQLeft", 0x0C}:                                         "FL",
+	{0x0199, "NQLeft", 0x0D}:                                         "FL",
+	{0x0199, "NQLeft", 0x0E}:                                         "FL",
+	{0x0199, "NQLeft", 0x0F}:                                         "FL",
+	{0x0199, "NQLeft", 0x10}:                                         "FL",
+	{0x0199, "NQLeft", 0x11}:                                         "FL",
+	{0x0199, "NQLeft", 0x12}:                                         "FL",
+	{0x0199, "NQLeft", 0x13}:                                         "FL",
+	{0x0199, "NQLeft", 0x14}:                                         "FL",
+	{0x0199, "NQLeft", 0x15}:                                         "FL",
+	{0x0199, "NQLeft", 0x16}:                                         "FL",
+	{0x0299, "NQRight", 0x01}:                                        "FL",
+	{0x0299, "NQRight", 0x02}:                                        "FL",
+	{0x0299, "NQRight", 0x03}:                                        "FL",
+	{0x0299, "NQRight", 0x04}:                                        "FL",
+	{0x0299, "NQRight", 0x05}:                                        "FL",
+	{0x0299, "NQRight", 0x06}:                                        "FL",
+	{0x0299, "NQRight", 0x07}:                                        "FL",
+	{0x0299, "NQRight", 0x08}:                                        "FL",
+	{0x0299, "NQRight", 0x09}:                                        "FL",
+	{0x0299, "NQRight", 0x0A}:                                        "FL",
+	{0x0299, "NQRight", 0x0B}:                                        "FL",
+	{0x0299, "NQRight", 0x0C}:                                        "FL",
+	{0x0299, "NQRight", 0x0D}:                                        "FL",
+	{0x0299, "NQRight", 0x0E}:                                        "FL",
+	{0x0299, "NQRight", 0x0F}:                                        "FL",
+	{0x0299, "NQRight", 0x10}:                                        "FL",
+	{0x0299, "NQRight", 0x11}:                                        "FL",
+	{0x0299, "NQRight", 0x12}:                                        "FL",
+	{0x0299, "NQRight", 0x13}:                                        "FL",
+	{0x0299, "NQRight", 0x14}:                                        "FL",
+	{0x0299, "NQRight", 0x15}:                                        "FL",
+	{0x0299, "NQRight", 0x16}:                                        "FL",
+	{0x2001, "Philips Imaging DD 001", 0x01}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x02}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x03}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x04}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x05}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x06}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x07}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x08}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x09}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x0A}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x0B}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x0C}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x0E}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x0F}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x10}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x11}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x12}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x13}:                         "SL",
+	{0x2001, "Philips Imaging DD 001", 0x14}:                         "SL",
+	{0x2001, "Philips Imaging DD 001", 0x15}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x16}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x17}:                         "SL",
+	{0x2001, "Philips Imaging DD 001", 0x18}:                         "SL",
+	{0x2001, "Philips Imaging DD 001", 0x19}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x1A}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x1B}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x1C}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x1D}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x1E}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x1F}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x21}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x22}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x23}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x24}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x25}:                         "SH",
+	{0x2001, "Philips Imaging DD 001", 0x26}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x27}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x28}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x29}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x2A}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x2B}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x2C}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x2D}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x2E}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x2F}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x30}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x31}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0x32}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x33}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x34}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x35}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x36}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x37}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x38}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x39}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x3A}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x3B}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x3C}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x3D}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x3E}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x3F}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x40}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x41}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x42}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x43}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x44}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x45}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x46}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x47}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x48}:                         "SS",
+	{0x2001, "Philips Imaging DD 001", 0x49}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x4A}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x4B}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x4C}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x4D}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x4E}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x4F}:                         "FD",
+	{0x2001, "Philips Imaging DD 001", 0x50}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x51}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x53}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x54}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x55}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x56}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x57}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x58}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x59}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x5A}:                         "ST",
+	{0x2001, "Philips Imaging DD 001", 0x5D}:                         "ST",
+	{0x2001, "Philips Imaging DD 001", 0x5E}:                         "ST",
+	{0x2001, "Philips Imaging DD 001", 0x5F}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x60}:                         "SL",
+	{0x2001, "Philips Imaging DD 001", 0x61}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x62}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x63}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x64}:                         "SH",
+	{0x2001, "Philips Imaging DD 001", 0x65}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x66}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x67}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x68}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x69}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x6A}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x6B}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x6D}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x6E}:                         "SH",
+	{0x2001, "Philips Imaging DD 001", 0x6F}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x71}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x72}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x73}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x74}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x75}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x76}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x77}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x79}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x7A}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0x7B}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x7C}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x7D}:                         "OW/OB",
+	{0x2001, "Philips Imaging DD 001", 0x7E}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0x7F}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0x80}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x81}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x82}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x83}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x84}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x85}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x86}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0x87}:                         "SH",
+	{0x2001, "Philips Imaging DD 001", 0x88}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x89}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x8A}:                         "DS",
+	{0x2001, "Philips Imaging DD 001", 0x8B}:                         "SH",
+	{0x2001, "Philips Imaging DD 001", 0x8C}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0x90}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x91}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x92}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x93}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x94}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x9A}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0x9B}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0x9D}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0x9F}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xA1}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0xA2}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xA3}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xA4}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xA5}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xC0}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xC1}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0xC2}:                         "FD",
+	{0x2001, "Philips Imaging DD 001", 0xC3}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xC5}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xC6}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xC7}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xCA}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xCB}:                         "IS",
+	{0x2001, "Philips Imaging DD 001", 0xD0}:                         "AT",
+	{0x2001, "Philips Imaging DD 001", 0xD1}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD2}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD3}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD4}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD5}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD6}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD7}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD8}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xD9}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xDA}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0xDB}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xDC}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xDD}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xDE}:                         "US",
+	{0x2001, "Philips Imaging DD 001", 0xDF}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xE9}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xF1}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0xF2}:                         "FL",
+	{0x2001, "Philips Imaging DD 001", 0xF3}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0xF4}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xF5}:                         "CS",
+	{0x2001, "Philips Imaging DD 001", 0xF6}:                         "UL",
+	{0x2001, "Philips Imaging DD 001", 0xF7}:                         "LO",
+	{0x2001, "Philips Imaging DD 001", 0xF9}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xFB}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xFC}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xFD}:                         "SQ",
+	{0x2001, "Philips Imaging DD 001", 0xFF}:                         "OW/OB",
+	{0x2001, "Philips Imaging DD 002", 0x01}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x02}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x03}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x04}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x05}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x06}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x07}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x08}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x09}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x0A}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x0B}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x0C}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x0D}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x0E}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x0F}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x10}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x11}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x12}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x13}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x14}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x15}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x16}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x17}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x18}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x19}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x1A}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x1B}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x1C}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x1D}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x1E}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x1F}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x20}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x21}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x22}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x23}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x24}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x25}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x26}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x27}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x28}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x29}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x2A}:                         "US",
+	{0x2001, "Philips Imaging DD 002", 0x2B}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x2C}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x2D}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x2E}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x2F}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x30}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x31}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x32}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x33}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x34}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x35}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x36}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x37}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x38}:                         "FD",
+	{0x2001, "Philips Imaging DD 002", 0x39}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x3A}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x3B}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x3C}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x3D}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x3E}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x3F}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x40}:                         "SS",
+	{0x2001, "Philips Imaging DD 002", 0x50}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x52}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x53}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x57}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x58}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x5A}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x5C}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x5D}:                         "UL",
+	{0x2001, "Philips Imaging DD 002", 0x5E}:                         "UL",
+	{0x2001, "Philips Imaging DD 002", 0x5F}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x63}:                         "ST",
+	{0x2001, "Philips Imaging DD 002", 0x64}:                         "SQ",
+	{0x2001, "Philips Imaging DD 002", 0x65}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x66}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x67}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x68}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x6B}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x71}:                         "CS",
+	{0x2001, "Philips Imaging DD 002", 0x72}:                         "FL",
+	{0x2001, "Philips Imaging DD 002", 0x73}:                         "FL",
+	{0x2001, "Philips Imaging DD 002", 0x74}:                         "LO",
+	{0x2001, "Philips Imaging DD 002", 0x75}:                         "SS",
+	{0x2001, "Philips Imaging DD 097", 0x01}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x02}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x03}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x04}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x05}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x06}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x07}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x08}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x0A}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x0B}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x0D}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x0E}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x0F}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x12}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x17}:                         "US",
+	{0x2001, "Philips Imaging DD 097", 0x18}:                         "US",
+	{0x2001, "Philips Imaging DD 097", 0x19}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x1A}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x1B}:                         "UL",
+	{0x2001, "Philips Imaging DD 097", 0x1C}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x1D}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x1E}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x1F}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x21}:                         "UL",
+	{0x2001, "Philips Imaging DD 097", 0x22}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x23}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x24}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x25}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x26}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x27}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x28}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x2A}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x2B}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x2C}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x2D}:                         "UL",
+	{0x2001, "Philips Imaging DD 097", 0x2E}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x2F}:                         "OB",
+	{0x2001, "Philips Imaging DD 097", 0x30}:                         "SL",
+	{0x2001, "Philips Imaging DD 097", 0x31}:                         "SL",
+	{0x2001, "Philips Imaging DD 097", 0x32}:                         "SL",
+	{0x2001, "Philips Imaging DD 097", 0x36}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x37}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x38}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x39}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x3A}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x3B}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x3C}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x3D}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0x3E}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x40}:                         "UL",
+	{0x2001, "Philips Imaging DD 097", 0x41}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x42}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x44}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x45}:                         "SL",
+	{0x2001, "Philips Imaging DD 097", 0x46}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0x47}:                         "OB",
+	{0x2001, "Philips Imaging DD 097", 0x49}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0x4A}:                         "OB",
+	{0x2001, "Philips Imaging DD 097", 0x4B}:                         "SL",
+	{0x2001, "Philips Imaging DD 097", 0x4C}:                         "LO",
+	{0x2001, "Philips Imaging DD 097", 0xA1}:                         "CS",
+	{0x2001, "Philips Imaging DD 097", 0xA2}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0xA3}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0xA4}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0xA5}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0xA6}:                         "US",
+	{0x2001, "Philips Imaging DD 097", 0xA8}:                         "IS",
+	{0x2001, "Philips Imaging DD 097", 0xA9}:                         "SQ",
+	{0x2001, "Philips Imaging DD 097", 0xAA}:                         "FD",
+	{0x2001, "Philips Imaging DD 097", 0xAB}:                         "IS",
+	{0x2001, "Philips Imaging DD 129", 0x00}:                         "SQ",
+	{0x2001, "Philips Imaging DD 129", 0x01}:                         "SQ",
+	{0x2001, "Philips Imaging DD 129", 0x02}:                         "SQ",
+	{0x2001, "Philips Imaging DD 129", 0x03}:                         "UL",
+	{0x2001, "Philips Imaging DD 129", 0x04}:                         "SQ",
+	{0x2001, "Philips Imaging DD 129", 0x05}:                         "FD",
+	{0x2001, "Philips Imaging DD 129", 0x06}:                         "FD",
+	{0x2001, "Philips Imaging DD 129", 0x07}:                         "CS",
+	{0x2001, "Philips Imaging DD 129", 0x08}:                         "CS",
+	{0x2001, "Philips Imaging DD 129", 0x09}:                         "UL",
+	{0x2005, "Philips MR Imaging DD 001", 0x0D}:                      "FL",
+	{0x2005, "Philips MR Imaging DD 001", 0x0E}:                      "FL",
+	{0x7053, "Philips PET Private Group", 0x00}:                      "DS",
+	{0x7053, "Philips PET Private Group", 0x09}:                      "DS",
+	{0x0025, "Philips ST80i", 0x01}:                                  "OW",
+	{0x0019, "SIEMENS MR HEADER", 0x0C}:                              "IS",
+	{0x0019, "SIEMENS MR HEADER", 0x0D}:                              "CS",
+	{0x0019, "SIEMENS MR HEADER", 0x0E}:                              "FD",
+	{0x0019, "SIEMENS MR HEADER", 0x27}:                              "FD",
+	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x01}: "OB",
+	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x09}: "UI",
+	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x10}: "OB",
+	{0x7FD1, "SIEMENS SYNGO ULTRA-SOUND TOYON DATA STREAMING", 0x11}: "OB",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x00}:                      "LO",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x01}:                      "OB",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x02}:                      "SQ",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x03}:                      "SQ",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x04}:                      "OB",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x05}:                      "UL",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x06}:                      "UL",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x07}:                      "UL",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x08}:                      "UL",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x09}:                      "SS",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x10}:                      "SH",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x11}:                      "",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x12}:                      "",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x13}:                      "IS",
+	{0x0119, "SIEMENS Ultrasound SC2000", 0x21}:                      "SH",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x00}:                      "SQ",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x02}:                      "UI",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x03}:                      "",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x04}:                      "",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x05}:                      "",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x06}:                      "SQ",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x07}:                      "UI",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x08}:                      "OB",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x09}:                      "SQ",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x10}:                      "OB",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x11}:                      "SQ",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x12}:                      "UI",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x20}:                      "SQ",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x21}:                      "OB",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x22}:                      "OB",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x29}:                      "OB",
+	{0x0129, "SIEMENS Ultrasound SC2000", 0x30}:                      "CS",
+	{0x0139, "SIEMENS Ultrasound SC2000", 0x01}:                      "SL",
+	{0x0149, "SIEMENS Ultrasound SC2000", 0x01}:                      "FD",
+	{0x0149, "SIEMENS Ultrasound SC2000", 0x02}:                      "FD",
+	{0x0149, "SIEMENS Ultrasound SC2000", 0x03}:                      "FD",
+	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x01}:                      "OB",
+	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x09}:                      "UI",
+	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x10}:                      "OB",
+	{0x7FD1, "SIEMENS Ultrasound SC2000", 0x11}:                      "OB",
 }

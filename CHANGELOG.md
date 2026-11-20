@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   come from the standard's own DocBook source, through the new
   `scripts/ps315-table.py`, and not from the library's option switches. What
   comes back is a copy.
+- **PS3.15 Table E.3.10-1, the safe private attributes, as a lookup.**
+  `anonymize.LookupSafePrivate(group, creator, element)` reports whether the
+  table lists a private attribute as safe and gives its value representation,
+  and `SafePrivateEntries` iterates the 479 rows. The table already held the
+  value representation, in a comment; it is now data (empty for five
+  SIEMENS Ultrasound SC2000 rows whose VR the standard leaves blank).
+  `SafePrivateEdition` names the edition (2026d).
 
 ### Fixed
 
