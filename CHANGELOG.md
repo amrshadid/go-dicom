@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PS3.15 Table E.1-1 as data.** `anonymize.ProfileTable`,
+  `ProfileEntries` and `LookupProfileEntry` return every attribute of the
+  table with its name, its code in the Basic Profile column and its code in
+  each option column (`ProfileColumn`: retain safe private, UIDs, device
+  identity, institution identity, patient characteristics, longitudinal
+  temporal information with full or modified dates, clean descriptors, clean
+  structured content, clean graphics), as the standard writes them: `X/Z/D`,
+  `X/D`, `Z/D`, `X/Z` and `X/Z/U*` are not resolved. `ProfileTableEdition`
+  names the edition the table was generated from (2026d). The option columns
+  come from the standard's own DocBook source, through the new
+  `scripts/ps315-table.py`, and not from the library's option switches. What
+  comes back is a copy.
+
+### Fixed
+
+- **`BasicProfileTemplate` and the templates built on it de-identified far less
+  than the Basic Profile.** The template held 39 attributes, and an
+  `Anonymizer` applies a template's actions before the profile's own table, so
+  a program that gave one to `ApplyTemplate` or `SetTemplate` kept Patient's
+  Sex, Age, Size and Weight, among others. Over pydicom's corpus, the Basic
+  Profile left Patient's Sex in none of the files where the template kept it in
+  52, Age in 26, Weight in 17 and Size in 7 (53 of 79 files differed). The
+  template, and `CleanDescriptorsTemplate`, `RetainDatesTemplate` and
+  `RetainDeviceTemplate`, now hold every attribute of Table E.1-1 with the
+  action the profile applies; Patient's Name and ID are now emptied, as the
+  profile does, and no longer replaced by `ANONYMOUS` and a random identifier.
+
 ## [1.11.0] - 2026-11-19
 
 The largest release so far. The library now writes every compressed syntax

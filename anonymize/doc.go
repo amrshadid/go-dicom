@@ -69,6 +69,18 @@
 // [Anonymizer.SetRetainPatientName] and [Anonymizer.SetRetainPatientID] are
 // shorthands for the two most commonly overridden attributes.
 //
+// # The standard's table as data
+//
+// [ProfileTable] returns PS3.15 Table E.1-1 for a program that builds its own
+// profiles: every attribute with its name and its code in the Basic Profile
+// column and in each option column, left as the standard writes them, so a
+// combined code such as X/Z/D is not resolved for the caller. [ProfileEntries]
+// iterates the rows, [LookupProfileEntry] finds one, and [ProfileTableEdition]
+// names the edition of the standard the table came from. What they return is
+// a copy. [BasicProfileTemplate] and the templates built on it hold the action
+// this package applies for each of those attributes, so an [Anonymizer] given
+// one de-identifies as strongly as one built with [BasicProfile].
+//
 // # UID remapping
 //
 // Study, series, and SOP Instance UIDs identify a patient across data sets even

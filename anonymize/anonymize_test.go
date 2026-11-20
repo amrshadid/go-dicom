@@ -173,9 +173,15 @@ func TestBasicProfileTemplate(t *testing.T) {
 	if len(tmpl.Actions) == 0 {
 		t.Error("Basic profile template should have actions")
 	}
-	// Check a known action
-	if tmpl.Actions[tag.New(0x0010, 0x0010)] != anonymize.ActionReplace {
-		t.Error("PatientName should be ActionReplace in basic profile")
+	// Check known actions: the ones Table E.1-1 gives, which the profile applies.
+	if tmpl.Actions[tag.New(0x0010, 0x0010)] != anonymize.ActionEmpty {
+		t.Error("PatientName should be ActionEmpty (Z) in basic profile")
+	}
+	if tmpl.Actions[tag.New(0x0010, 0x0040)] != anonymize.ActionEmpty {
+		t.Error("PatientSex should be ActionEmpty (Z) in basic profile")
+	}
+	if got := len(tmpl.Actions); got < 650 {
+		t.Errorf("template holds %d attributes, want every one of Table E.1-1", got)
 	}
 }
 

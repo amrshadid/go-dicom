@@ -83,10 +83,28 @@ anon.Anonymize(ds)
 
 ### Pre-built Templates
 
-- `BasicProfileTemplate()` - DICOM PS3.15 basic profile
+- `BasicProfileTemplate()` - every attribute of PS3.15 Table E.1-1, with the action the Basic Profile applies
 - `CleanDescriptorsTemplate()` - Cleans descriptions instead of removing
 - `RetainDatesTemplate()` - Keeps full dates
 - `RetainDeviceTemplate()` - Keeps device identity
+
+## The Standard's Table as Data
+
+A program that builds its own de-identification profiles can read PS3.15
+Table E.1-1 itself: `ProfileTable()` returns every attribute with its name, its
+code in the Basic Profile column and its code in each option column, as the
+standard writes them (`X/Z/D`, `X/D`, `Z/D`, `X/Z` and `X/Z/U*` are not
+resolved). `ProfileEntries()` yields the same rows one at a time,
+`LookupProfileEntry(tag)` finds one, and `ProfileTableEdition` names the
+edition of the standard the table was generated from (`scripts/ps315-table.py`
+regenerates it). What comes back is a copy; changing it does not change the
+library.
+
+```go
+e, _ := anonymize.LookupProfileEntry(tag.New(0x0010, 0x0040)) // Patient's Sex
+fmt.Println(e.Name, e.Basic(), e.Code(anonymize.ColumnRetainPatientCharacteristics))
+// Patient's Sex Z K
+```
 
 ## Custom Per-Tag Actions
 

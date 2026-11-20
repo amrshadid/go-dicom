@@ -258,7 +258,7 @@ func (a *Anonymizer) getDefaultAction(t tag.Tag) Action {
 		// Every attribute the Basic Profile remaps, not the four the old
 		// table named: a reference remapped while the instance it points at
 		// is kept no longer resolves (#213).
-		if ps315BasicProfile[t] == ActionUID || basicProfileActions[t] == ActionUID {
+		if ps315BasicProfile[t] == ActionUID {
 			return ActionKeep
 		}
 	case RetainPatientCharsProfile:
@@ -317,9 +317,6 @@ func (a *Anonymizer) getDefaultAction(t tag.Tag) Action {
 	// entries kept the attributes in every profile, including the one whose
 	// whole purpose is to remove them.
 	if action, ok := ps315BasicProfile[t]; ok {
-		return action
-	}
-	if action, ok := basicProfileActions[t]; ok {
 		return action
 	}
 	// Curve and overlay data are named by a range of groups rather than by one
@@ -508,11 +505,25 @@ func (tmpl *Template) Clone() *Template {
 	return cloned
 }
 
-// BasicProfileTemplate returns a template based on the DICOM PS3.15
-// Annex E Basic Application Level Confidentiality Profile.
+// BasicProfileTemplate returns a template holding the action the library
+// applies for every attribute the DICOM PS3.15 Basic Application Level
+// Confidentiality Profile names (Table E.1-1, [ProfileTableEdition]), a choice
+// of actions resolved as [NewAnonymizer] resolves it. An [Anonymizer] given
+// the template de-identifies exactly as strongly as one built with
+// [BasicProfile].
+//
+// The curve and overlay attributes that the table names by a range of groups
+// are not in the template, which is keyed by single tags; an Anonymizer
+// removes them whatever the template holds. The template is a new one on every
+// call.
+//
+// The template used to hold 39 attributes, and an Anonymizer applies a
+// template's actions before the profile's own table, so one given the
+// template kept Patient's Sex, Age, Size and Weight, and every other
+// attribute the 39 did not name, that the profile removes or empties.
 func BasicProfileTemplate() *Template {
 	tmpl := NewTemplate("Basic Profile", "DICOM PS3.15 Annex E Basic Application Level Confidentiality Profile")
-	for t, action := range basicProfileActions {
+	for t, action := range ps315BasicProfile {
 		tmpl.Actions[t] = action
 	}
 	return tmpl
@@ -572,54 +583,4 @@ func (a *Anonymizer) ApplyTemplate(tmpl *Template) {
 	for t, action := range tmpl.Actions {
 		a.customActions[t] = action
 	}
-}
-
-// basicProfileActions defines the de-identification actions for the DICOM PS3.15
-// Annex E Basic Application Level Confidentiality Profile.
-var basicProfileActions = map[tag.Tag]Action{
-	// Patient-related tags
-	tag.New(0x0010, 0x0010): ActionReplace, // PatientName -> replace with "ANONYMOUS"
-	tag.New(0x0010, 0x0020): ActionReplace, // PatientID -> replace with random ID
-	tag.New(0x0010, 0x0030): ActionEmpty,   // PatientBirthDate
-	tag.New(0x0010, 0x0040): ActionKeep,    // PatientSex (usually kept in basic profile)
-	tag.New(0x0010, 0x1000): ActionRemove,  // OtherPatientIDs
-	tag.New(0x0010, 0x1001): ActionRemove,  // OtherPatientNames
-	tag.New(0x0010, 0x1010): ActionKeep,    // PatientAge
-	tag.New(0x0010, 0x1020): ActionKeep,    // PatientSize
-	tag.New(0x0010, 0x1030): ActionKeep,    // PatientWeight
-	tag.New(0x0010, 0x2160): ActionRemove,  // EthnicGroup
-	tag.New(0x0010, 0x21B0): ActionRemove,  // AdditionalPatientHistory
-	tag.New(0x0010, 0x4000): ActionRemove,  // PatientComments
-
-	// Study-related tags
-	tag.New(0x0008, 0x0020): ActionEmpty,  // StudyDate
-	tag.New(0x0008, 0x0030): ActionEmpty,  // StudyTime
-	tag.New(0x0008, 0x0050): ActionEmpty,  // AccessionNumber
-	tag.New(0x0008, 0x0080): ActionRemove, // InstitutionName
-	tag.New(0x0008, 0x0081): ActionRemove, // InstitutionAddress
-	tag.New(0x0008, 0x0090): ActionEmpty,  // ReferringPhysicianName
-	tag.New(0x0008, 0x0096): ActionRemove, // ReferringPhysicianIdentificationSequence
-	tag.New(0x0008, 0x1010): ActionRemove, // StationName
-	tag.New(0x0008, 0x1030): ActionRemove, // StudyDescription
-	tag.New(0x0008, 0x103E): ActionRemove, // SeriesDescription
-	tag.New(0x0008, 0x1040): ActionRemove, // InstitutionalDepartmentName
-	tag.New(0x0008, 0x1048): ActionRemove, // PhysiciansOfRecord
-	tag.New(0x0008, 0x1050): ActionRemove, // PerformingPhysicianName
-	tag.New(0x0008, 0x1060): ActionRemove, // NameOfPhysiciansReadingStudy
-	tag.New(0x0008, 0x1070): ActionRemove, // OperatorsName
-	tag.New(0x0020, 0x0010): ActionEmpty,  // StudyID
-	tag.New(0x0020, 0x4000): ActionRemove, // ImageComments
-
-	// UID-related tags
-	tag.New(0x0008, 0x0018): ActionUID,  // SOPInstanceUID
-	tag.New(0x0020, 0x000D): ActionUID,  // StudyInstanceUID
-	tag.New(0x0020, 0x000E): ActionUID,  // SeriesInstanceUID
-	tag.New(0x0008, 0x0016): ActionKeep, // SOPClassUID (must be kept)
-	tag.New(0x0002, 0x0003): ActionUID,  // MediaStorageSOPInstanceUID
-
-	// Device-related tags
-	tag.New(0x0008, 0x0070): ActionKeep,   // Manufacturer (usually kept)
-	tag.New(0x0008, 0x1090): ActionKeep,   // ManufacturerModelName
-	tag.New(0x0018, 0x1000): ActionRemove, // DeviceSerialNumber
-	tag.New(0x0018, 0x1020): ActionKeep,   // SoftwareVersions
 }
