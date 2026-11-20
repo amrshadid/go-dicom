@@ -151,26 +151,6 @@ func (r readerAt) ReadAt(p []byte, offset int64) (int, error) {
 	return io.ReadFull(r.file, p)
 }
 
-// shiftedReaderAt reads a value held in memory as though it were where it
-// lies in the data set, so ranges counted in the data set can be read from
-// it.
-type shiftedReaderAt struct {
-	value []byte
-	base  int64
-}
-
-func (r shiftedReaderAt) ReadAt(p []byte, offset int64) (int, error) {
-	at := offset - r.base
-	if at < 0 || at > int64(len(r.value)) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.value[at:])
-	if n < len(p) {
-		return n, io.EOF
-	}
-	return n, nil
-}
-
 // frameSource is an instance opened for its frames: what reads them by
 // position, and the attributes that say how.
 type frameSource struct {
@@ -206,22 +186,10 @@ func openFrames(file io.ReadSeeker) (*frameSource, error) {
 	}
 	source := &frameSource{attributes: parsed.GetDataset(), float: pixels.Tag != tagPixelData}
 	source.syntax = source.attributes.TransferSyntaxUID()
-	src := readerAtOf(file)
-	if parsed.Deflated {
-		// The positions count in the inflated data set, which is not on
-		// disk. It is all inflated to be read at all, so it is read whole
-		// and the frame taken from the value.
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return nil, err
-		}
-		if parsed, err = filereader.ReadDICOMFile(filebase.NewFileReader(file)); err != nil {
-			return nil, err
-		}
-		if pixels = parsed.PixelDataElement(); pixels == nil {
-			return nil, errNoFrames
-		}
-		src = shiftedReaderAt{value: pixels.Value, base: pixels.Position.ValueOffset}
-	}
+	// The frames are read from the file by position, or for a deflated one,
+	// whose positions count inflated bytes, from a source that inflates the
+	// stream up to the frame, so that no whole inflated data set is held.
+	src := parsed.ValueSource(readerAtOf(file))
 	if source.frames, err = parsed.FrameReader(src); err != nil {
 		return nil, err
 	}

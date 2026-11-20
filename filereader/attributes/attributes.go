@@ -14,8 +14,16 @@
 // arrives for instance, links all of them through filereader whether it calls
 // them or not. This package is
 // the parser alone. Its dependencies are charset, config, errors, filebase,
-// tag and uid, and a test in this package fails if any of the codec packages
-// joins them.
+// tag and uid, with the VR rules and the DICOM JSON writer that dataset shares
+// (internal/vr, internal/dicomjson), and a test in this package fails if any of
+// the codec packages joins them.
+//
+// DICOMJSON writes the DICOM JSON Model (PS3.18 Annex F) of the elements Read
+// returns, with a hook that gives a BulkDataURI for a value the caller chooses
+// by VR, length or tag, or leaves it out, told where the value is in the file.
+// It is the writer behind dataset.Dataset.ToDICOMJSON, not a copy of it, so a
+// program that wants the JSON of a header does not link dataset and the
+// codecs it brings.
 //
 // What it returns is what filereader returns, by the same types: File has the
 // fields of filereader.DICOMFile, and DataElementValue, ReadOptions and the

@@ -1615,11 +1615,27 @@ func Read(ctx context.Context, reader filebase.Reader, options ReadOptions) (*Fi
 			compressedSize = size - dfr.position
 		}
 
-		inflated, err := inflateRemainder(reader, compressedSize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to inflate deflated data set: %w", err)
+		if dfr.options.SkipBulkData {
+			// A read that leaves the bulk values where they are is a read that
+			// does not want them in memory, and inflating the whole data set
+			// into a slice to find where they end put them there: a deflated
+			// file with a 200 MB value took 200 MB to read. The inflated bytes
+			// are a stream instead, measured once (the bound against a bomb
+			// holds exactly as it does below) and read forward, a skipped
+			// value being inflated and dropped. The data set is then read
+			// with the memory of its attributes.
+			stream, err := inflate.Open(reader, compressedSize, MaxInflatedDatasetSize)
+			if err != nil {
+				return nil, fmt.Errorf("failed to inflate deflated data set: %w", err)
+			}
+			reader = filebase.NewFileReader(stream)
+		} else {
+			inflated, err := inflateRemainder(reader, compressedSize)
+			if err != nil {
+				return nil, fmt.Errorf("failed to inflate deflated data set: %w", err)
+			}
+			reader = filebase.NewFileReader(bytes.NewReader(inflated))
 		}
-		reader = filebase.NewFileReader(bytes.NewReader(inflated))
 		dfr.reader = reader
 		// Offsets now refer to the inflated data set, which begins at zero.
 		dicomFile.Deflated = true

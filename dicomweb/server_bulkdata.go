@@ -186,25 +186,12 @@ func (s *Server) bulkdata(w http.ResponseWriter, r *http.Request, target retriev
 // read from file with its bulk data skipped, and returns it little endian.
 func bulkValue(file io.ReadSeeker, parsed *filereader.DICOMFile, path bulkPath,
 	element *filereader.DataElementValue) ([]byte, error) {
-	switch {
-	case element.ValueSkipped && parsed.Deflated:
-		// Positions count in the inflated data set, which is not on disk.
-		// It is all inflated to be read at all, so it is read whole.
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return nil, err
-		}
-		whole, err := filereader.ReadDICOMFile(filebase.NewFileReader(file))
-		if err != nil {
-			return nil, err
-		}
-		inflated := path.find(whole.DataElements)
-		if inflated == nil {
-			return nil, fmt.Errorf("%s is not where it was when the file was read in full", path)
-		}
-		return inflated.Value, nil
-	case element.ValueSkipped:
+	if element.ValueSkipped {
+		// From the file by position, or for a deflated one, whose positions
+		// count inflated bytes, from a source that inflates the stream up to
+		// the value.
 		value := make([]byte, element.Length)
-		if _, err := readerAtOf(file).ReadAt(value, element.Position.ValueOffset); err != nil {
+		if _, err := parsed.ValueSource(readerAtOf(file)).ReadAt(value, element.Position.ValueOffset); err != nil {
 			return nil, err
 		}
 		// A value read here is as the file has it; one the reader read it

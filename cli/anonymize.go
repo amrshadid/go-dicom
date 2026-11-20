@@ -255,7 +255,7 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 	// from it then.
 	defer in.Close()
 
-	df, ds, inFile, err := readForAnonymizing(in, read)
+	df, ds, source, err := readForAnonymizing(in, read)
 	if err != nil {
 		return errNotDICOM
 	}
@@ -338,8 +338,8 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 		return err
 	}
 	w := filewriter.NewDICOMFileWriter(filebase.NewFileWriter(out))
-	if inFile {
-		w.SetValueSource(in, df.IsLittleEndian)
+	if source != nil {
+		w.SetValueSource(source, df.IsLittleEndian)
 	}
 	w.SetFileMetaInfo(&filewriter.FileMetaInfo{
 		MediaStorageSOPClassUID:    sopClass,
@@ -361,28 +361,30 @@ func (ac *AnonymizeCommand) anonymizeFileAs(anonymizer *anonymize.Anonymizer, in
 	return nil
 }
 
-// readForAnonymizing reads the input as read asks, and reports whether some
-// values were left in the file. A deflated data set is read whole whatever was
-// asked: its values are in the inflated bytes, not in the file. So is a file
-// that cannot be read the other way, so it fails, or not, as it always did.
-func readForAnonymizing(in *os.File, read anonymizeRead) (*filereader.DICOMFile, *dataset.Dataset, bool, error) {
+// readForAnonymizing reads the input as read asks. It returns the source the
+// values left in the file are copied from, or nil when none were: the file
+// itself, or for a deflated data set, whose offsets count inflated bytes, a
+// source that inflates the stream as the writer asks for each value in turn
+// (DICOMFile.GetDatasetWithValuesIn). A file that cannot be read the other way
+// is read whole, so it fails, or not, as it always did.
+func readForAnonymizing(in *os.File, read anonymizeRead) (*filereader.DICOMFile, *dataset.Dataset, io.ReaderAt, error) {
 	if !read.whole {
 		df, err := filereader.ReadDICOMFileWithOptions(filebase.NewFileReader(in),
 			filereader.ReadOptions{SkipBulkData: true, BulkDataThreshold: read.threshold})
-		if err == nil && !df.Deflated {
-			if ds, err := df.GetDatasetWithValuesInFile(); err == nil {
-				return df, ds, true, nil
+		if err == nil {
+			if ds, source, err := df.GetDatasetWithValuesIn(in); err == nil {
+				return df, ds, source, nil
 			}
 		}
 		if _, err := in.Seek(0, io.SeekStart); err != nil {
-			return nil, nil, false, err
+			return nil, nil, nil, err
 		}
 	}
 	df, err := filereader.ReadDICOMFile(filebase.NewFileReader(in))
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, err
 	}
-	return df, df.GetDataset(), false, nil
+	return df, df.GetDataset(), nil, nil
 }
 
 // datasetText reads a text value without its padding.

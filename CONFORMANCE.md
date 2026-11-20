@@ -516,7 +516,7 @@ advisory.
 | `NetworkConfig.MaxDataSetSize` | no limit unless set | A data set larger than the receiver will hold in memory, or will take from a stream; aborted |
 | `NetworkConfig.ARTIMTimeout` / `DIMSETimeout` | 30 s / 60 s | A peer that connects and sends nothing, or stops partway through a PDU |
 | `network.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated data set received over an association |
-| `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file |
+| `filereader.MaxInflatedDatasetSize` | 256 MiB | Decompression bombs in a deflated file, a read that leaves its bulk values in the file measured against it first and then not holding the inflated bytes |
 | `compress.MaxDecompressedSize` | 256 MiB | Decompression bombs in stored pixel data |
 | `compress.MaxInflateRatio` / `MinInflateAllowance` | 1000:1, 8 MiB floor | A *small* input claiming a large expansion |
 | A compressed frame's size | the data set's Rows, Columns and Samples per Pixel, compared before decoding | A small codestream describing a large image in a small data set (§8.1) |

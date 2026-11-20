@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -134,8 +135,8 @@ func TestValidateRefusesWhatItCannotCheck(t *testing.T) {
 // TestValidateFindsTheSameWithBulkDataLeftInTheFile: the command reads a file
 // with Pixel Data and long binary values left in it, and every file of the
 // corpus gets the report, finding for finding, that reading it whole gives.
-// The deflated file is among them; it is read whole, as its values are not in
-// the file as written.
+// The deflated file is among them, and is read the same way: its values are in
+// the inflated data set, which the read counts without holding.
 func TestValidateFindsTheSameWithBulkDataLeftInTheFile(t *testing.T) {
 	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
 	if corpus == "" {
@@ -162,8 +163,8 @@ func TestValidateFindsTheSameWithBulkDataLeftInTheFile(t *testing.T) {
 
 		// That something was left in the file, or the comparison proves
 		// nothing.
-		if df, err := readForValidation(path, true); err == nil && !df.Deflated {
-			if ds, err := df.GetDatasetWithValuesInFile(); err == nil {
+		if df, err := readForValidation(path, true); err == nil {
+			if ds, _, err := df.GetDatasetWithValuesIn(bytes.NewReader(nil)); err == nil {
 				if e, ok := ds.Get(tag.New(0x7FE0, 0x0010)); ok {
 					if _, inFile := e.GetValue().(dataelem.ValueInFile); inFile {
 						skipped++

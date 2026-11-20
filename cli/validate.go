@@ -113,19 +113,21 @@ func validateFile(path string) (*validate.Report, error) {
 // data set has none, which is then reported as missing like any other Type 1
 // attribute.
 //
-// A deflated file is read whole: its values are in the inflated bytes, not in
-// the file as written (PS3.5 A.5).
+// A deflated file is read the same way: its values are in the inflated bytes
+// (PS3.5 A.5), which the read counts without holding.
 func checkFile(path string, skipBulk bool) (*validate.Report, error) {
 	df, err := readForValidation(path, skipBulk)
 	if err != nil {
 		return nil, err
 	}
-	if df.Deflated && skipBulk {
-		return checkFile(path, false)
-	}
 	ds := df.GetDataset()
 	if skipBulk {
-		if ds, err = df.GetDatasetWithValuesInFile(); err != nil {
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		if ds, _, err = df.GetDatasetWithValuesIn(f); err != nil {
 			return nil, err
 		}
 	}

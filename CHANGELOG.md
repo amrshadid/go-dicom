@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A deflated file can be read and rewritten with its values left in it.**
+  `GetDatasetWithValuesInFile` refused a deflated file, because its values are
+  in the inflated bytes and not in the file to be copied from, so a program
+  that rewrote files in place (de-identifying them, say) had to read a deflated
+  one whole, or refuse it. `DICOMFile.GetDatasetWithValuesIn(file)` returns the
+  data set with its values left, and the source to give `filewriter`'s
+  `SetValueSource`: the file itself, or for a deflated file a source of the
+  inflated data set that inflates the file's DEFLATE stream as values are asked
+  for, forward only and starting again from the start of the data set when a
+  range lies behind. A writer copying values in increasing order inflates the
+  stream once. `DICOMFile.ValueSource(file)` is that source alone, for
+  `FrameReader` and for a program that reads values by position. The old method
+  still refuses a deflated file, now naming the new one, since a writer given
+  the file itself would copy the wrong bytes. The output is the same bytes a
+  whole read writes: checked for pydicom's deflated file and for deflated files
+  made with dcmtk's `dcmconv +td` from corpus images, and read back the same by
+  `dcmdump` and pydicom.
+
+- **The DICOM JSON of a header can be written without linking the codecs.**
+  The only DICOM JSON writer (PS3.18 Annex F) was `Dataset.ToDICOMJSON`, so a
+  program that read a file with `filereader/attributes` to avoid the image
+  codecs linked them all again as soon as it wanted the JSON of what it read.
+  `attributes.DICOMJSON` (and `DICOMJSONWithContext`) writes the document from
+  the elements `attributes.Read` returns: text decoded under the Specific
+  Character Set as `GetDataset` decodes it, nested sequences, PN as
+  Alphabetic, Ideographic and Phonetic, numbers for IS, DS and the binary
+  numeric VRs, AT, InlineBinary. `JSONOptions.BulkData` is a hook called for
+  each value with its VR, tag, the sequences it is in, and its offset and
+  length in the file; it returns a `BulkDataURI` for the values it chooses or
+  leaves them out, which is how a header of a file read with `SkipBulkData` is
+  written with its pixels left where they are. There is one implementation,
+  not two: `dataset` writes through the same code, so for every file of
+  pydicom's corpus and of the repository's test data (180 files) the two
+  documents are equal byte for byte, and a test holds them to it. The package
+  still links none of `dataset`, `dataelem` or the codecs, which its existing
+  test checks. `dataset.DICOMJSONElement` is now an alias of the type
+  `attributes.JSONElement` names; its fields and methods are unchanged.
+
 - **The order of a data set's tags is reported as values.**
   `DICOMFile.TagOrderViolations` lists each data element whose tag is not
   greater than the one before it in its data set or sequence item (PS3.5 7.1),
@@ -16,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   up to a thousand; `TagOrderViolationCount` counts them all. The warning in
   `Warnings` is unchanged; a program acts on these instead of matching its
   words.
+
 - **A private sequence that arrives as UN can be walked.**
   `network.DecodeUNSequence` reads the value of a UN element as the items of a
   sequence, in Implicit VR Little Endian as PS3.5 6.2.2 has it, and refuses
@@ -129,6 +168,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A deflated file is no longer inflated into memory to be read in place.**
+  A read with `SkipBulkData` of a deflated file inflated the whole data set into
+  one slice to find where the values end, so a 200 MB value cost 200 MB, and
+  the file writer encoded a deflated data set whole before compressing it.
+  Both are streams now: the read measures the DEFLATE stream once, so
+  `MaxInflatedDatasetSize` and the ratio bound refuse a deflate bomb with the
+  same error as before, then reads it forward, inflating and dropping a value it
+  skips; the writer compresses each element as it is reached. `go-dicom
+  anonymize` of a deflated file with a 200 MB value took 848 MB of resident
+  memory and takes 32 MB, with the same output byte for byte; `show`, `diff`,
+  `validate`, `image` and the DICOMweb frame and bulk data resources of a
+  deflated file no longer read it whole either.
+
+- **A received data fragment is no longer copied out of its PDU.** Each
+  fragment of a P-DATA-TF is a slice of the PDU's body, capped at its own end.
+  A 64 KiB PDU cost 139,529 bytes to read and costs 73,992, and reads at
+  twice the rate.
+
+- **`Server.Shutdown` refuses a new caller as transient, as it documents.**
+  Shutdown closed the listener at once, so a caller arriving while the
+  associations in progress finished met a refused TCP connection, and only a
+  connection already open was answered with the A-ASSOCIATE-RJ,
+  rejected-transient, service-provider (presentation), temporary-congestion,
+  that tells a caller to try again later. A modality treats a refused
+  connection as a failure and may not retry; one that is told to retry later
+  does, which is what PS3.8 Table 9-21 provides the reason for and what the
+  documentation of `Shutdown` has always said. The server now keeps accepting
+  while it drains and refuses each new association that way, and closes the
+  listener when the drain ends: when no association is left, at once for an
+  idle server, or at the bound of the context. A server that is not draining
+  is unchanged, and so is what happens to an association in progress.
+  Checked with pynetdicom, which read the refusal as result 2, source 3,
+  diagnostic 1.
+
 - **Redacting the pixels of an image holds a frame, not the image.**
   `CleanPixelData`, `RedactDetectedText` and the `-redact` options of
   `anonymize` and `share` decoded every frame of the image, filled a copy of
@@ -159,27 +232,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image with regions filled for `RenderFramesFrom` to render.
   `DetectBurnedInText` renders a frame at a time too.
 
-- **A received data fragment is no longer copied out of its PDU.** Each
-  fragment of a P-DATA-TF is a slice of the PDU's body, capped at its own end.
-  A 64 KiB PDU cost 139,529 bytes to read and costs 73,992, and reads at
-  twice the rate.
-
-- **`Server.Shutdown` refuses a new caller as transient, as it documents.**
-  Shutdown closed the listener at once, so a caller arriving while the
-  associations in progress finished met a refused TCP connection, and only a
-  connection already open was answered with the A-ASSOCIATE-RJ,
-  rejected-transient, service-provider (presentation), temporary-congestion,
-  that tells a caller to try again later. A modality treats a refused
-  connection as a failure and may not retry; one that is told to retry later
-  does, which is what PS3.8 Table 9-21 provides the reason for and what the
-  documentation of `Shutdown` has always said. The server now keeps accepting
-  while it drains and refuses each new association that way, and closes the
-  listener when the drain ends: when no association is left, at once for an
-  idle server, or at the bound of the context. A server that is not draining
-  is unchanged, and so is what happens to an association in progress.
-  Checked with pynetdicom, which read the refusal as result 2, source 3,
-  diagnostic 1.
-
 ### Fixed
 
 - **`StoreStream` no longer sends a truncated data set as complete.** It took
@@ -188,11 +240,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole: the peer then refused a data set it could not parse. Only `io.EOF`
   ends it now; any other error is answered with an A-ABORT before the last
   fragment, like every reader failure.
+
 - **Overlay and curve data are matched in their own groups only.** The
   profile's (60xx,3000), (60xx,4000) and (50xx,xxxx) matched a private odd
   group such as 6001 too, in `LookupProfileEntry` and in the anonymizer's own
   rules. PS3.5 7.6 numbers the repeating groups xx00 to xx1E, even only; an
   odd group is private (PS3.5 7.8).
+
 - **`valuerep.IsValidVR` takes OV, SV and UV.** The three 64-bit VRs of PS3.5
   6.2 were missing from its table, though the rest of the library knows them.
 

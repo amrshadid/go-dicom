@@ -617,6 +617,14 @@
 //
 // Loads dataset from JSON representation.
 //
+// ### ToDICOMJSON
+//
+//	func (ds *Dataset) ToDICOMJSON() (map[string]DICOMJSONElement, error)
+//
+// Writes the DICOM JSON Model of PS3.18 Annex F, which ToJSON does not. The
+// writing is shared with filereader/attributes.DICOMJSON, which writes the same
+// document from a file's elements without linking this package and the codecs.
+//
 // ## Validation
 //
 // ### Validate

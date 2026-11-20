@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/amrshadid/go-dicom/anonymize"
+	"github.com/amrshadid/go-dicom/dataelem"
 	"github.com/amrshadid/go-dicom/filebase"
 	"github.com/amrshadid/go-dicom/filereader"
 	"github.com/amrshadid/go-dicom/tag"
@@ -153,4 +154,60 @@ func hasPixelData(path string) bool {
 		}
 	}
 	return false
+}
+
+// A deflated file is read with its Pixel Data left in it, like any other: the
+// data set holds a reference where the pixels are, and the source the writer
+// copies them from is not the file, whose bytes are compressed, but the
+// inflated data set the reference counts. The comparison above holds its
+// output to the whole read's, image_dfl.dcm included; this holds that it was
+// not read whole to get there.
+func TestAnonymizeReadsADeflatedFileInPlace(t *testing.T) {
+	corpus := os.Getenv("GODICOM_PYDICOM_DATA")
+	if corpus == "" {
+		t.Skip("set GODICOM_PYDICOM_DATA to pydicom's test_files directory to run this")
+	}
+	in, err := os.Open(filepath.Join(corpus, "image_dfl.dcm"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+
+	df, ds, source, err := readForAnonymizing(in, anonymizeRead{threshold: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !df.Deflated {
+		t.Fatal("image_dfl.dcm is not deflated")
+	}
+	if source == nil {
+		t.Fatal("the deflated file was read whole")
+	}
+	elem, ok := ds.Get(tag.New(0x7FE0, 0x0010))
+	if !ok {
+		t.Fatal("no Pixel Data")
+	}
+	ref, inFile := elem.GetValue().(dataelem.ValueInFile)
+	if !inFile {
+		t.Fatalf("Pixel Data is %T, want a reference to where it is", elem.GetValue())
+	}
+	whole, err := filereader.ReadDICOMFile(filebase.NewFileReader(bytes.NewReader(mustRead(t, in.Name()))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := whole.PixelDataElement().Value
+	got := make([]byte, ref.Length)
+	if _, err := source.ReadAt(got, ref.Offset); err != nil || !bytes.Equal(got, want) {
+		t.Errorf("the source gave %d bytes at %d (err %v), not the %d bytes of the pixels", len(got), ref.Offset, err, len(want))
+	}
+}
+
+// mustRead reads a file whole.
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
